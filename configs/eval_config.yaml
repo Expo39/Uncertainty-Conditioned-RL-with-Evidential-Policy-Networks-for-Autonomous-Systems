@@ -1,0 +1,37 @@
+# Evaluation Configuration
+# Configuration for evaluating trained agents across uncertainty levels
+
+# Model settings
+model_path: "checkpoints/final_model"  # Path to trained model
+
+# Environment settings
+carla_host: "localhost"
+carla_port: 2000
+town: "Town01"
+max_steps: 500
+
+# Evaluation settings
+n_episodes: 100  # Episodes per noise level
+deterministic: true  # Use deterministic actions
+render: false  # Render episodes (requires display)
+
+# Uncertainty noise levels to evaluate (metres)
+noise_levels:
+  - 0.05
+  - 0.1
+  - 0.2
+  - 0.3
+  - 0.5
+  - 0.7
+  - 1.0
+
+# Output settings
+output_dir: "evaluation_results"
+save_plots: true
+save_csv: true
+
+# Success criteria
+success_criteria:
+  position_threshold: 0.5  # metres
+  orientation_threshold: 10.0  # degrees
+  velocity_threshold: 0.1  # m/s
