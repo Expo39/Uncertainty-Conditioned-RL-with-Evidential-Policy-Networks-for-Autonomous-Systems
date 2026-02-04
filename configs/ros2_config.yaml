@@ -1,0 +1,25 @@
+# ROS 2 Configuration for Covariance Extraction
+# Configuration for the ROS 2 node that extracts covariance from robot_localization
+
+# ROS 2 topics
+odom_topic: "/odometry/filtered"  # Input odometry topic from robot_localization
+covariance_topic: "/slam_uncertainty/covariance"  # Output covariance topic
+
+# Publishing settings
+publish_rate: 10.0  # Hz
+
+# QoS settings
+qos:
+  reliability: "reliable"  # reliable or best_effort
+  history: "keep_last"
+  depth: 10
+
+# Logging
+log_level: "info"  # debug, info, warn, error
+log_rate: 1.0  # Log statistics every N seconds
+
+# Covariance processing
+covariance:
+  min_variance: 0.0001  # Minimum variance threshold (m²)
+  max_variance: 100.0  # Maximum variance threshold (m²)
+  outlier_rejection: true  # Reject outlier covariance values

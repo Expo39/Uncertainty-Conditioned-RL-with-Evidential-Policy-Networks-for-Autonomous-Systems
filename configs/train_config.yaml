@@ -1,0 +1,42 @@
+# Training Configuration for Uncertainty-Conditioned RL
+# This configuration file contains parameters for training the SAC agent
+
+# Environment settings
+carla_host: "localhost"
+carla_port: 2000
+town: "Town01"
+uncertainty_noise_std: 0.1  # Standard deviation of SLAM uncertainty (metres)
+eval_uncertainty_noise_std: 0.15  # Evaluation with higher uncertainty
+max_steps: 500  # Maximum episode length
+
+# SAC hyperparameters
+learning_rate: 0.0003
+buffer_size: 1000000
+learning_starts: 10000
+batch_size: 256
+tau: 0.005  # Target network update rate
+gamma: 0.99  # Discount factor
+train_freq: 1  # Update frequency (steps)
+gradient_steps: 1  # Number of gradient steps per update
+
+# Network architecture
+net_arch: [256, 256]  # Hidden layer sizes
+activation: "relu"  # Activation function
+
+# Logging and checkpointing
+checkpoint_freq: 50000  # Save checkpoint every N steps
+log_interval: 10  # Log every N episodes
+
+# Training settings
+total_timesteps: 1000000
+seed: 42
+
+# Evidential network settings
+evidential:
+  lambda_reg: 0.01  # Regularisation coefficient for evidential loss
+  use_uncertainty_conditioning: true  # Condition policy on uncertainty
+  
+# Uncertainty settings
+uncertainty:
+  epistemic_weight: 1.0  # Weight for epistemic uncertainty in loss
+  aleatoric_weight: 1.0  # Weight for aleatoric uncertainty in loss
