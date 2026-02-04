@@ -1,8 +1,8 @@
-"""Visualisation utilities for uncertainty and performance metrics.
-
-This module provides visualisation tools for understanding agent behaviour
-and uncertainty evolution during training and evaluation.
-"""
+## @file visualisation.py
+#  @brief Visualisation utilities for uncertainty and performance metrics.
+#
+#  This module provides visualisation tools for understanding agent behaviour
+#  and uncertainty evolution during training and evaluation.
 from typing import List, Optional, Dict, Any
 import numpy as np
 import matplotlib.pyplot as plt
@@ -10,20 +10,17 @@ import seaborn as sns
 from pathlib import Path
 
 
+## @brief Plot the evolution of uncertainties over time.
+#  @param epistemic: List of epistemic uncertainty values.
+#  @param aleatoric: List of aleatoric uncertainty values.
+#  @param save_path: Path to save the plot.
+#  @param title: Plot title.
 def plot_uncertainty_evolution(
     epistemic: List[float],
     aleatoric: List[float],
     save_path: Optional[str] = None,
     title: str = "Uncertainty Evolution"
 ) -> None:
-    """Plot the evolution of uncertainties over time.
-    
-    Args:
-        epistemic: List of epistemic uncertainty values.
-        aleatoric: List of aleatoric uncertainty values.
-        save_path: Path to save the plot.
-        title: Plot title.
-    """
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
     
     steps = np.arange(len(epistemic))
@@ -55,6 +52,12 @@ def plot_uncertainty_evolution(
     plt.close()
 
 
+## @brief Plot vehicle trajectory with uncertainty ellipses.
+#  @param positions: Array of (x, y) positions, shape (N, 2).
+#  @param target: Target position (x, y, yaw).
+#  @param uncertainties: Optional uncertainty covariances, shape (N, 2, 2).
+#  @param save_path: Path to save the plot.
+#  @param title: Plot title.
 def plot_trajectory(
     positions: np.ndarray,
     target: np.ndarray,
@@ -62,15 +65,6 @@ def plot_trajectory(
     save_path: Optional[str] = None,
     title: str = "Vehicle Trajectory"
 ) -> None:
-    """Plot vehicle trajectory with uncertainty ellipses.
-    
-    Args:
-        positions: Array of (x, y) positions, shape (N, 2).
-        target: Target position (x, y, yaw).
-        uncertainties: Optional uncertainty covariances, shape (N, 2, 2).
-        save_path: Path to save the plot.
-        title: Plot title.
-    """
     fig, ax = plt.subplots(figsize=(10, 10))
     
     # Plot trajectory
@@ -125,18 +119,15 @@ def plot_trajectory(
     plt.close()
 
 
+## @brief Plot training curves for multiple metrics.
+#  @param metrics: Dictionary mapping metric names to lists of values.
+#  @param save_path: Path to save the plot.
+#  @param title: Plot title.
 def plot_training_curves(
     metrics: Dict[str, List[float]],
     save_path: Optional[str] = None,
     title: str = "Training Curves"
 ) -> None:
-    """Plot training curves for multiple metrics.
-    
-    Args:
-        metrics: Dictionary mapping metric names to lists of values.
-        save_path: Path to save the plot.
-        title: Plot title.
-    """
     n_metrics = len(metrics)
     n_cols = 2
     n_rows = (n_metrics + n_cols - 1) // n_cols

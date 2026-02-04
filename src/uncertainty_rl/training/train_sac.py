@@ -1,8 +1,8 @@
-"""Training script for uncertainty-conditioned RL with SAC.
-
-This module provides training functionality using Stable-Baselines3's SAC algorithm
-with evidential policy networks.
-"""
+## @file train_sac.py
+#  @brief Training script for uncertainty-conditioned RL with SAC.
+#
+#  This module provides training functionality using Stable-Baselines3's SAC algorithm
+#  with evidential policy networks.
 from typing import Optional, Dict, Any, Callable
 import os
 import yaml
@@ -24,16 +24,11 @@ from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 from uncertainty_rl.networks.evidential_policy import EvidentialPolicyNetwork
 
 
+## @brief Create a callable that returns a new environment instance.
+#  @param config: Configuration dictionary.
+#  @param rank: Environment rank for seeding.
+#  @return Callable that creates environment.
 def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
-    """Create a callable that returns a new environment instance.
-    
-    Args:
-        config: Configuration dictionary.
-        rank: Environment rank for seeding.
-        
-    Returns:
-        Callable that creates environment.
-    """
     def _init() -> gym.Env:
         env = CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
@@ -46,43 +41,42 @@ def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
     return _init
 
 
+## @class UncertaintyLogger
+#  @brief Custom callback to log uncertainty metrics during training.
 class UncertaintyLogger:
-    """Custom callback to log uncertainty metrics during training.
     
-    Args:
-        verbose: Verbosity level.
-    """
-    
+    ## @brief Constructor for UncertaintyLogger.
+    #  @param verbose: Verbosity level.
     def __init__(self, verbose: int = 0) -> None:
         self.verbose = verbose
         self.epistemic_uncertainties = []
         self.aleatoric_uncertainties = []
         
+    ## @brief Called after each environment step.
+    #  @return True to continue training.
     def _on_step(self) -> bool:
-        """Called after each environment step.
-        
-        Returns:
-            True to continue training.
-        """
         # This would log uncertainty from the policy network
         # Implementation depends on integration with SB3
         return True
 
 
+## @brief Load configuration from YAML file.
+#  @param config_path: Path to configuration file.
+#  @return Configuration dictionary.
 def load_config(config_path: str) -> Dict[str, Any]:
-    """Load configuration from YAML file.
-    
-    Args:
-        config_path: Path to configuration file.
-        
-    Returns:
-        Configuration dictionary.
-    """
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
     return config
 
 
+## @brief Train the uncertainty-conditioned RL agent.
+#  @param config_path: Path to configuration YAML file.
+#  @param total_timesteps: Total training timesteps.
+#  @param log_dir: Directory for TensorBoard logs.
+#  @param checkpoint_dir: Directory for model checkpoints.
+#  @param eval_freq: Evaluation frequency (timesteps).
+#  @param n_eval_episodes: Number of evaluation episodes.
+#  @param seed: Random seed for reproducibility.
 def train(
     config_path: str,
     total_timesteps: int = 1000000,
@@ -92,17 +86,6 @@ def train(
     n_eval_episodes: int = 10,
     seed: int = 42,
 ) -> None:
-    """Train the uncertainty-conditioned RL agent.
-    
-    Args:
-        config_path: Path to configuration YAML file.
-        total_timesteps: Total training timesteps.
-        log_dir: Directory for TensorBoard logs.
-        checkpoint_dir: Directory for model checkpoints.
-        eval_freq: Evaluation frequency (timesteps).
-        n_eval_episodes: Number of evaluation episodes.
-        seed: Random seed for reproducibility.
-    """
     # Load configuration
     config = load_config(config_path)
     
@@ -211,8 +194,8 @@ def train(
     eval_env.close()
 
 
+## @brief Main entry point for training script.
 def main() -> None:
-    """Main entry point for training script."""
     parser = argparse.ArgumentParser(
         description="Train uncertainty-conditioned RL agent for autonomous parking"
     )
