@@ -1,14 +1,14 @@
-"""Example: Basic usage of the CARLA parking environment.
-
-This script demonstrates how to create and interact with the CARLA parking
-environment with SLAM uncertainty.
-"""
+## @file basic_environment.py
+#  @brief Example: Basic usage of the CARLA parking environment.
+#
+#  This script demonstrates how to create and interact with the CARLA parking
+#  environment with SLAM uncertainty.
 import numpy as np
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
 
+## @brief Run a simple episode in the CARLA parking environment.
 def main():
-    """Run a simple episode in the CARLA parking environment."""
     print("Creating CARLA parking environment...")
     
     # Create environment with moderate uncertainty

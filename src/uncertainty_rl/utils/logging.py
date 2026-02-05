@@ -1,8 +1,8 @@
-"""Logging utilities for uncertainty-conditioned RL.
-
-This module provides logging utilities for tracking training progress and
-uncertainty metrics.
-"""
+## @file logging.py
+#  @brief Logging utilities for uncertainty-conditioned RL.
+#
+#  This module provides logging utilities for tracking training progress and
+#  uncertainty metrics.
 from typing import Dict, List, Optional, Any
 import numpy as np
 from pathlib import Path
@@ -10,14 +10,13 @@ import json
 import csv
 
 
+## @class MetricsLogger
+#  @brief Logger for tracking training and evaluation metrics.
 class MetricsLogger:
-    """Logger for tracking training and evaluation metrics.
     
-    Args:
-        log_dir: Directory to save logs.
-        prefix: Prefix for log files.
-    """
-    
+    ## @brief Constructor for MetricsLogger.
+    #  @param log_dir: Directory to save logs.
+    #  @param prefix: Prefix for log files.
     def __init__(self, log_dir: str, prefix: str = "metrics") -> None:
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -25,13 +24,10 @@ class MetricsLogger:
         
         self.metrics: Dict[str, List[Any]] = {}
         
+    ## @brief Log metrics for a given step.
+    #  @param step: Training step or episode number.
+    #  @param metrics: Dictionary of metric names to values.
     def log(self, step: int, metrics: Dict[str, float]) -> None:
-        """Log metrics for a given step.
-        
-        Args:
-            step: Training step or episode number.
-            metrics: Dictionary of metric names to values.
-        """
         if "step" not in self.metrics:
             self.metrics["step"] = []
         self.metrics["step"].append(step)
@@ -41,12 +37,9 @@ class MetricsLogger:
                 self.metrics[key] = []
             self.metrics[key].append(value)
             
+    ## @brief Save metrics to CSV file.
+    #  @param filename: Optional custom filename.
     def save_csv(self, filename: Optional[str] = None) -> None:
-        """Save metrics to CSV file.
-        
-        Args:
-            filename: Optional custom filename.
-        """
         if filename is None:
             filename = f"{self.prefix}.csv"
             
@@ -68,12 +61,9 @@ class MetricsLogger:
                 row = {key: self.metrics[key][i] for key in keys}
                 writer.writerow(row)
                 
+    ## @brief Save metrics to JSON file.
+    #  @param filename: Optional custom filename.
     def save_json(self, filename: Optional[str] = None) -> None:
-        """Save metrics to JSON file.
-        
-        Args:
-            filename: Optional custom filename.
-        """
         if filename is None:
             filename = f"{self.prefix}.json"
             
@@ -82,26 +72,16 @@ class MetricsLogger:
         with open(filepath, 'w') as f:
             json.dump(self.metrics, f, indent=2)
             
+    ## @brief Get logged values for a specific metric.
+    #  @param name: Metric name.
+    #  @return List of logged values or None if metric doesn't exist.
     def get_metric(self, name: str) -> Optional[List[Any]]:
-        """Get logged values for a specific metric.
-        
-        Args:
-            name: Metric name.
-            
-        Returns:
-            List of logged values or None if metric doesn't exist.
-        """
         return self.metrics.get(name)
     
+    ## @brief Compute statistics for a metric.
+    #  @param name: Metric name.
+    #  @return Dictionary with mean, std, min, max.
     def compute_statistics(self, name: str) -> Dict[str, float]:
-        """Compute statistics for a metric.
-        
-        Args:
-            name: Metric name.
-            
-        Returns:
-            Dictionary with mean, std, min, max.
-        """
         values = self.get_metric(name)
         if values is None:
             return {}
@@ -115,25 +95,21 @@ class MetricsLogger:
         }
 
 
+## @class UncertaintyTracker
+#  @brief Tracker for epistemic and aleatoric uncertainty during training.
 class UncertaintyTracker:
-    """Tracker for epistemic and aleatoric uncertainty during training.
     
-    Args:
-        window_size: Size of sliding window for computing statistics.
-    """
-    
+    ## @brief Constructor for UncertaintyTracker.
+    #  @param window_size: Size of sliding window for computing statistics.
     def __init__(self, window_size: int = 100) -> None:
         self.window_size = window_size
         self.epistemic_values: List[float] = []
         self.aleatoric_values: List[float] = []
         
+    ## @brief Update tracker with new uncertainty values.
+    #  @param epistemic: Epistemic uncertainty value.
+    #  @param aleatoric: Aleatoric uncertainty value.
     def update(self, epistemic: float, aleatoric: float) -> None:
-        """Update tracker with new uncertainty values.
-        
-        Args:
-            epistemic: Epistemic uncertainty value.
-            aleatoric: Aleatoric uncertainty value.
-        """
         self.epistemic_values.append(epistemic)
         self.aleatoric_values.append(aleatoric)
         
@@ -142,12 +118,9 @@ class UncertaintyTracker:
             self.epistemic_values.pop(0)
             self.aleatoric_values.pop(0)
             
+    ## @brief Get statistics for tracked uncertainties.
+    #  @return Dictionary with statistics for epistemic and aleatoric uncertainty.
     def get_statistics(self) -> Dict[str, Dict[str, float]]:
-        """Get statistics for tracked uncertainties.
-        
-        Returns:
-            Dictionary with statistics for epistemic and aleatoric uncertainty.
-        """
         if not self.epistemic_values:
             return {}
             
@@ -169,7 +142,7 @@ class UncertaintyTracker:
             },
         }
     
+    ## @brief Reset the tracker.
     def reset(self) -> None:
-        """Reset the tracker."""
         self.epistemic_values.clear()
         self.aleatoric_values.clear()
