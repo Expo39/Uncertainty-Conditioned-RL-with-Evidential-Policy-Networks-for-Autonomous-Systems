@@ -1,8 +1,10 @@
-## @file covariance_extractor.py
-#  @brief ROS 2 node for extracting covariance from robot_localization.
-#
-#  This module implements a ROS 2 node that subscribes to odometry messages from
-#  robot_localization and extracts the covariance matrix for use in RL training.
+"""
+@file covariance_extractor.py
+@brief ROS 2 node for extracting covariance from robot_localization.
+
+This module implements a ROS 2 node that subscribes to odometry messages from
+robot_localization and extracts the covariance matrix for use in RL training.
+"""
 from typing import Optional, Tuple
 import numpy as np
 import rclpy
@@ -13,16 +15,20 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from std_msgs.msg import Float64MultiArray
 
 
-## @class CovarianceExtractorNode
-#  @brief ROS 2 node for extracting localisation covariance.
-#
-#  Subscribes to odometry messages from robot_localization and publishes
-#  the covariance matrix elements for consumption by the RL agent.
 class CovarianceExtractorNode(Node):
+    """
+    @class CovarianceExtractorNode
+    @brief ROS 2 node for extracting localisation covariance.
     
-    ## @brief Constructor for CovarianceExtractorNode.
-    #  @param node_name: Name of the ROS node.
+    Subscribes to odometry messages from robot_localization and publishes
+    the covariance matrix elements for consumption by the RL agent.
+    """
+    
     def __init__(self, node_name: str = "covariance_extractor") -> None:
+        """
+        @brief Constructor for CovarianceExtractorNode.
+        @param node_name: Name of the ROS node.
+        """
         super().__init__(node_name)
         
         # Declare parameters
@@ -69,11 +75,13 @@ class CovarianceExtractorNode(Node):
         self.get_logger().info(f"  Subscribing to: {odom_topic}")
         self.get_logger().info(f"  Publishing to: {covariance_topic}")
         
-    ## @brief Callback for odometry messages.
-    #
-    #  Extracts pose covariance from the odometry message and stores it.
-    #  @param msg: Odometry message from robot_localization.
     def odom_callback(self, msg: Odometry) -> None:
+        """
+        @brief Callback for odometry messages.
+        
+        Extracts pose covariance from the odometry message and stores it.
+        @param msg: Odometry message from robot_localization.
+        """
         # Extract pose
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
@@ -116,10 +124,12 @@ class CovarianceExtractorNode(Node):
                 f"Uncertainty - X: {std_x:.4f}m, Y: {std_y:.4f}m, Yaw: {np.rad2deg(std_yaw):.2f}°"
             )
             
-    ## @brief Publish the latest covariance matrix.
-    #
-    #  Publishes the covariance matrix as a flattened array.
     def publish_covariance(self) -> None:
+        """
+        @brief Publish the latest covariance matrix.
+        
+        Publishes the covariance matrix as a flattened array.
+        """
         if self.latest_covariance is None:
             return
             
@@ -137,12 +147,14 @@ class CovarianceExtractorNode(Node):
         # Publish
         self.covariance_publisher.publish(msg)
         
-    ## @brief Get the current uncertainty state vector.
-    #  @return Uncertainty state vector: [std_x, std_y, std_yaw, 
-    #                                    cov_xx, cov_yy, cov_yawyaw,
-    #                                    cov_xy, cov_xyaw, cov_yyaw]
-    #          or None if no covariance data is available.
     def get_uncertainty_state(self) -> Optional[np.ndarray]:
+        """
+        @brief Get the current uncertainty state vector.
+        @return Uncertainty state vector: [std_x, std_y, std_yaw, 
+                                          cov_xx, cov_yy, cov_yawyaw,
+                                          cov_xy, cov_xyaw, cov_yyaw]
+                or None if no covariance data is available.
+        """
         if self.latest_covariance is None:
             return None
             
@@ -169,15 +181,19 @@ class CovarianceExtractorNode(Node):
         return uncertainty_state
 
 
-## @class CovarianceMonitorNode
-#  @brief ROS 2 node for monitoring and visualising covariance.
-#
-#  Provides additional monitoring capabilities for debugging and analysis.
 class CovarianceMonitorNode(Node):
+    """
+    @class CovarianceMonitorNode
+    @brief ROS 2 node for monitoring and visualising covariance.
     
-    ## @brief Constructor for CovarianceMonitorNode.
-    #  @param node_name: Name of the ROS node.
+    Provides additional monitoring capabilities for debugging and analysis.
+    """
+    
     def __init__(self, node_name: str = "covariance_monitor") -> None:
+        """
+        @brief Constructor for CovarianceMonitorNode.
+        @param node_name: Name of the ROS node.
+        """
         super().__init__(node_name)
         
         # Declare parameters
@@ -201,9 +217,11 @@ class CovarianceMonitorNode(Node):
         
         self.get_logger().info(f"Covariance monitor initialised")
         
-    ## @brief Callback for covariance messages.
-    #  @param msg: Float64MultiArray containing covariance data.
     def covariance_callback(self, msg: Float64MultiArray) -> None:
+        """
+        @brief Callback for covariance messages.
+        @param msg: Float64MultiArray containing covariance data.
+        """
         data = np.array(msg.data)
         
         # Parse data (first 3: pose, remaining 9: covariance)
@@ -221,8 +239,10 @@ class CovarianceMonitorNode(Node):
             )
 
 
-## @brief Main entry point for the ROS 2 node.
 def main(args=None) -> None:
+    """
+    @brief Main entry point for the ROS 2 node.
+    """
     rclpy.init(args=args)
     
     node = CovarianceExtractorNode()
@@ -236,8 +256,10 @@ def main(args=None) -> None:
         rclpy.shutdown()
 
 
-## @brief Main entry point for the monitor node.
 def main_monitor(args=None) -> None:
+    """
+    @brief Main entry point for the monitor node.
+    """
     rclpy.init(args=args)
     
     node = CovarianceMonitorNode()

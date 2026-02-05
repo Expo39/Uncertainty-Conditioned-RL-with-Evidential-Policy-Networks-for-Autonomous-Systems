@@ -1,15 +1,19 @@
-## @file evidential_network_demo.py
-#  @brief Example: Using the evidential policy network.
-#
-#  This script demonstrates how to use the evidential policy network for
-#  uncertainty-aware action selection.
+"""
+@file evidential_network_demo.py
+@brief Example: Using the evidential policy network.
+
+This script demonstrates how to use the evidential policy network for
+uncertainty-aware action selection.
+"""
 import torch
 import numpy as np
 from uncertainty_rl.networks.evidential_policy import EvidentialPolicyNetwork
 
 
-## @brief Demonstrate evidential policy network usage.
 def main():
+    """
+    @brief Demonstrate evidential policy network usage.
+    """
     print("Creating evidential policy network...")
     
     # Network parameters
