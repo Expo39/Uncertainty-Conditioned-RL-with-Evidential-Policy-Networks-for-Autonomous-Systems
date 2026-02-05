@@ -1,8 +1,8 @@
-"""Evaluation script for trained agents across different uncertainty levels.
-
-This module provides comprehensive evaluation of trained agents under varying
-SLAM uncertainty conditions.
-"""
+## @file evaluate.py
+#  @brief Evaluation script for trained agents across different uncertainty levels.
+#
+#  This module provides comprehensive evaluation of trained agents under varying
+#  SLAM uncertainty conditions.
 from typing import Dict, List, Optional, Tuple, Any
 import os
 import argparse
@@ -19,19 +19,19 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
 
+## @class EvaluationMetrics
+#  @brief Container for evaluation metrics.
+#
+#  @var success_rate: Percentage of successful parking attempts.
+#  @var average_reward: Mean episode reward.
+#  @var average_steps: Mean number of steps to completion.
+#  @var position_errors: List of final position errors.
+#  @var orientation_errors: List of final orientation errors.
+#  @var epistemic_uncertainties: Epistemic uncertainty values during episodes.
+#  @var aleatoric_uncertainties: Aleatoric uncertainty values during episodes.
 class EvaluationMetrics:
-    """Container for evaluation metrics.
     
-    Attributes:
-        success_rate: Percentage of successful parking attempts.
-        average_reward: Mean episode reward.
-        average_steps: Mean number of steps to completion.
-        position_errors: List of final position errors.
-        orientation_errors: List of final orientation errors.
-        epistemic_uncertainties: Epistemic uncertainty values during episodes.
-        aleatoric_uncertainties: Aleatoric uncertainty values during episodes.
-    """
-    
+    ## @brief Constructor for EvaluationMetrics.
     def __init__(self) -> None:
         self.success_rate: float = 0.0
         self.average_reward: float = 0.0
@@ -41,12 +41,9 @@ class EvaluationMetrics:
         self.epistemic_uncertainties: List[float] = []
         self.aleatoric_uncertainties: List[float] = []
         
+    ## @brief Convert metrics to dictionary.
+    #  @return Dictionary of metrics.
     def to_dict(self) -> Dict[str, Any]:
-        """Convert metrics to dictionary.
-        
-        Returns:
-            Dictionary of metrics.
-        """
         return {
             "success_rate": self.success_rate,
             "average_reward": self.average_reward,
@@ -60,19 +57,14 @@ class EvaluationMetrics:
         }
 
 
+## @brief Create evaluation environment with specific uncertainty level.
+#  @param uncertainty_noise_std: Standard deviation of uncertainty noise.
+#  @param config: Configuration dictionary.
+#  @return Vectorised evaluation environment.
 def make_eval_env(
     uncertainty_noise_std: float,
     config: Dict[str, Any]
 ) -> DummyVecEnv:
-    """Create evaluation environment with specific uncertainty level.
-    
-    Args:
-        uncertainty_noise_std: Standard deviation of uncertainty noise.
-        config: Configuration dictionary.
-        
-    Returns:
-        Vectorised evaluation environment.
-    """
     def _init():
         return CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
@@ -86,6 +78,13 @@ def make_eval_env(
     return env
 
 
+## @brief Evaluate agent performance.
+#  @param model: Trained SAC model.
+#  @param env: Evaluation environment.
+#  @param n_episodes: Number of evaluation episodes.
+#  @param deterministic: Use deterministic actions.
+#  @param render: Render episodes.
+#  @return EvaluationMetrics object with results.
 def evaluate_agent(
     model: SAC,
     env: DummyVecEnv,
@@ -93,18 +92,6 @@ def evaluate_agent(
     deterministic: bool = True,
     render: bool = False,
 ) -> EvaluationMetrics:
-    """Evaluate agent performance.
-    
-    Args:
-        model: Trained SAC model.
-        env: Evaluation environment.
-        n_episodes: Number of evaluation episodes.
-        deterministic: Use deterministic actions.
-        render: Render episodes.
-        
-    Returns:
-        EvaluationMetrics object with results.
-    """
     metrics = EvaluationMetrics()
     
     episode_rewards = []
@@ -158,6 +145,13 @@ def evaluate_agent(
     return metrics
 
 
+## @brief Evaluate agent across different uncertainty noise levels.
+#  @param model_path: Path to trained model.
+#  @param config_path: Path to configuration file.
+#  @param noise_levels: List of uncertainty noise standard deviations to test.
+#  @param n_episodes: Number of episodes per noise level.
+#  @param output_dir: Directory to save results.
+#  @return DataFrame with evaluation results.
 def evaluate_across_noise_levels(
     model_path: str,
     config_path: str,
@@ -165,18 +159,6 @@ def evaluate_across_noise_levels(
     n_episodes: int = 100,
     output_dir: str = "./evaluation_results",
 ) -> pd.DataFrame:
-    """Evaluate agent across different uncertainty noise levels.
-    
-    Args:
-        model_path: Path to trained model.
-        config_path: Path to configuration file.
-        noise_levels: List of uncertainty noise standard deviations to test.
-        n_episodes: Number of episodes per noise level.
-        output_dir: Directory to save results.
-        
-    Returns:
-        DataFrame with evaluation results.
-    """
     # Load configuration
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
@@ -237,16 +219,13 @@ def evaluate_across_noise_levels(
     return df
 
 
+## @brief Create visualisations of evaluation results.
+#  @param df: DataFrame with evaluation results.
+#  @param output_dir: Directory to save plots.
 def plot_evaluation_results(
     df: pd.DataFrame,
     output_dir: str = "./evaluation_results",
 ) -> None:
-    """Create visualisations of evaluation results.
-    
-    Args:
-        df: DataFrame with evaluation results.
-        output_dir: Directory to save plots.
-    """
     sns.set_style("whitegrid")
     
     # Create figure with subplots
@@ -305,8 +284,8 @@ def plot_evaluation_results(
     plt.close()
 
 
+## @brief Main entry point for evaluation script.
 def main() -> None:
-    """Main entry point for evaluation script."""
     parser = argparse.ArgumentParser(
         description="Evaluate trained agent across uncertainty levels"
     )

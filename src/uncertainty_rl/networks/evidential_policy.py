@@ -1,9 +1,9 @@
-"""Evidential policy network for uncertainty quantification.
-
-This module implements an evidential deep learning policy network that quantifies
-both epistemic (model) uncertainty and aleatoric (data) uncertainty using 
-evidential distributions.
-"""
+## @file evidential_policy.py
+#  @brief Evidential policy network for uncertainty quantification.
+#
+#  This module implements an evidential deep learning policy network that quantifies
+#  both epistemic (model) uncertainty and aleatoric (data) uncertainty using 
+#  evidential distributions.
 from typing import Tuple, Optional, Dict, Any
 import torch
 import torch.nn as nn
@@ -12,17 +12,16 @@ from torch.distributions import Normal
 import numpy as np
 
 
+## @class EvidentialLayer
+#  @brief Evidential output layer for uncertainty quantification.
+#
+#  This layer outputs the parameters of an evidential Normal-Inverse-Gamma (NIG)
+#  distribution, which can be used to quantify both epistemic and aleatoric uncertainty.
 class EvidentialLayer(nn.Module):
-    """Evidential output layer for uncertainty quantification.
     
-    This layer outputs the parameters of an evidential Normal-Inverse-Gamma (NIG)
-    distribution, which can be used to quantify both epistemic and aleatoric uncertainty.
-    
-    Args:
-        input_dim: Dimension of input features.
-        output_dim: Dimension of output (action space).
-    """
-    
+    ## @brief Constructor for EvidentialLayer.
+    #  @param input_dim: Dimension of input features.
+    #  @param output_dim: Dimension of output (action space).
     def __init__(self, input_dim: int, output_dim: int) -> None:
         super().__init__()
         self.input_dim = input_dim
@@ -31,19 +30,14 @@ class EvidentialLayer(nn.Module):
         # Output 4 parameters per action: gamma, nu, alpha, beta
         self.linear = nn.Linear(input_dim, output_dim * 4)
         
+    ## @brief Forward pass to compute evidential parameters.
+    #  @param x: Input features of shape (batch_size, input_dim).
+    #  @return Tuple of (gamma, nu, alpha, beta) evidential parameters.
+    #          - gamma: Mean of the Gaussian (batch_size, output_dim)
+    #          - nu: Precision parameter (batch_size, output_dim)
+    #          - alpha: Shape parameter (batch_size, output_dim)
+    #          - beta: Rate parameter (batch_size, output_dim)
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass to compute evidential parameters.
-        
-        Args:
-            x: Input features of shape (batch_size, input_dim).
-            
-        Returns:
-            Tuple of (gamma, nu, alpha, beta) evidential parameters.
-            - gamma: Mean of the Gaussian (batch_size, output_dim)
-            - nu: Precision parameter (batch_size, output_dim)
-            - alpha: Shape parameter (batch_size, output_dim)
-            - beta: Rate parameter (batch_size, output_dim)
-        """
         out = self.linear(x)
         # Reshape to (batch_size, output_dim, 4)
         out = out.view(-1, self.output_dim, 4)
@@ -57,19 +51,18 @@ class EvidentialLayer(nn.Module):
         return gamma, nu, alpha, beta
 
 
+## @class EvidentialPolicyNetwork
+#  @brief Evidential policy network for actor-critic RL.
+#
+#  This network outputs action distributions with epistemic and aleatoric uncertainty
+#  estimates using evidential deep learning.
 class EvidentialPolicyNetwork(nn.Module):
-    """Evidential policy network for actor-critic RL.
     
-    This network outputs action distributions with epistemic and aleatoric uncertainty
-    estimates using evidential deep learning.
-    
-    Args:
-        state_dim: Dimension of state space (including uncertainty features).
-        action_dim: Dimension of action space.
-        hidden_dims: List of hidden layer dimensions.
-        activation: Activation function to use.
-    """
-    
+    ## @brief Constructor for EvidentialPolicyNetwork.
+    #  @param state_dim: Dimension of state space (including uncertainty features).
+    #  @param action_dim: Dimension of action space.
+    #  @param hidden_dims: List of hidden layer dimensions.
+    #  @param activation: Activation function to use.
     def __init__(
         self,
         state_dim: int,
@@ -111,37 +104,27 @@ class EvidentialPolicyNetwork(nn.Module):
         # Evidential output layer
         self.evidential_layer = EvidentialLayer(prev_dim, action_dim)
         
+    ## @brief Forward pass through the network.
+    #  @param state: State tensor of shape (batch_size, state_dim).
+    #  @return Tuple of (gamma, nu, alpha, beta) evidential parameters.
     def forward(
         self, 
         state: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass through the network.
-        
-        Args:
-            state: State tensor of shape (batch_size, state_dim).
-            
-        Returns:
-            Tuple of (gamma, nu, alpha, beta) evidential parameters.
-        """
         features = self.feature_extractor(state)
         gamma, nu, alpha, beta = self.evidential_layer(features)
         return gamma, nu, alpha, beta
     
+    ## @brief Get action from the policy with uncertainty estimates.
+    #  @param state: State tensor of shape (batch_size, state_dim).
+    #  @param deterministic: If True, return mean action. Otherwise, sample.
+    #  @return Tuple of (action, uncertainty_dict) where uncertainty_dict contains
+    #          epistemic and aleatoric uncertainty estimates.
     def get_action(
         self, 
         state: torch.Tensor,
         deterministic: bool = False
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
-        """Get action from the policy with uncertainty estimates.
-        
-        Args:
-            state: State tensor of shape (batch_size, state_dim).
-            deterministic: If True, return mean action. Otherwise, sample.
-            
-        Returns:
-            Tuple of (action, uncertainty_dict) where uncertainty_dict contains
-            epistemic and aleatoric uncertainty estimates.
-        """
         gamma, nu, alpha, beta = self.forward(state)
         
         # Compute uncertainties
@@ -171,6 +154,14 @@ class EvidentialPolicyNetwork(nn.Module):
         
         return action, uncertainty_dict
     
+    ## @brief Compute evidential regression loss.
+    #  @param gamma: Mean parameter.
+    #  @param nu: Precision parameter.
+    #  @param alpha: Shape parameter.
+    #  @param beta: Rate parameter.
+    #  @param target: Target values.
+    #  @param lambda_reg: Regularisation coefficient.
+    #  @return Dictionary containing loss components.
     def compute_evidential_loss(
         self,
         gamma: torch.Tensor,
@@ -180,19 +171,6 @@ class EvidentialPolicyNetwork(nn.Module):
         target: torch.Tensor,
         lambda_reg: float = 0.01
     ) -> Dict[str, torch.Tensor]:
-        """Compute evidential regression loss.
-        
-        Args:
-            gamma: Mean parameter.
-            nu: Precision parameter.
-            alpha: Shape parameter.
-            beta: Rate parameter.
-            target: Target values.
-            lambda_reg: Regularisation coefficient.
-            
-        Returns:
-            Dictionary containing loss components.
-        """
         # NLL term
         two_beta_lambda = 2 * beta * (1 + nu)
         nll = (
@@ -218,19 +196,18 @@ class EvidentialPolicyNetwork(nn.Module):
         }
 
 
+## @class UncertaintyConditionedActor
+#  @brief Actor network that conditions on state uncertainty.
+#
+#  This network explicitly uses uncertainty information in the state to make
+#  more cautious decisions under high uncertainty.
 class UncertaintyConditionedActor(nn.Module):
-    """Actor network that conditions on state uncertainty.
     
-    This network explicitly uses uncertainty information in the state to make
-    more cautious decisions under high uncertainty.
-    
-    Args:
-        state_dim: Dimension of state (excluding uncertainty features).
-        uncertainty_dim: Dimension of uncertainty features (e.g., covariance).
-        action_dim: Dimension of action space.
-        hidden_dims: List of hidden layer dimensions.
-    """
-    
+    ## @brief Constructor for UncertaintyConditionedActor.
+    #  @param state_dim: Dimension of state (excluding uncertainty features).
+    #  @param uncertainty_dim: Dimension of uncertainty features (e.g., covariance).
+    #  @param action_dim: Dimension of action space.
+    #  @param hidden_dims: List of hidden layer dimensions.
     def __init__(
         self,
         state_dim: int,
@@ -272,20 +249,15 @@ class UncertaintyConditionedActor(nn.Module):
         # Evidential output
         self.evidential_layer = EvidentialLayer(prev_dim, action_dim)
         
+    ## @brief Forward pass with separate state and uncertainty inputs.
+    #  @param state: State tensor without uncertainty.
+    #  @param uncertainty: Uncertainty features (e.g., covariance matrix elements).
+    #  @return Evidential parameters (gamma, nu, alpha, beta).
     def forward(
         self, 
         state: torch.Tensor, 
         uncertainty: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Forward pass with separate state and uncertainty inputs.
-        
-        Args:
-            state: State tensor without uncertainty.
-            uncertainty: Uncertainty features (e.g., covariance matrix elements).
-            
-        Returns:
-            Evidential parameters (gamma, nu, alpha, beta).
-        """
         state_features = self.state_encoder(state)
         uncertainty_features = self.uncertainty_encoder(uncertainty)
         
