@@ -1,8 +1,10 @@
-## @file carla_parking.py
-#  @brief CARLA Gymnasium parking environment with SLAM uncertainty integration.
-#
-#  This module implements a Gymnasium-compatible environment for autonomous parking
-#  in CARLA simulator with SLAM localisation uncertainty in the state representation.
+"""
+@file carla_parking.py
+@brief CARLA Gymnasium parking environment with SLAM uncertainty integration.
+
+This module implements a Gymnasium-compatible environment for autonomous parking
+in CARLA simulator with SLAM localisation uncertainty in the state representation.
+"""
 from typing import Dict, Tuple, Optional, Any, List
 import numpy as np
 import gymnasium as gym
@@ -12,23 +14,17 @@ import time
 import random
 
 
-## @class CARLAParkingEnv
-#  @brief CARLA-based parking environment with SLAM uncertainty.
-#
-#  This environment simulates an autonomous parking scenario where the agent must
-#  park a vehicle whilst accounting for localisation uncertainty from SLAM.
 class CARLAParkingEnv(gym.Env):
+    """
+    @class CARLAParkingEnv
+    @brief CARLA-based parking environment with SLAM uncertainty.
+    
+    This environment simulates an autonomous parking scenario where the agent must
+    park a vehicle whilst accounting for localisation uncertainty from SLAM.
+    """
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
     
-    ## @brief Constructor for CARLAParkingEnv.
-    #  @param carla_host: CARLA server host address.
-    #  @param carla_port: CARLA server port.
-    #  @param town: CARLA town/map to use.
-    #  @param uncertainty_noise_std: Standard deviation of position uncertainty (metres).
-    #  @param max_steps: Maximum episode length.
-    #  @param target_parking_spot: Target parking spot coordinates (x, y, yaw).
-    #  @param render_mode: Rendering mode ('human', 'rgb_array', or None).
     def __init__(
         self,
         carla_host: str = "localhost",
@@ -39,6 +35,16 @@ class CARLAParkingEnv(gym.Env):
         target_parking_spot: Optional[Tuple[float, float, float]] = None,
         render_mode: Optional[str] = None,
     ) -> None:
+        """
+        @brief Constructor for CARLAParkingEnv.
+        @param carla_host: CARLA server host address.
+        @param carla_port: CARLA server port.
+        @param town: CARLA town/map to use.
+        @param uncertainty_noise_std: Standard deviation of position uncertainty (metres).
+        @param max_steps: Maximum episode length.
+        @param target_parking_spot: Target parking spot coordinates (x, y, yaw).
+        @param render_mode: Rendering mode ('human', 'rgb_array', or None).
+        """
         super().__init__()
         
         self.carla_host = carla_host
@@ -86,8 +92,10 @@ class CARLAParkingEnv(gym.Env):
         # Covariance matrix for SLAM uncertainty simulation
         self.covariance_matrix = np.eye(3) * (uncertainty_noise_std ** 2)
         
-    ## @brief Establish connection to CARLA simulator.
     def _connect_to_carla(self) -> None:
+        """
+        @brief Establish connection to CARLA simulator.
+        """
         try:
             self.client = carla.Client(self.carla_host, self.carla_port)
             self.client.set_timeout(10.0)
@@ -104,8 +112,10 @@ class CARLAParkingEnv(gym.Env):
             self.client = None
             self.world = None
             
-    ## @brief Spawn the ego vehicle in the world.
     def _spawn_vehicle(self) -> None:
+        """
+        @brief Spawn the ego vehicle in the world.
+        """
         if self.world is None:
             return
             
@@ -130,9 +140,11 @@ class CARLAParkingEnv(gym.Env):
         # Wait for vehicle to spawn
         time.sleep(0.5)
         
-    ## @brief Get current state with SLAM uncertainty.
-    #  @return State vector including position, velocity, and uncertainty estimates.
     def _get_state(self) -> np.ndarray:
+        """
+        @brief Get current state with SLAM uncertainty.
+        @return State vector including position, velocity, and uncertainty estimates.
+        """
         if self.vehicle is None or self.world is None:
             # Simulation mode - return dummy state
             return np.zeros(15, dtype=np.float32)
@@ -185,10 +197,12 @@ class CARLAParkingEnv(gym.Env):
         
         return state
     
-    ## @brief Compute reward based on parking objective.
-    #  @param state: Current state vector.
-    #  @return Tuple of (reward, done) where done indicates episode termination.
     def _compute_reward(self, state: np.ndarray) -> Tuple[float, bool]:
+        """
+        @brief Compute reward based on parking objective.
+        @param state: Current state vector.
+        @return Tuple of (reward, done) where done indicates episode termination.
+        """
         # Extract position and orientation
         x, y, yaw = state[0], state[1], state[2]
         vx, vy, vyaw = state[3], state[4], state[5]
@@ -229,15 +243,17 @@ class CARLAParkingEnv(gym.Env):
         
         return float(reward), done
     
-    ## @brief Reset the environment.
-    #  @param seed: Random seed for reproducibility.
-    #  @param options: Additional options for reset.
-    #  @return Tuple of (initial_state, info_dict).
     def reset(
         self, 
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """
+        @brief Reset the environment.
+        @param seed: Random seed for reproducibility.
+        @param options: Additional options for reset.
+        @return Tuple of (initial_state, info_dict).
+        """
         super().reset(seed=seed)
         
         # Reset episode state
@@ -266,13 +282,15 @@ class CARLAParkingEnv(gym.Env):
         
         return state, info
     
-    ## @brief Execute one environment step.
-    #  @param action: Action vector [steering, throttle, brake].
-    #  @return Tuple of (next_state, reward, terminated, truncated, info).
     def step(
         self, 
         action: np.ndarray
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        """
+        @brief Execute one environment step.
+        @param action: Action vector [steering, throttle, brake].
+        @return Tuple of (next_state, reward, terminated, truncated, info).
+        """
         self.steps += 1
         
         # Apply action to vehicle
@@ -303,9 +321,11 @@ class CARLAParkingEnv(gym.Env):
         
         return state, reward, terminated, truncated, info
     
-    ## @brief Render the environment.
-    #  @return RGB array if render_mode is 'rgb_array', None otherwise.
     def render(self) -> Optional[np.ndarray]:
+        """
+        @brief Render the environment.
+        @return RGB array if render_mode is 'rgb_array', None otherwise.
+        """
         if self.render_mode == "human" and self.world is not None:
             # Update spectator view to follow vehicle
             if self.vehicle is not None:
@@ -324,8 +344,10 @@ class CARLAParkingEnv(gym.Env):
             
         return None
     
-    ## @brief Clean up resources.
     def close(self) -> None:
+        """
+        @brief Clean up resources.
+        """
         if self.vehicle is not None:
             self.vehicle.destroy()
             self.vehicle = None
