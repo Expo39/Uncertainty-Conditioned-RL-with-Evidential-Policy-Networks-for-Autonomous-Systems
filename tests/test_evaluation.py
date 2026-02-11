@@ -5,10 +5,8 @@
 Validates the EvaluationMetrics container, metric aggregation,
 and the evaluation helper functions.
 """
-from typing import Dict
 
 import numpy as np
-import pytest
 
 from uncertainty_rl.evaluation.evaluate import EvaluationMetrics
 

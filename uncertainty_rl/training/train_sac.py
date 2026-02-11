@@ -5,25 +5,25 @@
 This module provides training functionality using Stable-Baselines3's SAC algorithm
 with evidential policy networks.
 """
-from typing import Optional, Dict, Any, Callable
-import os
-import yaml
+
 import argparse
-from pathlib import Path
-import torch
+import os
+from typing import Any, Callable, Dict
+
+import gymnasium as gym
 import numpy as np
+import torch
+import yaml
 from stable_baselines3 import SAC
 from stable_baselines3.common.callbacks import (
+    CallbackList,
     CheckpointCallback,
     EvalCallback,
-    CallbackList,
 )
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-import gymnasium as gym
 
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
-from uncertainty_rl.networks.evidential_policy import EvidentialPolicyNetwork
 
 
 def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
@@ -33,6 +33,7 @@ def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
     @param rank: Environment rank for seeding.
     @return Callable that creates environment.
     """
+
     def _init() -> gym.Env:
         env = CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
@@ -42,6 +43,7 @@ def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
             max_steps=config.get("max_steps", 500),
         )
         return env
+
     return _init
 
 
@@ -50,7 +52,7 @@ class UncertaintyLogger:
     @class UncertaintyLogger
     @brief Custom callback to log uncertainty metrics during training.
     """
-    
+
     def __init__(self, verbose: int = 0) -> None:
         """
         @brief Constructor for UncertaintyLogger.
@@ -59,7 +61,7 @@ class UncertaintyLogger:
         self.verbose = verbose
         self.epistemic_uncertainties = []
         self.aleatoric_uncertainties = []
-        
+
     def _on_step(self) -> bool:
         """
         @brief Called after each environment step.
@@ -76,7 +78,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     @param config_path: Path to configuration file.
     @return Configuration dictionary.
     """
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         config = yaml.safe_load(f)
     return config
 
@@ -102,19 +104,19 @@ def train(
     """
     # Load configuration
     config = load_config(config_path)
-    
+
     # Set random seeds
     torch.manual_seed(seed)
     np.random.seed(seed)
-    
+
     # Create directories
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
+
     # Create training environment
     print("Creating training environment...")
     env = DummyVecEnv([make_env(config)])
-    
+
     # Normalise observations and rewards
     env = VecNormalize(
         env,
@@ -123,7 +125,7 @@ def train(
         clip_obs=10.0,
         clip_reward=10.0,
     )
-    
+
     # Create evaluation environment
     print("Creating evaluation environment...")
     eval_config = config.copy()
@@ -136,13 +138,13 @@ def train(
         clip_obs=10.0,
         training=False,  # Important: don't update running statistics
     )
-    
+
     # Configure SAC hyperparameters
     policy_kwargs = dict(
         net_arch=config.get("net_arch", [256, 256]),
         activation_fn=torch.nn.ReLU,
     )
-    
+
     # Create SAC agent
     print("Initialising SAC agent...")
     model = SAC(
@@ -161,11 +163,11 @@ def train(
         tensorboard_log=log_dir,
         seed=seed,
     )
-    
+
     # Set up logger
     logger = configure(log_dir, ["stdout", "tensorboard"])
     model.set_logger(logger)
-    
+
     # Create callbacks
     checkpoint_callback = CheckpointCallback(
         save_freq=config.get("checkpoint_freq", 50000),
@@ -174,7 +176,7 @@ def train(
         save_replay_buffer=True,
         save_vecnormalize=True,
     )
-    
+
     eval_callback = EvalCallback(
         eval_env,
         best_model_save_path=checkpoint_dir,
@@ -184,9 +186,9 @@ def train(
         deterministic=True,
         render=False,
     )
-    
+
     callback_list = CallbackList([checkpoint_callback, eval_callback])
-    
+
     # Train the agent
     print(f"Starting training for {total_timesteps} timesteps...")
     model.learn(
@@ -195,14 +197,14 @@ def train(
         log_interval=10,
         progress_bar=True,
     )
-    
+
     # Save final model
     final_model_path = os.path.join(checkpoint_dir, "final_model")
     model.save(final_model_path)
     env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
-    
+
     print(f"Training complete! Model saved to {final_model_path}")
-    
+
     # Clean up
     env.close()
     eval_env.close()
@@ -257,9 +259,9 @@ def main() -> None:
         default=42,
         help="Random seed",
     )
-    
+
     args = parser.parse_args()
-    
+
     train(
         config_path=args.config,
         total_timesteps=args.total_timesteps,

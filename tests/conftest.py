@@ -5,12 +5,11 @@
 Provides reusable fixtures for network instantiation, dummy states,
 environment configuration, and logging setup.
 """
-from typing import Dict, Any
 
-import numpy as np
+from typing import Any, Dict
+
 import pytest
 import torch
-
 
 # ---------------------------------------------------------------------------
 # Constants matching the project's 15-dim state / 3-dim action convention

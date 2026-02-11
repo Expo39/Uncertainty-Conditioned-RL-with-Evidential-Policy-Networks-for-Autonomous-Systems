@@ -6,8 +6,9 @@ All tests run in simulation mode (no CARLA server required) by verifying
 the environment's API contract, state dimensions, reward logic, and
 fallback behaviour.
 """
-import pytest
+
 import numpy as np
+import pytest
 
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
@@ -52,12 +53,8 @@ class TestCARLAParkingEnvAPI:
         """
         @brief Action bounds: steering [-1,1], throttle [0,1], brake [0,1].
         """
-        np.testing.assert_array_equal(
-            self.env.action_space.low, [-1.0, 0.0, 0.0]
-        )
-        np.testing.assert_array_equal(
-            self.env.action_space.high, [1.0, 1.0, 1.0]
-        )
+        np.testing.assert_array_equal(self.env.action_space.low, [-1.0, 0.0, 0.0])
+        np.testing.assert_array_equal(self.env.action_space.high, [1.0, 1.0, 1.0])
 
     def test_reset_returns_tuple(self) -> None:
         """
@@ -201,13 +198,9 @@ class TestCovarianceSimulation:
             uncertainty_noise_std=noise_std,
             max_steps=10,
         )
-        expected_variance = noise_std ** 2
-        np.testing.assert_approx_equal(
-            env.covariance_matrix[0, 0], expected_variance
-        )
-        np.testing.assert_approx_equal(
-            env.covariance_matrix[1, 1], expected_variance
-        )
+        expected_variance = noise_std**2
+        np.testing.assert_approx_equal(env.covariance_matrix[0, 0], expected_variance)
+        np.testing.assert_approx_equal(env.covariance_matrix[1, 1], expected_variance)
         env.close()
 
     def test_covariance_is_symmetric(self) -> None:
@@ -215,7 +208,5 @@ class TestCovarianceSimulation:
         @brief Covariance matrix must always be symmetric.
         """
         env = CARLAParkingEnv(uncertainty_noise_std=0.3, max_steps=10)
-        np.testing.assert_array_equal(
-            env.covariance_matrix, env.covariance_matrix.T
-        )
+        np.testing.assert_array_equal(env.covariance_matrix, env.covariance_matrix.T)
         env.close()
