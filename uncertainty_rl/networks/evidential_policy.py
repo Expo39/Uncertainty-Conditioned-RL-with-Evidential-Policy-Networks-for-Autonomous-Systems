@@ -22,7 +22,7 @@ class EvidentialLayer(nn.Module):
     @brief Evidential output layer for uncertainty quantification.
 
     This layer outputs the parameters of an evidential Normal-Inverse-Gamma (NIG)
-    distribution, which can be used to quantify both epistemic and aleatoric uncertainty.
+    distribution for epistemic and aleatoric uncertainty quantification.
     """
 
     def __init__(self, input_dim: int, output_dim: int) -> None:

@@ -89,7 +89,7 @@ class TestMetricsLogger:
         @brief Logger should create the log directory if it doesn't exist.
         """
         nested = tmp_path / "a" / "b" / "c"
-        logger = MetricsLogger(log_dir=str(nested))
+        MetricsLogger(log_dir=str(nested))
         assert nested.exists()
 
 

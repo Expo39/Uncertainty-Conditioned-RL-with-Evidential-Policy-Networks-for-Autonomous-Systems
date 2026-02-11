@@ -42,7 +42,7 @@ class CARLAParkingEnv(gym.Env):
         @param carla_host: CARLA server host address.
         @param carla_port: CARLA server port.
         @param town: CARLA town/map to use.
-        @param uncertainty_noise_std: Standard deviation of position uncertainty (metres).
+        @param uncertainty_noise_std: Std dev of position uncertainty (metres).
         @param max_steps: Maximum episode length.
         @param target_parking_spot: Target parking spot coordinates (x, y, yaw).
         @param render_mode: Rendering mode ('human', 'rgb_array', or None).
@@ -218,7 +218,7 @@ class CARLAParkingEnv(gym.Env):
         """
         # Extract position and orientation
         x, y, yaw = state[0], state[1], state[2]
-        vx, vy, vyaw = state[3], state[4], state[5]
+        vx, vy, _ = state[3], state[4], state[5]
 
         # Distance to target parking spot
         target_x, target_y, target_yaw = self.target_parking_spot

@@ -67,7 +67,7 @@ class CovarianceExtractorNode(Node):
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
-        self.get_logger().info(f"Covariance extractor node initialised")
+        self.get_logger().info("Covariance extractor node initialised")
         self.get_logger().info(f"  Subscribing to: {odom_topic}")
         self.get_logger().info(f"  Publishing to: {covariance_topic}")
 
@@ -117,7 +117,8 @@ class CovarianceExtractorNode(Node):
             std_y = np.sqrt(covariance_3x3[1, 1])
             std_yaw = np.sqrt(covariance_3x3[2, 2])
             self.get_logger().info(
-                f"Uncertainty - X: {std_x:.4f}m, Y: {std_y:.4f}m, Yaw: {np.rad2deg(std_yaw):.2f}°"
+                f"Uncertainty - X: {std_x:.4f}m, "
+                f"Y: {std_y:.4f}m, Yaw: {np.rad2deg(std_yaw):.2f}°"
             )
 
     def publish_covariance(self) -> None:
@@ -216,7 +217,7 @@ class CovarianceMonitorNode(Node):
             Float64MultiArray, covariance_topic, self.covariance_callback, qos_profile
         )
 
-        self.get_logger().info(f"Covariance monitor initialised")
+        self.get_logger().info("Covariance monitor initialised")
 
     def covariance_callback(self, msg: Float64MultiArray) -> None:
         """
@@ -236,7 +237,8 @@ class CovarianceMonitorNode(Node):
 
             self.get_logger().info(
                 f"Pose: ({x:.2f}, {y:.2f}, {np.rad2deg(yaw):.1f}°) | "
-                f"Uncertainty: σ_x={std_x:.4f}m, σ_y={std_y:.4f}m, σ_yaw={np.rad2deg(std_yaw):.2f}°"
+                f"Uncertainty: σ_x={std_x:.4f}m, "
+                f"σ_y={std_y:.4f}m, σ_yaw={np.rad2deg(std_yaw):.2f}°"
             )
 
 

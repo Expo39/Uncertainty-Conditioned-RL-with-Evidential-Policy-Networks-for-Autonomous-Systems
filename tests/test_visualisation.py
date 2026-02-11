@@ -10,12 +10,11 @@ from pathlib import Path
 from typing import Dict, List
 
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")  # Non-interactive backend for CI/headless testing
 
-import numpy as np
-
-from uncertainty_rl.utils.visualisation import (
+from uncertainty_rl.utils.visualisation import (  # noqa: E402
     plot_training_curves,
     plot_trajectory,
     plot_uncertainty_evolution,
