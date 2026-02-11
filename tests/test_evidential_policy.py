@@ -6,9 +6,9 @@ Validates NIG parameter constraints, uncertainty decomposition, loss computation
 and interface contracts for EvidentialLayer, EvidentialPolicyNetwork, and
 UncertaintyConditionedActor.
 """
+
 import pytest
 import torch
-import numpy as np
 
 from uncertainty_rl.networks.evidential_policy import (
     EvidentialLayer,
@@ -142,18 +142,14 @@ class TestEvidentialPolicyNetwork:
             unc.keys()
         ), f"Missing keys: {required_keys - unc.keys()}"
 
-    def test_deterministic_action_is_gamma(
-        self, single_state: torch.Tensor
-    ) -> None:
+    def test_deterministic_action_is_gamma(self, single_state: torch.Tensor) -> None:
         """
         @brief In deterministic mode the action must equal gamma (the NIG mean).
         """
         action, unc = self.net.get_action(single_state, deterministic=True)
         torch.testing.assert_close(action, unc["gamma"])
 
-    def test_uncertainty_decomposition(
-        self, state_batch: torch.Tensor
-    ) -> None:
+    def test_uncertainty_decomposition(self, state_batch: torch.Tensor) -> None:
         """
         @brief Total uncertainty must equal epistemic + aleatoric.
         """
@@ -177,9 +173,7 @@ class TestEvidentialPolicyNetwork:
         expected = unc["beta"] / (unc["nu"] * (unc["alpha"] - 1))
         torch.testing.assert_close(unc["aleatoric"], expected)
 
-    def test_uncertainties_are_positive(
-        self, state_batch: torch.Tensor
-    ) -> None:
+    def test_uncertainties_are_positive(self, state_batch: torch.Tensor) -> None:
         """
         @brief All uncertainty values must be positive.
         """
@@ -274,7 +268,11 @@ class TestEvidentialLoss:
         @brief With lambda_reg=0, loss should equal NLL.
         """
         result = self.net.compute_evidential_loss(
-            self.gamma, self.nu, self.alpha, self.beta, self.target,
+            self.gamma,
+            self.nu,
+            self.alpha,
+            self.beta,
+            self.target,
             lambda_reg=0.0,
         )
         torch.testing.assert_close(result["loss"], result["nll"])

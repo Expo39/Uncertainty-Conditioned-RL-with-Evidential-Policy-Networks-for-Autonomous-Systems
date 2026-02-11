@@ -5,14 +5,15 @@
 Validates that plot functions execute without errors and produce output files.
 Uses matplotlib's non-interactive backend so no display is required.
 """
+
 from pathlib import Path
 from typing import Dict, List
 
 import matplotlib
+
 matplotlib.use("Agg")  # Non-interactive backend for CI/headless testing
 
 import numpy as np
-import pytest
 
 from uncertainty_rl.utils.visualisation import (
     plot_training_curves,

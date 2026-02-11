@@ -2,12 +2,9 @@
 @file test_logging.py
 @brief Tests for logging and uncertainty tracking utilities.
 """
+
 import json
 from pathlib import Path
-from typing import Dict
-
-import numpy as np
-import pytest
 
 from uncertainty_rl.utils.logging import MetricsLogger, UncertaintyTracker
 

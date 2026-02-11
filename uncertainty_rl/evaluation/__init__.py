@@ -5,8 +5,8 @@
 
 from uncertainty_rl.evaluation.evaluate import (
     EvaluationMetrics,
-    evaluate_agent,
     evaluate_across_noise_levels,
+    evaluate_agent,
     plot_evaluation_results,
 )
 
