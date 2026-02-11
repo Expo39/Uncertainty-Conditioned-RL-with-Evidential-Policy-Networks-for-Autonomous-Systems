@@ -334,7 +334,7 @@ class CARLAParkingEnv(gym.Env):
 
         return state, reward, terminated, truncated, info
 
-    def render(self) -> Optional[np.ndarray]:
+    def render(self) -> Optional[np.ndarray]:  # type: ignore[override]
         """
         @brief Render the environment.
         @return RGB array if render_mode is 'rgb_array', None otherwise.

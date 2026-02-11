@@ -8,7 +8,7 @@ SLAM uncertainty conditions.
 
 import argparse
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -104,7 +104,7 @@ def make_eval_env(uncertainty_noise_std: float, config: Dict[str, Any]) -> Dummy
 
 def evaluate_agent(
     model: SAC,
-    env: DummyVecEnv,
+    env: Union[DummyVecEnv, VecNormalize],
     n_episodes: int = 100,
     deterministic: bool = True,
     render: bool = False,
@@ -120,28 +120,28 @@ def evaluate_agent(
     """
     metrics = EvaluationMetrics()
 
-    episode_rewards = []
-    episode_steps = []
+    episode_rewards: List[float] = []
+    episode_steps: List[int] = []
     successes = 0
 
     for episode in range(n_episodes):
-        obs = env.reset()
-        done = False
+        obs: np.ndarray = env.reset()  # type: ignore[assignment]
+        done_arr = np.array([False])
         episode_reward = 0.0
         steps = 0
 
-        while not done:
+        while not done_arr[0]:
             action, _states = model.predict(obs, deterministic=deterministic)
-            obs, reward, done, info = env.step(action)
+            obs, reward, done_arr, info = env.step(action)  # type: ignore[assignment]
 
-            episode_reward += reward[0]
+            episode_reward += float(reward[0])
             steps += 1
 
             if render:
                 env.render()
 
             # Check if done
-            if done[0]:
+            if done_arr[0]:
                 break
 
         # Extract final state for error computation
@@ -160,13 +160,13 @@ def evaluate_agent(
         # Store metrics
         episode_rewards.append(episode_reward)
         episode_steps.append(steps)
-        metrics.position_errors.append(position_error)
-        metrics.orientation_errors.append(orientation_error)
+        metrics.position_errors.append(float(position_error))
+        metrics.orientation_errors.append(float(orientation_error))
 
     # Compute aggregate metrics
     metrics.success_rate = (successes / n_episodes) * 100.0
-    metrics.average_reward = np.mean(episode_rewards)
-    metrics.average_steps = np.mean(episode_steps)
+    metrics.average_reward = float(np.mean(episode_rewards))
+    metrics.average_steps = float(np.mean(episode_steps))
 
     return metrics
 
@@ -189,7 +189,7 @@ def evaluate_across_noise_levels(
     """
     # Load configuration
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+        config: Dict[str, Any] = yaml.safe_load(f)
 
     # Load model
     print(f"Loading model from {model_path}...")
@@ -204,18 +204,19 @@ def evaluate_across_noise_levels(
         print(f"\nEvaluating with uncertainty noise std = {noise_std:.4f}")
 
         # Create environment with specific noise level
-        env = make_eval_env(noise_std, config)
+        base_env = make_eval_env(noise_std, config)
+        eval_env: Union[DummyVecEnv, VecNormalize] = base_env
 
         # Apply normalisation if available
         if os.path.exists(vec_normalize_path):
-            env = VecNormalize.load(vec_normalize_path, env)
-            env.training = False
-            env.norm_reward = False
+            eval_env = VecNormalize.load(vec_normalize_path, base_env)
+            eval_env.training = False
+            eval_env.norm_reward = False
 
         # Evaluate
         metrics = evaluate_agent(
             model=model,
-            env=env,
+            env=eval_env,
             n_episodes=n_episodes,
             deterministic=True,
         )
@@ -230,7 +231,7 @@ def evaluate_across_noise_levels(
         print(f"  Mean position error: {np.mean(metrics.position_errors):.3f} m")
 
         # Clean up
-        env.close()
+        eval_env.close()
 
     # Create DataFrame
     df = pd.DataFrame(results)
