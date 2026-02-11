@@ -115,11 +115,11 @@ def train(
 
     # Create training environment
     print("Creating training environment...")
-    env = DummyVecEnv([make_env(config)])
+    train_vec_env = DummyVecEnv([make_env(config)])
 
     # Normalise observations and rewards
     env = VecNormalize(
-        env,
+        train_vec_env,
         norm_obs=True,
         norm_reward=True,
         clip_obs=10.0,
@@ -130,9 +130,9 @@ def train(
     print("Creating evaluation environment...")
     eval_config = config.copy()
     eval_config["uncertainty_noise_std"] = config.get("eval_uncertainty_noise_std", 0.1)
-    eval_env = DummyVecEnv([make_env(eval_config)])
+    eval_vec_env = DummyVecEnv([make_env(eval_config)])
     eval_env = VecNormalize(
-        eval_env,
+        eval_vec_env,
         norm_obs=True,
         norm_reward=False,  # Don't normalise rewards during evaluation
         clip_obs=10.0,
