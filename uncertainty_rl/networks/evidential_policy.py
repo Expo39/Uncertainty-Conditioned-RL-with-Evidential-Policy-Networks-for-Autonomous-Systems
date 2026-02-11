@@ -292,4 +292,5 @@ class UncertaintyConditionedActor(nn.Module):
         combined = torch.cat([state_features, uncertainty_features], dim=-1)
         features = self.combined_layers(combined)
 
-        return self.evidential_layer(features)
+        gamma, nu, alpha, beta = self.evidential_layer(features)
+        return gamma, nu, alpha, beta

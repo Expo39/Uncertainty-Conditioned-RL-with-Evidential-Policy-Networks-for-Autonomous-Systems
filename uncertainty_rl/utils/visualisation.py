@@ -158,8 +158,8 @@ def plot_training_curves(
     n_cols = 2
     n_rows = (n_metrics + n_cols - 1) // n_cols
 
-    fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 5 * n_rows))
-    axes = axes.flatten() if n_metrics > 1 else [axes]
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 5 * n_rows), squeeze=False)
+    axes = axes.flatten()
 
     for idx, (name, values) in enumerate(metrics.items()):
         if idx >= len(axes):

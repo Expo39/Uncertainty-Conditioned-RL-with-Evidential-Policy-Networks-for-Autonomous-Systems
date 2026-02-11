@@ -62,6 +62,7 @@ class CovarianceExtractorNode(Node):
         # Store latest covariance
         self.latest_covariance: Optional[np.ndarray] = None
         self.latest_pose: Optional[Tuple[float, float, float]] = None
+        self._log_counter: int = 0
 
         # Create timer for publishing
         timer_period = 1.0 / publish_rate
@@ -107,10 +108,7 @@ class CovarianceExtractorNode(Node):
         self.latest_covariance = covariance_3x3
 
         # Log uncertainty statistics periodically
-        if hasattr(self, "_log_counter"):
-            self._log_counter += 1
-        else:
-            self._log_counter = 0
+        self._log_counter += 1
 
         if self._log_counter % 100 == 0:
             std_x = np.sqrt(covariance_3x3[0, 0])

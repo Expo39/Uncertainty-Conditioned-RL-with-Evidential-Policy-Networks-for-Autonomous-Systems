@@ -257,7 +257,7 @@ class CARLAParkingEnv(gym.Env):
         # Episode termination conditions
         done = success or position_error > 20.0 or self.steps >= self.max_steps
 
-        return float(reward), done
+        return float(reward), bool(done)
 
     def reset(
         self, seed: Optional[int] = None, options: Optional[Dict[str, Any]] = None
