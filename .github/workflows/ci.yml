@@ -5,6 +5,9 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: write
+
 # Cancel in-progress runs for the same branch/PR to save Actions minutes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -26,15 +29,24 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -e ".[dev]"
+          pip install autoflake
+
+      - name: Remove unused imports (autoflake)
+        run: autoflake --in-place --remove-all-unused-imports --recursive uncertainty_rl tests
+
+      - name: Sort imports (isort)
+        run: isort uncertainty_rl tests
+
+      - name: Format code (black)
+        run: black uncertainty_rl tests
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: Apply auto-formatting fixes
 
       - name: Run flake8
         run: flake8 uncertainty_rl tests/ --max-line-length 88 --extend-ignore E203,W503
-
-      - name: Check import ordering (isort)
-        run: isort --check-only --diff uncertainty_rl tests/
-
-      - name: Check formatting (black)
-        run: black --check uncertainty_rl tests/
 
   test:
     name: Test
