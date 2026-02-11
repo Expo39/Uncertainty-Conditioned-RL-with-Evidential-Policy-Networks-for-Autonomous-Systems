@@ -52,7 +52,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     needs: lint
-    steps:
+    steps: 
       - uses: actions/checkout@v5
 
       - uses: actions/setup-python@v5

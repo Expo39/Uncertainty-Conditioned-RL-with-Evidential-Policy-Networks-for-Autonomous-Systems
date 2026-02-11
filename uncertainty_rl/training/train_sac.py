@@ -59,8 +59,8 @@ class UncertaintyLogger:
         @param verbose: Verbosity level.
         """
         self.verbose = verbose
-        self.epistemic_uncertainties = []
-        self.aleatoric_uncertainties = []
+        self.epistemic_uncertainties: list[float] = []
+        self.aleatoric_uncertainties: list[float] = []
 
     def _on_step(self) -> bool:
         """
@@ -79,7 +79,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     @return Configuration dictionary.
     """
     with open(config_path, "r") as f:
-        config = yaml.safe_load(f)
+        config: Dict[str, Any] = yaml.safe_load(f)
     return config
 
 
