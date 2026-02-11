@@ -55,3 +55,13 @@ build/
 tmp/
 temp/
 *.tmp
+
+# AI assistant instructions (local only)
+CLAUDE.md
+**/CLAUDE.md
+
+# Testing & linting artefacts
+htmlcov/
+.coverage
+.pytest_cache/
+.mypy_cache/

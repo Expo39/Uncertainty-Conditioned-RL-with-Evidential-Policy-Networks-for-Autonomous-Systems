@@ -1,0 +1,143 @@
+
+# @file docker-compose.yml
+# @brief Docker Compose orchestration for uncertainty-conditioned RL research stack.
+
+# This compose file orchestrates:
+# - CARLA Server (headless simulation)
+# - ROS 2 Jazzy + CARLA bridge + robot_localisation
+# - Training/evaluation container with PyTorch + SB3 + evidential networks
+
+# Network architecture: Internal bridge network for container communication.
+# Volume mounts: Persistent storage for logs, checkpoints, configs.
+
+# @author Antonio
+# @date 2025-02-11
+
+services:
+  # CARLA simulation server - headless with GPU passthrough
+  carla-server:
+    image: carlasim/carla:0.9.15
+    container_name: uncertainty-rl-carla
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=${DISPLAY}
+    # Headless mode: -RenderOffScreen for no display requirement
+    command: /bin/bash CarlaUE4.sh -RenderOffScreen -world-port=2000 -resx=800 -resy=600 -quality-level=Low
+    ports:
+      - "2000-2002:2000-2002"  # CARLA world, streaming, RPC
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/2000' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ROS 2 Jazzy bridge with robot_localisation EKF-SLAM
+  ros2-bridge:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.ros2
+      args:
+        ROS_DISTRO: jazzy
+    container_name: uncertainty-rl-ros2
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - CARLA_HOST=carla-server
+      - CARLA_PORT=2000
+    depends_on:
+      carla-server:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./configs:/workspace/configs:ro
+      - ./logs/ros2:/workspace/logs:rw
+      - ./uncertainty_rl/ros2:/workspace/ros2_nodes:ro
+    command: >
+      bash -c "
+        source /opt/ros/jazzy/setup.bash &&
+        source /workspace/install/setup.bash &&
+        ros2 launch uncertainty_rl_ros2 carla_bridge.launch.py
+      "
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Training and evaluation container
+  training:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.training
+      args:
+        PYTORCH_VERSION: 23.12-py3
+    container_name: uncertainty-rl-training
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - PYTHONUNBUFFERED=1
+      - CARLA_HOST=carla-server
+      - CARLA_PORT=2000
+    depends_on:
+      carla-server:
+        condition: service_healthy
+      ros2-bridge:
+        condition: service_started
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./logs:/workspace/logs:rw
+      - ./checkpoints:/workspace/checkpoints:rw
+      - ./tests:/workspace/tests:ro
+    working_dir: /workspace
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Optional: TensorBoard for monitoring
+  tensorboard:
+    image: tensorflow/tensorflow:latest
+    container_name: uncertainty-rl-tensorboard
+    ports:
+      - "6006:6006"
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./logs:/logs:ro
+    command: tensorboard --logdir=/logs --host=0.0.0.0 --port=6006
+
+networks:
+  uncertainty-rl-network:
+    driver: bridge
+    name: uncertainty-rl-network
+
+volumes:
+  logs:
+  checkpoints:
