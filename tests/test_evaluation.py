@@ -8,7 +8,7 @@ and the evaluation helper functions.
 
 import numpy as np
 
-from uncertainty_rl.evaluation.evaluate import EvaluationMetrics
+from uncertainty_rl.evaluation import EvaluationMetrics
 
 
 class TestEvaluationMetrics:

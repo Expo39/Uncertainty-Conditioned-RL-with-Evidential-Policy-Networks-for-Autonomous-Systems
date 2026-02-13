@@ -8,6 +8,7 @@ SLAM uncertainty conditions.
 
 import argparse
 import os
+from dataclasses import dataclass, field
 from typing import Any, Dict, List, Union
 
 import matplotlib.pyplot as plt
@@ -15,12 +16,14 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import yaml
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO  # Changed from SAC to PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.envs import CARLAParkingEnv
+from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_POSITION, SUCCESS_THRESHOLD_ORIENTATION
 
 
+@dataclass
 class EvaluationMetrics:
     """
     @class EvaluationMetrics
@@ -34,18 +37,14 @@ class EvaluationMetrics:
     @var epistemic_uncertainties: Epistemic uncertainty values during episodes.
     @var aleatoric_uncertainties: Aleatoric uncertainty values during episodes.
     """
-
-    def __init__(self) -> None:
-        """
-        @brief Constructor for EvaluationMetrics.
-        """
-        self.success_rate: float = 0.0
-        self.average_reward: float = 0.0
-        self.average_steps: float = 0.0
-        self.position_errors: List[float] = []
-        self.orientation_errors: List[float] = []
-        self.epistemic_uncertainties: List[float] = []
-        self.aleatoric_uncertainties: List[float] = []
+    
+    success_rate: float = 0.0
+    average_reward: float = 0.0
+    average_steps: float = 0.0
+    position_errors: List[float] = field(default_factory=list)
+    orientation_errors: List[float] = field(default_factory=list)
+    epistemic_uncertainties: List[float] = field(default_factory=list)
+    aleatoric_uncertainties: List[float] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -103,7 +102,7 @@ def make_eval_env(uncertainty_noise_std: float, config: Dict[str, Any]) -> Dummy
 
 
 def evaluate_agent(
-    model: SAC,
+    model: PPO,  # Changed from SAC to PPO
     env: Union[DummyVecEnv, VecNormalize],
     n_episodes: int = 100,
     deterministic: bool = True,
@@ -111,7 +110,7 @@ def evaluate_agent(
 ) -> EvaluationMetrics:
     """
     @brief Evaluate agent performance.
-    @param model: Trained SAC model.
+    @param model: Trained PPO model.
     @param env: Evaluation environment.
     @param n_episodes: Number of evaluation episodes.
     @param deterministic: Use deterministic actions.
@@ -152,8 +151,9 @@ def evaluate_agent(
         position_error = np.sqrt(x**2 + y**2)
         orientation_error = np.abs(yaw)
 
-        # Check success (within thresholds)
-        success = position_error < 0.5 and orientation_error < np.deg2rad(10)
+        # Check success using shared constants
+        success = (position_error < SUCCESS_THRESHOLD_POSITION and 
+                  orientation_error < SUCCESS_THRESHOLD_ORIENTATION)
         if success:
             successes += 1
 
@@ -193,7 +193,7 @@ def evaluate_across_noise_levels(
 
     # Load model
     print(f"Loading model from {model_path}...")
-    model = SAC.load(model_path)
+    model = PPO.load(model_path)
 
     # Load normalisation statistics if available
     vec_normalize_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")

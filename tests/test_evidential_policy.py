@@ -10,7 +10,7 @@ UncertaintyConditionedActor.
 import pytest
 import torch
 
-from uncertainty_rl.networks.evidential_policy import (
+from uncertainty_rl.networks import (
     EvidentialLayer,
     EvidentialPolicyNetwork,
     UncertaintyConditionedActor,
@@ -159,7 +159,7 @@ class TestEvidentialPolicyNetwork:
 
     def test_epistemic_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Epistemic uncertainty must be β / (α − 1).
+        @brief Epistemic uncertainty must be beta / (alpha - 1).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["alpha"] - 1)
@@ -167,7 +167,7 @@ class TestEvidentialPolicyNetwork:
 
     def test_aleatoric_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Aleatoric uncertainty must be β / (ν(α − 1)).
+        @brief Aleatoric uncertainty must be beta / (nu * (alpha - 1)).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["nu"] * (unc["alpha"] - 1))

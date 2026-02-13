@@ -1,9 +1,9 @@
 """
-@file train_sac.py
-@brief Training script for uncertainty-conditioned RL with SAC.
+@file train_ppo.py
+@brief Training script for uncertainty-conditioned RL with PPO and evidential policies.
 
-This module provides training functionality using Stable-Baselines3's SAC algorithm
-with evidential policy networks.
+This module provides training functionality using Stable-Baselines3's PPO algorithm
+with evidential actor networks for autonomous parking.
 """
 
 import argparse
@@ -14,7 +14,7 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
-from stable_baselines3 import SAC
+from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
@@ -23,7 +23,9 @@ from stable_baselines3.common.callbacks import (
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.envs import CARLAParkingEnv
+# TODO: Uncomment when evidential policy is ready
+# from uncertainty_rl.networks import EvidentialActorCriticPolicy
 
 
 def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
@@ -47,31 +49,6 @@ def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
     return _init
 
 
-class UncertaintyLogger:
-    """
-    @class UncertaintyLogger
-    @brief Custom callback to log uncertainty metrics during training.
-    """
-
-    def __init__(self, verbose: int = 0) -> None:
-        """
-        @brief Constructor for UncertaintyLogger.
-        @param verbose: Verbosity level.
-        """
-        self.verbose = verbose
-        self.epistemic_uncertainties: list[float] = []
-        self.aleatoric_uncertainties: list[float] = []
-
-    def _on_step(self) -> bool:
-        """
-        @brief Called after each environment step.
-        @return True to continue training.
-        """
-        # This would log uncertainty from the policy network
-        # Implementation depends on integration with SB3
-        return True
-
-
 def load_config(config_path: str) -> Dict[str, Any]:
     """
     @brief Load configuration from YAML file.
@@ -93,7 +70,7 @@ def train(
     seed: int = 42,
 ) -> None:
     """
-    @brief Train the uncertainty-conditioned RL agent.
+    @brief Train the uncertainty-conditioned RL agent with PPO.
     @param config_path: Path to configuration YAML file.
     @param total_timesteps: Total training timesteps.
     @param log_dir: Directory for TensorBoard logs.
@@ -139,25 +116,36 @@ def train(
         training=False,  # Important: don't update running statistics
     )
 
-    # Configure SAC hyperparameters
+    # Configure PPO policy network architecture
     policy_kwargs = dict(
-        net_arch=config.get("net_arch", [256, 256]),
+        net_arch=dict(
+            pi=config.get("net_arch", [256, 256]),  # Actor network
+            vf=config.get("net_arch", [256, 256]),  # Critic network
+        ),
         activation_fn=torch.nn.ReLU,
     )
 
-    # Create SAC agent
-    print("Initialising SAC agent...")
-    model = SAC(
-        policy="MlpPolicy",
+    # TODO: When evidential policy is ready, use:
+    # policy = EvidentialActorCriticPolicy
+    # For now, use standard MlpPolicy:
+    policy = "MlpPolicy"
+
+    # Create PPO agent
+    print("Initialising PPO agent...")
+    model = PPO(
+        policy=policy,
         env=env,
         learning_rate=config.get("learning_rate", 3e-4),
-        buffer_size=config.get("buffer_size", 1000000),
-        learning_starts=config.get("learning_starts", 10000),
-        batch_size=config.get("batch_size", 256),
-        tau=config.get("tau", 0.005),
+        n_steps=config.get("n_steps", 2048),
+        batch_size=config.get("batch_size", 64),
+        n_epochs=config.get("n_epochs", 10),
         gamma=config.get("gamma", 0.99),
-        train_freq=config.get("train_freq", 1),
-        gradient_steps=config.get("gradient_steps", 1),
+        gae_lambda=config.get("gae_lambda", 0.95),
+        clip_range=config.get("clip_range", 0.2),
+        clip_range_vf=config.get("clip_range_vf", None),
+        ent_coef=config.get("ent_coef", 0.0),
+        vf_coef=config.get("vf_coef", 0.5),
+        max_grad_norm=config.get("max_grad_norm", 0.5),
         policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
@@ -172,8 +160,7 @@ def train(
     checkpoint_callback = CheckpointCallback(
         save_freq=config.get("checkpoint_freq", 50000),
         save_path=checkpoint_dir,
-        name_prefix="sac_uncertainty_rl",
-        save_replay_buffer=True,
+        name_prefix="ppo_uncertainty_rl",
         save_vecnormalize=True,
     )
 

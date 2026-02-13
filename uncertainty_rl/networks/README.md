@@ -1,6 +1,6 @@
 # networks/
 
-Core novel component — evidential deep learning policy networks for uncertainty-aware action selection.
+Core novel component - evidential deep learning policy networks for uncertainty-aware action selection.
 
 ## Module: `evidential_policy.py`
 

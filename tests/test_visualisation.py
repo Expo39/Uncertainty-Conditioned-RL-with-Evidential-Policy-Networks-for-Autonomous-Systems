@@ -14,7 +14,7 @@ import numpy as np
 
 matplotlib.use("Agg")  # Non-interactive backend for CI/headless testing
 
-from uncertainty_rl.utils.visualisation import (  # noqa: E402
+from uncertainty_rl.utils import (  # noqa: E402
     plot_training_curves,
     plot_trajectory,
     plot_uncertainty_evolution,

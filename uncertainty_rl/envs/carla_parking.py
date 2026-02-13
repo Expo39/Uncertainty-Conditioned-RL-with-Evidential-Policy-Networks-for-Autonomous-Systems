@@ -10,10 +10,17 @@ import random
 import time
 from typing import Any, Dict, Optional, Tuple
 
-import carla
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+
+try:
+    import carla
+except ImportError:
+    carla = None  # Running without CARLA (CI, tests, or sim-only mode)
+
+from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_POSITION, SUCCESS_THRESHOLD_ORIENTATION
+from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
 
 class CARLAParkingEnv(gym.Env):
@@ -240,12 +247,10 @@ class CARLAParkingEnv(gym.Env):
         # 3. Velocity penalty (should slow down near target)
         velocity_penalty = -velocity_magnitude * 0.1
 
-        # 4. Success bonus
-        success_threshold_pos = 0.5  # metres
-        success_threshold_ori = np.deg2rad(10)  # 10 degrees
+        # 4. Success bonus (using shared constants)
         success = (
-            position_error < success_threshold_pos
-            and orientation_error < success_threshold_ori
+            position_error < SUCCESS_THRESHOLD_POSITION
+            and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
             and velocity_magnitude < 0.1
         )
 
@@ -369,3 +374,7 @@ class CARLAParkingEnv(gym.Env):
             self.client = None
 
         self.world = None
+        
+        # Call parent class cleanup
+        super().close()
+

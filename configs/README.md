@@ -1,6 +1,6 @@
 # configs/
 
-YAML configuration files for all hyperparameters and runtime settings. **No hyperparameters are hardcoded in source** — everything is config-driven.
+YAML configuration files for all hyperparameters and runtime settings. **No hyperparameters are hardcoded in source** - everything is config-driven.
 
 ## Files
 

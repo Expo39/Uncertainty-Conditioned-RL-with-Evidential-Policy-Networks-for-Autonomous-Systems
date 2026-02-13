@@ -10,7 +10,7 @@ fallback behaviour.
 import numpy as np
 import pytest
 
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.envs import CARLAParkingEnv
 
 
 class TestCARLAParkingEnvAPI:

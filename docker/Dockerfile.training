@@ -32,9 +32,12 @@ RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 # Create workspace directory
 WORKDIR /workspace
 
-# Copy project config first (better layer caching — only rebuilds deps when pyproject.toml changes)
+# Copy project config first (better layer caching - only rebuilds deps when pyproject.toml changes)
 COPY pyproject.toml /workspace/pyproject.toml
 COPY uncertainty_rl /workspace/uncertainty_rl
+
+# Install CARLA Python API (system-level dependency, not on PyPI reliably)
+RUN pip install --no-cache-dir carla==0.9.15
 
 # Install all dependencies from pyproject.toml
 RUN pip install --no-cache-dir -e "/workspace[dev]"

@@ -9,6 +9,7 @@ pytest test suite mirroring the `uncertainty_rl/` package structure.
 | `conftest.py` | Shared fixtures: state/action tensors, config dicts, uncertainty states |
 | `test_evidential_policy.py` | EvidentialLayer, EvidentialPolicyNetwork, UncertaintyConditionedActor, loss computation |
 | `test_carla_parking.py` | Environment API, reward function, covariance simulation |
+| `test_covariance_utils.py` | Covariance feature extraction, matrix validation, dimension helper |
 | `test_evaluation.py` | EvaluationMetrics container and aggregation |
 | `test_logging.py` | MetricsLogger and UncertaintyTracker |
 | `test_visualisation.py` | Plot generation (uncertainty evolution, trajectory, training curves) |
@@ -25,8 +26,8 @@ make test-cov          # With coverage report (htmlcov/)
 
 ## Markers
 
-- `@pytest.mark.slow` — long-running tests
-- `@pytest.mark.integration` — requires CARLA or ROS 2
+- `@pytest.mark.slow` - long-running tests
+- `@pytest.mark.integration` - requires CARLA or ROS 2
 
 ## Constants
 

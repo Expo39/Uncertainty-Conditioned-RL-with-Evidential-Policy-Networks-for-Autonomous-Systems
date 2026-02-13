@@ -20,6 +20,6 @@ log_rate: 1.0  # Log statistics every N seconds
 
 # Covariance processing
 covariance:
-  min_variance: 0.0001  # Minimum variance threshold (m²)
-  max_variance: 100.0  # Maximum variance threshold (m²)
+  min_variance: 0.0001  # Minimum variance threshold (m^2)
+  max_variance: 100.0  # Maximum variance threshold (m^2)
   outlier_rejection: true  # Reject outlier covariance values

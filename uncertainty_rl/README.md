@@ -6,7 +6,7 @@ Main Python package for uncertainty-conditioned reinforcement learning with evid
 
 | Directory | Purpose |
 |-----------|---------|
-| `networks/` | Evidential deep learning policy — NIG distributions, uncertainty quantification |
+| `networks/` | Evidential deep learning policy - NIG distributions, uncertainty quantification |
 | `envs/` | CARLA Gymnasium parking environment with SLAM uncertainty in observations |
 | `training/` | RL training scripts using Stable-Baselines3 |
 | `evaluation/` | Performance evaluation across varying uncertainty levels |
@@ -16,8 +16,8 @@ Main Python package for uncertainty-conditioned reinforcement learning with evid
 ## Imports
 
 ```python
-from uncertainty_rl.networks.evidential_policy import EvidentialPolicyNetwork
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.networks import EvidentialPolicyNetwork
+from uncertainty_rl.envs import CARLAParkingEnv
 ```
 
 ## Package Exports

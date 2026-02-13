@@ -22,7 +22,6 @@ dependencies = [
     "numpy>=1.24.0",
     "gymnasium>=0.29.0",
     "stable-baselines3>=2.0.0",
-    "carla>=0.9.13",
     "pyyaml>=6.0",
     "tensorboard>=2.13.0",
     "matplotlib>=3.7.0",
@@ -41,15 +40,9 @@ dev = [
     "types-PyYAML>=6.0",
     "pre-commit>=3.6.0",
 ]
-ros2 = [
-    "rclpy>=3.3.0",
-    "sensor-msgs>=4.2.0",
-    "geometry-msgs>=4.2.0",
-    "nav-msgs>=4.2.0",
-]
 
 [project.scripts]
-uncertainty-rl-train = "uncertainty_rl.training.train_sac:main"
+uncertainty-rl-train = "uncertainty_rl.training.train_ppo:main"
 uncertainty-rl-eval = "uncertainty_rl.evaluation.evaluate:main"
 
 [tool.setuptools.packages.find]
