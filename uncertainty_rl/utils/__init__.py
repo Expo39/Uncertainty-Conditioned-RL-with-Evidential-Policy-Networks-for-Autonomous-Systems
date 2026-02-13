@@ -4,13 +4,13 @@
 """
 
 from uncertainty_rl.utils.constants import (
-    SUCCESS_THRESHOLD_POSITION,
-    SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_VELOCITY,
-    VEHICLE_STATE_DIM,
-    COVARIANCE_FEATURES_DIM,
-    TOTAL_OBS_DIM,
     ACTION_DIM,
+    COVARIANCE_FEATURES_DIM,
+    SUCCESS_THRESHOLD_ORIENTATION,
+    SUCCESS_THRESHOLD_POSITION,
+    SUCCESS_THRESHOLD_VELOCITY,
+    TOTAL_OBS_DIM,
+    VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.covariance_utils import (
     extract_2d_covariance_features,
@@ -45,4 +45,3 @@ __all__ = [
     "get_covariance_dimension",
     "validate_covariance_matrix",
 ]
-

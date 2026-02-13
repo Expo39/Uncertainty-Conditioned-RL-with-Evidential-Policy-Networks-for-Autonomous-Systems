@@ -19,8 +19,10 @@ try:
 except ImportError:
     carla = None  # Running without CARLA (CI, tests, or sim-only mode)
 
-from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_POSITION, SUCCESS_THRESHOLD_ORIENTATION
-from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
+from uncertainty_rl.utils.constants import (
+    SUCCESS_THRESHOLD_ORIENTATION,
+    SUCCESS_THRESHOLD_POSITION,
+)
 
 
 class CARLAParkingEnv(gym.Env):
@@ -374,7 +376,6 @@ class CARLAParkingEnv(gym.Env):
             self.client = None
 
         self.world = None
-        
+
         # Call parent class cleanup
         super().close()
-
