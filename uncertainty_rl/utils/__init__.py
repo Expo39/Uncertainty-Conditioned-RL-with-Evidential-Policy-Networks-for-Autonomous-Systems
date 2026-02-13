@@ -1,6 +1,6 @@
 """
 @file __init__.py
-@brief Shared logging, metrics, visualisation utilities, constants, and covariance tools.
+@brief Shared logging, metrics, visualisation, constants, and covariance tools.
 """
 
 from uncertainty_rl.utils.constants import (

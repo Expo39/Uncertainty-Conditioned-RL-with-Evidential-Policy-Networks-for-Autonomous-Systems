@@ -49,7 +49,8 @@ class TestExtract2DCovarianceFeatures:
         cov = np.eye(3)
         features = extract_2d_covariance_features(cov)
 
-        # [std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
+        # [std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw,
+        #  cov_xy, cov_xyaw, cov_yyaw]
         np.testing.assert_approx_equal(features[0], 1.0)  # std_x
         np.testing.assert_approx_equal(features[1], 1.0)  # std_y
         np.testing.assert_approx_equal(features[2], 1.0)  # std_yaw
