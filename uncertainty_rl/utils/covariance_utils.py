@@ -12,7 +12,7 @@ import numpy as np
 def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
     """
     @brief Extract 2D covariance features from covariance matrix.
-    
+
     Extracts [std_x, std_y, std_yaw, cov_xx, cov_yy,
     cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
     for use as RL state input. This provides both marginal uncertainties
@@ -60,11 +60,19 @@ def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
     cov_xyaw = cov_2d[0, 2]  # Correlation between x and yaw
     cov_yyaw = cov_2d[1, 2]  # Correlation between y and yaw
 
-    return np.array([
-        std_x, std_y, std_yaw,
-        cov_xx, cov_yy, cov_yawyaw,
-        cov_xy, cov_xyaw, cov_yyaw,
-    ])
+    return np.array(
+        [
+            std_x,
+            std_y,
+            std_yaw,
+            cov_xx,
+            cov_yy,
+            cov_yawyaw,
+            cov_xy,
+            cov_xyaw,
+            cov_yyaw,
+        ]
+    )
 
 
 def get_covariance_dimension() -> int:
