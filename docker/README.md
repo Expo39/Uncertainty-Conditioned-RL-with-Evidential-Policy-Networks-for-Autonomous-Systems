@@ -12,11 +12,11 @@ Dockerfiles for the containerised research stack. Orchestrated by `docker-compos
 ## Architecture
 
 ```
-┌──────────────┐    ┌──────────────┐    ┌──────────────┐
-│ carla-server │◄──►│  ros2-bridge │◄──►│   training   │
-│  (pre-built) │    │ Dockerfile.  │    │ Dockerfile.  │
-│              │    │    ros2      │    │   training   │
-└──────────────┘    └──────────────┘    └──────────────┘
++----------------+    +----------------+    +----------------+
+| carla-server   |<-->|  ros2-bridge   |<-->|   training     |
+|  (pre-built)   |    | Dockerfile.    |    | Dockerfile.    |
+|                |    |    ros2        |    |   training     |
++----------------+    +----------------+    +----------------+
 ```
 
 All containers share a bridge network (`uncertainty-rl-network`). Code directories are bind-mounted for hot-reloading.

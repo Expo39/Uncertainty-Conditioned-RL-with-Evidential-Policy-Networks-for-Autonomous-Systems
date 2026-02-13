@@ -16,14 +16,16 @@ deterministic: true  # Use deterministic actions
 render: false  # Render episodes (requires display)
 
 # Uncertainty noise levels to evaluate (metres)
+# Denser coverage in 0.1-1.0 range where performance transition occurs
 noise_levels:
-  - 0.05
-  - 0.1
-  - 0.2
-  - 0.3
-  - 0.5
-  - 0.7
-  - 1.0
+  - 0.05   # Perfect localisation
+  - 0.1    # Nominal (training condition)
+  - 0.2    # Mildly degraded
+  - 0.5    # Degraded
+  - 0.75   # Moderately degraded
+  - 1.0    # Heavily degraded
+  - 2.0    # Severe degradation
+  - 5.0    # Extreme degradation
 
 # Output settings
 output_dir: "evaluation_results"

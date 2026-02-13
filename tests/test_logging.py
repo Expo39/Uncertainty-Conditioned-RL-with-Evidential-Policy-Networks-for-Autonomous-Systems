@@ -6,7 +6,7 @@
 import json
 from pathlib import Path
 
-from uncertainty_rl.utils.logging import MetricsLogger, UncertaintyTracker
+from uncertainty_rl.utils import MetricsLogger, UncertaintyTracker
 
 
 class TestMetricsLogger:

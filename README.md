@@ -51,7 +51,7 @@ CARLA Python API must be on `PYTHONPATH`. ROS 2 Jazzy required only for `robot_l
 ./CarlaUE4.sh -RenderOffScreen
 
 # 2. Train
-python uncertainty_rl/training/train_sac.py \
+python uncertainty_rl/training/train_ppo.py \
     --config configs/train_config.yaml \
     --total-timesteps 1000000
 
@@ -85,14 +85,14 @@ Run `make help` for the full list.
 
 ```
 uncertainty_rl/                      # Main Python package
-├── networks/evidential_policy.py    # Evidential layers, NIG distributions
-├── envs/carla_parking.py            # CARLA Gymnasium environment (15D state, 3D action)
-├── training/train_sac.py            # SAC training with SB3
-├── evaluation/evaluate.py           # Noise sweep, metrics, plots
-├── ros2/covariance_extractor.py     # Bridge to robot_localization EKF
-└── utils/
-    ├── logging.py                   # MetricsLogger, UncertaintyTracker
-    └── visualisation.py             # Trajectory plots, uncertainty evolution, training curves
+|-- networks/evidential_policy.py    # Evidential layers, NIG distributions
+|-- envs/carla_parking.py            # CARLA Gymnasium environment (15D state, 3D action)
+|-- training/train_ppo.py            # PPO training with SB3
+|-- evaluation/evaluate.py           # Noise sweep, metrics, plots
+|-- ros2/covariance_extractor.py     # Bridge to robot_localization EKF
++-- utils/
+    |-- logging.py                   # MetricsLogger, UncertaintyTracker
+    +-- visualisation.py             # Trajectory plots, uncertainty evolution, training curves
 configs/                             # YAML hyperparameters (train, eval, ROS 2)
 docker/                              # Dockerfiles for ROS 2 bridge and training containers
 tests/                               # pytest suite mirroring uncertainty_rl/ structure

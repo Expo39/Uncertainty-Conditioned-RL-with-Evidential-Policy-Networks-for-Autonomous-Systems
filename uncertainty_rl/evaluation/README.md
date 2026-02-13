@@ -1,13 +1,13 @@
 # evaluation/
 
-Performance evaluation across varying SLAM uncertainty levels — the centrepiece of the dissertation's experimental chapter.
+Performance evaluation across varying SLAM uncertainty levels - the centrepiece of the dissertation's experimental chapter.
 
 ## Module: `evaluate.py`
 
 ### Evaluation Protocol
 
 1. Load trained model with VecNormalize statistics
-2. Sweep `uncertainty_noise_std` across levels (e.g., 0.05 to 1.0 metres)
+2. Sweep `uncertainty_noise_std` across `noise_levels` defined in `configs/eval_config.yaml`
 3. Run N episodes per level, collecting metrics
 4. Generate plots and CSV results
 
@@ -23,9 +23,10 @@ Performance evaluation across varying SLAM uncertainty levels — the centrepiec
 ```bash
 python uncertainty_rl/evaluation/evaluate.py \
     --model-path checkpoints/final_model \
-    --config configs/eval_config.yaml \
-    --noise-levels 0.05 0.1 0.2 0.5 1.0
+    --config configs/eval_config.yaml
 ```
+
+Noise levels, episode counts, and success criteria are all configured in `configs/eval_config.yaml`.
 
 ### Output
 

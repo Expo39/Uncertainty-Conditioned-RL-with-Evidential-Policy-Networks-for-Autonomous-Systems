@@ -1,8 +1,8 @@
-# Makefile — Uncertainty-Conditioned RL
+# Makefile - Uncertainty-Conditioned RL
 # Development commands for training, evaluation, testing, and linting.
 
-.PHONY: help install test test-fast test-networks test-env test-cov
-.PHONY: lint format typecheck check verify smoke sanity clean
+.PHONY: help install test
+.PHONY: lint format typecheck clean
 .PHONY: train train-short evaluate ros2
 .PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
 .PHONY: docker-train docker-train-short docker-eval
@@ -17,17 +17,17 @@ SRC_DIR := uncertainty_rl
 TESTS_DIR := tests
 DOCKER_COMPOSE := docker-compose
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Help
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Setup
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 install: ## Install package and dev dependencies
 	pip install -e ".[dev]"
@@ -36,13 +36,13 @@ install: ## Install package and dev dependencies
 
 
 
-# ══════════════════════════════════════════════════════════════════════
-# DOCKER — commands that run inside containers
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
+# DOCKER - commands that run inside containers
+# ======================================================================
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Docker: Lifecycle
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 docker-build: ## Build all Docker images
 	$(DOCKER_COMPOSE) build
@@ -65,18 +65,18 @@ docker-ps: ## Show running containers
 docker-top: ## Show running processes in containers
 	$(DOCKER_COMPOSE) top
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Docker: Training & Evaluation
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 docker-train: ## Run training inside container
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_sac.py \
+	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
 docker-train-short: ## Quick training (10k steps) inside container
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_sac.py \
+	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--total-timesteps 10000 \
 		--log-dir logs \
@@ -88,15 +88,12 @@ docker-eval: ## Run evaluation inside container
 		--config $(CONFIG_DIR)/eval_config.yaml \
 		--output-dir evaluation_results
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Docker: Testing & Linting
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 docker-test: ## Run tests inside container
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v
-
-docker-test-fast: ## Run fast tests inside container
-	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v -m "not slow"
 
 docker-lint: ## Run linters inside container
 	$(DOCKER_COMPOSE) exec training make lint
@@ -104,9 +101,9 @@ docker-lint: ## Run linters inside container
 docker-format: ## Format code inside container
 	$(DOCKER_COMPOSE) exec training make format
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Docker: Shells & Logs
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 docker-shell: ## Interactive shell in training container
 	$(DOCKER_COMPOSE) exec training /bin/bash
@@ -126,9 +123,9 @@ docker-logs-carla: ## Follow logs from CARLA server
 docker-logs-ros2: ## Follow logs from ROS 2 bridge
 	$(DOCKER_COMPOSE) logs -f ros2-bridge
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Docker: Cleanup
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 docker-clean: ## Stop containers and remove volumes
 	$(DOCKER_COMPOSE) down -v
@@ -138,9 +135,9 @@ docker-clean-all: ## Remove all containers, images, and volumes
 	$(DOCKER_COMPOSE) down -v --rmi all
 	docker system prune -af
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Docker: Combined Workflows
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 docker-full-build: ## Build and start full stack
 	$(DOCKER_COMPOSE) build && $(DOCKER_COMPOSE) up -d
@@ -157,22 +154,22 @@ docker-dev: ## Start stack + open training shell (development mode)
 
 
 
-# ══════════════════════════════════════════════════════════════════════
-# LOCAL — commands that run on the host machine
-# ══════════════════════════════════════════════════════════════════════
+# ======================================================================
+# LOCAL - commands that run on the host machine
+# ======================================================================
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Training & Evaluation
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
-train: ## Train SAC agent (requires CARLA running)
-	$(PYTHON) $(SRC_DIR)/training/train_sac.py \
+train: ## Train PPO agent (requires CARLA running)
+	$(PYTHON) $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--log-dir ./logs \
 		--checkpoint-dir ./checkpoints
 
 train-short: ## Quick training run (10k steps) for smoke testing
-	$(PYTHON) $(SRC_DIR)/training/train_sac.py \
+	$(PYTHON) $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--total-timesteps 10000 \
 		--log-dir ./logs \
@@ -187,28 +184,16 @@ evaluate: ## Evaluate trained agent across uncertainty levels
 ros2: ## Launch covariance extractor node
 	$(PYTHON) $(SRC_DIR)/ros2/covariance_extractor.py
 
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Testing
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 test: ## Run full test suite
 	$(PYTEST) $(TESTS_DIR) -v --tb=short
 
-test-fast: ## Run tests excluding slow/integration markers
-	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not slow"
-
-test-networks: ## Run only network/evidential policy tests
-	$(PYTEST) $(TESTS_DIR)/test_evidential_policy.py -v
-
-test-env: ## Run only environment tests
-	$(PYTEST) $(TESTS_DIR)/test_carla_parking.py -v
-
-test-cov: ## Run tests with coverage report
-	$(PYTEST) $(TESTS_DIR) -v --cov=$(SRC_DIR) --cov-report=term-missing --cov-report=html:htmlcov
-
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Linting & Formatting
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 lint: ## Run all linters (flake8 + isort + black)
 	flake8 $(SRC_DIR) $(TESTS_DIR) --max-line-length 88 --extend-ignore E203,W503
@@ -222,24 +207,16 @@ format: ## Auto-format code with black + isort
 typecheck: ## Run mypy type checking
 	mypy $(SRC_DIR) --ignore-missing-imports
 
-# ──────────────────────────────────────────────────────────────────────
-# Combined Checks
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
+# Santiy Check
+# ----------------------------------------------------------------------
 
 sanity: ## Quick import check
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
 
-smoke: sanity test-fast ## Smoke test (imports + fast tests)
-	@echo "Smoke test passed"
-
-check: lint test ## Linters then full tests (CI pipeline)
-
-verify: sanity test-fast lint ## Full verification (imports + fast tests + lint)
-	@echo "All verification checks passed"
-
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 # Cleanup
-# ──────────────────────────────────────────────────────────────────────
+# ----------------------------------------------------------------------
 
 clean: ## Remove build artefacts, caches, and generated outputs
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache

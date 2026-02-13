@@ -121,9 +121,9 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Optional: TensorBoard for monitoring
+  # TensorBoard for monitoring training metrics (optional)
   tensorboard:
-    image: tensorflow/tensorflow:latest
+    image: python:3.10-slim
     container_name: uncertainty-rl-tensorboard
     ports:
       - "6006:6006"
@@ -131,7 +131,8 @@ services:
       - uncertainty-rl-network
     volumes:
       - ./logs:/logs:ro
-    command: tensorboard --logdir=/logs --host=0.0.0.0 --port=6006
+    entrypoint: >
+      bash -c "pip install --no-cache-dir tensorboard && tensorboard --logdir=/logs --host=0.0.0.0 --port=6006"
 
 networks:
   uncertainty-rl-network:

@@ -116,7 +116,7 @@ class CovarianceExtractorNode(Node):
             std_yaw = np.sqrt(covariance_3x3[2, 2])
             self.get_logger().info(
                 f"Uncertainty - X: {std_x:.4f}m, "
-                f"Y: {std_y:.4f}m, Yaw: {np.rad2deg(std_yaw):.2f}°"
+                f"Y: {std_y:.4f}m, Yaw: {np.rad2deg(std_yaw):.2f}deg"
             )
 
     def publish_covariance(self) -> None:
@@ -234,9 +234,9 @@ class CovarianceMonitorNode(Node):
             std_yaw = np.sqrt(covariance[2, 2])
 
             self.get_logger().info(
-                f"Pose: ({x:.2f}, {y:.2f}, {np.rad2deg(yaw):.1f}°) | "
-                f"Uncertainty: σ_x={std_x:.4f}m, "
-                f"σ_y={std_y:.4f}m, σ_yaw={np.rad2deg(std_yaw):.2f}°"
+                f"Pose: ({x:.2f}, {y:.2f}, {np.rad2deg(yaw):.1f}deg) | "
+                f"Uncertainty: std_x={std_x:.4f}m, "
+                f"std_y={std_y:.4f}m, std_yaw={np.rad2deg(std_yaw):.2f}deg"
             )
 
 
