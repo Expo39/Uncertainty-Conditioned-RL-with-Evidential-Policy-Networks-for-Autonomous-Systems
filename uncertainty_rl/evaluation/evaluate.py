@@ -20,7 +20,10 @@ from stable_baselines3 import PPO  # Changed from SAC to PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_POSITION, SUCCESS_THRESHOLD_ORIENTATION
+from uncertainty_rl.utils.constants import (
+    SUCCESS_THRESHOLD_ORIENTATION,
+    SUCCESS_THRESHOLD_POSITION,
+)
 
 
 @dataclass
@@ -37,7 +40,7 @@ class EvaluationMetrics:
     @var epistemic_uncertainties: Epistemic uncertainty values during episodes.
     @var aleatoric_uncertainties: Aleatoric uncertainty values during episodes.
     """
-    
+
     success_rate: float = 0.0
     average_reward: float = 0.0
     average_steps: float = 0.0
@@ -152,8 +155,10 @@ def evaluate_agent(
         orientation_error = np.abs(yaw)
 
         # Check success using shared constants
-        success = (position_error < SUCCESS_THRESHOLD_POSITION and 
-                  orientation_error < SUCCESS_THRESHOLD_ORIENTATION)
+        success = (
+            position_error < SUCCESS_THRESHOLD_POSITION
+            and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
+        )
         if success:
             successes += 1
 

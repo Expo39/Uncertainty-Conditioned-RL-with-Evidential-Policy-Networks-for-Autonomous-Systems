@@ -15,7 +15,6 @@ from uncertainty_rl.utils import (
     validate_covariance_matrix,
 )
 
-
 # ---------------------------------------------------------------------------
 # extract_2d_covariance_features
 # ---------------------------------------------------------------------------
@@ -68,9 +67,9 @@ class TestExtract2DCovarianceFeatures:
         cov = np.diag([0.04, 0.09, 0.16])
         features = extract_2d_covariance_features(cov)
 
-        np.testing.assert_approx_equal(features[0], 0.2)   # std_x = sqrt(0.04)
-        np.testing.assert_approx_equal(features[1], 0.3)   # std_y = sqrt(0.09)
-        np.testing.assert_approx_equal(features[2], 0.4)   # std_yaw = sqrt(0.16)
+        np.testing.assert_approx_equal(features[0], 0.2)  # std_x = sqrt(0.04)
+        np.testing.assert_approx_equal(features[1], 0.3)  # std_y = sqrt(0.09)
+        np.testing.assert_approx_equal(features[2], 0.4)  # std_yaw = sqrt(0.16)
 
     def test_6x6_extracts_correct_indices(self) -> None:
         """
@@ -87,10 +86,10 @@ class TestExtract2DCovarianceFeatures:
 
         features = extract_2d_covariance_features(cov)
 
-        np.testing.assert_approx_equal(features[0], 0.5)    # std_x = sqrt(0.25)
-        np.testing.assert_approx_equal(features[1], 0.6)    # std_y = sqrt(0.36)
-        np.testing.assert_approx_equal(features[2], 0.1)    # std_yaw = sqrt(0.01)
-        np.testing.assert_approx_equal(features[7], 0.05)   # cov_xyaw
+        np.testing.assert_approx_equal(features[0], 0.5)  # std_x = sqrt(0.25)
+        np.testing.assert_approx_equal(features[1], 0.6)  # std_y = sqrt(0.36)
+        np.testing.assert_approx_equal(features[2], 0.1)  # std_yaw = sqrt(0.01)
+        np.testing.assert_approx_equal(features[7], 0.05)  # cov_xyaw
 
     def test_off_diagonal_preserved(self) -> None:
         """
@@ -183,11 +182,13 @@ class TestValidateCovarianceMatrix:
         @brief A realistic SLAM covariance matrix should be valid.
         """
         # Typical EKF output: small variances with mild correlations
-        cov = np.array([
-            [0.04, 0.005, 0.001],
-            [0.005, 0.09, 0.002],
-            [0.001, 0.002, 0.01],
-        ])
+        cov = np.array(
+            [
+                [0.04, 0.005, 0.001],
+                [0.005, 0.09, 0.002],
+                [0.001, 0.002, 0.01],
+            ]
+        )
         assert validate_covariance_matrix(cov) is True
 
     def test_6x6_valid(self) -> None:

@@ -24,6 +24,7 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import CARLAParkingEnv
+
 # TODO: Uncomment when evidential policy is ready
 # from uncertainty_rl.networks import EvidentialActorCriticPolicy
 
