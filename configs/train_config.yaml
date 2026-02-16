@@ -5,10 +5,51 @@
 carla_host: "localhost"
 carla_port: 2000
 town: "Town01"
-uncertainty_noise_std: 0.1  # Standard deviation of SLAM uncertainty (metres)
-eval_uncertainty_noise_std: 0.15  # Evaluation with higher uncertainty
 max_steps: 500  # Maximum episode length
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
+
+# ROS 2 covariance subscription settings
+# The training container subscribes to real EKF covariance via DDS
+ros2:
+  covariance_topic: "/slam_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
+  covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
+
+# CARLA sensor noise configuration
+# These parameters control the noise injected into CARLA's virtual sensors,
+# which in turn drives EKF uncertainty. Higher noise -> higher covariance.
+carla_sensors:
+  imu:
+    noise_accel_stddev_x: 0.1   # Accelerometer noise (m/s^2)
+    noise_accel_stddev_y: 0.1
+    noise_accel_stddev_z: 0.1
+    noise_gyro_stddev_x: 0.01   # Gyroscope noise (rad/s)
+    noise_gyro_stddev_y: 0.01
+    noise_gyro_stddev_z: 0.01
+    sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
+  gnss:
+    noise_alt_stddev: 0.5       # Altitude noise (metres)
+    noise_lat_stddev: 0.00001   # Latitude noise (degrees, ~1.1 m at equator)
+    noise_lon_stddev: 0.00001   # Longitude noise (degrees, ~1.1 m at equator)
+    noise_alt_bias: 0.0
+    noise_lat_bias: 0.0
+    noise_lon_bias: 0.0
+    sensor_tick: 0.1            # Publish rate (seconds)
+
+# CARLA environmental conditions
+# Randomised per episode during training to expose the agent to varied uncertainty
+carla_conditions:
+  weather_presets:               # Randomly sampled each episode
+    - "ClearNoon"
+    - "CloudyNoon"
+    - "WetNoon"
+    - "SoftRainNoon"
+    - "HardRainNoon"
+    - "ClearSunset"
+    - "CloudySunset"
+  fog_density_range: [0.0, 50.0]     # Uniform random range per episode (0-100 scale)
+  fog_distance_range: [20.0, 100.0]  # Minimum fog distance (metres)
+  num_vehicles: 20                    # NPC vehicles via traffic manager
+  num_pedestrians: 10                 # NPC pedestrians
 
 # PPO hyperparameters
 learning_rate: 0.0003

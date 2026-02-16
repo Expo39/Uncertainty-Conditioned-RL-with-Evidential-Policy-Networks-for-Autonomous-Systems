@@ -86,7 +86,6 @@ def train_config() -> Dict[str, Any]:
         "carla_host": "localhost",
         "carla_port": 2000,
         "town": "Town01",
-        "uncertainty_noise_std": 0.1,
         "max_steps": 50,
         "learning_rate": 3e-4,
         "n_steps": 128,
@@ -100,6 +99,34 @@ def train_config() -> Dict[str, Any]:
         "max_grad_norm": 0.5,
         "net_arch": [64, 64],
         "checkpoint_freq": 500,
+        "ros2": {
+            "covariance_topic": "/slam_uncertainty/covariance",
+            "covariance_timeout": 10.0,
+        },
+        "carla_sensors": {
+            "imu": {
+                "noise_accel_stddev_x": 0.1,
+                "noise_accel_stddev_y": 0.1,
+                "noise_accel_stddev_z": 0.1,
+                "noise_gyro_stddev_x": 0.01,
+                "noise_gyro_stddev_y": 0.01,
+                "noise_gyro_stddev_z": 0.01,
+                "sensor_tick": 0.05,
+            },
+            "gnss": {
+                "noise_alt_stddev": 0.5,
+                "noise_lat_stddev": 0.00001,
+                "noise_lon_stddev": 0.00001,
+                "sensor_tick": 0.1,
+            },
+        },
+        "carla_conditions": {
+            "weather_presets": ["ClearNoon"],
+            "fog_density_range": [0.0, 0.0],
+            "fog_distance_range": [50.0, 50.0],
+            "num_vehicles": 0,
+            "num_pedestrians": 0,
+        },
     }
 
 
@@ -113,6 +140,31 @@ def eval_config() -> Dict[str, Any]:
         "carla_port": 2000,
         "town": "Town01",
         "max_steps": 50,
-        "noise_levels": [0.05, 0.1, 0.5],
         "n_episodes": 3,
+        "ros2": {
+            "covariance_topic": "/slam_uncertainty/covariance",
+            "covariance_timeout": 10.0,
+        },
+        "eval_conditions": [
+            {
+                "name": "clear_low_noise",
+                "description": "Clear weather, low sensor noise",
+                "weather_preset": "ClearNoon",
+                "fog_density": 0.0,
+                "imu_noise_multiplier": 0.5,
+                "gnss_noise_multiplier": 0.5,
+                "num_vehicles": 0,
+                "num_pedestrians": 0,
+            },
+            {
+                "name": "fog_moderate",
+                "description": "Moderate fog, moderate noise",
+                "weather_preset": "CloudyNoon",
+                "fog_density": 50.0,
+                "imu_noise_multiplier": 2.0,
+                "gnss_noise_multiplier": 5.0,
+                "num_vehicles": 10,
+                "num_pedestrians": 5,
+            },
+        ],
     }

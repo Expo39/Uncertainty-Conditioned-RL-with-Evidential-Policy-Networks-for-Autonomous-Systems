@@ -1,5 +1,5 @@
-# Dockerfile.ros2
-# @file docker/Dockerfile.ros2
+# Dockerfile
+# @file uncertainty_rl/ros2/Dockerfile
 # @brief ROS 2 Jazzy container with CARLA bridge and robot_localisation for EKF-SLAM.
 #
 # Components:

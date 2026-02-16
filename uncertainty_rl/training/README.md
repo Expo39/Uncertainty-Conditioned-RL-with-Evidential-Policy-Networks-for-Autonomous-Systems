@@ -2,6 +2,10 @@
 
 RL training scripts using Stable-Baselines3.
 
+## Dockerfile
+
+`Dockerfile` builds the **training** container: NVIDIA NGC PyTorch base with Stable-Baselines3, evidential networks, rclpy (ROS 2 Humble), and all Python dependencies from `pyproject.toml`. Orchestrated via `docker-compose.yml` at the project root. ROS 2 Humble is used because the NGC base is Ubuntu 22.04; DDS communication with the Jazzy ros2-bridge container is seamless.
+
 ## Module: `train_ppo.py`
 
 Config-driven PPO training loop with:
@@ -30,7 +34,9 @@ Uses SB3's standard `MlpPolicy`. The evidential policy network is **not yet inte
 - `n_steps`: 2048
 - `n_epochs`: 10
 - `net_arch`: [256, 256]
-- `uncertainty_noise_std`: 0.1 (metres)
 - `total_timesteps`: 1,000,000
+- `ros2.covariance_topic`: `/slam_uncertainty/covariance`
+- `carla_sensors.imu.noise_accel_stddev_*`: 0.1 (m/s^2)
+- `carla_conditions.num_vehicles`: 20
 
 See `configs/train_config.yaml` for the full parameter list.

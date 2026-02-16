@@ -1,5 +1,6 @@
 # Evaluation Configuration
-# Configuration for evaluating trained agents across uncertainty levels
+# Configuration for evaluating trained agents across physical conditions
+# that produce varying EKF uncertainty levels.
 
 # Model settings
 model_path: "checkpoints/final_model"  # Path to trained model
@@ -10,22 +11,92 @@ carla_port: 2000
 town: "Town01"
 max_steps: 500
 
+# ROS 2 covariance subscription (same topic as training)
+ros2:
+  covariance_topic: "/slam_uncertainty/covariance"
+  covariance_timeout: 10.0
+
 # Evaluation settings
-n_episodes: 100  # Episodes per noise level
+n_episodes: 100  # Episodes per condition
 deterministic: true  # Use deterministic actions
 render: false  # Render episodes (requires display)
 
-# Uncertainty noise levels to evaluate (metres)
-# Denser coverage in 0.1-1.0 range where performance transition occurs
-noise_levels:
-  - 0.05   # Perfect localisation
-  - 0.1    # Nominal (training condition)
-  - 0.2    # Mildly degraded
-  - 0.5    # Degraded
-  - 0.75   # Moderately degraded
-  - 1.0    # Heavily degraded
-  - 2.0    # Severe degradation
-  - 5.0    # Extreme degradation
+# Evaluation conditions sweep
+# Each condition specifies weather, sensor noise multipliers, and traffic.
+# Base sensor noise comes from train_config.yaml; multipliers scale it.
+# Ordered from easiest (low uncertainty) to hardest (extreme uncertainty).
+eval_conditions:
+  - name: "clear_low_noise"
+    description: "Clear weather, low sensor noise, no traffic"
+    weather_preset: "ClearNoon"
+    fog_density: 0.0
+    imu_noise_multiplier: 0.5
+    gnss_noise_multiplier: 0.5
+    num_vehicles: 0
+    num_pedestrians: 0
+
+  - name: "clear_nominal"
+    description: "Clear weather, nominal sensor noise, light traffic"
+    weather_preset: "ClearNoon"
+    fog_density: 0.0
+    imu_noise_multiplier: 1.0
+    gnss_noise_multiplier: 1.0
+    num_vehicles: 10
+    num_pedestrians: 5
+
+  - name: "cloudy_moderate"
+    description: "Cloudy with moderate noise and traffic"
+    weather_preset: "CloudyNoon"
+    fog_density: 10.0
+    imu_noise_multiplier: 1.5
+    gnss_noise_multiplier: 1.5
+    num_vehicles: 20
+    num_pedestrians: 10
+
+  - name: "rain_degraded"
+    description: "Rain with degraded sensors and moderate traffic"
+    weather_preset: "SoftRainNoon"
+    fog_density: 20.0
+    imu_noise_multiplier: 2.0
+    gnss_noise_multiplier: 2.0
+    num_vehicles: 25
+    num_pedestrians: 15
+
+  - name: "heavy_rain_noisy"
+    description: "Heavy rain, high noise, dense traffic"
+    weather_preset: "HardRainNoon"
+    fog_density: 30.0
+    imu_noise_multiplier: 3.0
+    gnss_noise_multiplier: 3.0
+    num_vehicles: 40
+    num_pedestrians: 20
+
+  - name: "fog_moderate"
+    description: "Moderate fog causing GNSS multipath, moderate traffic"
+    weather_preset: "CloudyNoon"
+    fog_density: 50.0
+    imu_noise_multiplier: 2.0
+    gnss_noise_multiplier: 5.0
+    num_vehicles: 30
+    num_pedestrians: 15
+
+  - name: "fog_heavy"
+    description: "Dense fog, severely degraded sensors, heavy traffic"
+    weather_preset: "CloudySunset"
+    fog_density: 75.0
+    imu_noise_multiplier: 4.0
+    gnss_noise_multiplier: 8.0
+    num_vehicles: 50
+    num_pedestrians: 30
+
+  - name: "fog_extreme"
+    description: "Extreme fog, nearly useless sensors, maximum traffic"
+    weather_preset: "CloudySunset"
+    fog_density: 95.0
+    imu_noise_multiplier: 8.0
+    gnss_noise_multiplier: 15.0
+    num_vehicles: 60
+    num_pedestrians: 40
 
 # Output settings
 output_dir: "evaluation_results"

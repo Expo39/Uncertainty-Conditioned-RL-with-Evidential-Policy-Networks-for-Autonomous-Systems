@@ -1,9 +1,33 @@
 # ROS 2 Configuration for Covariance Extraction
-# Configuration for the ROS 2 node that extracts covariance from robot_localization
+# Configuration for the ROS 2 bridge, EKF, and covariance extraction pipeline.
 
-# ROS 2 topics
-odom_topic: "/odometry/filtered"  # Input odometry topic from robot_localization
-covariance_topic: "/slam_uncertainty/covariance"  # Output covariance topic
+# CARLA ROS bridge topics
+# These are the default topic names published by the carla_ros_bridge.
+# Override via launch argument remappings if your bridge version differs.
+carla_topics:
+  odometry: "/carla/ego_vehicle/odometry"   # nav_msgs/Odometry from CARLA bridge
+  imu: "/carla/ego_vehicle/imu"             # sensor_msgs/Imu from CARLA bridge
+  gnss: "/carla/ego_vehicle/gnss"           # sensor_msgs/NavSatFix from CARLA bridge
+
+# robot_localisation EKF settings
+# These configure the EKF node launched via carla_bridge.launch.py.
+ekf:
+  frequency: 20.0           # EKF update rate (Hz), matches CARLA timestep
+  two_d_mode: true           # Constrain to 2D (no z, roll, pitch)
+  world_frame: "odom"        # Frame of reference for EKF output
+  odom0: "/carla/ego_vehicle/odometry"
+  odom0_config:              # Which variables from odometry to fuse
+    # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw]
+    - [true, true, false, false, false, true,
+       true, true, false, false, false, true]
+  imu0: "/carla/ego_vehicle/imu"
+  imu0_config:
+    - [false, false, false, false, false, false,
+       false, false, false, true, true, true]
+
+# Covariance extraction node topics
+odom_topic: "/odometry/filtered"  # Input: EKF-filtered odometry
+covariance_topic: "/slam_uncertainty/covariance"  # Output: Float64MultiArray
 
 # Publishing settings
 publish_rate: 10.0  # Hz

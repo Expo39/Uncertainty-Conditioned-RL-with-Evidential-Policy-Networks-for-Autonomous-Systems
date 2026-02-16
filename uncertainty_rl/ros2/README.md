@@ -1,27 +1,51 @@
 # ros2/
 
-ROS 2 Jazzy nodes for extracting SLAM covariance from the `robot_localisation` EKF.
+ROS 2 ament_python package for SLAM covariance extraction from the `robot_localisation` EKF.
 
-## Module: `covariance_extractor.py`
+## Dockerfile
 
-### Nodes
+`Dockerfile` builds the **ros2-bridge** container: ROS 2 Jazzy base, CARLA ROS bridge, `robot_localisation` EKF, and custom covariance extraction nodes. Orchestrated via `docker-compose.yml` at the project root.
+
+## Package Structure
+
+This is an ament_python package built by colcon inside the ros2-bridge container.
+
+| File | Purpose |
+|------|---------|
+| `package.xml` | ament_python manifest with dependencies |
+| `setup.py` / `setup.cfg` | Python package setup for colcon |
+| `resource/uncertainty_rl_ros2` | Empty ament_index marker |
+| `uncertainty_rl_ros2/` | Python package (covariance_extractor.py) |
+| `launch/carla_bridge.launch.py` | Launches CARLA bridge + EKF + covariance extractor |
+
+## Launch File
+
+`launch/carla_bridge.launch.py` orchestrates the full pipeline:
+
+1. **CARLA ROS bridge** — publishes sensor topics from CARLA simulator
+2. **robot_localisation EKF** — fuses odometry + IMU (optionally GNSS), outputs `/odometry/filtered`
+3. **CovarianceExtractorNode** — extracts 3x3 covariance, publishes to `/slam_uncertainty/covariance`
+
+## Nodes
 
 | Node | Purpose |
 |------|---------|
-| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix from 6x6 pose covariance, publishes as `Float64MultiArray` |
+| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes 12-element `Float64MultiArray` |
 | `CovarianceMonitorNode` | Debug/visualisation node for monitoring covariance values |
 
-### Covariance Extraction
+## EKF Sensor Fusion
 
-The 6x6 `nav_msgs/Odometry` pose covariance is reduced to a 2D [x, y, yaw] representation by extracting rows/columns at indices [0, 1, 5].
+EKF sensor inputs are an open decision (see TODO.md Task 4). Preferred: **odometry + IMU only** (parking manoeuvres are short, drift stays small). Alternatives: add GNSS or LiDAR-SLAM. Configured with `two_d_mode: true`. See `configs/ros2_config.yaml` for full EKF parameters including topic remappings and fusion matrix configs.
 
-### Configuration
+## Configuration
 
 Parameters set via `configs/ros2_config.yaml`:
+- `carla_topics.*`: CARLA ROS bridge topic names (odometry, imu; optionally gnss)
+- `ekf.*`: EKF frequency, 2D mode, fusion configs
 - `odom_topic`: Input odometry topic (default: `/odometry/filtered`)
 - `covariance_topic`: Output covariance topic
 - `publish_rate`: Update rate in Hz (default: 10)
 
-### QoS
+## QoS
 
 Uses RELIABLE QoS profile to ensure no dropped covariance messages.
