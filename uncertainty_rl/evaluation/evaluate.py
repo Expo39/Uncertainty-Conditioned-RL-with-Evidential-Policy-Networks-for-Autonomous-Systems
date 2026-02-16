@@ -247,7 +247,8 @@ def evaluate_across_conditions(
     @brief Evaluate agent across different physical conditions.
     @param model_path: Path to trained model.
     @param eval_config_path: Path to evaluation configuration file.
-    @param train_config_path: Path to training configuration file (for base sensor noise).
+    @param train_config_path: Path to training configuration file
+        (for base sensor noise).
     @param n_episodes: Number of episodes per condition.
     @param output_dir: Directory to save results.
     @return DataFrame with evaluation results.

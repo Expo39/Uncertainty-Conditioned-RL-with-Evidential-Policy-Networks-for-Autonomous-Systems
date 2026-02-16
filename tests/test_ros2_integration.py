@@ -57,7 +57,7 @@ class TestROS2CovariancePipeline:
 
     def test_covariance_dimensions_match_constant(self) -> None:
         """
-        @brief Verify the covariance subscriber returns COVARIANCE_FEATURES_DIM elements.
+        @brief Verify covariance subscriber returns correct elements.
         """
         from uncertainty_rl.envs.carla_parking import _CovarianceSubscriber
 

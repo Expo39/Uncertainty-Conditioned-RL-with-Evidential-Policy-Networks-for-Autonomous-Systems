@@ -4,7 +4,7 @@
 .PHONY: help install test
 .PHONY: lint format typecheck clean
 .PHONY: train train-short evaluate ros2
-.PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
+.PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
 .PHONY: docker-train docker-train-short docker-eval
 .PHONY: docker-test docker-test-fast docker-lint docker-format
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
@@ -46,6 +46,9 @@ install: ## Install package and dev dependencies
 
 docker-build: ## Build all Docker images
 	$(DOCKER_COMPOSE) build
+
+docker-build-prod: ## Build training image without dev dependencies (lighter)
+	$(DOCKER_COMPOSE) build --build-arg DEV_INSTALL=false training
 
 docker-build-no-cache: ## Build images without cache (clean rebuild)
 	$(DOCKER_COMPOSE) build --no-cache
