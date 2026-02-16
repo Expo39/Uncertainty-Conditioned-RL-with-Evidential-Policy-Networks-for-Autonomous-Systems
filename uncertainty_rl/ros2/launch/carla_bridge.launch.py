@@ -96,20 +96,40 @@ def generate_launch_description() -> LaunchDescription:
                 # Odometry input from CARLA bridge
                 "odom0": "/carla/ego_vehicle/odometry",
                 "odom0_config": [
-                    True, True, False,    # x, y, z
-                    False, False, True,   # roll, pitch, yaw
-                    True, True, False,    # vx, vy, vz
-                    False, False, True,   # vroll, vpitch, vyaw
-                    False, False, False,  # ax, ay, az
+                    True,
+                    True,
+                    False,  # x, y, z
+                    False,
+                    False,
+                    True,  # roll, pitch, yaw
+                    True,
+                    True,
+                    False,  # vx, vy, vz
+                    False,
+                    False,
+                    True,  # vroll, vpitch, vyaw
+                    False,
+                    False,
+                    False,  # ax, ay, az
                 ],
                 # IMU input from CARLA bridge
                 "imu0": "/carla/ego_vehicle/imu",
                 "imu0_config": [
-                    False, False, False,  # x, y, z
-                    False, False, True,   # roll, pitch, yaw
-                    False, False, False,  # vx, vy, vz
-                    False, False, True,   # vroll, vpitch, vyaw
-                    True, True, False,    # ax, ay, az
+                    False,
+                    False,
+                    False,  # x, y, z
+                    False,
+                    False,
+                    True,  # roll, pitch, yaw
+                    False,
+                    False,
+                    False,  # vx, vy, vz
+                    False,
+                    False,
+                    True,  # vroll, vpitch, vyaw
+                    True,
+                    True,
+                    False,  # ax, ay, az
                 ],
                 "publish_tf": True,
                 "world_frame": "odom",

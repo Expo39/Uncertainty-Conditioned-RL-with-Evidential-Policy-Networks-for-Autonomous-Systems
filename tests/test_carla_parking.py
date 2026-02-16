@@ -54,12 +54,8 @@ class TestCARLAParkingEnvAPI:
         """
         @brief Action bounds: steering [-1,1], throttle [0,1], brake [0,1].
         """
-        np.testing.assert_array_equal(
-            self.env.action_space.low, [-1.0, 0.0, 0.0]
-        )
-        np.testing.assert_array_equal(
-            self.env.action_space.high, [1.0, 1.0, 1.0]
-        )
+        np.testing.assert_array_equal(self.env.action_space.low, [-1.0, 0.0, 0.0])
+        np.testing.assert_array_equal(self.env.action_space.high, [1.0, 1.0, 1.0])
 
     def test_reset_returns_tuple(self) -> None:
         """

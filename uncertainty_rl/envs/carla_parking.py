@@ -42,7 +42,6 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
     TOTAL_OBS_DIM,
-    VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
@@ -97,9 +96,7 @@ class _CovarianceSubscriber(_NodeBase):
             self._covariance_callback,
             qos,
         )
-        self.get_logger().info(
-            f"Subscribed to covariance topic: {covariance_topic}"
-        )
+        self.get_logger().info(f"Subscribed to covariance topic: {covariance_topic}")
 
     def _covariance_callback(self, msg: "Float64MultiArray") -> None:
         """
@@ -422,23 +419,17 @@ class CARLAParkingEnv(gym.Env):
         if self.world is None:
             return
 
-        presets = self._conditions_config.get(
-            "weather_presets", ["ClearNoon"]
-        )
+        presets = self._conditions_config.get("weather_presets", ["ClearNoon"])
         preset_name = random.choice(presets)
 
         # Get the weather preset from CARLA
         weather = getattr(carla.WeatherParameters, preset_name, None)
         if weather is None:
-            logger.warning(
-                f"Unknown weather preset '{preset_name}', using ClearNoon."
-            )
+            logger.warning(f"Unknown weather preset '{preset_name}', using ClearNoon.")
             weather = carla.WeatherParameters.ClearNoon
 
         # Apply randomised fog on top of the preset
-        fog_range = self._conditions_config.get(
-            "fog_density_range", [0.0, 0.0]
-        )
+        fog_range = self._conditions_config.get("fog_density_range", [0.0, 0.0])
         fog_density = random.uniform(fog_range[0], fog_range[1])
 
         fog_dist_range = self._conditions_config.get(
@@ -482,9 +473,7 @@ class CARLAParkingEnv(gym.Env):
         for i in range(min(num_vehicles, len(available_spawns))):
             bp = random.choice(vehicle_bps)
             if bp.has_attribute("color"):
-                color = random.choice(
-                    bp.get_attribute("color").recommended_values
-                )
+                color = random.choice(bp.get_attribute("color").recommended_values)
                 bp.set_attribute("color", color)
 
             npc = self.world.try_spawn_actor(bp, available_spawns[i])
@@ -494,9 +483,7 @@ class CARLAParkingEnv(gym.Env):
 
         # --- Pedestrians ---
         walker_bps = blueprint_library.filter("walker.pedestrian.*")
-        walker_controller_bp = blueprint_library.find(
-            "controller.ai.walker"
-        )
+        walker_controller_bp = blueprint_library.find("controller.ai.walker")
 
         for _ in range(num_pedestrians):
             bp = random.choice(walker_bps)
@@ -518,9 +505,7 @@ class CARLAParkingEnv(gym.Env):
                 attach_to=walker,
             )
             controller.start()
-            controller.go_to_location(
-                self.world.get_random_location_from_navigation()
-            )
+            controller.go_to_location(self.world.get_random_location_from_navigation())
             controller.set_max_speed(1.0 + random.random())
 
             self._spawned_npcs.append(walker)
@@ -621,9 +606,7 @@ class CARLAParkingEnv(gym.Env):
         vyaw = np.deg2rad(angular_vel.z)
 
         # Vehicle state vector (6 elements)
-        vehicle_state = np.array(
-            [x, y, yaw, vx, vy, vyaw], dtype=np.float32
-        )
+        vehicle_state = np.array([x, y, yaw, vx, vy, vyaw], dtype=np.float32)
 
         # Uncertainty features from EKF covariance (9 elements)
         if self._cov_subscriber is not None:
@@ -673,12 +656,7 @@ class CARLAParkingEnv(gym.Env):
 
         success_bonus = 100.0 if success else 0.0
 
-        reward = (
-            distance_reward
-            + orientation_reward
-            + velocity_penalty
-            + success_bonus
-        )
+        reward = distance_reward + orientation_reward + velocity_penalty + success_bonus
 
         # Episode termination conditions
         done = success or position_error > 20.0 or self.steps >= self.max_steps
