@@ -5,7 +5,7 @@
 
 from uncertainty_rl.evaluation.evaluate import (
     EvaluationMetrics,
-    evaluate_across_noise_levels,
+    evaluate_across_conditions,
     evaluate_agent,
     plot_evaluation_results,
 )
@@ -13,6 +13,6 @@ from uncertainty_rl.evaluation.evaluate import (
 __all__ = [
     "EvaluationMetrics",
     "evaluate_agent",
-    "evaluate_across_noise_levels",
+    "evaluate_across_conditions",
     "plot_evaluation_results",
 ]
