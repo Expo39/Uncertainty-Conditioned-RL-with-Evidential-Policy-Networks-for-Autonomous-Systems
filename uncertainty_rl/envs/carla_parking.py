@@ -1,6 +1,6 @@
 """
 @file carla_parking.py
-@brief CARLA Gymnasium parking environment with real EKF covariance from robot_localisation.
+@brief CARLA parking environment with EKF covariance from robot_localisation.
 
 This module implements a Gymnasium-compatible environment for autonomous parking
 in CARLA simulator. Localisation uncertainty comes from the robot_localisation
@@ -63,7 +63,8 @@ class _CovarianceSubscriber(_NodeBase):
 
     The CovarianceExtractorNode publishes a Float64MultiArray with 12 elements:
     [x, y, yaw, cov_00, cov_01, cov_02, cov_10, cov_11, cov_12, cov_20, cov_21, cov_22].
-    We parse elements [3:12] into a 3x3 matrix and call extract_2d_covariance_features().
+    We parse elements [3:12] into a 3x3 matrix and call
+    extract_2d_covariance_features().
     """
 
     def __init__(

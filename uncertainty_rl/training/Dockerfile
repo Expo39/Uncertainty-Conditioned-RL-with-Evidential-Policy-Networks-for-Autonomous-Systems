@@ -68,8 +68,14 @@ COPY uncertainty_rl /workspace/uncertainty_rl
 # Install CARLA Python API (system-level dependency, not on PyPI reliably)
 RUN pip install --no-cache-dir carla==0.9.15
 
-# Install all dependencies from pyproject.toml
-RUN pip install --no-cache-dir -e "/workspace[dev]"
+# Install dependencies from pyproject.toml
+# Set DEV_INSTALL=false for lighter production builds without linting/testing tools
+ARG DEV_INSTALL=true
+RUN if [ "$DEV_INSTALL" = "true" ]; then \
+        pip install --no-cache-dir -e "/workspace[dev]"; \
+    else \
+        pip install --no-cache-dir -e "/workspace"; \
+    fi
 
 # Copy remaining project files
 COPY configs /workspace/configs
