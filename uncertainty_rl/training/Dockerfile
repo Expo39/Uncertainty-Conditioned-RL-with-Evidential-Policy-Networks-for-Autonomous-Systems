@@ -47,7 +47,18 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
     ros-humble-rclpy \
     ros-humble-std-msgs \
     ros-humble-nav-msgs \
+    python3-colcon-common-extensions \
+    ros-humble-rosidl-default-generators \
+    ros-humble-rosidl-default-runtime \
     && rm -rf /var/lib/apt/lists/*
+
+# Build uncertainty_rl_msgs (CovarianceEstimate) into the ROS 2 install prefix
+# so it is importable alongside rclpy without extra PYTHONPATH entries
+COPY uncertainty_rl/ros2/uncertainty_rl_msgs /tmp/msgs_ws/src/uncertainty_rl_msgs
+RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
+    cd /tmp/msgs_ws && \
+    colcon build --install-base /opt/ros/humble" && \
+    rm -rf /tmp/msgs_ws
 
 # Set ROS 2 environment variables so rclpy is importable without sourcing setup.bash
 ENV AMENT_PREFIX_PATH=/opt/ros/humble

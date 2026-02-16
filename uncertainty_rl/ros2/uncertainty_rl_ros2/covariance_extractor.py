@@ -4,6 +4,8 @@
 
 This module implements a ROS 2 node that subscribes to odometry messages from
 robot_localization and extracts the covariance matrix for use in RL training.
+Publishes a custom CovarianceEstimate message with semantic fields per Henki
+ROS 2 best practices.
 """
 
 from typing import Optional, Tuple
@@ -13,7 +15,7 @@ import rclpy
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from std_msgs.msg import Float64MultiArray
+from uncertainty_rl_msgs.msg import CovarianceEstimate
 
 
 class CovarianceExtractorNode(Node):
@@ -22,7 +24,7 @@ class CovarianceExtractorNode(Node):
     @brief ROS 2 node for extracting localisation covariance.
 
     Subscribes to odometry messages from robot_localization and publishes
-    the covariance matrix elements for consumption by the RL agent.
+    a CovarianceEstimate message for consumption by the RL agent.
     """
 
     def __init__(self, node_name: str = "covariance_extractor") -> None:
@@ -56,7 +58,7 @@ class CovarianceExtractorNode(Node):
 
         # Create publisher for covariance
         self.covariance_publisher = self.create_publisher(
-            Float64MultiArray, covariance_topic, qos_profile
+            CovarianceEstimate, covariance_topic, qos_profile
         )
 
         # Store latest covariance
@@ -121,25 +123,22 @@ class CovarianceExtractorNode(Node):
 
     def publish_covariance(self) -> None:
         """
-        @brief Publish the latest covariance matrix.
+        @brief Publish the latest covariance as a CovarianceEstimate message.
 
-        Publishes the covariance matrix as a flattened array.
+        Uses semantic fields (x, y, yaw, covariance) instead of a flat array.
+        Includes a timestamped header for latency measurement and ordering.
         """
-        if self.latest_covariance is None:
+        if self.latest_covariance is None or self.latest_pose is None:
             return
 
-        # Create message
-        msg = Float64MultiArray()
+        msg = CovarianceEstimate()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = "odom"
+        msg.x = self.latest_pose[0]
+        msg.y = self.latest_pose[1]
+        msg.yaw = self.latest_pose[2]
+        msg.covariance = self.latest_covariance.flatten().tolist()
 
-        # Flatten covariance matrix (3x3 -> 9 elements)
-        msg.data = self.latest_covariance.flatten().tolist()
-
-        # Add pose information as well (optional, first 3 elements)
-        if self.latest_pose is not None:
-            full_data = list(self.latest_pose) + msg.data
-            msg.data = full_data
-
-        # Publish
         self.covariance_publisher.publish(msg)
 
     def get_uncertainty_state(self) -> Optional[np.ndarray]:
@@ -212,32 +211,30 @@ class CovarianceMonitorNode(Node):
         )
 
         self.covariance_subscriber = self.create_subscription(
-            Float64MultiArray, covariance_topic, self.covariance_callback, qos_profile
+            CovarianceEstimate,
+            covariance_topic,
+            self.covariance_callback,
+            qos_profile,
         )
 
         self.get_logger().info("Covariance monitor initialised")
 
-    def covariance_callback(self, msg: Float64MultiArray) -> None:
+    def covariance_callback(self, msg: CovarianceEstimate) -> None:
         """
         @brief Callback for covariance messages.
-        @param msg: Float64MultiArray containing covariance data.
+        @param msg: CovarianceEstimate containing pose and covariance data.
         """
-        data = np.array(msg.data)
+        covariance = np.array(msg.covariance).reshape(3, 3)
 
-        # Parse data (first 3: pose, remaining 9: covariance)
-        if len(data) >= 12:
-            x, y, yaw = data[0], data[1], data[2]
-            covariance = data[3:].reshape(3, 3)
+        std_x = np.sqrt(covariance[0, 0])
+        std_y = np.sqrt(covariance[1, 1])
+        std_yaw = np.sqrt(covariance[2, 2])
 
-            std_x = np.sqrt(covariance[0, 0])
-            std_y = np.sqrt(covariance[1, 1])
-            std_yaw = np.sqrt(covariance[2, 2])
-
-            self.get_logger().info(
-                f"Pose: ({x:.2f}, {y:.2f}, {np.rad2deg(yaw):.1f}deg) | "
-                f"Uncertainty: std_x={std_x:.4f}m, "
-                f"std_y={std_y:.4f}m, std_yaw={np.rad2deg(std_yaw):.2f}deg"
-            )
+        self.get_logger().info(
+            f"Pose: ({msg.x:.2f}, {msg.y:.2f}, {np.rad2deg(msg.yaw):.1f}deg) | "
+            f"Uncertainty: std_x={std_x:.4f}m, "
+            f"std_y={std_y:.4f}m, std_yaw={np.rad2deg(std_yaw):.2f}deg"
+        )
 
 
 def main(args=None) -> None:

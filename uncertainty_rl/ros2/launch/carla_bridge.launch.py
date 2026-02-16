@@ -5,8 +5,13 @@
 Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (publishes noisy sensor data from CARLA to ROS 2 topics)
 2. robot_localisation EKF node (fuses sensor data, outputs /odometry/filtered)
-3. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance, publishes to
-   /slam_uncertainty/covariance for the training container to consume)
+3. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance, publishes
+   CovarianceEstimate to /slam_uncertainty/covariance for the training
+   container to consume)
+
+EKF and covariance extractor parameters are loaded from configs/ros2_config.yaml
+(path configurable via ROS2_CONFIG_PATH environment variable) per Henki ROS 2
+best practices (no hardcoded parameters in launch files).
 
 @note CARLA ROS bridge topic names depend on the bridge version and vehicle
       role name. The defaults below assume the standard carla_ros_bridge output.
@@ -14,7 +19,9 @@ Orchestrates the full sensor-to-covariance pipeline:
 """
 
 import os
+from pathlib import Path
 
+import yaml
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
@@ -22,11 +29,35 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 
+def _load_ros2_config() -> dict:
+    """
+    @brief Load ROS 2 configuration from YAML file.
+    @return Configuration dictionary. Returns empty dict if file not found.
+    """
+    config_path = os.environ.get(
+        "ROS2_CONFIG_PATH", "/workspace/configs/ros2_config.yaml"
+    )
+    path = Path(config_path)
+
+    if not path.exists():
+        # Fallback: check relative to this file (for local development)
+        repo_root = Path(__file__).resolve().parents[3]
+        path = repo_root / "configs" / "ros2_config.yaml"
+
+    if path.exists():
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+
+    return {}
+
+
 def generate_launch_description() -> LaunchDescription:
     """
     @brief Generate launch description for the full CARLA + EKF + covariance stack.
     @return LaunchDescription with all nodes and launch arguments.
     """
+    config = _load_ros2_config()
+
     # -- Launch arguments --------------------------------------------------
 
     carla_host_arg = DeclareLaunchArgument(
@@ -79,64 +110,18 @@ def generate_launch_description() -> LaunchDescription:
     # Fuses noisy odometry and IMU data from the CARLA ROS bridge to produce
     # a filtered pose estimate with covariance at /odometry/filtered.
     #
+    # Parameters are loaded from configs/ros2_config.yaml (ekf section).
+    #
     # @note The odom0 and imu0 topic names must match the CARLA ROS bridge
     #       output. Verify with `ros2 topic list` after bridge startup.
-    #       Common CARLA bridge topics:
-    #         /carla/ego_vehicle/odometry
-    #         /carla/ego_vehicle/imu
+
+    ekf_config = config.get("ekf", {})
 
     ekf_node = Node(
         package="robot_localization",
         executable="ekf_node",
         name="ekf_filter_node",
-        parameters=[
-            {
-                "frequency": 20.0,
-                "two_d_mode": True,
-                # Odometry input from CARLA bridge
-                "odom0": "/carla/ego_vehicle/odometry",
-                "odom0_config": [
-                    True,
-                    True,
-                    False,  # x, y, z
-                    False,
-                    False,
-                    True,  # roll, pitch, yaw
-                    True,
-                    True,
-                    False,  # vx, vy, vz
-                    False,
-                    False,
-                    True,  # vroll, vpitch, vyaw
-                    False,
-                    False,
-                    False,  # ax, ay, az
-                ],
-                # IMU input from CARLA bridge
-                "imu0": "/carla/ego_vehicle/imu",
-                "imu0_config": [
-                    False,
-                    False,
-                    False,  # x, y, z
-                    False,
-                    False,
-                    True,  # roll, pitch, yaw
-                    False,
-                    False,
-                    False,  # vx, vy, vz
-                    False,
-                    False,
-                    True,  # vroll, vpitch, vyaw
-                    True,
-                    True,
-                    False,  # ax, ay, az
-                ],
-                "publish_tf": True,
-                "world_frame": "odom",
-                "odom_frame": "odom",
-                "base_link_frame": "base_link",
-            }
-        ],
+        parameters=[ekf_config],
         remappings=[
             ("odometry/filtered", "/odometry/filtered"),
         ],
@@ -144,8 +129,8 @@ def generate_launch_description() -> LaunchDescription:
 
     # -- Covariance extractor node -----------------------------------------
     # Subscribes to /odometry/filtered, extracts the 3x3 [x, y, yaw]
-    # covariance submatrix, and publishes to /slam_uncertainty/covariance
-    # for the training container to consume via rclpy.
+    # covariance submatrix, and publishes a CovarianceEstimate message to
+    # /slam_uncertainty/covariance for the training container to consume.
 
     covariance_extractor = Node(
         package="uncertainty_rl_ros2",
@@ -153,9 +138,11 @@ def generate_launch_description() -> LaunchDescription:
         name="covariance_extractor",
         parameters=[
             {
-                "odom_topic": "/odometry/filtered",
-                "covariance_topic": "/slam_uncertainty/covariance",
-                "publish_rate": 10.0,
+                "odom_topic": config.get("odom_topic", "/odometry/filtered"),
+                "covariance_topic": config.get(
+                    "covariance_topic", "/slam_uncertainty/covariance"
+                ),
+                "publish_rate": config.get("publish_rate", 10.0),
             }
         ],
     )

@@ -11,23 +11,29 @@ carla_topics:
 
 # robot_localisation EKF settings
 # These configure the EKF node launched via carla_bridge.launch.py.
+# The launch file loads this section directly as EKF node parameters.
 ekf:
   frequency: 20.0           # EKF update rate (Hz), matches CARLA timestep
   two_d_mode: true           # Constrain to 2D (no z, roll, pitch)
   world_frame: "odom"        # Frame of reference for EKF output
+  odom_frame: "odom"
+  base_link_frame: "base_link"
+  publish_tf: true
   odom0: "/carla/ego_vehicle/odometry"
-  odom0_config:              # Which variables from odometry to fuse
-    # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw]
-    - [true, true, false, false, false, true,
-       true, true, false, false, false, true]
+  # 15-element boolean list: [x, y, z, roll, pitch, yaw,
+  #                           vx, vy, vz, vroll, vpitch, vyaw,
+  #                           ax, ay, az]
+  odom0_config: [true, true, false, false, false, true,
+                 true, true, false, false, false, true,
+                 false, false, false]
   imu0: "/carla/ego_vehicle/imu"
-  imu0_config:
-    - [false, false, false, false, false, false,
-       false, false, false, true, true, true]
+  imu0_config: [false, false, false, false, false, true,
+                false, false, false, false, false, true,
+                true, true, false]
 
 # Covariance extraction node topics
 odom_topic: "/odometry/filtered"  # Input: EKF-filtered odometry
-covariance_topic: "/slam_uncertainty/covariance"  # Output: Float64MultiArray
+covariance_topic: "/slam_uncertainty/covariance"  # Output: CovarianceEstimate
 
 # Publishing settings
 publish_rate: 10.0  # Hz

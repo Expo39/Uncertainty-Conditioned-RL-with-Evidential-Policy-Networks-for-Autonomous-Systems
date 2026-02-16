@@ -16,8 +16,9 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 | `package.xml` | ament_python manifest with dependencies |
 | `setup.py` / `setup.cfg` | Python package setup for colcon |
 | `resource/uncertainty_rl_ros2` | Empty ament_index marker (required by ament) |
+| `uncertainty_rl_msgs/` | Custom message package: `CovarianceEstimate.msg` (ament_cmake) |
 | `uncertainty_rl_ros2/` | Single source of truth for node code |
-| `launch/carla_bridge.launch.py` | Launches CARLA bridge + EKF + covariance extractor |
+| `launch/carla_bridge.launch.py` | Launches CARLA bridge + EKF + covariance extractor (params from YAML) |
 
 ## Launch File
 
@@ -31,8 +32,8 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 | Node | Purpose |
 |------|---------|
-| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes 12-element `Float64MultiArray` |
-| `CovarianceMonitorNode` | Debug/visualisation node for monitoring covariance values |
+| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes `CovarianceEstimate` (semantic fields: header, x, y, yaw, covariance[9]) |
+| `CovarianceMonitorNode` | Debug/visualisation node for monitoring covariance values (subscribes to `CovarianceEstimate`) |
 
 ## EKF Sensor Fusion
 
