@@ -37,8 +37,7 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "covariance_extractor = "
-            "uncertainty_rl_ros2.covariance_extractor:main",
+            "covariance_extractor = " "uncertainty_rl_ros2.covariance_extractor:main",
             "covariance_monitor = "
             "uncertainty_rl_ros2.covariance_extractor:main_monitor",
         ],

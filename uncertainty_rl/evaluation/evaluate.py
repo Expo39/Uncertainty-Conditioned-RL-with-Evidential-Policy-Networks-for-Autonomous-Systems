@@ -62,14 +62,10 @@ class EvaluationMetrics:
             "average_reward": self.average_reward,
             "average_steps": self.average_steps,
             "mean_position_error": (
-                float(np.mean(self.position_errors))
-                if self.position_errors
-                else 0.0
+                float(np.mean(self.position_errors)) if self.position_errors else 0.0
             ),
             "std_position_error": (
-                float(np.std(self.position_errors))
-                if self.position_errors
-                else 0.0
+                float(np.std(self.position_errors)) if self.position_errors else 0.0
             ),
             "mean_orientation_error": (
                 float(np.mean(self.orientation_errors))
@@ -198,9 +194,7 @@ def evaluate_agent(
         steps = 0
 
         while not done_arr[0]:
-            action, _states = model.predict(
-                obs, deterministic=deterministic
-            )
+            action, _states = model.predict(obs, deterministic=deterministic)
             obs, reward, done_arr, info = env.step(action)  # type: ignore[assignment]
 
             episode_reward += float(reward[0])
@@ -273,9 +267,7 @@ def evaluate_across_conditions(
     model = PPO.load(model_path)
 
     # Load normalisation statistics if available
-    vec_normalize_path = os.path.join(
-        os.path.dirname(model_path), "vec_normalize.pkl"
-    )
+    vec_normalize_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
 
     results = []
 
@@ -309,22 +301,15 @@ def evaluate_across_conditions(
         result["description"] = description
         result["weather_preset"] = condition.get("weather_preset", "")
         result["fog_density"] = condition.get("fog_density", 0.0)
-        result["imu_noise_multiplier"] = condition.get(
-            "imu_noise_multiplier", 1.0
-        )
-        result["gnss_noise_multiplier"] = condition.get(
-            "gnss_noise_multiplier", 1.0
-        )
+        result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
+        result["gnss_noise_multiplier"] = condition.get("gnss_noise_multiplier", 1.0)
         result["num_vehicles"] = condition.get("num_vehicles", 0)
         result["num_pedestrians"] = condition.get("num_pedestrians", 0)
         results.append(result)
 
         print(f"  Success rate: {metrics.success_rate:.1f}%")
         print(f"  Average reward: {metrics.average_reward:.2f}")
-        print(
-            f"  Mean position error: "
-            f"{np.mean(metrics.position_errors):.3f} m"
-        )
+        print(f"  Mean position error: " f"{np.mean(metrics.position_errors):.3f} m")
 
         # Clean up
         eval_env.close()
@@ -358,9 +343,7 @@ def plot_evaluation_results(
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
 
     # Plot 1: Success rate vs condition
-    axes[0, 0].bar(
-        x_positions, df["success_rate"], color="steelblue", alpha=0.8
-    )
+    axes[0, 0].bar(x_positions, df["success_rate"], color="steelblue", alpha=0.8)
     axes[0, 0].set_xticks(list(x_positions))
     axes[0, 0].set_xticklabels(conditions, rotation=45, ha="right")
     axes[0, 0].set_ylabel("Success Rate (%)", fontsize=12)
@@ -368,9 +351,7 @@ def plot_evaluation_results(
     axes[0, 0].grid(True, alpha=0.3, axis="y")
 
     # Plot 2: Average reward vs condition
-    axes[0, 1].bar(
-        x_positions, df["average_reward"], color="forestgreen", alpha=0.8
-    )
+    axes[0, 1].bar(x_positions, df["average_reward"], color="forestgreen", alpha=0.8)
     axes[0, 1].set_xticks(list(x_positions))
     axes[0, 1].set_xticklabels(conditions, rotation=45, ha="right")
     axes[0, 1].set_ylabel("Average Reward", fontsize=12)
