@@ -9,10 +9,7 @@ because rclpy is only available in containers with ROS 2 installed.
 """
 
 try:
-    from uncertainty_rl_ros2.covariance_extractor import (
-        CovarianceExtractorNode,
-        CovarianceMonitorNode,
-    )
+    pass
 
     __all__ = [
         "CovarianceExtractorNode",
