@@ -199,7 +199,6 @@ def evaluate_agent(
             obs = cast(np.ndarray, step_result[0])
             reward = cast(np.ndarray, step_result[1])
             done_arr = cast(np.ndarray, step_result[2])
-            info = step_result[3]
 
             episode_reward += float(reward[0])
             steps += 1
