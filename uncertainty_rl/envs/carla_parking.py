@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
+from gymnasium.core import RenderFrame
 
 try:
     import carla
@@ -739,7 +740,7 @@ class CARLAParkingEnv(gym.Env):
 
         return state, reward, terminated, truncated, info
 
-    def render(self) -> Union[np.ndarray, List[np.ndarray], None]:
+    def render(self) -> Union[RenderFrame, List[RenderFrame], None]:
         """
         @brief Render the environment.
         @return RGB array if render_mode is 'rgb_array', None otherwise.
