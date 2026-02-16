@@ -8,14 +8,14 @@
     SLAM covariance extraction and CARLA bridge orchestration for
     uncertainty-conditioned RL.
   </description>
-  <maintainer email="antonio@example.com">Antonio</maintainer>
+  <maintainer email="antoniogaldes2@outlook.com">Antonio Galdes</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 
   <exec_depend>rclpy</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>uncertainty_rl_msgs</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
 

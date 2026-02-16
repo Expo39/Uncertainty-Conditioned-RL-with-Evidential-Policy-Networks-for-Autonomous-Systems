@@ -31,8 +31,8 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="Antonio",
-    maintainer_email="antonio@example.com",
+    maintainer="Antonio Galdes",
+    maintainer_email="antoniogaldes2@outlook.com",
     description="SLAM covariance extraction for uncertainty-conditioned RL.",
     license="MIT",
     entry_points={

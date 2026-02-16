@@ -16,7 +16,7 @@ import logging
 import random
 import threading
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import gymnasium as gym
 import numpy as np
@@ -31,7 +31,7 @@ try:
     import rclpy
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from std_msgs.msg import Float64MultiArray
+    from uncertainty_rl_msgs.msg import CovarianceEstimate
 
     _ROS2_AVAILABLE = True
 except ImportError:
@@ -48,14 +48,15 @@ from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 logger = logging.getLogger(__name__)
 
 
-# Base class depends on rclpy availability
-if _ROS2_AVAILABLE:
-    _NodeBase = Node
+if TYPE_CHECKING:
+    # mypy always sees Node as the base class (rclpy is in ignore_missing_imports)
+    from rclpy.node import Node as _NodeBase
 else:
-    _NodeBase = object  # type: ignore[assignment,misc]
+    # At runtime, fall back to object when rclpy is not installed
+    _NodeBase = Node if _ROS2_AVAILABLE else object
 
 
-class _CovarianceSubscriber(_NodeBase):  # type: ignore[valid-type]
+class _CovarianceSubscriber(_NodeBase):
     """
     @class _CovarianceSubscriber
     @brief Lightweight rclpy Node that subscribes to EKF covariance.
@@ -64,10 +65,9 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[valid-type]
     manner. Runs via rclpy.spin() in a daemon thread so it does not block
     Gymnasium step().
 
-    The CovarianceExtractorNode publishes a Float64MultiArray with 12 elements:
-    [x, y, yaw, cov_00, cov_01, cov_02, cov_10, cov_11, cov_12, cov_20, cov_21, cov_22].
-    We parse elements [3:12] into a 3x3 matrix and call
-    extract_2d_covariance_features().
+    The CovarianceExtractorNode publishes a CovarianceEstimate message with
+    semantic fields (x, y, yaw, covariance[9]). We reshape the covariance
+    field into a 3x3 matrix and call extract_2d_covariance_features().
     """
 
     def __init__(
@@ -95,29 +95,19 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[valid-type]
         )
 
         self._subscription = self.create_subscription(
-            Float64MultiArray,
+            CovarianceEstimate,
             covariance_topic,
             self._covariance_callback,
             qos,
         )
         self.get_logger().info(f"Subscribed to covariance topic: {covariance_topic}")
 
-    def _covariance_callback(self, msg: "Float64MultiArray") -> None:
+    def _covariance_callback(self, msg: "CovarianceEstimate") -> None:
         """
         @brief Callback for incoming covariance messages.
-        @param msg: Float64MultiArray with 12 elements [x, y, yaw, cov_flat_9].
+        @param msg: CovarianceEstimate with semantic fields (x, y, yaw, covariance).
         """
-        data = np.array(msg.data)
-        if len(data) < 12:
-            self.get_logger().warn(
-                f"Received covariance message with {len(data)} elements, "
-                f"expected 12."
-            )
-            return
-
-        # Elements [3:12] are the flattened 3x3 covariance matrix
-        cov_flat = data[3:12]
-        cov_matrix = cov_flat.reshape(3, 3)
+        cov_matrix = np.array(msg.covariance).reshape(3, 3)
 
         # Extract the 9 uncertainty features used in the state vector
         features = extract_2d_covariance_features(cov_matrix)
@@ -749,7 +739,7 @@ class CARLAParkingEnv(gym.Env):
 
         return state, reward, terminated, truncated, info
 
-    def render(self) -> Optional[np.ndarray]:  # type: ignore[override]
+    def render(self) -> Union[np.ndarray, List[np.ndarray], None]:
         """
         @brief Render the environment.
         @return RGB array if render_mode is 'rgb_array', None otherwise.

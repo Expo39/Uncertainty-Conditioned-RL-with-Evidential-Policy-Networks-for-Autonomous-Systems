@@ -62,10 +62,21 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
 
-# Copy custom ROS 2 nodes for covariance extraction
-COPY uncertainty_rl/ros2 /workspace/src/uncertainty_rl_ros2
+# Copy custom message package (ament_cmake, builds first via dependency order)
+COPY uncertainty_rl/ros2/uncertainty_rl_msgs /workspace/src/uncertainty_rl_msgs
 
-# Rebuild with custom nodes
+# Copy custom ROS 2 nodes for covariance extraction (ament_python)
+COPY uncertainty_rl/ros2/uncertainty_rl_ros2 /workspace/src/uncertainty_rl_ros2/uncertainty_rl_ros2
+COPY uncertainty_rl/ros2/package.xml /workspace/src/uncertainty_rl_ros2/package.xml
+COPY uncertainty_rl/ros2/setup.py /workspace/src/uncertainty_rl_ros2/setup.py
+COPY uncertainty_rl/ros2/setup.cfg /workspace/src/uncertainty_rl_ros2/setup.cfg
+COPY uncertainty_rl/ros2/resource /workspace/src/uncertainty_rl_ros2/resource
+COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
+
+# Copy ROS 2 config (loaded at launch time)
+COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
+
+# Rebuild with custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"

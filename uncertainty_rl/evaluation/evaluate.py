@@ -12,7 +12,7 @@ import argparse
 import copy
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -188,14 +188,18 @@ def evaluate_agent(
     successes = 0
 
     for episode in range(n_episodes):
-        obs: np.ndarray = env.reset()  # type: ignore[assignment]
+        obs = cast(np.ndarray, env.reset())
         done_arr = np.array([False])
         episode_reward = 0.0
         steps = 0
 
         while not done_arr[0]:
             action, _states = model.predict(obs, deterministic=deterministic)
-            obs, reward, done_arr, info = env.step(action)  # type: ignore[assignment]
+            step_result = env.step(action)
+            obs = cast(np.ndarray, step_result[0])
+            reward = cast(np.ndarray, step_result[1])
+            done_arr = cast(np.ndarray, step_result[2])
+            info = step_result[3]
 
             episode_reward += float(reward[0])
             steps += 1
