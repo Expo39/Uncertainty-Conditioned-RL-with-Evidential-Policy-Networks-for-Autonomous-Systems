@@ -16,7 +16,7 @@ import logging
 import random
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import gymnasium as gym
 import numpy as np
