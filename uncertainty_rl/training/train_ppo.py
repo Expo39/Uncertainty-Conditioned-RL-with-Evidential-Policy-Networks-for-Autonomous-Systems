@@ -8,7 +8,7 @@ with evidential actor networks for autonomous parking.
 
 import argparse
 import os
-from typing import Any, Callable, Dict
+from typing import Any, Callable, Dict, Optional
 
 import gymnasium as gym
 import numpy as np
@@ -29,11 +29,18 @@ from uncertainty_rl.envs import CARLAParkingEnv
 # from uncertainty_rl.networks import EvidentialActorCriticPolicy
 
 
-def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
+def make_env(
+    config: Dict[str, Any],
+    rank: int = 0,
+    carla_sensors_override: Optional[Dict[str, Any]] = None,
+    carla_conditions_override: Optional[Dict[str, Any]] = None,
+) -> Callable:
     """
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param rank: Environment rank for seeding.
+    @param carla_sensors_override: Override sensor noise config (for evaluation).
+    @param carla_conditions_override: Override conditions config (for evaluation).
     @return Callable that creates environment.
     """
 
@@ -42,8 +49,18 @@ def make_env(config: Dict[str, Any], rank: int = 0) -> Callable:
             carla_host=config.get("carla_host", "localhost"),
             carla_port=config.get("carla_port", 2000) + rank,
             town=config.get("town", "Town01"),
-            uncertainty_noise_std=config.get("uncertainty_noise_std", 0.1),
             max_steps=config.get("max_steps", 500),
+            ros2_config=config.get("ros2", {}),
+            carla_sensors_config=(
+                carla_sensors_override
+                if carla_sensors_override is not None
+                else config.get("carla_sensors", {})
+            ),
+            carla_conditions_config=(
+                carla_conditions_override
+                if carla_conditions_override is not None
+                else config.get("carla_conditions", {})
+            ),
         )
         return env
 
@@ -104,11 +121,9 @@ def train(
         clip_reward=10.0,
     )
 
-    # Create evaluation environment
+    # Create evaluation environment (same config as training)
     print("Creating evaluation environment...")
-    eval_config = config.copy()
-    eval_config["uncertainty_noise_std"] = config.get("eval_uncertainty_noise_std", 0.1)
-    eval_vec_env = DummyVecEnv([make_env(eval_config)])
+    eval_vec_env = DummyVecEnv([make_env(config)])
     eval_env = VecNormalize(
         eval_vec_env,
         norm_obs=True,

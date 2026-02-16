@@ -48,7 +48,7 @@ services:
   ros2-bridge:
     build:
       context: .
-      dockerfile: docker/Dockerfile.ros2
+      dockerfile: uncertainty_rl/ros2/Dockerfile
       args:
         ROS_DISTRO: jazzy
     container_name: uncertainty-rl-ros2
@@ -85,7 +85,7 @@ services:
   training:
     build:
       context: .
-      dockerfile: docker/Dockerfile.training
+      dockerfile: uncertainty_rl/training/Dockerfile
       args:
         PYTORCH_VERSION: 23.12-py3
     container_name: uncertainty-rl-training

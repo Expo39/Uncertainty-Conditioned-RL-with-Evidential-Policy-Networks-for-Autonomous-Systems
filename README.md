@@ -87,14 +87,17 @@ Run `make help` for the full list.
 uncertainty_rl/                      # Main Python package
 |-- networks/evidential_policy.py    # Evidential layers, NIG distributions
 |-- envs/carla_parking.py            # CARLA Gymnasium environment (15D state, 3D action)
-|-- training/train_ppo.py            # PPO training with SB3
+|-- training/
+|   |-- train_ppo.py                 # PPO training with SB3
+|   +-- Dockerfile                   # Training container (NGC PyTorch + SB3)
 |-- evaluation/evaluate.py           # Noise sweep, metrics, plots
-|-- ros2/covariance_extractor.py     # Bridge to robot_localization EKF
+|-- ros2/
+|   |-- covariance_extractor.py      # Bridge to robot_localization EKF
+|   +-- Dockerfile                   # ROS 2 bridge container (Jazzy + robot_localisation)
 +-- utils/
     |-- logging.py                   # MetricsLogger, UncertaintyTracker
     +-- visualisation.py             # Trajectory plots, uncertainty evolution, training curves
 configs/                             # YAML hyperparameters (train, eval, ROS 2)
-docker/                              # Dockerfiles for ROS 2 bridge and training containers
 tests/                               # pytest suite mirroring uncertainty_rl/ structure
 ```
 

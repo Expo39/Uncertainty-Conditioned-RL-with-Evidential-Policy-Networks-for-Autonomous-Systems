@@ -2,15 +2,17 @@
 @file test_carla_parking.py
 @brief Tests for the CARLA parking environment.
 
-All tests run in simulation mode (no CARLA server required) by verifying
-the environment's API contract, state dimensions, reward logic, and
-fallback behaviour.
+All tests run in simulation mode (no CARLA server or ROS 2 required) by
+verifying the environment's API contract, state dimensions, reward logic,
+and fallback behaviour. When rclpy is unavailable (CI), the env returns
+zero uncertainty features - this is expected and non-functional for training.
 """
 
 import numpy as np
 import pytest
 
 from uncertainty_rl.envs import CARLAParkingEnv
+from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM
 
 
 class TestCARLAParkingEnvAPI:
@@ -27,7 +29,6 @@ class TestCARLAParkingEnvAPI:
         self.env = CARLAParkingEnv(
             carla_host="localhost",
             carla_port=2000,
-            uncertainty_noise_std=0.1,
             max_steps=50,
         )
 
@@ -39,22 +40,26 @@ class TestCARLAParkingEnvAPI:
 
     def test_observation_space_shape(self) -> None:
         """
-        @brief Observation space must be 15-dimensional.
+        @brief Observation space must be TOTAL_OBS_DIM-dimensional (15).
         """
-        assert self.env.observation_space.shape == (15,)
+        assert self.env.observation_space.shape == (TOTAL_OBS_DIM,)
 
     def test_action_space_shape(self) -> None:
         """
-        @brief Action space must be 3-dimensional [steering, throttle, brake].
+        @brief Action space must be ACTION_DIM-dimensional [steering, throttle, brake].
         """
-        assert self.env.action_space.shape == (3,)
+        assert self.env.action_space.shape == (ACTION_DIM,)
 
     def test_action_space_bounds(self) -> None:
         """
         @brief Action bounds: steering [-1,1], throttle [0,1], brake [0,1].
         """
-        np.testing.assert_array_equal(self.env.action_space.low, [-1.0, 0.0, 0.0])
-        np.testing.assert_array_equal(self.env.action_space.high, [1.0, 1.0, 1.0])
+        np.testing.assert_array_equal(
+            self.env.action_space.low, [-1.0, 0.0, 0.0]
+        )
+        np.testing.assert_array_equal(
+            self.env.action_space.high, [1.0, 1.0, 1.0]
+        )
 
     def test_reset_returns_tuple(self) -> None:
         """
@@ -65,7 +70,7 @@ class TestCARLAParkingEnvAPI:
         assert len(result) == 2
 
         obs, info = result
-        assert obs.shape == (15,)
+        assert obs.shape == (TOTAL_OBS_DIM,)
         assert isinstance(info, dict)
 
     def test_step_returns_five_tuple(self) -> None:
@@ -80,7 +85,7 @@ class TestCARLAParkingEnvAPI:
         assert len(result) == 5
 
         obs, reward, terminated, truncated, info = result
-        assert obs.shape == (15,)
+        assert obs.shape == (TOTAL_OBS_DIM,)
         assert isinstance(reward, float)
         assert isinstance(terminated, bool)
         assert isinstance(truncated, bool)
@@ -107,6 +112,30 @@ class TestCARLAParkingEnvAPI:
         # After max_steps, should be truncated
         assert self.env.steps <= self.env.max_steps
 
+    def test_env_accepts_config_dicts(self) -> None:
+        """
+        @brief Constructor must accept ros2_config, carla_sensors_config,
+               and carla_conditions_config without error.
+        """
+        env = CARLAParkingEnv(
+            max_steps=10,
+            ros2_config={
+                "covariance_topic": "/test/covariance",
+                "covariance_timeout": 5.0,
+            },
+            carla_sensors_config={
+                "imu": {"noise_accel_stddev_x": 0.2},
+                "gnss": {"noise_lat_stddev": 0.001},
+            },
+            carla_conditions_config={
+                "weather_presets": ["ClearNoon"],
+                "num_vehicles": 5,
+            },
+        )
+        assert env._covariance_topic == "/test/covariance"
+        assert env._covariance_timeout == 5.0
+        env.close()
+
 
 class TestRewardFunction:
     """
@@ -121,7 +150,6 @@ class TestRewardFunction:
         """
         self.env = CARLAParkingEnv(
             target_parking_spot=(0.0, 0.0, 0.0),
-            uncertainty_noise_std=0.1,
             max_steps=50,
         )
 
@@ -135,9 +163,7 @@ class TestRewardFunction:
         """
         @brief A state at the target with zero velocity should yield success bonus.
         """
-        # Simulate a perfect parking state
-        state = np.zeros(15, dtype=np.float32)
-        # Position at target, zero velocity
+        state = np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
         reward, done = self.env._compute_reward(state)
         assert reward > 90.0, "Success bonus should dominate reward"
         assert done is True
@@ -146,10 +172,10 @@ class TestRewardFunction:
         """
         @brief States further from target should have lower reward.
         """
-        state_near = np.zeros(15, dtype=np.float32)
+        state_near = np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
         state_near[0] = 1.0  # 1m from target
 
-        state_far = np.zeros(15, dtype=np.float32)
+        state_far = np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
         state_far[0] = 10.0  # 10m from target
 
         reward_near, _ = self.env._compute_reward(state_near)
@@ -161,7 +187,7 @@ class TestRewardFunction:
         """
         @brief Episode should terminate when position error exceeds 20m.
         """
-        state = np.zeros(15, dtype=np.float32)
+        state = np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
         state[0] = 25.0  # 25m away
         _, done = self.env._compute_reward(state)
         assert done is True
@@ -170,10 +196,10 @@ class TestRewardFunction:
         """
         @brief Higher velocity near target should reduce reward.
         """
-        state_still = np.zeros(15, dtype=np.float32)
+        state_still = np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
         state_still[0] = 2.0  # Near target
 
-        state_fast = np.zeros(15, dtype=np.float32)
+        state_fast = np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
         state_fast[0] = 2.0
         state_fast[3] = 5.0  # Moving fast
 
@@ -181,32 +207,3 @@ class TestRewardFunction:
         reward_fast, _ = self.env._compute_reward(state_fast)
 
         assert reward_still > reward_fast
-
-
-class TestCovarianceSimulation:
-    """
-    @class TestCovarianceSimulation
-    @brief Tests for the simulated SLAM covariance in the state.
-    """
-
-    def test_initial_covariance_matches_noise_std(self) -> None:
-        """
-        @brief Initial covariance diagonal should reflect uncertainty_noise_std.
-        """
-        noise_std = 0.2
-        env = CARLAParkingEnv(
-            uncertainty_noise_std=noise_std,
-            max_steps=10,
-        )
-        expected_variance = noise_std**2
-        np.testing.assert_approx_equal(env.covariance_matrix[0, 0], expected_variance)
-        np.testing.assert_approx_equal(env.covariance_matrix[1, 1], expected_variance)
-        env.close()
-
-    def test_covariance_is_symmetric(self) -> None:
-        """
-        @brief Covariance matrix must always be symmetric.
-        """
-        env = CARLAParkingEnv(uncertainty_noise_std=0.3, max_steps=10)
-        np.testing.assert_array_equal(env.covariance_matrix, env.covariance_matrix.T)
-        env.close()

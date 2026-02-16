@@ -1,0 +1,46 @@
+"""
+@file setup.py
+@brief ROS 2 ament_python package setup for uncertainty_rl_ros2.
+
+This setup script is used by colcon to build and install the ROS 2
+package containing covariance extraction nodes and the CARLA bridge
+launch file.
+"""
+
+import os
+from glob import glob
+
+from setuptools import setup
+
+package_name = "uncertainty_rl_ros2"
+
+setup(
+    name=package_name,
+    version="0.1.0",
+    packages=[package_name],
+    data_files=[
+        (
+            "share/ament_index/resource_index/packages",
+            ["resource/" + package_name],
+        ),
+        ("share/" + package_name, ["package.xml"]),
+        (
+            os.path.join("share", package_name, "launch"),
+            glob("launch/*.launch.py"),
+        ),
+    ],
+    install_requires=["setuptools"],
+    zip_safe=True,
+    maintainer="Antonio",
+    maintainer_email="antonio@example.com",
+    description="SLAM covariance extraction for uncertainty-conditioned RL.",
+    license="MIT",
+    entry_points={
+        "console_scripts": [
+            "covariance_extractor = "
+            "uncertainty_rl_ros2.covariance_extractor:main",
+            "covariance_monitor = "
+            "uncertainty_rl_ros2.covariance_extractor:main_monitor",
+        ],
+    },
+)
