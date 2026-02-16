@@ -49,10 +49,13 @@ logger = logging.getLogger(__name__)
 
 
 # Base class depends on rclpy availability
-_NodeBase = Node if _ROS2_AVAILABLE else object
+if _ROS2_AVAILABLE:
+    _NodeBase = Node
+else:
+    _NodeBase = object  # type: ignore[assignment,misc]
 
 
-class _CovarianceSubscriber(_NodeBase):
+class _CovarianceSubscriber(_NodeBase):  # type: ignore[valid-type]
     """
     @class _CovarianceSubscriber
     @brief Lightweight rclpy Node that subscribes to EKF covariance.
@@ -621,7 +624,7 @@ class CARLAParkingEnv(gym.Env):
             uncertainty = uncertainty.astype(np.float32)
 
         # Concatenate: [vehicle_state(6), uncertainty_features(9)] = 15
-        state = np.concatenate([vehicle_state, uncertainty])
+        state: np.ndarray = np.concatenate([vehicle_state, uncertainty])
         return state
 
     def _compute_reward(self, state: np.ndarray) -> Tuple[float, bool]:

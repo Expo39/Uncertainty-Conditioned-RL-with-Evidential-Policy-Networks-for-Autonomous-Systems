@@ -8,14 +8,15 @@ ROS 2 ament_python package for SLAM covariance extraction from the `robot_locali
 
 ## Package Structure
 
-This is an ament_python package built by colcon inside the ros2-bridge container.
+This directory is both an ament_python package (built by colcon in the ros2-bridge container) and a subpackage of `uncertainty_rl`. Node code lives in one place only: `uncertainty_rl_ros2/covariance_extractor.py`.
 
 | File | Purpose |
 |------|---------|
+| `__init__.py` | Conditional re-export from `uncertainty_rl_ros2` (graceful fallback without rclpy) |
 | `package.xml` | ament_python manifest with dependencies |
 | `setup.py` / `setup.cfg` | Python package setup for colcon |
-| `resource/uncertainty_rl_ros2` | Empty ament_index marker |
-| `uncertainty_rl_ros2/` | Python package (covariance_extractor.py) |
+| `resource/uncertainty_rl_ros2` | Empty ament_index marker (required by ament) |
+| `uncertainty_rl_ros2/` | Single source of truth for node code |
 | `launch/carla_bridge.launch.py` | Launches CARLA bridge + EKF + covariance extractor |
 
 ## Launch File
