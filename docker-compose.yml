@@ -10,8 +10,7 @@
 # Network architecture: Internal bridge network for container communication.
 # Volume mounts: Persistent storage for logs, checkpoints, configs.
 
-# @author Antonio
-# @date 2025-02-11
+# @author Antonio Galdes
 
 services:
   # CARLA simulation server - headless with GPU passthrough
