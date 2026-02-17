@@ -1,6 +1,6 @@
 """
 @file test_covariance_utils.py
-@brief Tests for SLAM covariance matrix utility functions.
+@brief Tests for EKF covariance matrix utility functions.
 
 Validates feature extraction from 3x3 and 6x6 covariance matrices,
 matrix validation, and edge cases (zero, identity, non-symmetric).
@@ -178,9 +178,9 @@ class TestValidateCovarianceMatrix:
         """
         assert validate_covariance_matrix(np.ones((3, 4))) is False
 
-    def test_realistic_slam_covariance(self) -> None:
+    def test_realistic_ekf_covariance(self) -> None:
         """
-        @brief A realistic SLAM covariance matrix should be valid.
+        @brief A realistic EKF covariance matrix should be valid.
         """
         # Typical EKF output: small variances with mild correlations
         cov = np.array(

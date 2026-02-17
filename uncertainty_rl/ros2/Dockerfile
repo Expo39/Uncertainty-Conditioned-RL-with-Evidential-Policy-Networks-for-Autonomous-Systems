@@ -1,6 +1,6 @@
 # Dockerfile
 # @file uncertainty_rl/ros2/Dockerfile
-# @brief ROS 2 Jazzy container with CARLA bridge and robot_localisation for EKF-SLAM.
+# @brief ROS 2 Jazzy container with CARLA bridge and robot_localisation for EKF.
 #
 # Components:
 # - ROS 2 Jazzy base
@@ -30,7 +30,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install robot_localisation for EKF-SLAM
+# Install robot_localisation for EKF
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \

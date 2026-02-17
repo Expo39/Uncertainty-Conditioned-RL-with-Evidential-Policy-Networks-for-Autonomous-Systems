@@ -11,7 +11,7 @@ carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 # ROS 2 covariance subscription settings
 # The training container subscribes to real EKF covariance via DDS
 ros2:
-  covariance_topic: "/slam_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
+  covariance_topic: "/ekf_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
   covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
 
 # CARLA sensor noise configuration
@@ -81,7 +81,7 @@ eval_freq: 10000  # Evaluate every N training steps
 # Evidential network settings
 evidential:
   lambda_reg: 0.01  # Regularisation coefficient for evidential loss
-  use_uncertainty_conditioning: true  # Condition policy on SLAM uncertainty
+  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty
   
 # Uncertainty settings
 uncertainty:

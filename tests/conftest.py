@@ -52,7 +52,7 @@ def action_batch() -> torch.Tensor:
 @pytest.fixture
 def low_uncertainty_state() -> torch.Tensor:
     """
-    @brief State with very low SLAM uncertainty (indices 6-8 near zero).
+    @brief State with very low EKF localisation uncertainty (indices 6-8 near zero).
     """
     state = torch.randn(1, STATE_DIM)
     state[0, 6:9] = 0.01
@@ -63,7 +63,7 @@ def low_uncertainty_state() -> torch.Tensor:
 @pytest.fixture
 def high_uncertainty_state() -> torch.Tensor:
     """
-    @brief State with high SLAM uncertainty (indices 6-8 large).
+    @brief State with high EKF localisation uncertainty (indices 6-8 large).
     """
     state = torch.randn(1, STATE_DIM)
     state[0, 6:9] = 1.0
@@ -100,7 +100,7 @@ def train_config() -> Dict[str, Any]:
         "net_arch": [64, 64],
         "checkpoint_freq": 500,
         "ros2": {
-            "covariance_topic": "/slam_uncertainty/covariance",
+            "covariance_topic": "/ekf_uncertainty/covariance",
             "covariance_timeout": 10.0,
         },
         "carla_sensors": {
@@ -142,7 +142,7 @@ def eval_config() -> Dict[str, Any]:
         "max_steps": 50,
         "n_episodes": 3,
         "ros2": {
-            "covariance_topic": "/slam_uncertainty/covariance",
+            "covariance_topic": "/ekf_uncertainty/covariance",
             "covariance_timeout": 10.0,
         },
         "eval_conditions": [

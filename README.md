@@ -1,13 +1,13 @@
 # Uncertainty-Conditioned RL with Evidential Policy Networks for Autonomous Systems
 
-Propagating SLAM localisation uncertainty through evidential deep learning policies for safer autonomous parking in unmapped environments.
+Propagating EKF localisation uncertainty through evidential deep learning policies for safer autonomous parking in unmapped environments.
 
 ## Overview
 
-Most self-driving systems rely on expensive HD maps or vision-only approaches that cannot quantify uncertainty. This system uses SLAM to build its own map in real time and feeds the SLAM uncertainty directly into an RL policy that controls an anutonomous sytem. The policy uses **evidential deep learning** (Normal-Inverse-Gamma distributions) to quantify its own uncertainty about what action to take - enabling safety handoffs or conservative driving when confidence is low.
+Most self-driving systems rely on expensive HD maps or vision-only approaches that cannot quantify uncertainty. This system uses an EKF (Extended Kalman Filter) for real-time localisation and feeds the EKF uncertainty directly into an RL policy that controls an autonomous system. The policy uses **evidential deep learning** (Normal-Inverse-Gamma distributions) to quantify its own uncertainty about what action to take - enabling safety handoffs or conservative driving when confidence is low.
 
 **Two layers of uncertainty awareness:**
-1. *"How sure am I about where I am?"* - from SLAM (EKF via `robot_localization`)
+1. *"How sure am I about where I am?"* - from the EKF (via `robot_localization`)
 2. *"How sure am I about what to do?"* - from the evidential policy network
 
 ## Installation
