@@ -6,7 +6,7 @@ Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (publishes noisy sensor data from CARLA to ROS 2 topics)
 2. robot_localisation EKF node (fuses sensor data, outputs /odometry/filtered)
 3. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance, publishes
-   CovarianceEstimate to /slam_uncertainty/covariance for the training
+   CovarianceEstimate to /ekf_uncertainty/covariance for the training
    container to consume)
 
 EKF and covariance extractor parameters are loaded from configs/ros2_config.yaml
@@ -130,7 +130,7 @@ def generate_launch_description() -> LaunchDescription:
     # -- Covariance extractor node -----------------------------------------
     # Subscribes to /odometry/filtered, extracts the 3x3 [x, y, yaw]
     # covariance submatrix, and publishes a CovarianceEstimate message to
-    # /slam_uncertainty/covariance for the training container to consume.
+    # /ekf_uncertainty/covariance for the training container to consume.
 
     covariance_extractor = Node(
         package="uncertainty_rl_ros2",
@@ -140,7 +140,7 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "odom_topic": config.get("odom_topic", "/odometry/filtered"),
                 "covariance_topic": config.get(
-                    "covariance_topic", "/slam_uncertainty/covariance"
+                    "covariance_topic", "/ekf_uncertainty/covariance"
                 ),
                 "publish_rate": config.get("publish_rate", 10.0),
             }

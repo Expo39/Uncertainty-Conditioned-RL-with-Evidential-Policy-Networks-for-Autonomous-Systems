@@ -29,7 +29,7 @@ Structural constants fixed by system architecture. Not tuneable - changing these
 | `SUCCESS_THRESHOLD_ORIENTATION` | ~0.175 rad | Parking success orientation threshold (10 deg) |
 | `SUCCESS_THRESHOLD_VELOCITY` | 0.1 m/s | Parking success velocity threshold |
 | `VEHICLE_STATE_DIM` | 6 | Core state: [x, y, yaw, vx, vy, vyaw] |
-| `COVARIANCE_FEATURES_DIM` | 9 | SLAM uncertainty features |
+| `COVARIANCE_FEATURES_DIM` | 9 | EKF localisation uncertainty features |
 | `TOTAL_OBS_DIM` | 15 | Full observation dimension |
 | `ACTION_DIM` | 3 | [steering, throttle, brake] |
 

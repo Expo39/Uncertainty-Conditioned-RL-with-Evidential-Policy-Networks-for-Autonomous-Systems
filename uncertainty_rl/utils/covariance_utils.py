@@ -1,9 +1,9 @@
 """
 @file covariance_utils.py
-@brief Shared utilities for SLAM covariance matrix extraction.
+@brief Shared utilities for EKF covariance matrix extraction.
 
 This module provides common functions for extracting uncertainty features
-from SLAM covariance matrices for use in RL state representations.
+from EKF covariance matrices for use in RL state representations.
 """
 
 import numpy as np

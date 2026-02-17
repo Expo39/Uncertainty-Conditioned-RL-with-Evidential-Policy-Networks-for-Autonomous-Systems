@@ -1,7 +1,7 @@
 """Uncertainty-Conditioned RL with Evidential Policy Networks for Autonomous Vehicles.
 
 This package implements uncertainty-aware reinforcement learning for autonomous parking
-using CARLA simulator with SLAM localisation uncertainty propagation through
+using CARLA simulator with EKF localisation uncertainty propagation through
 evidential deep learning policies.
 """
 

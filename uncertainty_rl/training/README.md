@@ -35,7 +35,7 @@ Uses SB3's standard `MlpPolicy`. The evidential policy network is **not yet inte
 - `n_epochs`: 10
 - `net_arch`: [256, 256]
 - `total_timesteps`: 1,000,000
-- `ros2.covariance_topic`: `/slam_uncertainty/covariance`
+- `ros2.covariance_topic`: `/ekf_uncertainty/covariance`
 - `carla_sensors.imu.noise_accel_stddev_*`: 0.1 (m/s^2)
 - `carla_conditions.num_vehicles`: 20
 

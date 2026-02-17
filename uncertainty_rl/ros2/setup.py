@@ -33,7 +33,7 @@ setup(
     zip_safe=True,
     maintainer="Antonio Galdes",
     maintainer_email="antoniogaldes2@outlook.com",
-    description="SLAM covariance extraction for uncertainty-conditioned RL.",
+    description="EKF covariance extraction for uncertainty-conditioned RL.",
     license="MIT",
     entry_points={
         "console_scripts": [

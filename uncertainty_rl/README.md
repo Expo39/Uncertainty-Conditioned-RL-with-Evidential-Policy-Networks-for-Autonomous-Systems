@@ -7,7 +7,7 @@ Main Python package for uncertainty-conditioned reinforcement learning with evid
 | Directory | Purpose |
 |-----------|---------|
 | `networks/` | Evidential deep learning policy - NIG distributions, uncertainty quantification |
-| `envs/` | CARLA Gymnasium parking environment with SLAM uncertainty in observations |
+| `envs/` | CARLA Gymnasium parking environment with EKF localisation uncertainty in observations |
 | `training/` | RL training scripts using Stable-Baselines3 |
 | `evaluation/` | Performance evaluation across varying uncertainty levels |
 | `ros2/` | ROS 2 bridge to `robot_localisation` EKF covariance |

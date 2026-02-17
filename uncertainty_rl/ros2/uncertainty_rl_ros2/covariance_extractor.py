@@ -36,7 +36,7 @@ class CovarianceExtractorNode(Node):
 
         # Declare parameters
         self.declare_parameter("odom_topic", "/odometry/filtered")
-        self.declare_parameter("covariance_topic", "/slam_uncertainty/covariance")
+        self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
         self.declare_parameter("publish_rate", 10.0)  # Hz
 
         # Get parameters
@@ -199,7 +199,7 @@ class CovarianceMonitorNode(Node):
         super().__init__(node_name)
 
         # Declare parameters
-        self.declare_parameter("covariance_topic", "/slam_uncertainty/covariance")
+        self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
 
         covariance_topic = self.get_parameter("covariance_topic").value
 

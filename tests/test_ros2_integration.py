@@ -44,7 +44,7 @@ class TestROS2CovariancePipeline:
         env = CARLAParkingEnv(
             max_steps=10,
             ros2_config={
-                "covariance_topic": "/slam_uncertainty/covariance",
+                "covariance_topic": "/ekf_uncertainty/covariance",
                 "covariance_timeout": 30.0,
             },
         )
@@ -65,7 +65,7 @@ class TestROS2CovariancePipeline:
             rclpy.init()
 
         sub = _CovarianceSubscriber(
-            covariance_topic="/slam_uncertainty/covariance",
+            covariance_topic="/ekf_uncertainty/covariance",
             node_name="test_cov_dim_check",
         )
 
@@ -92,7 +92,7 @@ class TestROS2CovariancePipeline:
         env = CARLAParkingEnv(
             max_steps=10,
             ros2_config={
-                "covariance_topic": "/slam_uncertainty/covariance",
+                "covariance_topic": "/ekf_uncertainty/covariance",
                 "covariance_timeout": 30.0,
             },
         )

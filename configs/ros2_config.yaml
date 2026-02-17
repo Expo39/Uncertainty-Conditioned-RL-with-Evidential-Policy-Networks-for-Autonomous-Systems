@@ -33,7 +33,7 @@ ekf:
 
 # Covariance extraction node topics
 odom_topic: "/odometry/filtered"  # Input: EKF-filtered odometry
-covariance_topic: "/slam_uncertainty/covariance"  # Output: CovarianceEstimate
+covariance_topic: "/ekf_uncertainty/covariance"  # Output: CovarianceEstimate
 
 # Publishing settings
 publish_rate: 10.0  # Hz

@@ -32,7 +32,7 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # Core vehicle state: [x, y, yaw, vx, vy, vyaw]
 VEHICLE_STATE_DIM = 6
 
-# SLAM uncertainty features: [std_x, std_y, std_yaw, cov_xx, cov_yy,
+# EKF localisation uncertainty features: [std_x, std_y, std_yaw, cov_xx, cov_yy,
 # cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
 COVARIANCE_FEATURES_DIM = 9
 

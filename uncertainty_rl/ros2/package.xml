@@ -5,7 +5,7 @@
   <name>uncertainty_rl_ros2</name>
   <version>0.1.0</version>
   <description>
-    SLAM covariance extraction and CARLA bridge orchestration for
+    EKF covariance extraction and CARLA bridge orchestration for
     uncertainty-conditioned RL.
   </description>
   <maintainer email="antoniogaldes2@outlook.com">Antonio Galdes</maintainer>

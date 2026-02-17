@@ -20,7 +20,7 @@ CARLAParkingEnv(
     max_steps=500,
     target_parking_spot=None,
     render_mode=None,
-    ros2_config={"covariance_topic": "/slam_uncertainty/covariance", "covariance_timeout": 10.0},
+    ros2_config={"covariance_topic": "/ekf_uncertainty/covariance", "covariance_timeout": 10.0},
     carla_sensors_config={"imu": {...}, "gnss": {...}},
     carla_conditions_config={"weather_presets": [...], "num_vehicles": 20, ...},
 )

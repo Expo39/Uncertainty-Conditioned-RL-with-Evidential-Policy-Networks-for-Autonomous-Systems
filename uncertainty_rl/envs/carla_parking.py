@@ -72,7 +72,7 @@ class _CovarianceSubscriber(_NodeBase):
 
     def __init__(
         self,
-        covariance_topic: str = "/slam_uncertainty/covariance",
+        covariance_topic: str = "/ekf_uncertainty/covariance",
         node_name: str = "covariance_subscriber",
     ) -> None:
         """
@@ -187,7 +187,7 @@ class CARLAParkingEnv(gym.Env):
         # Parse configs with defaults
         ros2_config = ros2_config or {}
         self._covariance_topic = ros2_config.get(
-            "covariance_topic", "/slam_uncertainty/covariance"
+            "covariance_topic", "/ekf_uncertainty/covariance"
         )
         self._covariance_timeout = ros2_config.get("covariance_timeout", 10.0)
 
@@ -444,7 +444,7 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Spawn NPC vehicles and pedestrians via the CARLA traffic manager.
 
-        Moving objects in the scene cause dynamic occlusions and SLAM
+        Moving objects in the scene cause dynamic occlusions and
         data association challenges, increasing EKF uncertainty.
         """
         if self.world is None or self.client is None:

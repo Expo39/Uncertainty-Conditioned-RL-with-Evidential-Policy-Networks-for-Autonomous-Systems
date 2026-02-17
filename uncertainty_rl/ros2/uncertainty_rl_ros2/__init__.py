@@ -1,6 +1,6 @@
 """
 @file __init__.py
-@brief ROS 2 package for SLAM covariance extraction.
+@brief ROS 2 package for EKF covariance extraction.
 
 This is the ament_python package directory used by colcon inside the
 ros2-bridge container. The actual node implementations live in

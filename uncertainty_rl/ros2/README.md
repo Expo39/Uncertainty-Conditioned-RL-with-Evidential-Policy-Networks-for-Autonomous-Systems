@@ -1,6 +1,6 @@
 # ros2/
 
-ROS 2 ament_python package for SLAM covariance extraction from the `robot_localisation` EKF.
+ROS 2 ament_python package for EKF covariance extraction from the `robot_localisation` EKF.
 
 ## Dockerfile
 
@@ -26,7 +26,7 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 1. **CARLA ROS bridge** — publishes sensor topics from CARLA simulator
 2. **robot_localisation EKF** — fuses odometry + IMU (optionally GNSS), outputs `/odometry/filtered`
-3. **CovarianceExtractorNode** — extracts 3x3 covariance, publishes to `/slam_uncertainty/covariance`
+3. **CovarianceExtractorNode** — extracts 3x3 covariance, publishes to `/ekf_uncertainty/covariance`
 
 ## Nodes
 
@@ -37,7 +37,7 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 ## EKF Sensor Fusion
 
-EKF sensor inputs are an open decision (see TODO.md Task 4). Preferred: **odometry + IMU only** (parking manoeuvres are short, drift stays small). Alternatives: add GNSS or LiDAR-SLAM. Configured with `two_d_mode: true`. See `configs/ros2_config.yaml` for full EKF parameters including topic remappings and fusion matrix configs.
+EKF sensor inputs are an open decision (see TODO.md Task 4). Preferred: **odometry + IMU only** (parking manoeuvres are short, drift stays small). Alternatives: add GNSS or LiDAR-based localisation. Configured with `two_d_mode: true`. See `configs/ros2_config.yaml` for full EKF parameters including topic remappings and fusion matrix configs.
 
 ## Configuration
 
