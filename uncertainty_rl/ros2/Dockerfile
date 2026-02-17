@@ -8,8 +8,7 @@
 # - robot_localisation package for EKF covariance output
 # - Python dependencies for covariance extraction
 #
-# @author Antonio
-# @date 2025-02-11
+# @author Antonio Galdes
 
 ARG ROS_DISTRO=jazzy
 FROM ros:${ROS_DISTRO}-ros-base-noble
@@ -41,11 +40,9 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
-# Clone CARLA ROS bridge (compatible with CARLA 0.9.13+)
+# Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
 RUN cd /workspace/src && \
-    git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
-    cd ros-bridge && \
-    git checkout ros2
+    git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git
 
 # Install Python dependencies for CARLA
 RUN pip3 install --no-cache-dir \

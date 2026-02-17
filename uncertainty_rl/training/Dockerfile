@@ -8,8 +8,7 @@
 # DDS wire protocol is distro-agnostic, so Humble here communicates with
 # Jazzy in the ros2-bridge container without issues.
 #
-# @author Antonio
-# @date 2025-02-11
+# @author Antonio Galdes
 
 ARG PYTORCH_VERSION=24.01-py3
 FROM nvcr.io/nvidia/pytorch:${PYTORCH_VERSION}
