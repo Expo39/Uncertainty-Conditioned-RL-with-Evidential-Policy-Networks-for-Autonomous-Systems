@@ -288,7 +288,6 @@ backup-configs: ## Pack all CLAUDE.md, TODO.md, documentation/, and .github/ int
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
 	@echo "TODO.md" >> /tmp/_backup_files.txt
 	@find ./documentation -type f >> /tmp/_backup_files.txt 2>/dev/null || true
-	@find ./.github -type f >> /tmp/_backup_files.txt 2>/dev/null || true
 	tar -czf project_configs.tar.gz -T /tmp/_backup_files.txt
 	@rm -f /tmp/_backup_files.txt
 	@echo "Backed up to project_configs.tar.gz ($$(du -h project_configs.tar.gz | cut -f1))"

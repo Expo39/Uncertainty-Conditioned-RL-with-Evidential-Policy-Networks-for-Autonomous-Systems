@@ -72,8 +72,5 @@ TODO.md
 # Documentation (local dissertation notes, meeting agendas, references)
 documentation/
 
-# GitHub workflows and config (already on remote, kept locally via backup archive)
-.github/
-
 # Project config archive (local portability)
 project_configs.tar.gz
