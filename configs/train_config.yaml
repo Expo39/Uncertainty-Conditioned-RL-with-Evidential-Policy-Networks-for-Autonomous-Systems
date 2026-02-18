@@ -1,11 +1,16 @@
 # Training Configuration for Uncertainty-Conditioned RL
 # This configuration file contains parameters for training the PPO agent
+# with evidential actor networks for autonomous parking in CARLA.
+#
+# Hyperparameters are calibrated for a SINGLE CARLA environment (sequential
+# data collection) with 15-dim vector observations and 3-dim continuous
+# actions. See the references below each parameter for justification.
 
 # Environment settings
 carla_host: "localhost"
 carla_port: 2000
 town: "Town01"
-max_steps: 500  # Maximum episode length
+max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 
 # ROS 2 covariance subscription settings
@@ -51,40 +56,132 @@ carla_conditions:
   num_vehicles: 20                    # NPC vehicles via traffic manager
   num_pedestrians: 10                 # NPC pedestrians
 
+# ---------------------------------------------------------------------------
 # PPO hyperparameters
+# Calibrated for single-CARLA-env parking (sequential data collection,
+# 15-dim state, 3-dim action, 500-step episodes, weather randomisation).
+# ---------------------------------------------------------------------------
+
+# Learning rate: 3e-4 is validated by Andrychowicz et al. (2021) across
+# 250,000+ agents. Linear decay to 0 is applied in train_ppo.py following
+# Defazio et al. (2023) who proved linear decay optimal across RL tasks.
 learning_rate: 0.0003
-n_steps: 2048  # Number of steps to run for each environment per update
-batch_size: 64  # Minibatch size
-n_epochs: 10  # Number of epochs when optimising the surrogate loss
-gamma: 0.99  # Discount factor
-gae_lambda: 0.95  # Factor for trade-off of bias vs variance for GAE
-clip_range: 0.2  # Clipping parameter for PPO
-clip_range_vf: null  # Clipping parameter for value function (null = no clipping)
-ent_coef: 0.01  # Entropy coefficient for exploration
-vf_coef: 0.5  # Value function coefficient
-max_grad_norm: 0.5  # Maximum value for gradient clipping
+
+# n_steps: With a single CARLA env, 2048 steps = ~4 complete episodes per
+# PPO update. Provides trajectory diversity across weather randomisation.
+# CaRL (Jaeger et al. 2025) used lower values but with 4-8 parallel envs.
+n_steps: 2048
+
+# batch_size x n_epochs: Controls off-policy gradient steps per rollout.
+# Old: 64 x 10 = 320 steps (excessive, causes policy drift).
+# New: 256 x 5 = 40 steps (within CaRL-validated range for CARLA).
+batch_size: 256
+n_epochs: 5
+
+# gamma: Keep 0.99 for current reward structure. The +100 success bonus at
+# step ~300 needs gamma^300 ~ 0.05 to propagate. At 0.98, gamma^300 ~ 0.002
+# (invisible). If switching to potential-based reward shaping, 0.98 is viable.
+gamma: 0.99
+
+gae_lambda: 0.95    # Standard default (Andrychowicz et al. 2021)
+clip_range: 0.2     # Standard default (Schulman et al. 2017)
+clip_range_vf: null  # No VF clipping (SB3 default, avoids loss overshooting)
+
+# ent_coef: Zero for continuous control. Andrychowicz et al. (2021) found
+# "no evidence that the entropy term improves performance on continuous
+# control environments" across 250,000+ agents. Exploration is handled by
+# the Gaussian policy's learned standard deviation.
+ent_coef: 0.0
+
+vf_coef: 0.5        # Standard default
+max_grad_norm: 0.5   # Standard default
+
+# target_kl: Early-stop epochs when KL divergence exceeds threshold.
+# Set slightly higher than the typical 0.015 because weather randomisation
+# creates noisy reward landscapes. Acts as a safety valve against policy
+# collapse during aggressive gradient steps.
+target_kl: 0.02
 
 # Network architecture
-net_arch: [256, 256]  # Hidden layer sizes for both actor and critic
-activation: "relu"  # Activation function
+# [256,256] for both actor and critic. The evidential actor head outputs
+# 4 x 3 = 12 NIG parameters, requiring rich intermediate representations.
+# Andrychowicz et al. (2021) recommend separate sizing; we keep both at
+# [256,256] since the 15-dim state includes 9 covariance features encoding
+# complex non-linear uncertainty structure.
+net_arch: [256, 256]
+activation: "relu"  # Validated for evidential architectures (EPPO, Amini et al. 2020)
 
+# @todo(AG) Add LayerNorm support to EvidentialActorCriticPolicy. EPPO uses
+# LayerNorm after each hidden layer to preserve network plasticity under
+# non-stationary training (weather randomisation). See Dohare et al. (2024).
+
+# ---------------------------------------------------------------------------
+# Observation normalisation
+# ---------------------------------------------------------------------------
+# VecNormalize with norm_obs=True is "one of the most impactful
+# implementation details" (Andrychowicz et al. 2021). Essential for our
+# mixed-scale 15-dim state (metres, radians, covariance values 1e-6 to 100+).
+#
+# @todo(AG) Apply log1p transform to covariance features (indices 6-14) in
+# _get_state() before VecNormalize sees them. Compresses heavy tails from
+# high-uncertainty conditions (fog, rain) that would distort running stats.
+#
+# norm_reward=False is set in train_ppo.py because with potential-based
+# reward shaping (planned), reward components are already normalised to
+# similar scales. Auto-normalisation can obscure the success signal when
+# reward distributions change dramatically during training.
+
+# ---------------------------------------------------------------------------
 # Logging and checkpointing
+# ---------------------------------------------------------------------------
 checkpoint_freq: 50000  # Save checkpoint every N steps
-log_interval: 10  # Log every N episodes
+log_interval: 10        # Log every N episodes
 
 # Training settings
 total_timesteps: 1000000
 seed: 42
-random_seeds: [42, 123, 456, 789, 1011]  # For multi-seed ablation studies
+random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for final ablation
 eval_freq: 10000  # Evaluate every N training steps
 
+# ---------------------------------------------------------------------------
 # Evidential network settings
+# ---------------------------------------------------------------------------
 evidential:
-  lambda_reg: 0.01  # Regularisation coefficient for evidential loss
+  # Regularisation coefficient for evidential loss.
+  # Matches EPPO xi=0.01. Validated range [0.001, 0.1] across evidential
+  # DL literature. TrustGeo (KDD 2023) showed too-low lambda causes
+  # epistemic uncertainty to collapse; too-high inflates uncertainty.
+  lambda_reg: 0.01
+
+  # @todo(AG) Implement lambda_reg annealing from 0 to 0.01 over first
+  # 50K steps. Lets NLL establish good predictions before regularisation.
+
+  # @todo(AG) Implement NIG hyperprior initialisation in EvidentialLayer:
+  #   nu bias ~ 0.5   -> softplus(0.5) ~ 0.97 (high initial epistemic)
+  #   alpha bias ~ 0.5 -> softplus(0.5)+1 ~ 1.97 (well-defined variance)
+  #   beta bias ~ 0.0  -> softplus(0) ~ 0.69 (moderate scale)
+  #   output weights scaled by 0.01 (start near bias-determined values)
+
   use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty
-  
+
 # Uncertainty settings
 uncertainty:
   epistemic_weight: 1.0  # Weight for epistemic uncertainty in loss
   aleatoric_weight: 1.0  # Weight for aleatoric uncertainty in loss
 
+# ---------------------------------------------------------------------------
+# Reward function
+# ---------------------------------------------------------------------------
+# @todo(AG) CRITICAL: Fix reward scale imbalance (Task 9). Current reward:
+#   R = -distance - 0.5*orientation - 0.1*velocity + 100*success
+# Over 500 steps at ~5m avg distance, cumulative penalty ~ -2500, dwarfing
+# the +100 success bonus. Agent learns to fail fast (less penalty) rather
+# than succeed (penalty accumulates). Switch to potential-based shaping:
+#   R_distance = (prev_distance - curr_distance) / max_distance
+# This rewards PROGRESS not absolute position. Also add:
+#   - Collision penalty (-5 to -10, early termination)
+#   - Action smoothness (-0.05 * ||a_t - a_{t-1}||^2)
+#   - Time penalty (-0.01 per step)
+# See Ng et al. (1999) for potential-based shaping theory,
+# highway-env parking benchmark (Farama Foundation) for reference design,
+# RARLAP (2024) for milestone-augmented rewards with PPO.
