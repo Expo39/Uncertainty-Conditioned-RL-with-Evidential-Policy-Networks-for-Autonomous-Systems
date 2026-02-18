@@ -12,7 +12,11 @@ import numpy as np
 import pytest
 
 from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM
+from uncertainty_rl.utils.constants import (
+    ACTION_DIM,
+    TOTAL_OBS_DIM,
+    VEHICLE_STATE_DIM,
+)
 
 
 class TestCARLAParkingEnvAPI:
@@ -203,3 +207,68 @@ class TestRewardFunction:
         reward_fast, _ = self.env._compute_reward(state_fast)
 
         assert reward_still > reward_fast
+
+
+class TestIncludeCovarianceFlag:
+    """
+    @class TestIncludeCovarianceFlag
+    @brief Tests for the include_covariance configuration flag.
+    """
+
+    def test_default_includes_covariance(self) -> None:
+        """
+        @brief Default (no flag) should give 15-dim observation.
+        """
+        env = CARLAParkingEnv(max_steps=10)
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)
+        env.close()
+
+    def test_include_covariance_true(self) -> None:
+        """
+        @brief Explicit True should give 15-dim observation.
+        """
+        env = CARLAParkingEnv(max_steps=10, include_covariance=True)
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)
+        env.close()
+
+    def test_include_covariance_false(self) -> None:
+        """
+        @brief False should give 6-dim observation.
+        """
+        env = CARLAParkingEnv(max_steps=10, include_covariance=False)
+        assert env.observation_space.shape == (VEHICLE_STATE_DIM,)
+        env.close()
+
+    def test_reset_respects_include_covariance_false(self) -> None:
+        """
+        @brief reset() with include_covariance=False returns 6-dim obs.
+        """
+        env = CARLAParkingEnv(max_steps=10, include_covariance=False)
+        obs, info = env.reset()
+        assert obs.shape == (VEHICLE_STATE_DIM,)
+        env.close()
+
+    def test_step_respects_include_covariance_false(self) -> None:
+        """
+        @brief step() with include_covariance=False returns 6-dim obs.
+        """
+        env = CARLAParkingEnv(max_steps=10, include_covariance=False)
+        env.reset()
+        action = env.action_space.sample()
+        obs, _, _, _, _ = env.step(action)
+        assert obs.shape == (VEHICLE_STATE_DIM,)
+        env.close()
+
+    def test_reward_works_with_6dim_state(self) -> None:
+        """
+        @brief _compute_reward should work with 6-dim state (no covariance).
+        """
+        env = CARLAParkingEnv(
+            max_steps=10,
+            include_covariance=False,
+            target_parking_spot=(0.0, 0.0, 0.0),
+        )
+        state_6d = np.zeros(VEHICLE_STATE_DIM, dtype=np.float32)
+        reward, done = env._compute_reward(state_6d)
+        assert reward > 90.0
+        env.close()

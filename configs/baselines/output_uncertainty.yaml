@@ -1,0 +1,19 @@
+# Baseline: Output Uncertainty Only
+# 6-dim EKF pose (no covariance), evidential actor.
+# The agent does not see localisation uncertainty but the policy quantifies
+# its own epistemic and aleatoric uncertainty via NIG distributions.
+#
+# Ablation dimensions:
+#   include_covariance: false  (6-dim observation)
+#   policy_type: evidential    (EvidentialActorCriticPolicy + EvidentialPPO)
+#
+# All other parameters inherited from configs/train_config.yaml.
+
+baseline_name: "output_uncertainty"
+baseline_description: "6-dim EKF pose (no covariance), evidential actor"
+
+include_covariance: false
+policy_type: "evidential"
+
+log_dir: "./logs/output_uncertainty"
+checkpoint_dir: "./checkpoints/output_uncertainty"
