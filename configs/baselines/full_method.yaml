@@ -1,0 +1,19 @@
+# Baseline: Full Method (Main Contribution)
+# 15-dim EKF state (pose + covariance), evidential actor.
+# The agent sees localisation uncertainty AND the policy quantifies its own
+# epistemic and aleatoric uncertainty. This is the main contribution.
+#
+# Ablation dimensions:
+#   include_covariance: true   (15-dim observation)
+#   policy_type: evidential    (EvidentialActorCriticPolicy + EvidentialPPO)
+#
+# All other parameters inherited from configs/train_config.yaml.
+
+baseline_name: "full_method"
+baseline_description: "15-dim EKF state, evidential actor (main contribution)"
+
+include_covariance: true
+policy_type: "evidential"
+
+log_dir: "./logs/full_method"
+checkpoint_dir: "./checkpoints/full_method"

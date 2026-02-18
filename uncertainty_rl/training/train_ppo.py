@@ -21,6 +21,7 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.ppo import PPO
 
 from uncertainty_rl.envs import CARLAParkingEnv
 from uncertainty_rl.networks import (
@@ -74,6 +75,7 @@ def make_env(
                 if carla_conditions_override is not None
                 else config.get("carla_conditions", {})
             ),
+            include_covariance=config.get("include_covariance", True),
         )
         return env
 
@@ -138,10 +140,7 @@ def train(config: Dict[str, Any]) -> None:
         training=False,  # Don't update running statistics during evaluation
     )
 
-    # Configure evidential PPO policy
-    evidential_config = config.get("evidential", {})
-    lambda_reg = evidential_config.get("lambda_reg", 0.01)
-
+    # Shared policy kwargs for both standard and evidential policies
     policy_kwargs = dict(
         net_arch=dict(
             pi=config.get("net_arch", [256, 256]),
@@ -150,16 +149,12 @@ def train(config: Dict[str, Any]) -> None:
         activation_fn=torch.nn.ReLU,
     )
 
-    # Linear LR decay from initial value to 0 over training
+    # Shared PPO hyperparameters
     lr_initial = config.get("learning_rate", 3e-4)
     lr_schedule = linear_schedule(lr_initial)
 
-    # Create EvidentialPPO agent with evidential actor
-    print("Initialising EvidentialPPO agent...")
-    model = EvidentialPPO(
-        policy=EvidentialActorCriticPolicy,
+    ppo_kwargs = dict(
         env=env,
-        lambda_reg=lambda_reg,
         learning_rate=lr_schedule,
         n_steps=config.get("n_steps", 2048),
         batch_size=config.get("batch_size", 256),
@@ -177,6 +172,30 @@ def train(config: Dict[str, Any]) -> None:
         tensorboard_log=log_dir,
         seed=seed,
     )
+
+    # Create agent based on policy_type config
+    policy_type = config.get("policy_type", "evidential")
+    print(f"Initialising {policy_type} PPO agent...")
+
+    model: PPO
+    if policy_type == "evidential":
+        evidential_config = config.get("evidential", {})
+        lambda_reg = evidential_config.get("lambda_reg", 0.01)
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            lambda_reg=lambda_reg,
+            **ppo_kwargs,
+        )
+    elif policy_type == "standard":
+        model = PPO(
+            policy="MlpPolicy",
+            **ppo_kwargs,
+        )
+    else:
+        raise ValueError(
+            f"Unknown policy_type '{policy_type}'. "
+            f"Expected 'evidential' or 'standard'."
+        )
 
     # Set up logger
     logger = configure(log_dir, ["stdout", "tensorboard"])
