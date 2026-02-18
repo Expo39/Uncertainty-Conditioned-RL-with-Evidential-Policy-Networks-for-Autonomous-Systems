@@ -68,3 +68,6 @@ htmlcov/
 
 # TODO files
 TODO.md
+
+# Implementation references (local dissertation notes)
+references/
