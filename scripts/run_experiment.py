@@ -10,6 +10,10 @@ Each baseline config (in configs/baselines/) contains only override keys
 merged on top of the shared base config (configs/train_config.yaml) so that
 all baselines share identical PPO hyperparameters, sensor noise, etc.
 
+Supports parallel execution via the `parallel_workers` config parameter or
+`--workers` CLI flag. Each parallel worker uses a separate CARLA port
+(base_port + 3 * worker_index) to avoid conflicts.
+
 This script runs INSIDE the training Docker container where CARLA, ROS 2, and
 PyTorch/SB3 are available. Use `make docker-experiment` or `docker compose exec`
 to invoke it. Dry-run mode works locally without Docker for planning.
@@ -41,6 +45,10 @@ Usage examples (inside training container or via Make):
                   configs/baselines/full_method.yaml \\
         --seeds 0 1 2 3 4
 
+    # Run with 3 parallel workers (each gets its own CARLA port)
+    docker compose exec training python scripts/run_experiment.py \\
+        --configs configs/baselines/*.yaml --workers 3
+
     # Filter to specific baselines
     docker compose exec training python scripts/run_experiment.py \\
         --configs configs/baselines/*.yaml \\
@@ -52,7 +60,8 @@ import argparse
 import copy
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -94,6 +103,25 @@ def merge_configs(
     return merged
 
 
+def _assign_carla_port(
+    config: Dict[str, Any], worker_index: int
+) -> Dict[str, Any]:
+    """
+    @brief Assign a CARLA port to a run based on its worker index.
+
+    Each CARLA instance uses 3 consecutive ports (world, streaming, RPC).
+    Worker 0 uses base_port, worker 1 uses base_port+3, etc.
+
+    @param config: Run configuration dictionary.
+    @param worker_index: Zero-based index of the parallel worker.
+    @return Config with updated carla_port.
+    """
+    run_config = copy.deepcopy(config)
+    base_port = run_config.get("carla_port", 2000)
+    run_config["carla_port"] = base_port + (3 * worker_index)
+    return run_config
+
+
 def run_single(
     config: Dict[str, Any], seed: int, dry_run: bool = False
 ) -> None:
@@ -118,7 +146,8 @@ def run_single(
             f"checkpoint_dir={run_config['checkpoint_dir']}, "
             f"policy_type={run_config.get('policy_type', 'evidential')}, "
             f"include_covariance="
-            f"{run_config.get('include_covariance', True)}"
+            f"{run_config.get('include_covariance', True)}, "
+            f"carla_port={run_config.get('carla_port', 2000)}"
         )
         return
 
@@ -126,7 +155,10 @@ def run_single(
     from uncertainty_rl.training.train_ppo import train
 
     print(f"\n{'=' * 60}")
-    print(f"Starting: {baseline_name}, seed={seed}")
+    print(
+        f"Starting: {baseline_name}, seed={seed}, "
+        f"port={run_config.get('carla_port', 2000)}"
+    )
     print(f"{'=' * 60}\n")
 
     start_time = time.monotonic()
@@ -134,6 +166,21 @@ def run_single(
     elapsed = time.monotonic() - start_time
 
     print(f"\nCompleted {baseline_name}/seed_{seed} in {elapsed:.1f}s")
+
+
+def _run_worker(args: Tuple[Dict[str, Any], int, bool]) -> str:
+    """
+    @brief Worker function for parallel execution via ProcessPoolExecutor.
+    @param args: Tuple of (config, seed, dry_run).
+    @return Status message string.
+    """
+    config, seed, dry_run = args
+    baseline_name = config.get("baseline_name", "unknown")
+    try:
+        run_single(config, seed, dry_run=dry_run)
+        return f"OK: {baseline_name}/seed_{seed}"
+    except Exception as e:
+        return f"FAILED: {baseline_name}/seed_{seed}: {e}"
 
 
 def main() -> None:
@@ -172,6 +219,15 @@ def main() -> None:
         default=None,
         help="Only run baselines whose baseline_name matches these",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help=(
+            "Number of parallel workers (overrides parallel_workers in config). "
+            "Each worker uses a separate CARLA port."
+        ),
+    )
     args = parser.parse_args()
 
     # Load shared base config
@@ -195,27 +251,68 @@ def main() -> None:
         print("No configs matched the filter. Exiting.")
         sys.exit(1)
 
-    # Plan all runs
-    total_runs = 0
+    # Determine parallelism
+    parallel_workers: int = (
+        args.workers
+        if args.workers is not None
+        else base_config.get("parallel_workers", 1)
+    )
+
+    # Build list of all (config, seed) pairs
+    all_runs: List[Tuple[Dict[str, Any], int]] = []
     for config in configs:
         seeds: List[int] = args.seeds or config.get("random_seeds", [42])
         baseline_name = config.get("baseline_name", "unknown")
         print(f"Baseline: {baseline_name} x {len(seeds)} seeds")
-        total_runs += len(seeds)
+        for seed in seeds:
+            all_runs.append((config, seed))
 
+    total_runs = len(all_runs)
     print(f"\nTotal planned runs: {total_runs}")
+    print(f"Parallel workers: {parallel_workers}")
 
     if args.dry_run:
         print("\n--- DRY RUN ---\n")
 
-    # Execute runs sequentially
-    completed = 0
-    for config in configs:
-        seeds = args.seeds or config.get("random_seeds", [42])
-        for seed in seeds:
+    if parallel_workers <= 1:
+        # Sequential execution
+        completed = 0
+        for config, seed in all_runs:
             completed += 1
             print(f"\n[{completed}/{total_runs}]")
             run_single(config, seed, dry_run=args.dry_run)
+    else:
+        # Parallel execution — assign each run a CARLA port based on its
+        # position in the worker pool (worker_index cycles 0..workers-1)
+        worker_args: List[Tuple[Dict[str, Any], int, bool]] = []
+        for i, (config, seed) in enumerate(all_runs):
+            worker_index = i % parallel_workers
+            port_config = _assign_carla_port(config, worker_index)
+            worker_args.append((port_config, seed, args.dry_run))
+
+        if args.dry_run:
+            # Dry run: just print sequentially, no process pool needed
+            for i, (config, seed, _) in enumerate(worker_args):
+                print(f"\n[{i + 1}/{total_runs}]")
+                run_single(config, seed, dry_run=True)
+        else:
+            print(
+                f"\nLaunching {parallel_workers} parallel workers "
+                f"(ports {base_config.get('carla_port', 2000)}"
+                f"-{base_config.get('carla_port', 2000) + 3 * (parallel_workers - 1)})"
+            )
+            with ProcessPoolExecutor(
+                max_workers=parallel_workers
+            ) as executor:
+                futures = {
+                    executor.submit(_run_worker, wa): wa
+                    for wa in worker_args
+                }
+                completed = 0
+                for future in as_completed(futures):
+                    completed += 1
+                    result = future.result()
+                    print(f"[{completed}/{total_runs}] {result}")
 
     print(f"\nAll {total_runs} runs {'planned' if args.dry_run else 'complete'}.")
 

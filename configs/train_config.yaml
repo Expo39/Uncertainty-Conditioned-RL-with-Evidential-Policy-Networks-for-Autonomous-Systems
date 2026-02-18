@@ -143,6 +143,14 @@ seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for final ablation
 eval_freq: 10000  # Evaluate every N training steps
 
+# Parallel execution settings
+# Number of training runs to execute in parallel. Each worker spawns its own
+# CARLA instance on a separate port (base port + 3*worker_index, since CARLA
+# uses 3 consecutive ports per instance). Set to 1 for sequential execution.
+# Constrained by GPU VRAM: each CARLA instance needs ~2-4 GB VRAM.
+# Example: RTX 4090 (24 GB) can run 2-3 instances comfortably.
+parallel_workers: 1
+
 # ---------------------------------------------------------------------------
 # Evidential network settings
 # ---------------------------------------------------------------------------

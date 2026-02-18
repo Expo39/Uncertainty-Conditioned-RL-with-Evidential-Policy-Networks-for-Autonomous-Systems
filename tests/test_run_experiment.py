@@ -14,6 +14,7 @@ SCRIPTS_DIR = Path(__file__).parent.parent / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from run_experiment import (  # noqa: E402
+    _assign_carla_port,
     load_config,
     merge_configs,
     run_single,
@@ -148,3 +149,64 @@ class TestMergeConfigs:
         assert merged["gamma"] == 0.99
         assert "carla_sensors" in merged
         assert "carla_conditions" in merged
+
+
+class TestAssignCarlaPort:
+    """
+    @class TestAssignCarlaPort
+    @brief Tests for CARLA port assignment for parallel workers.
+    """
+
+    def test_worker_zero_keeps_base_port(self) -> None:
+        """
+        @brief Worker 0 should use the base port unchanged.
+        """
+        config: Dict[str, Any] = {"carla_port": 2000}
+        result = _assign_carla_port(config, worker_index=0)
+        assert result["carla_port"] == 2000
+
+    def test_worker_one_offsets_by_three(self) -> None:
+        """
+        @brief Worker 1 should use base_port + 3.
+        """
+        config: Dict[str, Any] = {"carla_port": 2000}
+        result = _assign_carla_port(config, worker_index=1)
+        assert result["carla_port"] == 2003
+
+    def test_worker_two_offsets_by_six(self) -> None:
+        """
+        @brief Worker 2 should use base_port + 6.
+        """
+        config: Dict[str, Any] = {"carla_port": 2000}
+        result = _assign_carla_port(config, worker_index=2)
+        assert result["carla_port"] == 2006
+
+    def test_does_not_mutate_original(self) -> None:
+        """
+        @brief _assign_carla_port should not modify the input config.
+        """
+        config: Dict[str, Any] = {"carla_port": 2000, "seed": 42}
+        _assign_carla_port(config, worker_index=3)
+        assert config["carla_port"] == 2000
+
+    def test_default_port_when_missing(self) -> None:
+        """
+        @brief Uses default port 2000 when carla_port is not in config.
+        """
+        config: Dict[str, Any] = {"seed": 42}
+        result = _assign_carla_port(config, worker_index=1)
+        assert result["carla_port"] == 2003
+
+    def test_dry_run_shows_port(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """
+        @brief Dry run output should include the assigned CARLA port.
+        """
+        config: Dict[str, Any] = {
+            "baseline_name": "test",
+            "carla_port": 2006,
+            "policy_type": "standard",
+            "include_covariance": False,
+        }
+        run_single(config, seed=0, dry_run=True)
+        captured = capsys.readouterr()
+        assert "carla_port=2006" in captured.out
