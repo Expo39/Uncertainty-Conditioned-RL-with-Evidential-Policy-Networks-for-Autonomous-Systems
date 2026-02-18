@@ -69,5 +69,11 @@ htmlcov/
 # TODO files
 TODO.md
 
-# Implementation references (local dissertation notes)
-references/
+# Documentation (local dissertation notes, meeting agendas, references)
+documentation/
+
+# GitHub workflows and config (already on remote, kept locally via backup archive)
+.github/
+
+# Project config backup archive (local portability)
+project_configs.tar.gz

@@ -3,6 +3,7 @@
 
 .PHONY: help install test test-unit test-integration verify
 .PHONY: lint format typecheck clean
+.PHONY: backup-configs restore-configs
 .PHONY: train train-short evaluate ros2 experiment-dry
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
 .PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
@@ -278,3 +279,20 @@ clean: ## Remove build artefacts, caches, and generated outputs
 	rm -rf logs/ checkpoints/ evaluation_results/ experiments/ results/
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+
+# ----------------------------------------------------------------------
+# Config Backup
+# ----------------------------------------------------------------------
+
+backup-configs: ## Pack all CLAUDE.md, TODO.md, documentation/, and .github/ into project_configs.tar.gz
+	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
+	@echo "TODO.md" >> /tmp/_backup_files.txt
+	@find ./documentation -type f >> /tmp/_backup_files.txt 2>/dev/null || true
+	@find ./.github -type f >> /tmp/_backup_files.txt 2>/dev/null || true
+	tar -czf project_configs.tar.gz -T /tmp/_backup_files.txt
+	@rm -f /tmp/_backup_files.txt
+	@echo "Backed up to project_configs.tar.gz ($$(du -h project_configs.tar.gz | cut -f1))"
+
+restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and .github/ from project_configs.tar.gz
+	tar -xzf project_configs.tar.gz
+	@echo "Restored configs from project_configs.tar.gz"
