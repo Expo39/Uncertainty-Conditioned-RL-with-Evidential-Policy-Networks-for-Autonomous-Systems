@@ -1,12 +1,12 @@
 # Makefile - Uncertainty-Conditioned RL
 # Development commands for training, evaluation, testing, and linting.
 
-.PHONY: help install test
+.PHONY: help install test test-unit test-integration verify
 .PHONY: lint format typecheck clean
 .PHONY: train train-short evaluate ros2
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
 .PHONY: docker-train docker-train-short docker-eval
-.PHONY: docker-test docker-test-fast docker-lint docker-format
+.PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
 .PHONY: docker-clean docker-clean-all docker-full-build docker-dev
 
@@ -15,7 +15,7 @@ PYTEST := pytest
 CONFIG_DIR := configs
 SRC_DIR := uncertainty_rl
 TESTS_DIR := tests
-DOCKER_COMPOSE := docker-compose
+DOCKER_COMPOSE := docker compose
 
 # ----------------------------------------------------------------------
 # Help
@@ -95,14 +95,26 @@ docker-eval: ## Run evaluation inside container
 # Docker: Testing & Linting
 # ----------------------------------------------------------------------
 
-docker-test: ## Run tests inside container
-	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v
+docker-test: ## Run full test suite inside container
+	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short
+
+docker-test-unit: ## Run unit tests inside container (no CARLA/ROS 2 needed)
+	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "not integration"
+
+docker-test-integration: ## Run integration tests inside container (requires full stack)
+	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
+
+docker-verify: ## Run all checks inside container (tests + lint + typecheck)
+	$(DOCKER_COMPOSE) exec training make verify
 
 docker-lint: ## Run linters inside container
 	$(DOCKER_COMPOSE) exec training make lint
 
 docker-format: ## Format code inside container
 	$(DOCKER_COMPOSE) exec training make format
+
+docker-typecheck: ## Run mypy inside container
+	$(DOCKER_COMPOSE) exec training make typecheck
 
 # ----------------------------------------------------------------------
 # Docker: Shells & Logs
@@ -191,8 +203,22 @@ ros2: ## Launch covariance extractor node
 # Testing
 # ----------------------------------------------------------------------
 
-test: ## Run full test suite
+test: ## Run full test suite (unit + integration)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short
+
+test-unit: ## Run unit tests only (no GPU, no CARLA, no ROS 2)
+	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
+
+test-integration: ## Run integration tests (requires CARLA + ROS 2 + GPU)
+	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "integration"
+
+verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
+	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
+	flake8 $(SRC_DIR) $(TESTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR)
+	black --check $(SRC_DIR) $(TESTS_DIR)
+	mypy $(SRC_DIR) --ignore-missing-imports
+	$(PYTHON) -c "import uncertainty_rl; print('All checks passed.')"
 
 # ----------------------------------------------------------------------
 # Linting & Formatting
@@ -211,7 +237,7 @@ typecheck: ## Run mypy type checking
 	mypy $(SRC_DIR) --ignore-missing-imports
 
 # ----------------------------------------------------------------------
-# Santiy Check
+# Sanity Check
 # ----------------------------------------------------------------------
 
 sanity: ## Quick import check

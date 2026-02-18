@@ -10,13 +10,12 @@
 # Network architecture: Internal bridge network for container communication.
 # Volume mounts: Persistent storage for logs, checkpoints, configs.
 
-# @author Antonio
-# @date 2025-02-11
+# @author Antonio Galdes
 
 services:
   # CARLA simulation server - headless with GPU passthrough
   carla-server:
-    image: carlasim/carla:0.9.15
+    image: carlasim/carla:0.9.16
     container_name: uncertainty-rl-carla
     runtime: nvidia
     environment:
@@ -87,7 +86,7 @@ services:
       context: .
       dockerfile: uncertainty_rl/training/Dockerfile
       args:
-        PYTORCH_VERSION: 23.12-py3
+        PYTORCH_VERSION: 24.10-py3
     container_name: uncertainty-rl-training
     runtime: nvidia
     environment:
