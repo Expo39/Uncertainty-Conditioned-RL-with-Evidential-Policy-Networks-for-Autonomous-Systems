@@ -29,11 +29,12 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install robot_localisation for EKF
+# Install robot_localisation for EKF + cv_bridge (needed by carla_ros_bridge camera.py import)
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
+    ros-${ROS_DISTRO}-cv-bridge \
     && rm -rf /var/lib/apt/lists/*
 
 # Create workspace
@@ -45,19 +46,24 @@ RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git
 
 # Install Python dependencies for CARLA
-RUN pip3 install --no-cache-dir \
-    carla==0.9.15 \
+# --break-system-packages needed on Ubuntu 24.04 (PEP 668); safe in a container
+RUN pip3 install --no-cache-dir --break-system-packages \
+    carla==0.9.16 \
     numpy \
     transforms3d
 
-# Install rosdep dependencies
+# Install rosdep dependencies for the packages we need (skip GUI/rviz/PCL packages)
 RUN rosdep update && \
-    rosdep install --from-paths /workspace/src --ignore-src -r -y
+    rosdep install --from-paths /workspace/src --ignore-src -r -y \
+    --skip-keys="rviz2 rviz_common rqt_gui_py python_qt_binding pcl_conversions \
+    qtbase5-dev libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
+    derived_object_msgs ackermann_msgs" || true
 
-# Build workspace
+# Build only the CARLA bridge packages we need (no rviz, rqt, PCL, manual control)
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
-    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
 
 # Copy custom message package (ament_cmake, builds first via dependency order)
 COPY uncertainty_rl/ros2/uncertainty_rl_msgs /workspace/src/uncertainty_rl_msgs
@@ -73,10 +79,12 @@ COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 # Copy ROS 2 config (loaded at launch time)
 COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
 
-# Rebuild with custom messages and nodes
+# Build custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
+    source /workspace/install/setup.bash && \
     cd /workspace && \
-    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release"
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
+    --packages-select uncertainty_rl_msgs uncertainty_rl_ros2"
 
 # Source ROS setup automatically
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \

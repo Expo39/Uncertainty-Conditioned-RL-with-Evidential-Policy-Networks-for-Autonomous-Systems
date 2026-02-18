@@ -8,7 +8,7 @@ MSc dissertation codebase - trains in CARLA simulation, evaluates across uncerta
 
 ### Three-Container Architecture
 
-1. **carla-server** - CARLA 0.9.15 headless simulation with GPU passthrough. Generates realistic sensor noise, weather, traffic.
+1. **carla-server** - CARLA 0.9.16 headless simulation with GPU passthrough. Generates realistic sensor noise, weather, traffic.
 2. **ros2-bridge** - ROS 2 Jazzy running `robot_localization` EKF + CARLA bridge. Publishes real covariance from noisy sensors.
 3. **training** - NVIDIA NGC PyTorch container. Training/evaluation happens here. Subscribes to EKF covariance via ROS 2 DDS.
 
@@ -96,19 +96,21 @@ Use `-> None` for void functions. Import from `typing`. Use `Optional[X]` not `X
 - **State space**: 15-dim - `[x, y, yaw, vx, vy, vyaw, std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]`. 2D only, no z-axis. All 15 dimensions come from the EKF via ROS 2.
 - **Localisation**: EKF via `robot_localization`. Covariance extracted from 6x6 at indices [0,1,5] for [x, y, yaw].
 - **RL**: PPO via Stable-Baselines3.
-- **Simulator**: CARLA 0.9.13+ with ROS 2 Jazzy bridge.
+- **Simulator**: CARLA 0.9.16 with ROS 2 Jazzy bridge.
 - **Uncertainty formulae**: epistemic = `beta/(alpha-1)`, aleatoric = `beta/(nu*(alpha-1))`.
 - **Evidential loss**: `L = NLL(gamma,nu,alpha,beta,y) + lambda*|y-gamma|*(2*nu+alpha)`.
 - **Uncertainty source**: CARLA simulates physical conditions (noisy sensors, weather, fog, traffic) that cause the `robot_localisation` EKF to produce real covariance. Docker + ROS 2 always required for training.
 
 ## Documentation Links
 
-Always consult official docs when generating code for these packages:
+Always consult official docs when generating code for these packages. Do not guess at API signatures - check docs.
+
+### Python / ROS 2 Libraries
 
 - **PyTorch**: https://pytorch.org/docs/stable/ - `nn.Module`, `nn.Linear`, `F.softplus`, `Normal`
 - **Gymnasium**: https://gymnasium.farama.org/ - `gym.Env`, `spaces.Box`, `reset()`/`step()` API
 - **Stable-Baselines3**: https://stable-baselines3.readthedocs.io/en/master/ - `PPO`, `VecNormalize`, custom policies
-- **CARLA Python API**: https://carla.readthedocs.io/en/0.9.13/python_api/ - `Client`, `World`, `Vehicle`, `VehicleControl`
+- **CARLA Python API**: https://carla.readthedocs.io/en/0.9.16/python_api/ - `Client`, `World`, `Vehicle`, `VehicleControl`
 - **ROS 2 Jazzy rclpy**: https://docs.ros.org/en/jazzy/p/rclpy/ - `Node`, subscriptions, publishers, QoS
 - **robot_localization**: https://docs.ros.org/en/jazzy/p/robot_localization/ - EKF, `Odometry` covariance
 - **NumPy**: https://numpy.org/doc/stable/
@@ -116,7 +118,18 @@ Always consult official docs when generating code for these packages:
 - **Seaborn**: https://seaborn.pydata.org/
 - **pytest**: https://docs.pytest.org/en/stable/
 
-Do not guess at API signatures - check docs.
+### Docker Infrastructure (Dockerfiles + docker-compose.yml)
+
+Consult these when modifying Dockerfiles, docker-compose.yml, or debugging container build/runtime issues:
+
+- **CARLA Docker image**: https://carla.readthedocs.io/en/0.9.15/build_docker/ - `carlasim/carla:0.9.15`, headless flags (`-RenderOffScreen`), port config (2000-2002)
+- **CARLA ROS bridge**: https://github.com/carla-simulator/ros-bridge - ROS 2 bridge for CARLA sensors. `master` branch (no `ros2` branch). Cloned in `ros2/Dockerfile`
+- **NVIDIA NGC PyTorch**: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch - `nvcr.io/nvidia/pytorch:24.10-py3` base for training container (last Ubuntu 22.04 tag). Ubuntu 22.04 -> ROS 2 Humble
+- **ROS 2 Docker images**: https://hub.docker.com/_/ros - `ros:jazzy-ros-base-noble` base for ros2-bridge container
+- **Docker Compose**: https://docs.docker.com/compose/compose-file/ - Service orchestration, healthchecks, GPU reservations, volumes, networks
+- **NVIDIA Container Toolkit**: https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/ - `runtime: nvidia`, GPU passthrough, `NVIDIA_VISIBLE_DEVICES`
+- **colcon**: https://colcon.readthedocs.io/en/released/ - ROS 2 workspace build tool, `colcon build --symlink-install`
+- **rosdep**: https://docs.ros.org/en/jazzy/Tutorials/Intermediate/Rosdep.html - Dependency resolution for ROS 2 packages
 
 ## Per-Directory Context
 

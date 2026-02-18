@@ -10,7 +10,7 @@
 #
 # @author Antonio Galdes
 
-ARG PYTORCH_VERSION=24.01-py3
+ARG PYTORCH_VERSION=24.10-py3
 FROM nvcr.io/nvidia/pytorch:${PYTORCH_VERSION}
 
 # Environment setup
@@ -61,8 +61,8 @@ RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
 
 # Set ROS 2 environment variables so rclpy is importable without sourcing setup.bash
 ENV AMENT_PREFIX_PATH=/opt/ros/humble
-ENV PYTHONPATH=/opt/ros/humble/lib/python3.10/dist-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:${PYTHONPATH}
-ENV LD_LIBRARY_PATH=/opt/ros/humble/lib:${LD_LIBRARY_PATH}
+ENV PYTHONPATH=/opt/ros/humble/lib/python3.10/dist-packages:/opt/ros/humble/local/lib/python3.10/dist-packages
+ENV LD_LIBRARY_PATH=/opt/ros/humble/lib
 ENV ROS_DISTRO=humble
 
 # Upgrade pip and install build tools
@@ -76,7 +76,7 @@ COPY pyproject.toml /workspace/pyproject.toml
 COPY uncertainty_rl /workspace/uncertainty_rl
 
 # Install CARLA Python API (system-level dependency, not on PyPI reliably)
-RUN pip install --no-cache-dir carla==0.9.15
+RUN pip install --no-cache-dir carla==0.9.16
 
 # Install dependencies from pyproject.toml
 # Set DEV_INSTALL=false for lighter production builds without linting/testing tools
