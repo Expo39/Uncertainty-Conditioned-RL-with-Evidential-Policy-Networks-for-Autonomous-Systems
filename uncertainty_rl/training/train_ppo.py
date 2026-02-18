@@ -14,7 +14,6 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
-from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
@@ -22,11 +21,26 @@ from stable_baselines3.common.callbacks import (
 )
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.ppo import PPO
 
 from uncertainty_rl.envs import CARLAParkingEnv
+from uncertainty_rl.networks import (
+    EvidentialActorCriticPolicy,
+    EvidentialPPO,
+)
 
-# TODO: Uncomment when evidential policy is ready
-# from uncertainty_rl.networks import EvidentialActorCriticPolicy
+
+def linear_schedule(initial_value: float) -> Callable[[float], float]:
+    """
+    @brief Linear learning rate schedule decaying to zero.
+    @param initial_value: Initial learning rate.
+    @return Callable that takes progress_remaining (1.0 -> 0.0) and returns LR.
+    """
+
+    def func(progress_remaining: float) -> float:
+        return progress_remaining * initial_value
+
+    return func
 
 
 def make_env(
@@ -61,6 +75,7 @@ def make_env(
                 if carla_conditions_override is not None
                 else config.get("carla_conditions", {})
             ),
+            include_covariance=config.get("include_covariance", True),
         )
         return env
 
@@ -78,27 +93,20 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def train(
-    config_path: str,
-    total_timesteps: int = 1000000,
-    log_dir: str = "./logs",
-    checkpoint_dir: str = "./checkpoints",
-    eval_freq: int = 10000,
-    n_eval_episodes: int = 10,
-    seed: int = 42,
-) -> None:
+def train(config: Dict[str, Any]) -> None:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
-    @param config_path: Path to configuration YAML file.
-    @param total_timesteps: Total training timesteps.
-    @param log_dir: Directory for TensorBoard logs.
-    @param checkpoint_dir: Directory for model checkpoints.
-    @param eval_freq: Evaluation frequency (timesteps).
-    @param n_eval_episodes: Number of evaluation episodes.
-    @param seed: Random seed for reproducibility.
+    @param config: Fully-resolved configuration dictionary. All operational
+           settings (seed, log_dir, etc.) and hyperparameters are read from
+           this dict. CLI arguments override YAML values before this is called.
     """
-    # Load configuration
-    config = load_config(config_path)
+    # Resolve operational settings from config
+    seed = config.get("seed", 42)
+    total_timesteps = config.get("total_timesteps", 1000000)
+    log_dir = config.get("log_dir", "./logs")
+    checkpoint_dir = config.get("checkpoint_dir", "./checkpoints")
+    eval_freq = config.get("eval_freq", 10000)
+    n_eval_episodes = config.get("n_eval_episodes", 10)
 
     # Set random seeds
     torch.manual_seed(seed)
@@ -112,13 +120,13 @@ def train(
     print("Creating training environment...")
     train_vec_env = DummyVecEnv([make_env(config)])
 
-    # Normalise observations and rewards
+    # Normalise observations but not rewards — reward components will be
+    # manually scaled via potential-based shaping (see reward TODO in config)
     env = VecNormalize(
         train_vec_env,
         norm_obs=True,
-        norm_reward=True,
+        norm_reward=False,
         clip_obs=10.0,
-        clip_reward=10.0,
     )
 
     # Create evaluation environment (same config as training)
@@ -127,34 +135,30 @@ def train(
     eval_env = VecNormalize(
         eval_vec_env,
         norm_obs=True,
-        norm_reward=False,  # Don't normalise rewards during evaluation
+        norm_reward=False,
         clip_obs=10.0,
-        training=False,  # Important: don't update running statistics
+        training=False,  # Don't update running statistics during evaluation
     )
 
-    # Configure PPO policy network architecture
+    # Shared policy kwargs for both standard and evidential policies
     policy_kwargs = dict(
         net_arch=dict(
-            pi=config.get("net_arch", [256, 256]),  # Actor network
-            vf=config.get("net_arch", [256, 256]),  # Critic network
+            pi=config.get("net_arch", [256, 256]),
+            vf=config.get("net_arch", [256, 256]),
         ),
         activation_fn=torch.nn.ReLU,
     )
 
-    # TODO: When evidential policy is ready, use:
-    # policy = EvidentialActorCriticPolicy
-    # For now, use standard MlpPolicy:
-    policy = "MlpPolicy"
+    # Shared PPO hyperparameters
+    lr_initial = config.get("learning_rate", 3e-4)
+    lr_schedule = linear_schedule(lr_initial)
 
-    # Create PPO agent
-    print("Initialising PPO agent...")
-    model = PPO(
-        policy=policy,
+    ppo_kwargs = dict(
         env=env,
-        learning_rate=config.get("learning_rate", 3e-4),
+        learning_rate=lr_schedule,
         n_steps=config.get("n_steps", 2048),
-        batch_size=config.get("batch_size", 64),
-        n_epochs=config.get("n_epochs", 10),
+        batch_size=config.get("batch_size", 256),
+        n_epochs=config.get("n_epochs", 5),
         gamma=config.get("gamma", 0.99),
         gae_lambda=config.get("gae_lambda", 0.95),
         clip_range=config.get("clip_range", 0.2),
@@ -162,11 +166,36 @@ def train(
         ent_coef=config.get("ent_coef", 0.0),
         vf_coef=config.get("vf_coef", 0.5),
         max_grad_norm=config.get("max_grad_norm", 0.5),
+        target_kl=config.get("target_kl", 0.02),
         policy_kwargs=policy_kwargs,
         verbose=1,
         tensorboard_log=log_dir,
         seed=seed,
     )
+
+    # Create agent based on policy_type config
+    policy_type = config.get("policy_type", "evidential")
+    print(f"Initialising {policy_type} PPO agent...")
+
+    model: PPO
+    if policy_type == "evidential":
+        evidential_config = config.get("evidential", {})
+        lambda_reg = evidential_config.get("lambda_reg", 0.01)
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            lambda_reg=lambda_reg,
+            **ppo_kwargs,
+        )
+    elif policy_type == "standard":
+        model = PPO(
+            policy="MlpPolicy",
+            **ppo_kwargs,
+        )
+    else:
+        raise ValueError(
+            f"Unknown policy_type '{policy_type}'. "
+            f"Expected 'evidential' or 'standard'."
+        )
 
     # Set up logger
     logger = configure(log_dir, ["stdout", "tensorboard"])
@@ -216,6 +245,10 @@ def train(
 def main() -> None:
     """
     @brief Main entry point for training script.
+
+    CLI arguments override values from the YAML config file. The config file
+    is the single source of truth; CLI args are convenience overrides for
+    per-run settings (e.g. --seed 7 for a specific ablation run).
     """
     parser = argparse.ArgumentParser(
         description="Train uncertainty-conditioned RL agent for autonomous parking"
@@ -224,56 +257,63 @@ def main() -> None:
         "--config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to configuration file",
+        help="Path to configuration file (single source of truth)",
     )
     parser.add_argument(
         "--total-timesteps",
         type=int,
-        default=1000000,
-        help="Total training timesteps",
+        default=None,
+        help="Override total_timesteps from config",
     )
     parser.add_argument(
         "--log-dir",
         type=str,
-        default="./logs",
-        help="Directory for logs",
+        default=None,
+        help="Override log directory from config",
     )
     parser.add_argument(
         "--checkpoint-dir",
         type=str,
-        default="./checkpoints",
-        help="Directory for checkpoints",
+        default=None,
+        help="Override checkpoint directory from config",
     )
     parser.add_argument(
         "--eval-freq",
         type=int,
-        default=10000,
-        help="Evaluation frequency (timesteps)",
+        default=None,
+        help="Override evaluation frequency from config",
     )
     parser.add_argument(
         "--n-eval-episodes",
         type=int,
-        default=10,
-        help="Number of evaluation episodes",
+        default=None,
+        help="Override number of evaluation episodes from config",
     )
     parser.add_argument(
         "--seed",
         type=int,
-        default=42,
-        help="Random seed",
+        default=None,
+        help="Override random seed from config",
     )
 
     args = parser.parse_args()
 
-    train(
-        config_path=args.config,
-        total_timesteps=args.total_timesteps,
-        log_dir=args.log_dir,
-        checkpoint_dir=args.checkpoint_dir,
-        eval_freq=args.eval_freq,
-        n_eval_episodes=args.n_eval_episodes,
-        seed=args.seed,
-    )
+    # Load config, then apply CLI overrides
+    config = load_config(args.config)
+    if args.total_timesteps is not None:
+        config["total_timesteps"] = args.total_timesteps
+    if args.log_dir is not None:
+        config["log_dir"] = args.log_dir
+    if args.checkpoint_dir is not None:
+        config["checkpoint_dir"] = args.checkpoint_dir
+    if args.eval_freq is not None:
+        config["eval_freq"] = args.eval_freq
+    if args.n_eval_episodes is not None:
+        config["n_eval_episodes"] = args.n_eval_episodes
+    if args.seed is not None:
+        config["seed"] = args.seed
+
+    train(config)
 
 
 if __name__ == "__main__":

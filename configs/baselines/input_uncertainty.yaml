@@ -1,0 +1,18 @@
+# Baseline: Input Uncertainty Only
+# 15-dim EKF state (pose + covariance), standard MlpPolicy.
+# The agent sees localisation uncertainty but uses a standard Gaussian policy.
+#
+# Ablation dimensions:
+#   include_covariance: true   (15-dim observation)
+#   policy_type: standard      (SB3 MlpPolicy + PPO)
+#
+# All other parameters inherited from configs/train_config.yaml.
+
+baseline_name: "input_uncertainty"
+baseline_description: "15-dim EKF state (pose + covariance), standard actor"
+
+include_covariance: true
+policy_type: "standard"
+
+log_dir: "./logs/input_uncertainty"
+checkpoint_dir: "./checkpoints/input_uncertainty"

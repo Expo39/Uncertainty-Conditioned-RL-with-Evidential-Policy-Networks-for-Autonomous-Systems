@@ -1,0 +1,18 @@
+# Baseline: Vanilla PPO
+# 6-dim state [x, y, yaw, vx, vy, vyaw], standard MlpPolicy.
+# No EKF covariance, no evidential actor. Pure PPO baseline.
+#
+# Ablation dimensions:
+#   include_covariance: false  (6-dim observation)
+#   policy_type: standard      (SB3 MlpPolicy + PPO)
+#
+# All other parameters inherited from configs/train_config.yaml.
+
+baseline_name: "vanilla_ppo"
+baseline_description: "Vanilla PPO with 6-dim state, standard actor"
+
+include_covariance: false
+policy_type: "standard"
+
+log_dir: "./logs/vanilla_ppo"
+checkpoint_dir: "./checkpoints/vanilla_ppo"

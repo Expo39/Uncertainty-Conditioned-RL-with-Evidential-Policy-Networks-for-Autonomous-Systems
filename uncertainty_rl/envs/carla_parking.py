@@ -16,7 +16,7 @@ import logging
 import random
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import gymnasium as gym
 import numpy as np
@@ -42,6 +42,7 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
     TOTAL_OBS_DIM,
+    VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
@@ -123,7 +124,7 @@ class _CovarianceSubscriber(_NodeBase):
         """
         with self._lock:
             if self._latest_uncertainty is not None:
-                return self._latest_uncertainty.copy()
+                return cast(np.ndarray, self._latest_uncertainty.copy())
             return None
 
     @property
@@ -163,6 +164,7 @@ class CARLAParkingEnv(gym.Env):
         ros2_config: Optional[Dict[str, Any]] = None,
         carla_sensors_config: Optional[Dict[str, Any]] = None,
         carla_conditions_config: Optional[Dict[str, Any]] = None,
+        include_covariance: bool = True,
     ) -> None:
         """
         @brief Constructor for CARLAParkingEnv.
@@ -175,6 +177,8 @@ class CARLAParkingEnv(gym.Env):
         @param ros2_config: ROS 2 settings (covariance_topic, covariance_timeout).
         @param carla_sensors_config: Sensor noise parameters (imu, gnss subsections).
         @param carla_conditions_config: Weather and traffic settings.
+        @param include_covariance: If True, observation includes 9 EKF covariance
+               features (15-dim). If False, observation is vehicle state only (6-dim).
         """
         super().__init__()
 
@@ -183,6 +187,7 @@ class CARLAParkingEnv(gym.Env):
         self.town = town
         self.max_steps = max_steps
         self.render_mode = render_mode
+        self._include_covariance = include_covariance
 
         # Parse configs with defaults
         ros2_config = ros2_config or {}
@@ -215,10 +220,11 @@ class CARLAParkingEnv(gym.Env):
         self.done = False
 
         # Observation and action spaces
+        obs_dim = TOTAL_OBS_DIM if self._include_covariance else VEHICLE_STATE_DIM
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(TOTAL_OBS_DIM,),
+            shape=(obs_dim,),
             dtype=np.float32,
         )
 
@@ -228,10 +234,11 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # ROS 2 covariance subscriber
+        # ROS 2 covariance subscriber (only needed when including covariance)
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
         self._spin_thread: Optional[threading.Thread] = None
-        self._init_ros2()
+        if self._include_covariance:
+            self._init_ros2()
 
     def _init_ros2(self) -> None:
         """
@@ -572,17 +579,17 @@ class CARLAParkingEnv(gym.Env):
 
     def _get_state(self) -> np.ndarray:
         """
-        @brief Get current state with real EKF uncertainty.
-        @return State vector of shape (TOTAL_OBS_DIM,) = (15,).
+        @brief Get current state, optionally including EKF uncertainty.
+        @return State vector of shape (TOTAL_OBS_DIM,) when include_covariance
+                is True, or (VEHICLE_STATE_DIM,) when False.
 
         Vehicle state (indices 0-5) comes from CARLA Python API (ground truth).
-        Uncertainty features (indices 6-14) come from the EKF covariance
-        subscriber. If no covariance message is available yet (should only
-        happen briefly at episode start before _wait_for_covariance() completes),
-        zeros are used.
+        When include_covariance is True, uncertainty features (indices 6-14)
+        come from the EKF covariance subscriber.
         """
+        obs_dim = TOTAL_OBS_DIM if self._include_covariance else VEHICLE_STATE_DIM
         if self.vehicle is None or self.world is None:
-            return np.zeros(TOTAL_OBS_DIM, dtype=np.float32)
+            return np.zeros(obs_dim, dtype=np.float32)
 
         # Get vehicle transform and velocity from CARLA (ground truth)
         transform = self.vehicle.get_transform()
@@ -601,6 +608,9 @@ class CARLAParkingEnv(gym.Env):
 
         # Vehicle state vector (6 elements)
         vehicle_state = np.array([x, y, yaw, vx, vy, vyaw], dtype=np.float32)
+
+        if not self._include_covariance:
+            return vehicle_state
 
         # Uncertainty features from EKF covariance (9 elements)
         if self._cov_subscriber is not None:
@@ -690,8 +700,9 @@ class CARLAParkingEnv(gym.Env):
         self._spawn_sensors()
         self._spawn_traffic()
 
-        # Wait for EKF to start producing covariance
-        self._wait_for_covariance()
+        # Wait for EKF to start producing covariance (only when needed)
+        if self._include_covariance:
+            self._wait_for_covariance()
 
         # Get initial state
         state = self._get_state()

@@ -8,9 +8,17 @@ from uncertainty_rl.networks.evidential_policy import (
     EvidentialPolicyNetwork,
     UncertaintyConditionedActor,
 )
+from uncertainty_rl.networks.sb3_integration import (
+    EvidentialActorCriticPolicy,
+    EvidentialDistribution,
+    EvidentialPPO,
+)
 
 __all__ = [
     "EvidentialLayer",
     "EvidentialPolicyNetwork",
     "UncertaintyConditionedActor",
+    "EvidentialActorCriticPolicy",
+    "EvidentialDistribution",
+    "EvidentialPPO",
 ]
