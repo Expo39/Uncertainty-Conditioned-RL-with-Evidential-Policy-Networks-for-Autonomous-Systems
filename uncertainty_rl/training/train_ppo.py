@@ -14,7 +14,6 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
-from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
@@ -24,9 +23,10 @@ from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import CARLAParkingEnv
-
-# TODO: Uncomment when evidential policy is ready
-# from uncertainty_rl.networks import EvidentialActorCriticPolicy
+from uncertainty_rl.networks import (
+    EvidentialActorCriticPolicy,
+    EvidentialPPO,
+)
 
 
 def make_env(
@@ -132,25 +132,24 @@ def train(
         training=False,  # Important: don't update running statistics
     )
 
-    # Configure PPO policy network architecture
+    # Configure evidential PPO policy
+    evidential_config = config.get("evidential", {})
+    lambda_reg = evidential_config.get("lambda_reg", 0.01)
+
     policy_kwargs = dict(
         net_arch=dict(
-            pi=config.get("net_arch", [256, 256]),  # Actor network
-            vf=config.get("net_arch", [256, 256]),  # Critic network
+            pi=config.get("net_arch", [256, 256]),
+            vf=config.get("net_arch", [256, 256]),
         ),
         activation_fn=torch.nn.ReLU,
     )
 
-    # TODO: When evidential policy is ready, use:
-    # policy = EvidentialActorCriticPolicy
-    # For now, use standard MlpPolicy:
-    policy = "MlpPolicy"
-
-    # Create PPO agent
-    print("Initialising PPO agent...")
-    model = PPO(
-        policy=policy,
+    # Create EvidentialPPO agent with evidential actor
+    print("Initialising EvidentialPPO agent...")
+    model = EvidentialPPO(
+        policy=EvidentialActorCriticPolicy,
         env=env,
+        lambda_reg=lambda_reg,
         learning_rate=config.get("learning_rate", 3e-4),
         n_steps=config.get("n_steps", 2048),
         batch_size=config.get("batch_size", 64),

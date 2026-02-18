@@ -16,7 +16,7 @@ import logging
 import random
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 import gymnasium as gym
 import numpy as np
@@ -123,7 +123,7 @@ class _CovarianceSubscriber(_NodeBase):
         """
         with self._lock:
             if self._latest_uncertainty is not None:
-                return self._latest_uncertainty.copy()
+                return cast(np.ndarray, self._latest_uncertainty.copy())
             return None
 
     @property
