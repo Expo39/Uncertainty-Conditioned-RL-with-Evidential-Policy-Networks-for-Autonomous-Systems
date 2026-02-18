@@ -3,9 +3,9 @@
 
 .PHONY: help install test test-unit test-integration verify
 .PHONY: lint format typecheck clean
-.PHONY: train train-short evaluate ros2
+.PHONY: train train-short evaluate ros2 experiment-dry
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
-.PHONY: docker-train docker-train-short docker-eval
+.PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
 .PHONY: docker-clean docker-clean-all docker-full-build docker-dev
@@ -90,6 +90,23 @@ docker-eval: ## Run evaluation inside container
 		--model-path checkpoints/final_model \
 		--config $(CONFIG_DIR)/eval_config.yaml \
 		--output-dir evaluation_results
+
+docker-experiment: ## Run full ablation study inside container (4 baselines x 10 seeds)
+	$(DOCKER_COMPOSE) exec training python scripts/run_experiment.py \
+		--base-config $(CONFIG_DIR)/train_config.yaml \
+		--configs $(CONFIG_DIR)/baselines/vanilla_ppo.yaml \
+		          $(CONFIG_DIR)/baselines/input_uncertainty.yaml \
+		          $(CONFIG_DIR)/baselines/output_uncertainty.yaml \
+		          $(CONFIG_DIR)/baselines/full_method.yaml
+
+docker-experiment-dry: ## Dry-run ablation study inside container (plan without training)
+	$(DOCKER_COMPOSE) exec training python scripts/run_experiment.py \
+		--base-config $(CONFIG_DIR)/train_config.yaml \
+		--configs $(CONFIG_DIR)/baselines/vanilla_ppo.yaml \
+		          $(CONFIG_DIR)/baselines/input_uncertainty.yaml \
+		          $(CONFIG_DIR)/baselines/output_uncertainty.yaml \
+		          $(CONFIG_DIR)/baselines/full_method.yaml \
+		--dry-run
 
 # ----------------------------------------------------------------------
 # Docker: Testing & Linting
@@ -195,6 +212,15 @@ evaluate: ## Evaluate trained agent across uncertainty levels
 		--model-path checkpoints/final_model \
 		--config $(CONFIG_DIR)/eval_config.yaml \
 		--output-dir ./evaluation_results
+
+experiment-dry: ## Dry-run ablation study locally (plan without training, no Docker needed)
+	$(PYTHON) scripts/run_experiment.py \
+		--base-config $(CONFIG_DIR)/train_config.yaml \
+		--configs $(CONFIG_DIR)/baselines/vanilla_ppo.yaml \
+		          $(CONFIG_DIR)/baselines/input_uncertainty.yaml \
+		          $(CONFIG_DIR)/baselines/output_uncertainty.yaml \
+		          $(CONFIG_DIR)/baselines/full_method.yaml \
+		--dry-run
 
 ros2: ## Launch covariance extractor node
 	$(PYTHON) $(SRC_DIR)/ros2/covariance_extractor.py

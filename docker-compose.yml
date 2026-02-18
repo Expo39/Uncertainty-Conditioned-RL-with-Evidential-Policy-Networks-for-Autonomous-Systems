@@ -105,6 +105,7 @@ services:
     volumes:
       - ./uncertainty_rl:/workspace/uncertainty_rl:ro
       - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
       - ./logs:/workspace/logs:rw
       - ./checkpoints:/workspace/checkpoints:rw
       - ./tests:/workspace/tests:ro
