@@ -99,6 +99,8 @@ def generate_launch_description() -> LaunchDescription:
                 "town": LaunchConfiguration("town"),
                 "synchronous_mode": "true",
                 "fixed_delta_seconds": "0.05",
+                # Increase timeout to 30s: CARLA can take >2s to load a new town
+                "timeout": "30",
             }.items(),
         )
     except Exception:
