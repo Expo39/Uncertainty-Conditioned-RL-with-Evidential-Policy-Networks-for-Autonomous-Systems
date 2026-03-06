@@ -5,11 +5,12 @@
 .PHONY: lint format typecheck clean
 .PHONY: backup-configs restore-configs
 .PHONY: train train-short evaluate ros2 experiment-dry
-.PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
+.PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top display-info docker-carla-windowed
 .PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
 .PHONY: docker-clean docker-clean-all docker-full-build docker-dev
+.PHONY: docker-explore-map
 
 PYTHON := python
 PYTEST := pytest
@@ -183,6 +184,39 @@ docker-dev: ## Start stack + open training shell (development mode)
 	@echo "Waiting for services to be healthy..."
 	sleep 15
 	$(DOCKER_COMPOSE) exec training /bin/bash
+
+display-info: ## Show active X11 displays and current DISPLAY variable (use before docker-carla-windowed)
+	@echo "=== Current DISPLAY variable ==="
+	@echo "DISPLAY=${DISPLAY}"
+	@echo ""
+	@echo "=== X11 sockets in /tmp/.X11-unix ==="
+	@ls /tmp/.X11-unix/ 2>/dev/null || echo "(none found)"
+	@echo ""
+	@echo "=== Active Xorg processes ==="
+	@ps aux | grep -E '[X]org' | awk '{print $$11, $$12, $$13}' || echo "(none)"
+	@echo ""
+	@echo "=== Hint: pass the display to docker-carla-windowed ==="
+	@echo "  make docker-carla-windowed CARLA_DISPLAY=:1"
+
+# Usage: make docker-carla-windowed CARLA_DISPLAY=:1
+# Run make display-info first to find the correct display value.
+CARLA_DISPLAY ?= :1
+docker-explore-map: ## Cycle through Town10HD spawn points in container, printing coordinates. Run make docker-up first.
+	$(DOCKER_COMPOSE) exec training python scripts/explore_map.py \
+		--host carla-server \
+		--town Town10HD \
+		--pause $(or $(PAUSE),3.0) \
+		--start $(or $(START),0) \
+		--step $(or $(STEP),1)
+
+docker-carla-windowed: ## Start CARLA windowed for map exploration. Set CARLA_DISPLAY (default :1). Run make display-info first.
+	@echo "Starting CARLA in windowed mode on DISPLAY=$(CARLA_DISPLAY)"
+	@echo "View via RustDesk connected to this machine's desktop session."
+	DISPLAY=$(CARLA_DISPLAY) xhost +local:docker 2>/dev/null || true
+	$(DOCKER_COMPOSE) run --rm \
+		-e DISPLAY=$(CARLA_DISPLAY) \
+		carla-server \
+		/bin/bash CarlaUE4.sh -windowed -ResX=1280 -ResY=720 -world-port=2000 -quality-level=Low
 
 
 
