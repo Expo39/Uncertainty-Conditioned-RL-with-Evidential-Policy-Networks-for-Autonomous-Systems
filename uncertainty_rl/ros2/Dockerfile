@@ -30,11 +30,13 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install robot_localisation for EKF + cv_bridge (needed by carla_ros_bridge camera.py import)
+# derived-object-msgs is a direct import in carla_ros_bridge/traffic_participant.py
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-cv-bridge \
+    ros-${ROS_DISTRO}-derived-object-msgs \
     && rm -rf /var/lib/apt/lists/*
 
 # Create workspace
@@ -42,8 +44,10 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
 # Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
+# Patch CARLA_VERSION to 0.9.16: the bridge hardcodes 0.9.13 but is compatible with 0.9.16
 RUN cd /workspace/src && \
-    git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git
+    git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
+    echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION
 
 # Install Python dependencies for CARLA
 # --break-system-packages needed on Ubuntu 24.04 (PEP 668); safe in a container
@@ -57,7 +61,7 @@ RUN rosdep update && \
     rosdep install --from-paths /workspace/src --ignore-src -r -y \
     --skip-keys="rviz2 rviz_common rqt_gui_py python_qt_binding pcl_conversions \
     qtbase5-dev libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
-    derived_object_msgs ackermann_msgs" || true
+    ackermann_msgs" || true
 
 # Build only the CARLA bridge packages we need (no rviz, rqt, PCL, manual control)
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
