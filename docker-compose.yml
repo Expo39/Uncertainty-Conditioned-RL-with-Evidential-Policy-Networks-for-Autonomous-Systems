@@ -29,6 +29,8 @@ services:
       - uncertainty-rl-network
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Mount host Vulkan ICD so CARLA can find the NVIDIA Vulkan driver inside the container
+      - /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
     deploy:
       resources:
         reservations:
@@ -72,6 +74,13 @@ services:
         source /workspace/install/setup.bash &&
         ros2 launch uncertainty_rl_ros2 carla_bridge.launch.py
       "
+    healthcheck:
+      test: ["CMD-SHELL", "source /opt/ros/jazzy/setup.bash && source /workspace/install/setup.bash && ros2 topic list | grep -q /ekf_uncertainty/covariance || exit 1"]
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      # Allow 60s for CARLA bridge + EKF + covariance extractor to fully initialise
+      start_period: 60s
     deploy:
       resources:
         reservations:
