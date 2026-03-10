@@ -6,7 +6,7 @@ All tests are CPU-only (no CARLA server, no ROS 2, no GPU). The environment
 falls back gracefully when CARLA and rclpy are unavailable. Tests exercise:
   - Pure geometry helpers (cone interpolation, relative target pose)
   - Observation space shape (18-dim with covariance, 9-dim without)
-  - Bay sampling logic (always_empty respected, stratified sampling)
+  - Bay sampling logic (stratified sampling by bay type)
   - VisStateWriter (atomic write, valid JSON, tmp file cleaned up)
   - Gymnasium API contract (reset/step return shapes, dtypes)
 """
@@ -327,48 +327,6 @@ class TestBaySampling:
         env._current_layout = layout
         return env
 
-    def test_always_empty_not_selected_as_target(self) -> None:
-        """
-        @brief Bays with always_empty=True must never be chosen as target.
-        """
-        layout: Dict[str, Any] = {
-            "bays": [
-                {"bay_id": "a1", "bay_type": "perpendicular", "x": 0.0, "y": 0.0,
-                 "yaw": 0.0, "width": 2.5, "depth": 5.0, "always_empty": True},
-                {"bay_id": "a2", "bay_type": "perpendicular", "x": 3.0, "y": 0.0,
-                 "yaw": 0.0, "width": 2.5, "depth": 5.0, "always_empty": False},
-            ]
-        }
-        env = self._make_env_with_layout(layout)
-
-        for _ in range(50):
-            env._sample_target_bay()
-            assert env._target_bay.get("bay_id") != "a1"
-
-        env.close()
-
-    def test_parallel_bay_neighbours_never_selected(self) -> None:
-        """
-        @brief Parallel bay neighbours marked always_empty=True are never selected.
-        """
-        layout: Dict[str, Any] = {
-            "bays": [
-                {"bay_id": "p0", "bay_type": "parallel", "x": 0.0, "y": 0.0,
-                 "yaw": 0.0, "width": 2.5, "depth": 8.0, "always_empty": True},
-                {"bay_id": "p1", "bay_type": "parallel", "x": 8.0, "y": 0.0,
-                 "yaw": 0.0, "width": 2.5, "depth": 8.0, "always_empty": False},
-                {"bay_id": "p2", "bay_type": "parallel", "x": 16.0, "y": 0.0,
-                 "yaw": 0.0, "width": 2.5, "depth": 8.0, "always_empty": True},
-            ]
-        }
-        env = self._make_env_with_layout(layout)
-
-        for _ in range(50):
-            env._sample_target_bay()
-            assert env._target_bay.get("bay_id") not in {"p0", "p2"}
-
-        env.close()
-
     def test_all_bay_types_reachable(self) -> None:
         """
         @brief With 5 bays per type, all three types should be sampled in 300 trials.
@@ -377,13 +335,13 @@ class TestBaySampling:
         for i in range(5):
             bays.append({"bay_id": f"perp_{i}", "bay_type": "perpendicular",
                          "x": float(i * 3), "y": 0.0, "yaw": 0.0,
-                         "width": 2.5, "depth": 5.0, "always_empty": False})
+                         "width": 2.5, "depth": 5.0})
             bays.append({"bay_id": f"angl_{i}", "bay_type": "angled",
                          "x": float(i * 3), "y": 10.0, "yaw": 0.785,
-                         "width": 2.5, "depth": 5.4, "always_empty": False})
+                         "width": 2.5, "depth": 5.4})
             bays.append({"bay_id": f"para_{i}", "bay_type": "parallel",
                          "x": float(i * 9), "y": 20.0, "yaw": 0.0,
-                         "width": 2.5, "depth": 8.0, "always_empty": False})
+                         "width": 2.5, "depth": 8.0})
 
         env = self._make_env_with_layout({"bays": bays})
 
@@ -393,25 +351,6 @@ class TestBaySampling:
             seen_types.add(env._target_bay.get("bay_type"))
 
         assert seen_types == {"perpendicular", "angled", "parallel"}
-        env.close()
-
-    def test_no_eligible_bays_raises(self) -> None:
-        """
-        @brief RuntimeError is raised when all bays have always_empty=True.
-        """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
-
-        env = CARLAParkingEnv(max_steps=5)
-        env._current_layout = {
-            "bays": [
-                {"bay_id": "x1", "bay_type": "perpendicular", "x": 0.0, "y": 0.0,
-                 "yaw": 0.0, "width": 2.5, "depth": 5.0, "always_empty": True},
-            ]
-        }
-
-        with pytest.raises(RuntimeError, match="No eligible bays"):
-            env._sample_target_bay()
-
         env.close()
 
 
