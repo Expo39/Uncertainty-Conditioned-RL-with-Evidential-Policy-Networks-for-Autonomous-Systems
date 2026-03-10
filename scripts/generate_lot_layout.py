@@ -231,6 +231,52 @@ def _validate_bays_in_polygon(
                 )
 
 
+def _warn_narrow_corridors(
+    bays: List[Dict[str, Any]],
+    shape_name: str,
+    min_width: float = 6.0,
+) -> None:
+    """
+    @brief Warn if the minimum gap between any two facing bay clusters is narrower
+           than min_width (EAR 05 minimum corridor width = 6.0 m).
+
+    Computes the nearest-edge gap between every pair of bays. If the gap is less
+    than min_width and the bays belong to different clusters (different bay_type
+    or opposing yaw), a warning is printed. Generation is not blocked.
+
+    @param bays: All bays in the layout (local frame), each with local_x, local_y,
+                 local_yaw_deg, width, depth.
+    @param shape_name: Floor plan name for warning messages.
+    @param min_width: Minimum acceptable corridor width in metres (default 6.0 m).
+    """
+    for i in range(len(bays)):
+        for j in range(i + 1, len(bays)):
+            a = bays[i]
+            b = bays[j]
+            # Skip pairs of the same type with the same yaw (same cluster)
+            same_type = a.get("bay_type") == b.get("bay_type")
+            yaw_diff = abs(a["local_yaw_deg"] - b["local_yaw_deg"]) % 360.0
+            same_yaw = yaw_diff < 1.0 or abs(yaw_diff - 360.0) < 1.0
+            if same_type and same_yaw:
+                continue
+            # Compute axis-aligned nearest-edge gap (conservative, ignores rotation)
+            a_half_x = a["depth"] / 2.0
+            a_half_y = a["width"] / 2.0
+            b_half_x = b["depth"] / 2.0
+            b_half_y = b["width"] / 2.0
+            gap_x = abs(a["local_x"] - b["local_x"]) - a_half_x - b_half_x
+            gap_y = abs(a["local_y"] - b["local_y"]) - a_half_y - b_half_y
+            # Nearest edge gap is the minimum positive axis separation
+            gap = max(gap_x, gap_y, 0.0) if gap_x > 0 or gap_y > 0 else 0.0
+            if gap < min_width:
+                print(
+                    f"  WARNING [{shape_name}]: corridor between "
+                    f"'{a.get('bay_type','?')}' ({a['local_x']:.1f},{a['local_y']:.1f}) "
+                    f"and '{b.get('bay_type','?')}' ({b['local_x']:.1f},{b['local_y']:.1f}) "
+                    f"is {gap:.2f} m (min {min_width:.1f} m)."
+                )
+
+
 def _perpendicular_bays(
     n: int,
     row_x: float,
@@ -513,21 +559,41 @@ def _rectangle_layout(
 
     all_bays = perp_bays + ang_bays + par_bays
     _validate_bays_in_polygon(all_bays, corners, "rectangle")
+    _warn_narrow_corridors(all_bays, "rectangle")
 
     spawn = {"x": 1.5, "y": width / 2.0, "yaw_deg": 0.0}
-    margin = 4.0
+
+    # Patrol path threads through the centre of each aisle (3 m into each 6 m corridor).
+    # Perp row nose faces -X (yaw=180); aisle in front of nose runs along x < perp_nose_x.
+    perp_nose_x = perp_cx - dims_perp["depth"] / 2.0
+    perp_aisle_cx = perp_nose_x - dims_perp["aisle"] / 2.0   # centre of 6 m aisle
+    # Angled row nose faces upper-left; aisle runs above the bay cluster in Y.
+    ang_aisle_cy = ang_w_offset + dims_ang["aisle"] / 2.0    # centre of angled-bay aisle
+    y_enter = 1.5
+    y_exit = width - 1.5
     patrol = [
-        {"x": margin, "y": margin},
-        {"x": depth - margin, "y": margin},
-        {"x": depth - margin, "y": width - margin},
-        {"x": margin, "y": width - margin},
+        {"x": perp_aisle_cx, "y": y_enter},
+        {"x": perp_aisle_cx, "y": y_exit},
+        {"x": ang_aisle_cy,  "y": y_exit},
+        {"x": ang_aisle_cy,  "y": y_enter},
     ]
+
+    # Pedestrian zones: 2 m strips hugging bay faces.
+    PED_STRIP = 2.0
     ped_zones = [
+        # Strip against perp row nose face (just in front of perp bays, toward -X)
+        {
+            "x_min": perp_nose_x - PED_STRIP,
+            "x_max": perp_nose_x,
+            "y_min": 1.0,
+            "y_max": 1.0 + BAYS_PER_TYPE * dims_perp["width"],
+        },
+        # Strip against angled bay nose face (just above the angled row cluster in Y)
         {
             "x_min": ang_x_start,
             "x_max": ang_x_start + BAYS_PER_TYPE * dims_ang["width"] / math.sin(math.radians(45.0)),
             "y_min": ang_w_offset,
-            "y_max": ang_w_offset + dims_ang["aisle"],
+            "y_max": ang_w_offset + PED_STRIP,
         },
     ]
 
@@ -579,14 +645,20 @@ def _trapezoid_layout(
     # Row B: yaw=270 (nose toward -Y), backs at y = mid + aisle/2
     # Gap between the two back edges = aisle (6 m) so a car can pass between them.
     # Rows extended asymmetrically: 2 extra bays on the left, 1 extra on the right
-    # (8 bays per row total). Cluster shifted up in Y (mid_y=23) to keep >= 6 m
-    # clearance between row A nose and the rightmost angled bay top edge (~y=8.8).
+    # (8 bays per row total).
+    #
+    # Geometry target: >= 6 m corridor on all four sides of the perp cluster.
+    # With width_front=45, depth=50:
+    #   Angled bay top face ~ y=9.5; top parallel inner face ~ y=43.75.
+    #   Row A nose = 18.5 (gap = 9.0 m above angled bays).
+    #   Row B nose = 34.5 (gap = 9.25 m below top parallel bays).
+    #   perp_mid_y = (21.0 + 32.0) / 2 = 26.5 centres the cluster vertically.
     PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3  # 8: base 5 + 2 left + 1 right
-    perp_mid_y = width_front / 2.0 + 1.0   # nudged +1 m above centre for angled-bay clearance
+    perp_mid_y = 25.5   # chosen to give >= 6 m corridors above angled bays and below top parallel bays
     perp_row_a_cy = perp_mid_y - dims_perp["aisle"] / 2.0 - dims_perp["depth"] / 2.0
     perp_row_b_cy = perp_mid_y + dims_perp["aisle"] / 2.0 + dims_perp["depth"] / 2.0
     # X range: shifted 3 m left of mid-lot, extended 2 bays left and 1 bay right vs original 5
-    perp_cx_start = depth / 2.0 - (PERP_BAYS_PER_ROW * dims_perp["width"]) / 2.0 + dims_perp["width"] / 2.0 - 1.5
+    perp_cx_start = depth / 2.0 - (PERP_BAYS_PER_ROW * dims_perp["width"]) / 2.0 + dims_perp["width"] / 2.0 - 1.5 - 3.63
     perp_bays = []
     for i in range(PERP_BAYS_PER_ROW):
         cx = perp_cx_start + i * dims_perp["width"]
@@ -682,6 +754,7 @@ def _trapezoid_layout(
 
     all_bays = perp_bays + ang_bays + par_bays
     _validate_bays_in_polygon(all_bays, corners, "trapezoid")
+    _warn_narrow_corridors(all_bays, "trapezoid")
 
     # Spawn 1: gap in the left wall (x=0), car faces into the lot (yaw=0).
     spawn = {"x": 0.0, "y": width_front / 2.0, "yaw_deg": 0.0}
@@ -697,19 +770,82 @@ def _trapezoid_layout(
         "y": y_offset * (38.0 / depth),
         "yaw_deg": round(_spawn2_yaw, 1),
     }
-    margin = 4.0
+    # Patrol path threads through the centre of the three horizontal aisles.
+    # Row A nose faces +Y (yaw=90); aisle below nose = [row_a_nose_y - aisle, row_a_nose_y].
+    # Row B nose faces -Y (yaw=270); aisle above nose = [row_b_nose_y, row_b_nose_y + aisle].
+    # Back-to-back gap between row A back and row B back = [row_a_back_y, row_b_back_y].
+    aisle1_cy = perp_row_a_cy - dims_perp["depth"] / 2.0 - dims_perp["aisle"] / 2.0
+    aisle2_cy = perp_mid_y  # midpoint of the 6 m back-to-back gap
+    aisle3_cy = perp_row_b_cy + dims_perp["depth"] / 2.0 + dims_perp["aisle"] / 2.0
+    PED_STRIP = 2.0  # width of pedestrian zones in metres
+
+    # Patrol path: rectangular loop equidistant between the perp cluster and its neighbours.
+    # Left leg:   midpoint between ped zone right edge and left edge of perp cluster.
+    # Right leg:  midpoint between right edge of perp cluster and inner face of right-wall par bays.
+    # Bottom leg: aisle1_cy already = midpoint of corridor between Row A nose and angled bay top.
+    # Top leg:    aisle3_cy already = midpoint of corridor between Row B nose and top parallel face.
+    perp_cluster_x_min = perp_cx_start - dims_perp["width"] / 2.0
+    perp_cluster_x_max = perp_cx_start + (PERP_BAYS_PER_ROW - 0.5) * dims_perp["width"]
+    par_right_inner_x = par_cx_right - dims_par["width"] / 2.0  # inner face of right-wall par bays
+    # Left leg: midpoint between ped zone right edge (PED_STRIP) and cluster left edge.
+    # This ensures the patrol has a clear lane between the wall-hugging ped zones and the bays.
+    x_enter = (PED_STRIP + perp_cluster_x_min) / 2.0
+    x_exit = (perp_cluster_x_max + par_right_inner_x) / 2.0             # mid: cluster right <-> par right
     patrol = [
-        {"x": margin, "y": margin},
-        {"x": depth - margin, "y": y_offset + margin},
-        {"x": depth - margin, "y": width_front - y_offset - margin},
-        {"x": margin, "y": width_front - margin},
+        {"x": x_enter, "y": aisle1_cy - 4},   # bottom-left
+        {"x": x_exit,  "y": aisle1_cy},   # bottom-right
+        {"x": x_exit,  "y": aisle3_cy},   # top-right
+        {"x": x_enter, "y": aisle3_cy + 4},   # top-left
     ]
+
+    # Pedestrian zones: 2 m strips hugging bay faces.
+    # x extents match exactly the bay cluster left/right edges.
+    perp_cluster_x_min = perp_cx_start - dims_perp["width"] / 2.0
+    perp_cluster_x_max = perp_cx_start + (PERP_BAYS_PER_ROW - 0.5) * dims_perp["width"]
+    par_bay_x_min = par_cx_right - dims_par["width"] / 2.0
     ped_zones = [
+        # Aisle 1: 2 m strip against row A nose face (just below row A in Y)
         {
-            "x_min": perp_cx_start - dims_perp["width"] / 2.0,
-            "x_max": perp_cx_start + PERP_BAYS_PER_ROW * dims_perp["width"],
-            "y_min": perp_row_a_cy - dims_perp["depth"] / 2.0,
-            "y_max": perp_row_b_cy + dims_perp["depth"] / 2.0,
+            "x_min": perp_cluster_x_min,
+            "x_max": perp_cluster_x_max,
+            "y_min": perp_row_a_cy - dims_perp["depth"] / 2.0 - PED_STRIP,
+            "y_max": perp_row_a_cy - dims_perp["depth"] / 2.0,
+        },
+        # Aisle 2: 2 m strip against row A back face (inside the 6 m back-to-back gap)
+        {
+            "x_min": perp_cluster_x_min,
+            "x_max": perp_cluster_x_max,
+            "y_min": perp_row_a_cy + dims_perp["depth"] / 2.0,
+            "y_max": perp_row_a_cy + dims_perp["depth"] / 2.0 + PED_STRIP,
+        },
+        # Aisle 3: 2 m strip against row B nose face (just above row B in Y)
+        {
+            "x_min": perp_cluster_x_min,
+            "x_max": perp_cluster_x_max,
+            "y_min": perp_row_b_cy + dims_perp["depth"] / 2.0,
+            "y_max": perp_row_b_cy + dims_perp["depth"] / 2.0 + PED_STRIP,
+        },
+        # Aisle 4: 2 m vertical strip against left face of right-wall parallel bays
+        {
+            "x_min": par_bay_x_min - PED_STRIP,
+            "x_max": par_bay_x_min,
+            "y_min": par_right_y_start,
+            "y_max": par_right_y_start + 3 * dims_par["depth"],
+        },
+        # Aisles 5a/5b: equal-height 2 m strips hugging left wall (x=0), either side of spawn 1.
+        # Both zones are the same height: from 4 m above/below spawn to 12 m above/below spawn.
+        # This keeps them symmetric around the entrance and fully inside the lot boundary.
+        {
+            "x_min": 0.0,
+            "x_max": PED_STRIP,
+            "y_min": width_front / 2.0 - 12.0,
+            "y_max": width_front / 2.0 - 4.0,
+        },
+        {
+            "x_min": 0.0,
+            "x_max": PED_STRIP,
+            "y_min": width_front / 2.0 + 4.0,
+            "y_max": width_front / 2.0 + 12.0,
         },
     ]
 
@@ -814,22 +950,39 @@ def _irregular_a_layout(
 
     all_bays = perp_bays + ang_bays + par_bays
     _validate_bays_in_polygon(all_bays, corners, "irregular_a")
+    _warn_narrow_corridors(all_bays, "irregular_a")
 
     spawn = {"x": 1.5, "y": width / 2.0, "yaw_deg": 0.0}
-    margin = 4.0
+
+    # Patrol path threads through the centre of the aisle in front of the perp row.
+    # Perp row nose faces +X (yaw=0); aisle is to the right of the nose face.
+    perp_nose_x_irr = perp_cx + dims_perp["depth"] / 2.0
+    perp_aisle_cx_irr = perp_nose_x_irr + dims_perp["aisle"] / 2.0
+    y_bot = par_cy + dims_par["depth"] / 2.0 + 1.0  # clear the parallel bay noses
+    y_top = width - cut - 2.0
     patrol = [
-        {"x": margin, "y": margin},
-        {"x": depth - margin, "y": margin},
-        {"x": depth - margin, "y": width - cut - margin},
-        {"x": depth - cut - margin, "y": width - margin},
-        {"x": margin, "y": width - margin},
+        {"x": perp_aisle_cx_irr, "y": y_bot},
+        {"x": perp_aisle_cx_irr, "y": y_top},
+        {"x": depth - cut - 2.0, "y": y_top},
+        {"x": depth - 2.0,       "y": y_bot},
     ]
+
+    # Pedestrian zones: 2 m strips hugging bay faces.
+    PED_STRIP = 2.0
     ped_zones = [
+        # Strip against perp row nose face (just to the right of perp bays, toward +X)
+        {
+            "x_min": perp_nose_x_irr,
+            "x_max": perp_nose_x_irr + PED_STRIP,
+            "y_min": perp_y_start,
+            "y_max": perp_y_start + BAYS_PER_TYPE * dims_perp["width"],
+        },
+        # Strip against parallel bay nose face (just above the parallel row in Y)
         {
             "x_min": par_x_start - dims_par["width"] / 2.0,
             "x_max": par_x_start + BAYS_PER_TYPE * dims_par["width"],
-            "y_min": par_cy,
-            "y_max": par_cy + dims_par["aisle"],
+            "y_min": par_cy + dims_par["depth"] / 2.0,
+            "y_max": par_cy + dims_par["depth"] / 2.0 + PED_STRIP,
         },
     ]
 
@@ -1002,7 +1155,7 @@ def _write_layout_yaml(
         f.write("# Parking lot layout - generated by scripts/generate_lot_layout.py\n")
         f.write("# Edit origin.x/y and re-run 'make generate-layouts' after\n")
         f.write("# measuring CARLA world-frame coordinates via:\n")
-        f.write("#   python scripts/explore_map.py --mark --town Town05_Opt\n")
+        f.write("#   make docker-inspect LAYOUT=<floor_plan>\n")
         f.write("#\n")
         yaml.dump(
             doc_clean, f, default_flow_style=False, sort_keys=False, allow_unicode=True
@@ -1156,6 +1309,24 @@ def _plot_layout(
         )
         ax.add_patch(rect_patch)
 
+    # Pedestrian zone clouds: rounded semi-transparent yellow patches
+    # World-frame zones use centre_x/y + half_width/height format.
+    for zone in world_layout.get("pedestrian_zones", []):
+        zw = zone["half_width"] * 2.0
+        zh = zone["half_height"] * 2.0
+        cloud = mpatches.FancyBboxPatch(
+            (zone["centre_x"] - zone["half_width"], zone["centre_y"] - zone["half_height"]),
+            zw,
+            zh,
+            boxstyle="round,pad=0.4",
+            facecolor="yellow",
+            edgecolor="goldenrod",
+            alpha=0.40,
+            linewidth=1.5,
+            linestyle="--",
+            zorder=4,
+        )
+        ax.add_patch(cloud)
 
     # Spawn triangles + detached direction arrows
     for idx, sp in enumerate([world_layout["spawn_transform"]] + world_layout.get("extra_spawn_transforms", [])):
@@ -1201,6 +1372,13 @@ def _plot_layout(
         mpatches.Patch(color="forestgreen", label="Parallel bays"),
         mpatches.Patch(color="#DDDDDD", edgecolor="black", label="Lot boundary"),
         Line2D([0], [0], color="magenta", linestyle="--", linewidth=1.5, label="Patrol path"),
+        mpatches.FancyBboxPatch(
+            (0, 0), 1, 1,
+            boxstyle="round,pad=0.2",
+            facecolor="yellow", edgecolor="goldenrod",
+            alpha=0.5, linestyle="--",
+            label="Pedestrian zones",
+        ),
     ]
     ax.legend(handles=handles, loc="upper right", fontsize=9)
     ax.grid(True, alpha=0.3)
@@ -1300,7 +1478,7 @@ def _generate_one(
     if shape == "rectangle":
         local_layout = _rectangle_layout(width=35.0, depth=35.0)
     elif shape == "trapezoid":
-        local_layout = _trapezoid_layout(width_front=40.0, width_rear=30.0, depth=45.0)
+        local_layout = _trapezoid_layout(width_front=48.0, width_rear=30.0, depth=44.0)
     elif shape == "irregular_a":
         local_layout = _irregular_a_layout(width=35.0, depth=35.0)
     else:
@@ -1356,9 +1534,9 @@ def main() -> None:
         print(f"  PNGs  -> {plot_dir}/")
         print()
         print("NOTE: Origins are approximate placeholders.")
-        print("      Run 'python scripts/explore_map.py --mark --town Town05_Opt'")
+        print("      Run 'make docker-inspect LAYOUT=<floor_plan>'")
         print(
-            "      to record precise CARLA world coordinates, then re-run this script."
+            "      to verify coordinates visually, then re-run this script."
         )
         print()
 

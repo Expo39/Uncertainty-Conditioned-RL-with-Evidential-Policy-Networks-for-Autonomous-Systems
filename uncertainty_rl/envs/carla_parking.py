@@ -27,7 +27,7 @@ import random
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Tuple, cast
+from typing import Any, Deque, Dict, List, Optional, Tuple, cast
 
 import gymnasium as gym
 import numpy as np
@@ -42,14 +42,16 @@ except ImportError:
 
 try:
     import rclpy
-    from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from uncertainty_rl_msgs.msg import CovarianceEstimate
 
     _ROS2_AVAILABLE = True
 except ImportError:
     _ROS2_AVAILABLE = False
 
+from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
+from uncertainty_rl.envs.geometry import (
+    _compute_relative_target_pose,
+    _interpolate_cone_positions,
+)
 from uncertainty_rl.utils.constants import (
     CLEARANCE_THRESHOLD,
     COVARIANCE_FEATURES_DIM,
@@ -61,179 +63,18 @@ from uncertainty_rl.utils.constants import (
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
-from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
 logger = logging.getLogger(__name__)
 
 # Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
 
-
-if TYPE_CHECKING:
-    from rclpy.node import Node as _NodeBase
-else:
-    _NodeBase = Node if _ROS2_AVAILABLE else object
-
-
-# ---------------------------------------------------------------------------
-# Pure geometry helpers (unit-testable, no CARLA dependency)
-# ---------------------------------------------------------------------------
-
-
-def _interpolate_cone_positions(
-    corners: List[Tuple[float, float]],
-    spacing: float,
-) -> List[Tuple[float, float]]:
-    """
-    @brief Interpolate evenly spaced positions along a closed polygon perimeter.
-    @param corners: List of (x, y) polygon vertices in order (last edge closes
-                   back to first vertex automatically).
-    @param spacing: Desired spacing between consecutive cones (metres).
-    @return List of (x, y) positions for cone placement.
-
-    @note Uses adaptive spacing so the last cone on each edge aligns exactly
-          with the corner rather than leaving a gap.
-    """
-    positions: List[Tuple[float, float]] = []
-    n = len(corners)
-
-    for i in range(n):
-        x0, y0 = corners[i]
-        x1, y1 = corners[(i + 1) % n]
-
-        edge_len = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
-        if edge_len < 1e-6:
-            continue
-
-        # Number of intervals on this edge (at least 1)
-        num_intervals = max(1, int(round(edge_len / spacing)))
-        dx = (x1 - x0) / num_intervals
-        dy = (y1 - y0) / num_intervals
-
-        for k in range(num_intervals):
-            positions.append((x0 + k * dx, y0 + k * dy))
-
-    return positions
-
-
-def _compute_relative_target_pose(
-    x_ego: float,
-    y_ego: float,
-    yaw_ego: float,
-    x_target: float,
-    y_target: float,
-    yaw_target: float,
-) -> Tuple[float, float, float]:
-    """
-    @brief Compute target bay pose in the ego vehicle body frame.
-    @param x_ego: Ego x position (metres).
-    @param y_ego: Ego y position (metres).
-    @param yaw_ego: Ego heading (radians).
-    @param x_target: Target bay x position (metres).
-    @param y_target: Target bay y position (metres).
-    @param yaw_target: Target bay heading (radians).
-    @return Tuple (dx, dy, dyaw) where dx/dy are in the ego body frame and
-            dyaw is the heading error wrapped to (-pi, pi].
-
-    @note Body frame: +x forward, +y left. dx > 0 means target is ahead.
-    """
-    dx_world = x_target - x_ego
-    dy_world = y_target - y_ego
-
-    cos_yaw = math.cos(yaw_ego)
-    sin_yaw = math.sin(yaw_ego)
-
-    dx = cos_yaw * dx_world + sin_yaw * dy_world
-    dy = -sin_yaw * dx_world + cos_yaw * dy_world
-
-    raw_dyaw = yaw_target - yaw_ego
-    # Wrap to (-pi, pi]
-    dyaw = math.atan2(math.sin(raw_dyaw), math.cos(raw_dyaw))
-
-    return dx, dy, dyaw
-
-
-# ---------------------------------------------------------------------------
-# ROS 2 covariance subscriber
-# ---------------------------------------------------------------------------
-
-
-class _CovarianceSubscriber(_NodeBase):
-    """
-    @class _CovarianceSubscriber
-    @brief Lightweight rclpy Node that subscribes to EKF covariance.
-
-    Caches the latest 9-element uncertainty feature vector in a thread-safe
-    manner. Runs via rclpy.spin() in a daemon thread so it does not block
-    Gymnasium step().
-
-    The CovarianceExtractorNode publishes a CovarianceEstimate message with
-    semantic fields (x, y, yaw, covariance[9]). We reshape the covariance
-    field into a 3x3 matrix and call extract_2d_covariance_features().
-    """
-
-    def __init__(
-        self,
-        covariance_topic: str = "/ekf_uncertainty/covariance",
-        node_name: str = "covariance_subscriber",
-    ) -> None:
-        """
-        @brief Initialise the covariance subscriber node.
-        @param covariance_topic: ROS 2 topic to subscribe to.
-        @param node_name: Unique node name (important when multiple envs exist).
-        """
-        if not _ROS2_AVAILABLE:
-            return
-
-        super().__init__(node_name)
-
-        self._lock = threading.Lock()
-        self._latest_uncertainty: Optional[np.ndarray] = None
-        self._message_count = 0
-
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            depth=10,
-        )
-
-        self._subscription = self.create_subscription(
-            CovarianceEstimate,
-            covariance_topic,
-            self._covariance_callback,
-            qos,
-        )
-        self.get_logger().info(f"Subscribed to covariance topic: {covariance_topic}")
-
-    def _covariance_callback(self, msg: "CovarianceEstimate") -> None:
-        """
-        @brief Callback for incoming covariance messages.
-        @param msg: CovarianceEstimate with semantic fields (x, y, yaw, covariance).
-        """
-        cov_matrix = np.array(msg.covariance).reshape(3, 3)
-        features = extract_2d_covariance_features(cov_matrix)
-
-        with self._lock:
-            self._latest_uncertainty = features
-            self._message_count += 1
-
-    def get_latest_uncertainty(self) -> Optional[np.ndarray]:
-        """
-        @brief Get the most recent 9-element uncertainty feature vector.
-        @return Array of shape (9,) or None if no message received yet.
-        """
-        with self._lock:
-            if self._latest_uncertainty is not None:
-                return cast(np.ndarray, self._latest_uncertainty.copy())
-            return None
-
-    @property
-    def has_data(self) -> bool:
-        """
-        @brief Check whether at least one covariance message has been received.
-        @return True if data is available.
-        """
-        with self._lock:
-            return self._latest_uncertainty is not None
+# Re-export geometry helpers so existing imports from this module still work
+__all__ = [
+    "CARLAParkingEnv",
+    "_compute_relative_target_pose",
+    "_interpolate_cone_positions",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +106,7 @@ class CARLAParkingEnv(gym.Env):
         self,
         carla_host: str = "localhost",
         carla_port: int = 2000,
-        town: str = "Town05_Opt",
+        town: str = "FlatPlane",
         max_steps: int = 500,
         render_mode: Optional[str] = None,
         ros2_config: Optional[Dict[str, Any]] = None,
@@ -316,11 +157,18 @@ class CARLAParkingEnv(gym.Env):
 
         scenarios = parking_scenarios_config or {}
         self._cone_spacing: float = scenarios.get("perimeter_cone_spacing", 2.0)
+        self._entrance_half_width: float = scenarios.get("entrance_half_width", 4.0)
         self._bay_occupancy_rate: float = scenarios.get("bay_occupancy_rate", 0.70)
         self._num_patrol_max: int = scenarios.get("num_patrol_vehicles_max", 3)
+        self._patrol_obstacle_distance: float = scenarios.get(
+            "patrol_obstacle_stop_distance", 5.0
+        )
         self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
+        )
+        self._pedestrian_max_lifetime: int = scenarios.get(
+            "pedestrian_max_lifetime_steps", 200
         )
         self._floor_plans_config: Dict[str, Any] = scenarios.get("floor_plans", {})
 
@@ -352,9 +200,11 @@ class CARLAParkingEnv(gym.Env):
         # Patrol NPC step counters
         self._patrol_waypoint_indices: List[int] = []
 
-        # Pedestrian step counters for heading re-randomisation
+        # Pedestrian step counters for heading re-randomisation and zone confinement
         self._pedestrian_heading_steps: List[int] = []
         self._pedestrian_headings: List[Tuple[float, float, float]] = []
+        self._pedestrian_lifetime_steps: List[int] = []
+        self._pedestrian_zones: List[Dict[str, float]] = []
 
         # Trajectory buffer for debug overlays (ring buffer of (x, y) tuples)
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
@@ -498,11 +348,15 @@ class CARLAParkingEnv(gym.Env):
         self._target_bay = {
             "x": float(target["x"]),
             "y": float(target["y"]),
-            "yaw": float(target["yaw"]),
+            "yaw": (
+                float(target["yaw"])
+                if "yaw" in target
+                else math.radians(float(target.get("yaw_deg", 0.0)))
+            ),
             "width": float(target.get("width", 2.5)),
             "depth": float(target.get("depth", 5.0)),
             "bay_type": bay_type,
-            "bay_id": target.get("bay_id", ""),
+            "bay_id": target.get("id", target.get("bay_id", "")),
         }
         logger.info(
             f"Target bay: type={bay_type}, id={self._target_bay['bay_id']}, "
@@ -531,7 +385,17 @@ class CARLAParkingEnv(gym.Env):
         corners: List[Tuple[float, float]] = [
             (float(c["x"]), float(c["y"])) for c in corners_raw
         ]
-        cone_positions = _interpolate_cone_positions(corners, self._cone_spacing)
+        spawn_raw = self._current_layout.get("spawn_transform", {})
+        entrance: Optional[Tuple[float, float]] = (
+            float(spawn_raw["x"]),
+            float(spawn_raw["y"]),
+        ) if spawn_raw else None
+        cone_positions = _interpolate_cone_positions(
+            corners,
+            self._cone_spacing,
+            entrance_point=entrance,
+            entrance_half_width=self._entrance_half_width,
+        )
 
         bp_lib = self.world.get_blueprint_library()
         cone_bp = bp_lib.find("static.prop.trafficcone01")
@@ -597,7 +461,7 @@ class CARLAParkingEnv(gym.Env):
         z = self._current_layout.get("origin_z", 0.0) + 0.1
 
         for bay in bays:
-            if bay.get("bay_id", "") in excluded_ids:
+            if bay.get("id", bay.get("bay_id", "")) in excluded_ids:
                 continue
             if random.random() > self._bay_occupancy_rate:
                 continue
@@ -609,7 +473,7 @@ class CARLAParkingEnv(gym.Env):
 
             transform = carla.Transform(
                 carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z),
-                carla.Rotation(yaw=math.degrees(float(bay["yaw"]))),
+                carla.Rotation(yaw=float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))),
             )
             actor = self.world.try_spawn_actor(bp, transform)
             if actor is not None:
@@ -632,9 +496,8 @@ class CARLAParkingEnv(gym.Env):
         if not waypoints_raw:
             return
 
-        num_patrol = random.randint(0, self._num_patrol_max)
-        if num_patrol == 0:
-            return
+        # Always spawn at least 1 patrol vehicle so the agent always encounters a moving obstacle.
+        num_patrol = random.randint(1, max(1, self._num_patrol_max))
 
         bp_lib = self.world.get_blueprint_library()
         vehicle_bps = bp_lib.filter("vehicle.*")
@@ -687,10 +550,34 @@ class CARLAParkingEnv(gym.Env):
         walker_bps = bp_lib.filter("walker.pedestrian.*")
         z = self._current_layout.get("origin_z", 0.0) + 0.05
 
-        for _ in range(num_peds):
-            zone = random.choice(zones_raw)
-            px = random.uniform(float(zone["x_min"]), float(zone["x_max"]))
-            py = random.uniform(float(zone["y_min"]), float(zone["y_max"]))
+        def _zone_bbox(z: Dict[str, Any]) -> Dict[str, float]:
+            """Convert zone dict to x_min/x_max/y_min/y_max regardless of YAML format."""
+            if "x_min" in z:
+                return {
+                    "x_min": float(z["x_min"]),
+                    "x_max": float(z["x_max"]),
+                    "y_min": float(z["y_min"]),
+                    "y_max": float(z["y_max"]),
+                }
+            # World-frame YAML format: centre_x/y + half_width/height
+            cx = float(z["centre_x"])
+            cy = float(z["centre_y"])
+            hw = float(z["half_width"])
+            hh = float(z["half_height"])
+            return {
+                "x_min": cx - hw,
+                "x_max": cx + hw,
+                "y_min": cy - hh,
+                "y_max": cy + hh,
+            }
+
+        zones: List[Dict[str, float]] = [_zone_bbox(z) for z in zones_raw]
+
+        for ped_i in range(num_peds):
+            # Assign zones round-robin so all zones are populated evenly
+            zone = zones[ped_i % len(zones)]
+            px = random.uniform(zone["x_min"], zone["x_max"])
+            py = random.uniform(zone["y_min"], zone["y_max"])
 
             bp = random.choice(walker_bps)
             if bp.has_attribute("is_invincible"):
@@ -709,6 +596,8 @@ class CARLAParkingEnv(gym.Env):
                     (math.cos(heading_rad), math.sin(heading_rad), 0.0)
                 )
                 self._pedestrian_heading_steps.append(0)
+                self._pedestrian_lifetime_steps.append(0)
+                self._pedestrian_zones.append(zone)
 
         logger.debug(f"Spawned {len(self._pedestrian_actors)} pedestrians.")
 
@@ -732,6 +621,11 @@ class CARLAParkingEnv(gym.Env):
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
         k_p = 0.8  # Proportional steering gain
+
+        # Fetch all vehicles once per tick for obstacle proximity checks
+        all_vehicles: List[Any] = (
+            list(self.world.get_actors().filter("vehicle.*")) if self.world else []
+        )
 
         for i, npc in enumerate(self._patrol_npcs):
             if not (npc is not None and npc.is_alive):
@@ -762,21 +656,97 @@ class CARLAParkingEnv(gym.Env):
             )
 
             steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
+
+            # Obstacle proximity check — brake if any vehicle is ahead within stop distance
+            npc_yaw = math.radians(t.rotation.yaw)
+            fwd_x = math.cos(npc_yaw)
+            fwd_y = math.sin(npc_yaw)
+            blocked = False
+            for other in all_vehicles:
+                if other.id == npc.id:
+                    continue
+                to_x = other.get_location().x - t.location.x
+                to_y = other.get_location().y - t.location.y
+                fwd_proj = to_x * fwd_x + to_y * fwd_y
+                lat = abs(to_x * fwd_y - to_y * fwd_x)
+                dist = math.sqrt(to_x * to_x + to_y * to_y)
+                if 0.0 < fwd_proj and dist < self._patrol_obstacle_distance and lat < 2.0:
+                    blocked = True
+                    break
+
             control = carla.VehicleControl()
             control.steer = steer
-            control.throttle = 0.3
-            control.brake = 0.0
+            control.throttle = 0.0 if blocked else 0.3
+            control.brake = 1.0 if blocked else 0.0
             npc.apply_control(control)
+
+    def _respawn_pedestrian(self, idx: int) -> None:
+        """
+        @brief Destroy and respawn pedestrian at index idx within its assigned zone.
+
+        Called when a pedestrian exits its zone or exceeds its maximum lifetime.
+        The pedestrian is destroyed, a new walker is spawned at a random point
+        within the same zone, and the lifetime counter is reset.
+
+        @param idx: Index into _pedestrian_actors / _pedestrian_zones.
+        """
+        if self.world is None:
+            return
+        zone = self._pedestrian_zones[idx]
+        old = self._pedestrian_actors[idx]
+        if old is not None and old.is_alive:
+            old.destroy()
+
+        bp_lib = self.world.get_blueprint_library()
+        walker_bps = bp_lib.filter("walker.pedestrian.*")
+        z = self._current_layout.get("origin_z", 0.0) + 0.05
+
+        px = random.uniform(zone["x_min"], zone["x_max"])
+        py = random.uniform(zone["y_min"], zone["y_max"])
+        bp = random.choice(walker_bps)
+        if bp.has_attribute("is_invincible"):
+            bp.set_attribute("is_invincible", "false")
+        transform = carla.Transform(
+            carla.Location(x=px, y=py, z=z),
+            carla.Rotation(yaw=random.uniform(0.0, 360.0)),
+        )
+        walker = self.world.try_spawn_actor(bp, transform)
+        self._pedestrian_actors[idx] = walker
+        heading_rad = random.uniform(0.0, 2.0 * math.pi)
+        self._pedestrian_headings[idx] = (
+            math.cos(heading_rad),
+            math.sin(heading_rad),
+            0.0,
+        )
+        self._pedestrian_heading_steps[idx] = 0
+        self._pedestrian_lifetime_steps[idx] = 0
 
     def _update_pedestrians(self) -> None:
         """
-        @brief Advance pedestrians one step and re-randomise headings periodically.
+        @brief Advance pedestrians one step, re-randomise headings periodically,
+               and despawn/respawn walkers that leave their assigned zone or
+               exceed their maximum lifetime.
         """
         for i, walker in enumerate(self._pedestrian_actors):
             if not (walker is not None and walker.is_alive):
                 continue
 
+            self._pedestrian_lifetime_steps[i] += 1
             self._pedestrian_heading_steps[i] += 1
+
+            # Zone boundary check: despawn and respawn if outside assigned bbox
+            loc = walker.get_location()
+            zone = self._pedestrian_zones[i]
+            outside_zone = (
+                loc.x < zone["x_min"]
+                or loc.x > zone["x_max"]
+                or loc.y < zone["y_min"]
+                or loc.y > zone["y_max"]
+            )
+            if outside_zone or self._pedestrian_lifetime_steps[i] >= self._pedestrian_max_lifetime:
+                self._respawn_pedestrian(i)
+                continue
+
             if self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
                 heading_rad = random.uniform(0.0, 2.0 * math.pi)
                 self._pedestrian_headings[i] = (
@@ -968,7 +938,7 @@ class CARLAParkingEnv(gym.Env):
 
         debug = self.world.debug
         z = self._current_layout.get("origin_z", 0.0) + 0.05
-        target_id = self._target_bay.get("bay_id", "")
+        target_id = self._target_bay.get("bay_id", "")  # set from "id" key at sample time
 
         # Bay outlines -- colour by type
         type_colours = {
@@ -980,7 +950,7 @@ class CARLAParkingEnv(gym.Env):
         for bay in self._current_layout.get("bays", []):
             bay_type = bay.get("bay_type", "perpendicular")
             colour = type_colours.get(bay_type, carla.Color(r=100, g=100, b=100))
-            is_target = bay.get("bay_id", "") == target_id
+            is_target = bay.get("id", bay.get("bay_id", "")) == target_id
 
             if is_target:
                 colour = carla.Color(r=0, g=255, b=0)
@@ -989,7 +959,7 @@ class CARLAParkingEnv(gym.Env):
             depth = float(bay.get("depth", 5.0))
             bx = float(bay["x"])
             by = float(bay["y"])
-            yaw_deg = math.degrees(float(bay["yaw"]))
+            yaw_deg = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
 
             box = carla.BoundingBox(
                 carla.Location(x=bx, y=by, z=z),
@@ -1095,7 +1065,11 @@ class CARLAParkingEnv(gym.Env):
 
     def _connect_to_carla(self) -> None:
         """
-        @brief Establish connection to CARLA and load Town05_Opt.
+        @brief Connect to CARLA and load the world.
+
+        @note When town is "FlatPlane", loads configs/flat_plane.xodr via
+              generate_opendrive_world() — a clean flat plane with no roads or
+              buildings. Otherwise uses load_world() for named CARLA towns.
         """
         try:
             self.client = carla.Client(self.carla_host, self.carla_port)
@@ -1103,10 +1077,27 @@ class CARLAParkingEnv(gym.Env):
             self.world = self.client.get_world()
 
             current_map_name = self.world.get_map().name.split("/")[-1]
-            if current_map_name != self.town:
+            if self.town == "FlatPlane":
+                if current_map_name != "FlatPlane":
+                    xodr = Path("configs/flat_plane.xodr").read_text(encoding="utf-8")
+                    logger.info("Loading flat_plane.xodr ...")
+                    self.world = self.client.generate_opendrive_world(
+                        xodr,
+                        carla.OpendriveGenerationParameters(
+                            vertex_distance=2.0,
+                            max_road_length=600.0,
+                            wall_height=0.0,
+                            additional_width=300.0,
+                            smooth_junctions=False,
+                            enable_mesh_visibility=True,
+                        ),
+                    )
+                    time.sleep(5.0)
+                else:
+                    logger.info("FlatPlane already loaded.")
+            elif current_map_name != self.town:
                 logger.info(f"Loading map: {self.town}")
                 self.world = self.client.load_world(self.town)
-                # Allow map layers to settle
                 time.sleep(8.0)
 
         except Exception as exc:
@@ -1288,6 +1279,8 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_waypoint_indices.clear()
         self._pedestrian_heading_steps.clear()
         self._pedestrian_headings.clear()
+        self._pedestrian_lifetime_steps.clear()
+        self._pedestrian_zones.clear()
 
         if self.vehicle is not None:
             if self.vehicle.is_alive:
