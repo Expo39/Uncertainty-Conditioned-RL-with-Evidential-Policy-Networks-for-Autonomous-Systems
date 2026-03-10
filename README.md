@@ -174,14 +174,17 @@ make generate-layouts
 Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and `outputs/layouts/*.png`.
 Inspect the PNGs to confirm bay placement and aisle clearances.
 
-### Step 2 -- Record CARLA world-frame origins (run once per floor plan)
+### Step 2 -- Verify layout in windowed CARLA
 
 ```bash
-make docker-explore-map-mark
+make docker-inspect LAYOUT=trapezoid
+make docker-inspect LAYOUT=rectangle
+make docker-inspect LAYOUT=irregular_a
 ```
 
-Fly the spectator to a flat open area (~40m x 35m), press ENTER to record the origin (x, y, z).
-Record 3 origins, paste into `configs/layouts/*.yaml`, then re-run Step 1.
+Spawns each layout in windowed CARLA with full debug overlays (bay outlines, spawn points,
+pedestrian zones, patrol path). Origins are pre-set for the FlatPlane map — no coordinate
+discovery step needed.
 
 ## Visualisation
 

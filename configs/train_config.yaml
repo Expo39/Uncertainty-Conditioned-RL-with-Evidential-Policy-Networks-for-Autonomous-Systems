@@ -9,7 +9,7 @@
 # Environment settings
 carla_host: "localhost"
 carla_port: 2000
-town: "Town05_Opt"
+town: "FlatPlane"  # Loads configs/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 
@@ -63,10 +63,13 @@ carla_conditions:
 # ---------------------------------------------------------------------------
 parking_scenarios:
   perimeter_cone_spacing: 2.0          # Metres between perimeter cones
+  entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
   bay_occupancy_rate: 0.70             # Fraction of non-target bays filled
-  num_patrol_vehicles_max: 3           # Max NPC patrol vehicles per episode
+  num_patrol_vehicles_max: 3           # Max NPC patrol vehicles per episode (min 1 always spawned)
+  patrol_obstacle_stop_distance: 5.0  # Metres ahead — patrol brakes if any vehicle within range
   num_pedestrians_max: 4               # Max random-walk pedestrians per episode
   pedestrian_heading_resample_steps: 30  # Steps between pedestrian direction changes
+  pedestrian_max_lifetime_steps: 200  # Steps before a pedestrian despawns and respawns in its zone
   floor_plans:
     rectangle:
       layout_file: configs/layouts/rectangle.yaml

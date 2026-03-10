@@ -143,6 +143,11 @@ services:
     entrypoint: >
       bash -c "pip install --no-cache-dir tensorboard && tensorboard --logdir=/logs --host=0.0.0.0 --port=6006"
 
+  ###############################################################################
+  # Additional services for demo and inspection - not part of core training stack                       
+  ###############################################################################
+
+
   # CARLA demo server - windowed (no -RenderOffScreen), separate port range
   # Requires X11 forwarding on host (DISPLAY env var must be set).
   # Start with: make docker-demo MODEL=checkpoints/final_model
@@ -152,11 +157,15 @@ services:
     runtime: nvidia
     profiles:
       - demo
+      - inspect
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
     # Windowed mode: -RenderOffScreen is intentionally omitted so CARLA renders to the host X11 display.
-    command: /bin/bash CarlaUE4.sh -windowed -world-port=2100 -resx=1280 -resy=720 -quality-level=Low
+    command: >
+      /bin/bash -c "mkdir -p /tmp/runtime-root && chmod 700 /tmp/runtime-root
+      && /bin/bash CarlaUE4.sh -windowed -world-port=2100 -resx=800 -resy=600 -quality-level=Low"
     ports:
       - "2100-2102:2100-2102"
     networks:
@@ -213,6 +222,48 @@ services:
       --model-path ${MODEL:-checkpoints/final_model}
       --eval-config configs/eval_config.yaml
       --train-config configs/train_config.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Inspect container - spawns a layout in windowed CARLA for visual inspection (no training).
+  # Usage: make docker-inspect LAYOUT=trapezoid
+  training-inspect:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect
+    runtime: nvidia
+    profiles:
+      - inspect
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect_layout.py
+      --layout ${LAYOUT:-trapezoid}
+      --host carla-server-demo
+      --port 2100
+      --duration 300
     deploy:
       resources:
         reservations:
