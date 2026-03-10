@@ -11,7 +11,7 @@
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
 .PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo
-.PHONY: docker-explore-map docker-explore-map-mark
+.PHONY: docker-explore-map docker-explore-map-mark docker-generate-layouts
 
 PYTHON := python3
 PYTEST := pytest
@@ -45,6 +45,13 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 	$(PYTHON) scripts/generate_lot_layout.py \
 		--output-dir configs/layouts \
 		--plot-dir outputs/layouts
+
+docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container
+	$(DOCKER_COMPOSE) exec training bash -c \
+		"mkdir -p configs/layouts outputs/layouts && \
+		 python scripts/generate_lot_layout.py \
+		   --output-dir configs/layouts \
+		   --plot-dir outputs/layouts"
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side, detachable from training)

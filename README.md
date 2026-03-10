@@ -77,9 +77,30 @@ Code directories are bind-mounted. Edit files on the host and changes reflect im
 
 ---
 
+### Host-Side Python Setup (Required for Visualisation)
+
+A small subset of commands **must run on the host** because they open GUI windows — Docker containers run headless with no display server. These are:
+
+| Command | What it does | Host dep |
+|---------|-------------|----------|
+| `make visualise` | Live 2D bird's-eye window (polls `outputs/vis_state.json` written by the training container) | `matplotlib`, `numpy` |
+| `make visualise-record` | Same + saves MP4 to `outputs/recordings/` on window close | `matplotlib`, `numpy` |
+| `make generate-layouts` | Generates lot layout YAMLs and bird's-eye PNGs into `outputs/layouts/` | `matplotlib`, `numpy` (PNGs only; YAML generation works without them) |
+
+Set up a lightweight virtualenv for these — no CARLA, ROS 2, or GPU needed:
+
+```bash
+sudo apt install python3-venv python3-pip  # once, if not already installed
+python3 -m venv .venv-vis
+source .venv-vis/bin/activate
+pip install matplotlib numpy pyyaml
+```
+
+Then run visualisation commands inside that venv, or activate it once per terminal session. The training stack in Docker is unaffected.
+
 ### CPU-Only Development (No GPU, No CARLA)
 
-Unit tests, evidential network development, linting, and type checking all work without Docker or a GPU. Requires Python 3.10+ installed on the host.
+Unit tests, evidential network development, linting, and type checking all work without Docker or a GPU. Requires Python 3.10+ on the host.
 
 ```bash
 pip install -e ".[dev]"
@@ -112,9 +133,9 @@ make docker-down     # stop all containers when done
 | `make docker-logs` | Follow all container logs | Yes |
 | `make docker-dev` | Start stack + drop into training shell | Yes |
 | `make docker-clean` | Stop and remove volumes | No |
-| `make generate-layouts` | Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed) | No |
-| `make visualise` | Open detachable 2D bird's-eye visualiser | No |
-| `make visualise-record` | 2D visualiser + saves MP4 on window close | No |
+| `make generate-layouts` | Generate lot layout YAMLs + bird's-eye PNGs — **host only**, no CARLA needed | No |
+| `make visualise` | Live 2D bird's-eye window — **host only**, reads `outputs/vis_state.json` from container | No |
+| `make visualise-record` | Same as `visualise` + saves MP4 to `outputs/recordings/` on close — **host only** | No |
 | `make docker-demo MODEL=` | Windowed 3D CARLA demo with checkpoint (requires X11) | Yes |
 
 Run `make help` for the full list.
