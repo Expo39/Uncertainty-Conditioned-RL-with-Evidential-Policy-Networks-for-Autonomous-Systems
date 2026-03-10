@@ -1,13 +1,14 @@
 # ROS 2 Configuration for Covariance Extraction
 # Configuration for the ROS 2 bridge, EKF, and covariance extraction pipeline.
 
-# CARLA ROS bridge topics
-# These are the default topic names published by the carla_ros_bridge.
-# Override via launch argument remappings if your bridge version differs.
+# CARLA ROS bridge topics (Suite A: 2D LiDAR + IMU + wheel odometry + steering)
+# GNSS is excluded: unreliable in covered parking lots (building occlusion, multipath)
+# and not feasible at the Lemonworx deployment site.
+# Override topic names via launch argument remappings if your bridge version differs.
 carla_topics:
   odometry: "/carla/ego_vehicle/odometry"   # nav_msgs/Odometry from CARLA bridge
   imu: "/carla/ego_vehicle/imu"             # sensor_msgs/Imu from CARLA bridge
-  gnss: "/carla/ego_vehicle/gnss"           # sensor_msgs/NavSatFix from CARLA bridge
+  lidar: "/carla/ego_vehicle/lidar"         # sensor_msgs/PointCloud2 (2D single-channel)
 
 # robot_localisation EKF settings
 # These configure the EKF node launched via carla_bridge.launch.py.

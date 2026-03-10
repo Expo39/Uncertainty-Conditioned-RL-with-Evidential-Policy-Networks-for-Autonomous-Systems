@@ -5,14 +5,15 @@
 .PHONY: lint format typecheck clean
 .PHONY: backup-configs restore-configs
 .PHONY: train train-short evaluate ros2 experiment-dry
+.PHONY: generate-layouts visualise visualise-record
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top display-info docker-carla-windowed
 .PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev
-.PHONY: docker-explore-map
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo
+.PHONY: docker-explore-map docker-explore-map-mark
 
-PYTHON := python
+PYTHON := python3
 PYTEST := pytest
 CONFIG_DIR := configs
 SRC_DIR := uncertainty_rl
@@ -34,6 +35,26 @@ help: ## Show this help
 install: ## Install package and dev dependencies
 	pip install -e ".[dev]"
 	pre-commit install
+
+# ----------------------------------------------------------------------
+# Layout Generation (no CARLA needed)
+# ----------------------------------------------------------------------
+
+generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed)
+	mkdir -p configs/layouts outputs/layouts
+	$(PYTHON) scripts/generate_lot_layout.py \
+		--output-dir configs/layouts \
+		--plot-dir outputs/layouts
+
+# ----------------------------------------------------------------------
+# Visualisation (host-side, detachable from training)
+# ----------------------------------------------------------------------
+
+visualise: ## Open 2D bird's-eye visualiser (polls outputs/vis_state.json, detachable)
+	$(PYTHON) scripts/visualise_training.py
+
+visualise-record: ## Open 2D visualiser + save MP4 on window close
+	$(PYTHON) scripts/visualise_training.py --record
 
 
 
@@ -201,22 +222,44 @@ display-info: ## Show active X11 displays and current DISPLAY variable (use befo
 # Usage: make docker-carla-windowed CARLA_DISPLAY=:1
 # Run make display-info first to find the correct display value.
 CARLA_DISPLAY ?= :1
-docker-explore-map: ## Cycle through Town10HD spawn points in container, printing coordinates. Run make docker-up first.
+EXPLORE_TOWN  ?= Town10HD
+EXPLORE_PAUSE ?= 3.0
+EXPLORE_START ?= 0
+EXPLORE_STEP  ?= 1
+docker-explore-map: ## Cycle through map spawn points, printing coordinates. Requires full stack running (make docker-up).
 	$(DOCKER_COMPOSE) exec training python scripts/explore_map.py \
 		--host carla-server \
-		--town Town10HD \
-		--pause $(or $(PAUSE),3.0) \
-		--start $(or $(START),0) \
-		--step $(or $(STEP),1)
+		--port 2000 \
+		--town $(EXPLORE_TOWN) \
+		--pause $(EXPLORE_PAUSE) \
+		--start $(EXPLORE_START) \
+		--step $(EXPLORE_STEP)
 
-docker-carla-windowed: ## Start CARLA windowed for map exploration. Set CARLA_DISPLAY (default :1). Run make display-info first.
-	@echo "Starting CARLA in windowed mode on DISPLAY=$(CARLA_DISPLAY)"
-	@echo "View via RustDesk connected to this machine's desktop session."
+docker-carla-windowed: ## Start CARLA in windowed mode. Set CARLA_DISPLAY (default :1).
+	@echo "Starting CARLA windowed on DISPLAY=$(CARLA_DISPLAY)"
 	DISPLAY=$(CARLA_DISPLAY) xhost +local:docker 2>/dev/null || true
 	$(DOCKER_COMPOSE) run --rm \
 		-e DISPLAY=$(CARLA_DISPLAY) \
 		carla-server \
 		/bin/bash CarlaUE4.sh -windowed -ResX=1280 -ResY=720 -world-port=2000 -quality-level=Low
+
+# Usage: make docker-demo MODEL=checkpoints/final_model
+# Starts windowed CARLA on separate ports (2100-2102) and runs evaluation with the given model.
+# Requires X11 on host. Does not affect the training stack on ports 2000-2002.
+MODEL ?= checkpoints/final_model
+docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make docker-demo MODEL=<path>
+	@echo "Starting demo stack (windowed CARLA on ports 2100-2102)..."
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
+	xhost -local:docker 2>/dev/null || true
+
+EXPLORE_MARK_TOWN ?= Town05_Opt
+docker-explore-map-mark: ## Interactive spectator + ENTER to record lot origins. Usage: make docker-explore-map-mark [EXPLORE_MARK_TOWN=Town05_Opt]
+	$(DOCKER_COMPOSE) exec training python scripts/explore_map.py \
+		--host carla-server \
+		--port 2000 \
+		--mark \
+		--town $(EXPLORE_MARK_TOWN)
 
 
 

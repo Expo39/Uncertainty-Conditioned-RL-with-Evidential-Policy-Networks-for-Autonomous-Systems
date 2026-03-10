@@ -1,42 +1,63 @@
 # training/
 
-RL training scripts using Stable-Baselines3.
+RL training scripts for uncertainty-conditioned parking using Stable-Baselines3.
 
 ## Dockerfile
 
-`Dockerfile` builds the **training** container: NVIDIA NGC PyTorch base with Stable-Baselines3, evidential networks, rclpy (ROS 2 Humble), and all Python dependencies from `pyproject.toml`. Orchestrated via `docker-compose.yml` at the project root. ROS 2 Humble is used because the NGC base is Ubuntu 22.04; DDS communication with the Jazzy ros2-bridge container is seamless.
+`Dockerfile` builds the **training** container: NVIDIA NGC PyTorch base (Ubuntu 22.04) with Stable-Baselines3, evidential networks, rclpy (ROS 2 Humble), and all Python dependencies from `pyproject.toml`. Orchestrated via `docker-compose.yml` at the project root. ROS 2 Humble matches the NGC Ubuntu 22.04 base; DDS wire protocol is distro-agnostic so the training container communicates with the Jazzy ros2-bridge container seamlessly.
 
 ## Module: `train_ppo.py`
 
 Config-driven PPO training loop with:
 
-- **VecNormalize** for observation and reward normalisation
-- **Checkpointing** saves model and VecNormalize statistics
-- **TensorBoard** logging for training metrics
+- **Policy switching**: reads `policy_type` from config — `"evidential"` uses `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` uses SB3 `PPO` + `MlpPolicy`
+- **VecNormalize** wraps the environment for observation and reward normalisation
+- **Checkpointing** saves model and VecNormalize statistics together
+- **TensorBoard** logging for training metrics (including evidential reg loss and uncertainty estimates)
 - All hyperparameters loaded from `configs/train_config.yaml`
 
 ### Usage
 
 ```bash
+# Inside the training container (make docker-shell):
 python uncertainty_rl/training/train_ppo.py \
     --config configs/train_config.yaml \
     --total-timesteps 1000000
 ```
 
-### Current Status
+### Policy Type
 
-Uses SB3's standard `MlpPolicy`. The evidential policy network is **not yet integrated** as a custom SB3 policy class - this is a planned integration step.
+`train_ppo.py` reads `policy_type` from the config to select the agent:
+
+| `policy_type` | Agent | Policy | Observation |
+|---------------|-------|--------|-------------|
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 18-dim (full method) or 9-dim (output\_uncertainty) |
+| `"standard"` | `PPO` | `MlpPolicy` | 18-dim (input\_uncertainty) or 9-dim (vanilla\_ppo) |
+
+The `include_covariance` flag (from baseline YAML) controls observation dimensionality.
 
 ### Key Config Parameters (from `configs/train_config.yaml`)
 
-- `learning_rate`: 0.0003
-- `batch_size`: 64
-- `n_steps`: 2048
-- `n_epochs`: 10
-- `net_arch`: [256, 256]
-- `total_timesteps`: 1,000,000
-- `ros2.covariance_topic`: `/ekf_uncertainty/covariance`
-- `carla_sensors.imu.noise_accel_stddev_*`: 0.1 (m/s^2)
-- `carla_conditions.num_vehicles`: 20
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| `learning_rate` | 0.0003 | Linear decay to 0 applied in train\_ppo.py |
+| `batch_size` | 256 | 40 off-policy steps per rollout (within CaRL-validated range) |
+| `n_steps` | 2048 | ~4 episodes per PPO update (single CARLA env) |
+| `n_epochs` | 5 | Fewer epochs to avoid policy drift |
+| `net_arch` | [256, 256] | Both actor and critic |
+| `target_kl` | 0.02 | Early epoch stopping; 0.02 for noisy weather-randomised landscape |
+| `total_timesteps` | 1,000,000 | |
+| `evidential.lambda_reg` | 0.01 | NIG regularisation coefficient |
+| `sensor_suite` | suite\_a | 2D LiDAR + IMU + wheel odometry + steering angle |
+| `parking_scenarios.*` | see YAML | Floor plan files, bay occupancy, cone spacing, NPC counts |
 
-See `configs/train_config.yaml` for the full parameter list.
+See `configs/train_config.yaml` for the full parameter list with per-parameter justifications.
+
+## Ablation Study Orchestration: `scripts/run_experiment.py`
+
+Runs the full 2x2 ablation study (4 baselines x 10 seeds). Each baseline config in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` — all baselines share identical PPO hyperparameters.
+
+```bash
+make experiment-dry       # Plan runs without training (no Docker needed)
+make docker-experiment    # Full ablation inside container
+```

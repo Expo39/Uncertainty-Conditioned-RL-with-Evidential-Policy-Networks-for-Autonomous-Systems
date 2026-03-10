@@ -100,18 +100,22 @@ make docker-down     # stop all containers when done
 
 ### All Docker Commands
 
-| Command | Purpose |
-|---------|---------|
-| `make docker-up` | Start all containers |
-| `make docker-down` | Stop all containers |
-| `make docker-shell` | Interactive bash in training container |
-| `make docker-train` | Run full training |
-| `make docker-train-short` | 10k steps smoke test |
-| `make docker-eval` | Run evaluation |
-| `make docker-test` | Run pytest |
-| `make docker-logs` | Follow all container logs |
-| `make docker-dev` | Start stack + drop into training shell |
-| `make docker-clean` | Stop and remove volumes |
+| Command | Purpose | Needs GPU? |
+|---------|---------|------------|
+| `make docker-up` | Start all containers | Yes |
+| `make docker-down` | Stop all containers | No |
+| `make docker-shell` | Interactive bash in training container | Yes |
+| `make docker-train` | Run full training | Yes |
+| `make docker-train-short` | 10k steps smoke test | Yes |
+| `make docker-eval` | Run evaluation | Yes |
+| `make docker-test` | Run pytest | Yes |
+| `make docker-logs` | Follow all container logs | Yes |
+| `make docker-dev` | Start stack + drop into training shell | Yes |
+| `make docker-clean` | Stop and remove volumes | No |
+| `make generate-layouts` | Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed) | No |
+| `make visualise` | Open detachable 2D bird's-eye visualiser | No |
+| `make visualise-record` | 2D visualiser + saves MP4 on window close | No |
+| `make docker-demo MODEL=` | Windowed 3D CARLA demo with checkpoint (requires X11) | Yes |
 
 Run `make help` for the full list.
 
@@ -120,7 +124,7 @@ Run `make help` for the full list.
 ```
 uncertainty_rl/                      # Main Python package
 |-- networks/evidential_policy.py    # Evidential layers, NIG distributions
-|-- envs/carla_parking.py            # CARLA Gymnasium environment (15D state, 3D action)
+|-- envs/carla_parking.py            # CARLA Gymnasium environment (18D state, 3D action)
 |-- training/
 |   |-- train_ppo.py                 # PPO training with SB3
 |   +-- Dockerfile                   # Training container (NGC PyTorch + SB3)
@@ -134,6 +138,60 @@ uncertainty_rl/                      # Main Python package
 configs/                             # YAML hyperparameters (train, eval, ROS 2)
 tests/                               # pytest suite mirroring uncertainty_rl/ structure
 ```
+
+## Parking Lot Layout Generation
+
+Lot geometry (bay positions, perimeter corners, spawn transforms) is pre-computed offline
+and stored in `configs/layouts/`. To regenerate or modify layouts:
+
+### Step 1 -- Generate from shape dimensions (no CARLA needed)
+
+```bash
+make generate-layouts
+```
+
+Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and `outputs/layouts/*.png`.
+Inspect the PNGs to confirm bay placement and aisle clearances.
+
+### Step 2 -- Record CARLA world-frame origins (run once per floor plan)
+
+```bash
+make docker-explore-map-mark
+```
+
+Fly the spectator to a flat open area (~40m x 35m), press ENTER to record the origin (x, y, z).
+Record 3 origins, paste into `configs/layouts/*.yaml`, then re-run Step 1.
+
+## Visualisation
+
+### 2D bird's-eye view (detachable, zero training overhead)
+
+Training always runs headless. Attach the visualiser at any time from the host:
+
+```bash
+make visualise           # live window -- close to detach, training unaffected
+make visualise-record    # live window + saves MP4 on close
+#   outputs/recordings/YYYY-MM-DD_HH-MM-SS.mp4
+```
+
+Shows: lot boundary, bay outlines (blue=perpendicular, orange=angled, green=parallel),
+target bay (bright green), static vehicles (dark grey), patrol NPCs (orange),
+pedestrians (magenta), ego vehicle (cyan) with heading arrow and 50-step trail.
+
+### 3D overlays (CARLA spectator, live during training)
+
+Connect a CARLA spectator while training runs headless to see real-time debug overlays
+drawn every step: bay outlines (colour-coded), target bay ("TARGET" label), ego bounding
+box (cyan), ego trajectory trail (cyan dots).
+
+### 3D demo mode (windowed CARLA, checkpoint playback)
+
+```bash
+make docker-demo MODEL=checkpoints/final_model
+```
+
+Starts a windowed CARLA server on a separate port (2100-2102), loads the checkpoint via
+`PPO.load()`, and runs evaluation. Requires X11 on host. Does not affect training.
 
 ## Configuration
 

@@ -73,6 +73,14 @@ TODO.md
 # documentation/
 meeting_agendas/
 references/
+claude_plans/
+ENVIRONMENT_DESIGN.md
 
 # Project config archive (local portability)
 project_configs.tar.gz
+
+# Generated layout artefacts and visualiser state
+outputs/layouts/
+outputs/vis_state.json
+outputs/vis_state.tmp
+outputs/recordings/
