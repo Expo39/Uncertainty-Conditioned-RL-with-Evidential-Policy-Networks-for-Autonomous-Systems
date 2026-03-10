@@ -143,6 +143,84 @@ services:
     entrypoint: >
       bash -c "pip install --no-cache-dir tensorboard && tensorboard --logdir=/logs --host=0.0.0.0 --port=6006"
 
+  # CARLA demo server - windowed (no -RenderOffScreen), separate port range
+  # Requires X11 forwarding on host (DISPLAY env var must be set).
+  # Start with: make docker-demo MODEL=checkpoints/final_model
+  carla-server-demo:
+    image: carlasim/carla:0.9.16
+    container_name: uncertainty-rl-carla-demo
+    runtime: nvidia
+    profiles:
+      - demo
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=${DISPLAY}
+    # Windowed mode: -RenderOffScreen is intentionally omitted so CARLA renders to the host X11 display.
+    command: /bin/bash CarlaUE4.sh -windowed -world-port=2100 -resx=1280 -resy=720 -quality-level=Low
+    ports:
+      - "2100-2102:2100-2102"
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/2100' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Demo evaluation container - loads checkpoint and runs evaluation against windowed CARLA
+  training-demo:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-demo
+    runtime: nvidia
+    profiles:
+      - demo
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - PYTHONUNBUFFERED=1
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./logs:/workspace/logs:rw
+      - ./checkpoints:/workspace/checkpoints:rw
+      - ./tests:/workspace/tests:ro
+    working_dir: /workspace
+    command: >
+      python uncertainty_rl/evaluation/evaluate.py
+      --model-path ${MODEL:-checkpoints/final_model}
+      --eval-config configs/eval_config.yaml
+      --train-config configs/train_config.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 networks:
   uncertainty-rl-network:
     driver: bridge

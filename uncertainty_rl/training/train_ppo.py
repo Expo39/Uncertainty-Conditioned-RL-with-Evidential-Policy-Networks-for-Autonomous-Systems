@@ -24,10 +24,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.ppo import PPO
 
 from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.networks import (
-    EvidentialActorCriticPolicy,
-    EvidentialPPO,
-)
+from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
 
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
