@@ -29,7 +29,7 @@ Layout YAML format (consumed by CARLAParkingEnv):
   spawn_transform: {x: ..., y: ..., z: 0.3, yaw_deg: ...}
   bays:
     - {id: perp_0, bay_type: perpendicular, x: ..., y: ..., yaw_deg: ...,
-       width: 2.5, depth: 5.0, always_empty: false}
+       width: 2.5, depth: 5.0}
     ...
   patrol_waypoints: [{x: ..., y: ...}, ...]
   pedestrian_zones: [{x_min: ..., x_max: ..., y_min: ..., y_max: ...}]
@@ -130,6 +130,107 @@ def _world_yaw(local_yaw_deg: float, heading_deg: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+def _bay_corners(
+    cx: float,
+    cy: float,
+    yaw_deg: float,
+    width: float,
+    depth: float,
+) -> List[Tuple[float, float]]:
+    """
+    @brief Return the four corner points of a bay rectangle in local frame.
+
+    The bay rectangle has depth along the vehicle's heading axis and width
+    perpendicular to it. Corners are ordered CCW starting from (-d/2, -w/2).
+
+    @param cx: Bay centre x.
+    @param cy: Bay centre y.
+    @param yaw_deg: Bay heading in degrees (vehicle nose direction).
+    @param width: Bay width (perpendicular to heading), metres.
+    @param depth: Bay depth (along heading), metres.
+    @return List of four (x, y) corner tuples.
+    """
+    yaw_rad = math.radians(yaw_deg)
+    cos_y = math.cos(yaw_rad)
+    sin_y = math.sin(yaw_rad)
+    hw = width / 2.0
+    hd = depth / 2.0
+    local = [(-hd, -hw), (hd, -hw), (hd, hw), (-hd, hw)]
+    return [
+        (cx + cos_y * lx - sin_y * ly, cy + sin_y * lx + cos_y * ly)
+        for lx, ly in local
+    ]
+
+
+def _point_in_polygon(px: float, py: float, polygon: List[Tuple[float, float]]) -> bool:
+    """
+    @brief Ray-casting point-in-polygon test (includes boundary).
+    @param px: Point x.
+    @param py: Point y.
+    @param polygon: List of (x, y) vertices in order.
+    @return True if the point is inside or on the polygon boundary.
+    """
+    n = len(polygon)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = polygon[i]
+        xj, yj = polygon[j]
+        if ((yi > py) != (yj > py)) and (
+            px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi
+        ):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _validate_bays_in_polygon(
+    bays: List[Dict[str, Any]],
+    corners: List[Dict[str, float]],
+    shape_name: str,
+    margin: float = 0.05,
+) -> None:
+    """
+    @brief Raise ValueError if any bay corner lies outside the lot polygon.
+
+    Checks all four corners of every bay rectangle. A small margin is used
+    to allow bays that are flush against a wall (floating-point tolerance).
+
+    @param bays: List of bay dicts with local_x, local_y, local_yaw_deg, width, depth.
+    @param corners: Lot perimeter as list of {x, y} dicts (local frame).
+    @param shape_name: Floor plan name for error messages.
+    @param margin: Outward expansion of polygon for boundary-touching bays.
+    @raises ValueError: If any bay corner is outside the expanded polygon.
+    """
+    # Build slightly expanded polygon for tolerance
+    poly = [(c["x"], c["y"]) for c in corners]
+    cx_avg = sum(p[0] for p in poly) / len(poly)
+    cy_avg = sum(p[1] for p in poly) / len(poly)
+    expanded = [
+        (
+            cx_avg + (1.0 + margin) * (px - cx_avg),
+            cy_avg + (1.0 + margin) * (py - cy_avg),
+        )
+        for px, py in poly
+    ]
+
+    for bay in bays:
+        bay_corners_pts = _bay_corners(
+            bay["local_x"],
+            bay["local_y"],
+            bay["local_yaw_deg"],
+            bay["width"],
+            bay["depth"],
+        )
+        for corner in bay_corners_pts:
+            if not _point_in_polygon(corner[0], corner[1], expanded):
+                raise ValueError(
+                    f"[{shape_name}] Bay '{bay.get('bay_type','?')}' at "
+                    f"({bay['local_x']:.2f}, {bay['local_y']:.2f}) has a corner "
+                    f"at ({corner[0]:.2f}, {corner[1]:.2f}) outside the lot boundary."
+                )
+
+
 def _perpendicular_bays(
     n: int,
     row_x: float,
@@ -137,15 +238,15 @@ def _perpendicular_bays(
     facing_yaw_deg: float,
 ) -> List[Dict[str, Any]]:
     """
-    @brief Generate n perpendicular bay centres in a row.
+    @brief Generate n perpendicular bay centres in a row along the Y axis.
 
-    Bays are arranged side-by-side along the Y axis. The vehicle drives
-    in along +X (facing_yaw_deg = 0 means drive along +X into the bay).
+    Bay backs face the wall. row_x is the bay centre X, so the back edge
+    sits at row_x + depth/2. facing_yaw_deg=180 means nose toward -X (aisle).
 
-    @param n: Number of bays to generate.
-    @param row_x: X position of bay centre row (local frame).
+    @param n: Number of bays.
+    @param row_x: X position of bay centre row.
     @param row_y_start: Y position of the first bay centre.
-    @param facing_yaw_deg: Yaw of a vehicle parked in this bay (degrees, local).
+    @param facing_yaw_deg: Yaw of a parked vehicle (degrees, local frame).
     @return List of bay dicts.
     """
     dims = BAY_DIMS["perpendicular"]
@@ -159,44 +260,57 @@ def _perpendicular_bays(
                 "local_yaw_deg": facing_yaw_deg,
                 "width": dims["width"],
                 "depth": dims["depth"],
-                "always_empty": False,
             }
         )
     return bays
 
 
-def _angled_bays(
+def _angled_bays_along_wall(
     n: int,
-    row_x: float,
-    row_y_start: float,
+    wall_x0: float,
+    wall_y0: float,
+    wall_dx: float,
+    wall_dy: float,
+    wall_len: float,
+    offset_from_wall: float,
+    start_along_wall: float,
     facing_yaw_deg: float,
 ) -> List[Dict[str, Any]]:
     """
-    @brief Generate n angled (45-deg) bay centres in a row.
+    @brief Generate n angled (45-deg) bay centres along an arbitrary wall.
 
-    Bays are arranged side-by-side. Pitch of each bay is 45 deg from aisle axis.
+    Bay backs touch the wall. Bays are spaced width/sin(45) apart along
+    the wall direction vector.
 
-    @param n: Number of bays to generate.
-    @param row_x: X position of row front edge.
-    @param row_y_start: Y position of the first bay centre.
-    @param facing_yaw_deg: Yaw of a vehicle parked in this bay (degrees, local).
+    @param n: Number of bays.
+    @param wall_x0: Wall start point x.
+    @param wall_y0: Wall start point y.
+    @param wall_dx: Wall unit direction x (normalised).
+    @param wall_dy: Wall unit direction y (normalised).
+    @param wall_len: Total wall length (unused but kept for documentation).
+    @param offset_from_wall: Distance from wall to bay centre (inward).
+    @param start_along_wall: Distance along wall to the first bay centre.
+    @param facing_yaw_deg: Yaw of a parked vehicle (degrees, local frame).
     @return List of bay dicts.
     """
     dims = BAY_DIMS["angled"]
+    spacing = dims["width"] / math.sin(math.radians(45.0))
+    # Inward normal: rotate wall direction 90 deg CCW
+    nx = -wall_dy
+    ny = wall_dx
     bays = []
-    # At 45 deg, lateral spacing between bay centres along the row axis
-    # is width / sin(45) = width * sqrt(2)
-    lateral_spacing = dims["width"] / math.sin(math.radians(45.0))
     for i in range(n):
+        along = start_along_wall + i * spacing
+        bx = wall_x0 + wall_dx * along + nx * offset_from_wall
+        by = wall_y0 + wall_dy * along + ny * offset_from_wall
         bays.append(
             {
                 "bay_type": "angled",
-                "local_x": row_x,
-                "local_y": row_y_start + i * lateral_spacing,
+                "local_x": bx,
+                "local_y": by,
                 "local_yaw_deg": facing_yaw_deg,
                 "width": dims["width"],
                 "depth": dims["depth"],
-                "always_empty": False,
             }
         )
     return bays
@@ -211,13 +325,12 @@ def _parallel_bays(
     """
     @brief Generate n parallel (pull-in) bay centres along the X axis.
 
-    Parallel bays are arranged front-to-back along the X axis. Front and rear
-    neighbour slots get always_empty=True automatically.
+    Bays are side-by-side on their short side (width=2.5m spacing).
 
-    @param n: Number of bays to generate.
+    @param n: Number of bays.
     @param row_y: Y position of bay centre row.
     @param row_x_start: X position of the first bay centre.
-    @param facing_yaw_deg: Yaw of a vehicle parked in this bay (degrees, local).
+    @param facing_yaw_deg: Yaw of a parked vehicle (degrees, local frame).
     @return List of bay dicts.
     """
     dims = BAY_DIMS["parallel"]
@@ -226,16 +339,90 @@ def _parallel_bays(
         bays.append(
             {
                 "bay_type": "parallel",
-                "local_x": row_x_start + i * dims["depth"],
+                "local_x": row_x_start + i * dims["width"],
                 "local_y": row_y,
                 "local_yaw_deg": facing_yaw_deg,
                 "width": dims["width"],
                 "depth": dims["depth"],
-                # First and last slots are always empty to give clearance for pull-in
-                "always_empty": (i == 0 or i == n - 1),
             }
         )
     return bays
+
+
+# ---------------------------------------------------------------------------
+# Geometry: bay offset helpers
+# ---------------------------------------------------------------------------
+
+
+def _perp_centre_x_from_wall(wall_x: float, depth: float, inward: bool = True) -> float:
+    """
+    @brief Compute perpendicular bay centre x so back edge touches a vertical wall.
+    @param wall_x: X coordinate of the wall.
+    @param depth: Bay depth (metres).
+    @param inward: True if bays face away from the wall (nose inward).
+    @return Bay centre x.
+    """
+    if inward:
+        # Wall is on the +x side, bays face -x: centre = wall - depth/2
+        return wall_x - depth / 2.0
+    else:
+        # Wall is on the -x side, bays face +x: centre = wall + depth/2
+        return wall_x + depth / 2.0
+
+
+def _perp_centre_y_from_wall(wall_y: float, depth: float, inward: bool = True) -> float:
+    """
+    @brief Compute perpendicular bay centre y so back edge touches a horizontal wall.
+    @param wall_y: Y coordinate of the wall.
+    @param depth: Bay depth (metres).
+    @param inward: True if nose faces away from wall (-y direction when wall is on +y side).
+    @return Bay centre y.
+    """
+    if inward:
+        return wall_y - depth / 2.0
+    else:
+        return wall_y + depth / 2.0
+
+
+def _ang_offset_from_wall(bay_depth: float, bay_width: float) -> float:
+    """
+    @brief Inward offset from a flat wall to angled bay centre (45 deg parking).
+
+    At 45 deg the farthest corner of the rotated bay rectangle is at distance
+    (depth/2 + width/2) * sin(45) from the centre perpendicular to the wall.
+
+    @param bay_depth: Bay depth (metres).
+    @param bay_width: Bay width (metres).
+    @return Perpendicular offset from wall to bay centre.
+    """
+    return (bay_depth / 2.0 + bay_width / 2.0) * math.sin(math.radians(45.0))
+
+
+def _ang_x_margin(bay_depth: float, bay_width: float) -> float:
+    """
+    @brief Minimum along-wall start offset so leftmost bay corner sits at wall edge.
+    @param bay_depth: Bay depth (metres).
+    @param bay_width: Bay width (metres).
+    @return Start offset along the wall direction.
+    """
+    return (bay_depth / 2.0 + bay_width / 2.0) * math.cos(math.radians(45.0)) + 0.5
+
+
+def _par_centre_from_wall(wall_coord: float, bay_depth: float, inward: bool = True) -> float:
+    """
+    @brief Compute parallel bay centre so back edge touches a wall.
+
+    For a parallel bay at yaw=270 (nose toward -Y), depth is along Y.
+
+    @param wall_coord: Wall coordinate (y if top/bottom wall, x if side wall).
+    @param bay_depth: Bay depth (metres).
+    @param inward: True if nose faces away from the wall.
+    @return Bay centre coordinate.
+    """
+    if inward:
+        return wall_coord - bay_depth / 2.0
+    else:
+        return wall_coord + bay_depth / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -248,19 +435,20 @@ def _rectangle_layout(
     depth: float,
 ) -> Dict[str, Any]:
     """
-    @brief Generate a rectangular floor plan layout in local frame.
+    @brief Rectangle (35x35 m). Three distinct bay zones.
 
     Layout:
-      - Perpendicular bay row along rear wall (high x)
-      - 45-deg bay row in the middle
-      - Parallel bay row along one side
-      - Spawn at front-centre (low x, mid y)
+      - Perpendicular row along rear wall (x=depth), 5 bays, yaw=180.
+        Bays adjacent on the short side (2.5 m): stacked along Y.
+      - Angled row along bottom wall (y=0), 5 bays, yaw=135.
+      - Parallel bays short-side adjacent (8 m along wall, 2.5 m deep):
+          3 bays along top wall (y=width), yaw=0 (nose toward +X)
+          2 bays along right wall (x=depth), yaw=90 (nose toward +Y)
 
-    @param width: Lot width (Y axis extent), metres.
-    @param depth: Lot depth (X axis extent), metres.
-    @return Dict with corners, bays, spawn, patrol, pedestrian zones (local frame).
+    @param width: Lot width (Y axis), metres.
+    @param depth: Lot depth (X axis), metres.
+    @return Layout dict (local frame).
     """
-    # Perimeter corners (local frame, CCW from bottom-left)
     corners = [
         {"x": 0.0, "y": 0.0},
         {"x": depth, "y": 0.0},
@@ -272,31 +460,61 @@ def _rectangle_layout(
     dims_ang = BAY_DIMS["angled"]
     dims_par = BAY_DIMS["parallel"]
 
-    # Perpendicular row: rear of lot, bays face -X (yaw=180 deg in local frame)
-    perp_row_x = depth - dims_perp["depth"] - 1.0  # 1 m margin from rear wall
-    perp_y_start = 1.5  # 1.5 m from side wall
-    perp_bays = _perpendicular_bays(BAYS_PER_TYPE, perp_row_x, perp_y_start, 180.0)
+    # Perpendicular row: rear wall (x=depth), nose toward -X (yaw=180).
+    # Bays stacked along Y, adjacent on their short side (2.5 m spacing).
+    perp_cx = _perp_centre_x_from_wall(depth, dims_perp["depth"], inward=True)
+    perp_bays = _perpendicular_bays(BAYS_PER_TYPE, perp_cx, 1.0, 180.0)
 
-    # 45-deg row: mid-lot, bays face 225 deg (back-left in local frame)
-    ang_row_x = (
-        perp_row_x
-        - dims_perp["aisle"]
-        - dims_ang["depth"] * math.cos(math.radians(45.0))
+    # Angled row: bottom wall (y=0), nose toward upper-left (yaw=135).
+    ang_w_offset = _ang_offset_from_wall(dims_ang["depth"], dims_ang["width"])
+    ang_x_start = _ang_x_margin(dims_ang["depth"], dims_ang["width"])
+    ang_bays = _angled_bays_along_wall(
+        BAYS_PER_TYPE,
+        wall_x0=0.0, wall_y0=0.0,
+        wall_dx=1.0, wall_dy=0.0,
+        wall_len=depth,
+        offset_from_wall=ang_w_offset,
+        start_along_wall=ang_x_start,
+        facing_yaw_deg=135.0,
     )
-    ang_y_start = 1.5
-    ang_bays = _angled_bays(BAYS_PER_TYPE, ang_row_x, ang_y_start, 225.0)
 
-    # Parallel row: along one side wall, bays face 180 deg (nose pointing +X)
-    par_row_y = width - dims_par["width"] / 2.0 - 1.0  # 1 m from side wall
-    par_x_start = 2.0  # 2 m from front wall
-    par_bays = _parallel_bays(BAYS_PER_TYPE, par_row_y, par_x_start, 90.0)
+    # Parallel bays: short-side adjacent = each bay occupies 8 m along the wall.
+    # Group A: 3 bays along top wall (y=width), yaw=0 (nose +X, depth=8 m along X).
+    # Bay centre y = width - dims_par["width"]/2 (back edge at y=width).
+    par_cy_top = width - dims_par["width"] / 2.0
+    par_top_x_start = 2.0
+    par_bays_top = []
+    for i in range(3):
+        par_bays_top.append({
+            "bay_type": "parallel",
+            "local_x": par_top_x_start + dims_par["depth"] / 2.0 + i * dims_par["depth"],
+            "local_y": par_cy_top,
+            "local_yaw_deg": 0.0,
+            "width": dims_par["width"],
+            "depth": dims_par["depth"],
+        })
+
+    # Group B: 2 bays along right wall (x=depth), yaw=90 (nose +Y, depth=8 m along Y).
+    # Bay centre x = depth - dims_par["width"]/2 (back edge at x=depth).
+    par_cx_right = depth - dims_par["width"] / 2.0
+    par_right_y_start = 2.0
+    par_bays_right = []
+    for i in range(2):
+        par_bays_right.append({
+            "bay_type": "parallel",
+            "local_x": par_cx_right,
+            "local_y": par_right_y_start + dims_par["depth"] / 2.0 + i * dims_par["depth"],
+            "local_yaw_deg": 90.0,
+            "width": dims_par["width"],
+            "depth": dims_par["depth"],
+        })
+
+    par_bays = par_bays_top + par_bays_right
 
     all_bays = perp_bays + ang_bays + par_bays
+    _validate_bays_in_polygon(all_bays, corners, "rectangle")
 
-    # Spawn: front-centre, facing into lot (+X direction, yaw=0)
     spawn = {"x": 1.5, "y": width / 2.0, "yaw_deg": 0.0}
-
-    # Patrol waypoints: rectangular loop around inner lot
     margin = 4.0
     patrol = [
         {"x": margin, "y": margin},
@@ -304,14 +522,12 @@ def _rectangle_layout(
         {"x": depth - margin, "y": width - margin},
         {"x": margin, "y": width - margin},
     ]
-
-    # Pedestrian zones: two strips along the aisles
     ped_zones = [
         {
-            "x_min": ang_row_x - 1.0,
-            "x_max": ang_row_x + dims_ang["aisle"],
-            "y_min": 1.0,
-            "y_max": width - 1.0,
+            "x_min": ang_x_start,
+            "x_max": ang_x_start + BAYS_PER_TYPE * dims_ang["width"] / math.sin(math.radians(45.0)),
+            "y_min": ang_w_offset,
+            "y_max": ang_w_offset + dims_ang["aisle"],
         },
     ]
 
@@ -330,19 +546,22 @@ def _trapezoid_layout(
     depth: float,
 ) -> Dict[str, Any]:
     """
-    @brief Generate a trapezoidal floor plan layout in local frame.
+    @brief Trapezoid (front=35, rear=25, depth=35). Three distinct bay zones.
 
-    Wider at the front (entrance), narrower at the rear. This produces a
-    different LiDAR wall-distance profile compared to the rectangle.
+    Layout (intentionally different from rectangle):
+      - Perpendicular 5 bays in the CENTRE of the lot, rotated 90 deg (yaw=90,
+        nose toward +Y). Bays stacked along X, adjacent on short side (2.5 m).
+      - Angled row following the diagonal BOTTOM wall, 5 bays at 45 deg to the wall.
+      - Parallel bays, short-side adjacent (8 m along wall, 2.5 m deep):
+          3 bays along top wall, rotated to follow the sloped wall
+          3 bays along right wall (x=depth), yaw=90
 
-    @param width_front: Width at the entrance side (y extent at x=0).
-    @param width_rear: Width at the rear side (y extent at x=depth).
-    @param depth: Lot depth (X axis extent), metres.
-    @return Dict with corners, bays, spawn, patrol, pedestrian zones (local frame).
+    @param width_front: Width at entrance (y extent at x=0).
+    @param width_rear: Width at rear (y extent at x=depth).
+    @param depth: Lot depth (X axis), metres.
+    @return Layout dict (local frame).
     """
-    # Y offset of rear wall to create trapezoid shape
-    # Lot is symmetric: both sides taper by (width_front - width_rear)/2
-    y_offset = (width_front - width_rear) / 2.0
+    y_offset = (width_front - width_rear) / 2.0  # taper per side
 
     corners = [
         {"x": 0.0, "y": 0.0},
@@ -355,30 +574,129 @@ def _trapezoid_layout(
     dims_ang = BAY_DIMS["angled"]
     dims_par = BAY_DIMS["parallel"]
 
-    # Perpendicular row at rear (narrower end)
-    perp_row_x = depth - dims_perp["depth"] - 1.0
-    perp_y_start = y_offset + 1.5
-    perp_bays = _perpendicular_bays(BAYS_PER_TYPE, perp_row_x, perp_y_start, 180.0)
+    # Perpendicular bays: TWO back-to-back rows in the centre of the lot.
+    # Row A: yaw=90  (nose toward +Y), backs at y = mid - aisle/2
+    # Row B: yaw=270 (nose toward -Y), backs at y = mid + aisle/2
+    # Gap between the two back edges = aisle (6 m) so a car can pass between them.
+    # Rows extended asymmetrically: 2 extra bays on the left, 1 extra on the right
+    # (8 bays per row total). Cluster shifted up in Y (mid_y=23) to keep >= 6 m
+    # clearance between row A nose and the rightmost angled bay top edge (~y=8.8).
+    PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3  # 8: base 5 + 2 left + 1 right
+    perp_mid_y = width_front / 2.0 + 1.0   # nudged +1 m above centre for angled-bay clearance
+    perp_row_a_cy = perp_mid_y - dims_perp["aisle"] / 2.0 - dims_perp["depth"] / 2.0
+    perp_row_b_cy = perp_mid_y + dims_perp["aisle"] / 2.0 + dims_perp["depth"] / 2.0
+    # X range: shifted 3 m left of mid-lot, extended 2 bays left and 1 bay right vs original 5
+    perp_cx_start = depth / 2.0 - (PERP_BAYS_PER_ROW * dims_perp["width"]) / 2.0 + dims_perp["width"] / 2.0 - 1.5
+    perp_bays = []
+    for i in range(PERP_BAYS_PER_ROW):
+        cx = perp_cx_start + i * dims_perp["width"]
+        # Row A: nose toward +Y
+        perp_bays.append({
+            "bay_type": "perpendicular",
+            "local_x": cx,
+            "local_y": perp_row_a_cy,
+            "local_yaw_deg": 90.0,
+            "width": dims_perp["width"],
+            "depth": dims_perp["depth"],
+        })
+        # Row B: nose toward -Y (opposite direction)
+        perp_bays.append({
+            "bay_type": "perpendicular",
+            "local_x": cx,
+            "local_y": perp_row_b_cy,
+            "local_yaw_deg": 270.0,
+            "width": dims_perp["width"],
+            "depth": dims_perp["depth"],
+        })
 
-    # 45-deg row in mid-lot
-    ang_row_x = (
-        perp_row_x
-        - dims_perp["aisle"]
-        - dims_ang["depth"] * math.cos(math.radians(45.0))
+    # Angled row: follow the diagonal BOTTOM wall from (0,0) to (depth, y_offset).
+    wall_len = math.hypot(depth, y_offset)
+    wdx = depth / wall_len
+    wdy = y_offset / wall_len
+    wall_normal_deg = math.degrees(math.atan2(wdx, -wdy))  # inward normal CCW from wall dir
+    ang_yaw = (math.degrees(math.atan2(wdx, -wdy)) + 45.0) % 360.0
+
+    ang_offset = _ang_offset_from_wall(dims_ang["depth"], dims_ang["width"])
+    ang_start = _ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 6.0  # shift right up the wall
+    ang_bays = _angled_bays_along_wall(
+        7,  # 7 bays along the diagonal bottom wall
+        wall_x0=0.0, wall_y0=0.0,
+        wall_dx=wdx, wall_dy=wdy,
+        wall_len=wall_len,
+        offset_from_wall=ang_offset,
+        start_along_wall=ang_start,
+        facing_yaw_deg=ang_yaw,
     )
-    ang_y_start = 1.5
-    ang_bays = _angled_bays(BAYS_PER_TYPE, ang_row_x, ang_y_start, 225.0)
 
-    # Parallel row near front (wider end)
-    par_row_y = width_front - dims_par["width"] / 2.0 - 1.0
-    par_x_start = 2.0
-    par_bays = _parallel_bays(BAYS_PER_TYPE, par_row_y, par_x_start, 90.0)
+    # Parallel bays: short-side adjacent (8 m along wall, 2.5 m deep from wall).
+    # Group A: 3 bays along the top wall, following its slope.
+    # Top wall: from (0, width_front) to (depth, width_front - y_offset).
+    # Wall direction unit vector: (depth, -y_offset) / wall_len_top.
+    # Inward normal (CW 90 from wall dir, pointing into lot = downward): (wdy, -wdx).
+    # Bay yaw = atan2(wall_dy, wall_dx) so depth axis lies along the wall.
+    top_wall_len = math.hypot(depth, y_offset)
+    top_wdx = depth / top_wall_len
+    top_wdy = -y_offset / top_wall_len
+    # Inward normal (CW 90): (top_wdy, -top_wdx) -- points down-left, into lot ✓
+    top_nx = top_wdy
+    top_ny = -top_wdx
+    top_par_yaw = math.degrees(math.atan2(top_wdy, top_wdx))  # depth axis along wall
+    par_bays_top = []
+    par_top_spacing = dims_par["depth"]          # 8 m between bay centres along wall
+    par_top_along_start = 9.0 + dims_par["depth"] / 2.0  # start along-wall distance (clear corner)
+    par_top_normal_offset = dims_par["width"] / 2.0       # back edge flush with wall
+    for i in range(3):
+        along = par_top_along_start + i * par_top_spacing
+        # Wall point at this distance from corner (0, width_front)
+        wx = 0.0 + top_wdx * along
+        wy = width_front + top_wdy * along
+        # Bay centre offset inward from wall
+        cx = wx + top_nx * par_top_normal_offset
+        cy = wy + top_ny * par_top_normal_offset
+        par_bays_top.append({
+            "bay_type": "parallel",
+            "local_x": cx,
+            "local_y": cy,
+            "local_yaw_deg": top_par_yaw,
+            "width": dims_par["width"],
+            "depth": dims_par["depth"],
+        })
+
+    # Group B: 3 bays on right wall (x=depth), yaw=90 (nose +Y, depth=8 m along Y).
+    # Right wall runs from y=y_offset to y=width_front-y_offset (height=width_rear).
+    # 3 bays need 3*8 + 2 gaps = 26 m; width_rear=30 m so this fits comfortably.
+    par_cx_right = depth - dims_par["width"] / 2.0
+    par_right_y_start = y_offset + 3.0  # clear the tapered bottom-right corner
+    par_bays_right = []
+    for i in range(3):
+        par_bays_right.append({
+            "bay_type": "parallel",
+            "local_x": par_cx_right,
+            "local_y": par_right_y_start + dims_par["depth"] / 2.0 + i * dims_par["depth"],
+            "local_yaw_deg": 90.0,
+            "width": dims_par["width"],
+            "depth": dims_par["depth"],
+        })
+
+    par_bays = par_bays_top + par_bays_right
 
     all_bays = perp_bays + ang_bays + par_bays
+    _validate_bays_in_polygon(all_bays, corners, "trapezoid")
 
-    # Spawn at front-centre
-    spawn = {"x": 1.5, "y": width_front / 2.0, "yaw_deg": 0.0}
-
+    # Spawn 1: gap in the left wall (x=0), car faces into the lot (yaw=0).
+    spawn = {"x": 0.0, "y": width_front / 2.0, "yaw_deg": 0.0}
+    # Spawn 2: gap in the bottom diagonal wall at x=38.
+    # Car faces perpendicular to that wall, pointing inward (CCW 90 from wall dir).
+    _bw_len = math.hypot(depth, y_offset)
+    _bwdx = depth / _bw_len
+    _bwdy = y_offset / _bw_len
+    # Inward normal = CCW 90 from wall dir: (-wdy, wdx). yaw = atan2(wdx, -wdy).
+    _spawn2_yaw = math.degrees(math.atan2(_bwdx, -_bwdy))
+    spawn2 = {
+        "x": 38.0,
+        "y": y_offset * (38.0 / depth),
+        "yaw_deg": round(_spawn2_yaw, 1),
+    }
     margin = 4.0
     patrol = [
         {"x": margin, "y": margin},
@@ -386,13 +704,12 @@ def _trapezoid_layout(
         {"x": depth - margin, "y": width_front - y_offset - margin},
         {"x": margin, "y": width_front - margin},
     ]
-
     ped_zones = [
         {
-            "x_min": ang_row_x - 1.0,
-            "x_max": ang_row_x + dims_ang["aisle"],
-            "y_min": 1.0,
-            "y_max": width_front - 1.0,
+            "x_min": perp_cx_start - dims_perp["width"] / 2.0,
+            "x_max": perp_cx_start + PERP_BAYS_PER_ROW * dims_perp["width"],
+            "y_min": perp_row_a_cy - dims_perp["depth"] / 2.0,
+            "y_max": perp_row_b_cy + dims_perp["depth"] / 2.0,
         },
     ]
 
@@ -400,6 +717,7 @@ def _trapezoid_layout(
         "corners": corners,
         "bays": all_bays,
         "spawn": spawn,
+        "extra_spawns": [spawn2],
         "patrol_waypoints": patrol,
         "pedestrian_zones": ped_zones,
     }
@@ -410,22 +728,26 @@ def _irregular_a_layout(
     depth: float,
 ) -> Dict[str, Any]:
     """
-    @brief Generate a five-sided irregular polygon floor plan (OOD only).
+    @brief Five-sided irregular polygon (OOD, held out from training). Distinct bay layout.
 
-    One corner of the rectangle is cut diagonally, creating a five-sided
-    polygon that breaks the axis-aligned symmetry seen in training shapes.
+    Rear-right corner cut diagonally (8x8 m triangle removed).
 
-    @param width: Nominal lot width (Y axis extent), metres.
-    @param depth: Nominal lot depth (X axis extent), metres.
-    @return Dict with corners, bays, spawn, patrol, pedestrian zones (local frame).
+    Layout (intentionally different from both rectangle and trapezoid):
+      - Perpendicular row along LEFT wall (x=0), bays face +X (yaw=0)
+      - Angled row along the DIAGONAL CUT wall, bays face into lot
+      - Parallel row along BOTTOM wall (y=0), bays face +Y (yaw=90)
+
+    @param width: Nominal lot width (Y axis), metres.
+    @param depth: Nominal lot depth (X axis), metres.
+    @return Layout dict (local frame).
     """
-    # Cut the rear-right corner diagonally: remove 8m x 8m triangle
     cut = 8.0
+    # Cut is at rear-top-right: from (depth, width-cut) to (depth-cut, width)
     corners = [
         {"x": 0.0, "y": 0.0},
         {"x": depth, "y": 0.0},
-        {"x": depth, "y": width - cut},  # cut starts here
-        {"x": depth - cut, "y": width},  # cut ends here
+        {"x": depth, "y": width - cut},
+        {"x": depth - cut, "y": width},
         {"x": 0.0, "y": width},
     ]
 
@@ -433,29 +755,67 @@ def _irregular_a_layout(
     dims_ang = BAY_DIMS["angled"]
     dims_par = BAY_DIMS["parallel"]
 
-    # Perpendicular row: slightly shortened to avoid the cut corner
-    perp_row_x = depth - dims_perp["depth"] - 1.5
-    perp_y_start = 1.5
-    perp_bays = _perpendicular_bays(BAYS_PER_TYPE, perp_row_x, perp_y_start, 180.0)
+    # Perpendicular row: LEFT wall (x=0), nose toward +X (yaw=0).
+    # Bay centre x = depth/2 from left wall.
+    # Bays run along Y, start near mid-lot to be clearly distinct from rectangle.
+    perp_cx = _perp_centre_x_from_wall(0.0, dims_perp["depth"], inward=False)
+    perp_y_start = width / 2.0 - (BAYS_PER_TYPE * dims_perp["width"]) / 2.0
+    perp_bays = _perpendicular_bays(BAYS_PER_TYPE, perp_cx, perp_y_start, 0.0)
 
-    # 45-deg row
-    ang_row_x = (
-        perp_row_x
-        - dims_perp["aisle"]
-        - dims_ang["depth"] * math.cos(math.radians(45.0))
+    # Angled bays: split across two walls for variety.
+    #
+    # Group A (3 bays): DIAGONAL CUT wall from (depth, width-cut) to (depth-cut, width).
+    # The cut wall is 8*sqrt(2) ~ 11.3 m, fitting 3 bays comfortably.
+    cut_dx = (depth - cut) - depth   # = -cut
+    cut_dy = width - (width - cut)   # = cut
+    cut_len = math.hypot(cut_dx, cut_dy)
+    wdx_cut = cut_dx / cut_len  # = -1/sqrt(2)
+    wdy_cut = cut_dy / cut_len  # = +1/sqrt(2)
+    # Inward normal (90 deg CCW from wall direction):
+    nx_cut = -wdy_cut   # points toward lower-left (into lot)
+    ny_cut = wdx_cut
+    wall_normal_deg_cut = math.degrees(math.atan2(ny_cut, nx_cut))
+    ang_yaw_cut = (wall_normal_deg_cut + 45.0) % 360.0
+
+    ang_offset = _ang_offset_from_wall(dims_ang["depth"], dims_ang["width"])
+    ang_start = _ang_x_margin(dims_ang["depth"], dims_ang["width"])
+    ang_bays_cut = _angled_bays_along_wall(
+        3,
+        wall_x0=depth, wall_y0=width - cut,
+        wall_dx=wdx_cut, wall_dy=wdy_cut,
+        wall_len=cut_len,
+        offset_from_wall=ang_offset,
+        start_along_wall=ang_start,
+        facing_yaw_deg=ang_yaw_cut,
     )
-    ang_y_start = 1.5
-    ang_bays = _angled_bays(BAYS_PER_TYPE, ang_row_x, ang_y_start, 225.0)
 
-    # Parallel row
-    par_row_y = width - dims_par["width"] / 2.0 - 1.0
-    par_x_start = 2.0
-    par_bays = _parallel_bays(BAYS_PER_TYPE, par_row_y, par_x_start, 90.0)
+    # Group B (2 bays): REAR wall (x=depth), lower section, facing left (yaw=180).
+    # These bays are in the y=0 .. width-cut region, distinct from the perp row on x=0.
+    ang_bays_rear = _angled_bays_along_wall(
+        2,
+        wall_x0=depth, wall_y0=1.0,
+        wall_dx=0.0, wall_dy=1.0,
+        wall_len=width - cut - 2.0,
+        offset_from_wall=ang_offset,
+        start_along_wall=ang_start,
+        facing_yaw_deg=180.0 + 45.0,  # 225 deg: upper-left into lot
+    )
+
+    ang_bays = ang_bays_cut + ang_bays_rear
+
+    # Parallel row: BOTTOM wall (y=0), nose toward +Y (yaw=90).
+    # Bay centre y = depth_par/2 from bottom wall.
+    # Bays run along X; at yaw=90 the bay extends +-width/2 in x.
+    par_cy = _par_centre_from_wall(0.0, dims_par["depth"], inward=False)
+    par_x_start = dims_par["width"] / 2.0 + 0.5
+    par_bays = _parallel_bays(
+        BAYS_PER_TYPE, par_cy, par_x_start, 90.0
+    )
 
     all_bays = perp_bays + ang_bays + par_bays
+    _validate_bays_in_polygon(all_bays, corners, "irregular_a")
 
     spawn = {"x": 1.5, "y": width / 2.0, "yaw_deg": 0.0}
-
     margin = 4.0
     patrol = [
         {"x": margin, "y": margin},
@@ -464,13 +824,12 @@ def _irregular_a_layout(
         {"x": depth - cut - margin, "y": width - margin},
         {"x": margin, "y": width - margin},
     ]
-
     ped_zones = [
         {
-            "x_min": ang_row_x - 1.0,
-            "x_max": ang_row_x + dims_ang["aisle"],
-            "y_min": 1.0,
-            "y_max": width - 1.0,
+            "x_min": par_x_start - dims_par["width"] / 2.0,
+            "x_max": par_x_start + BAYS_PER_TYPE * dims_par["width"],
+            "y_min": par_cy,
+            "y_max": par_cy + dims_par["aisle"],
         },
     ]
 
@@ -531,7 +890,6 @@ def _to_world_frame(
                 "yaw_deg": round(world_yaw, 2),
                 "width": b["width"],
                 "depth": b["depth"],
-                "always_empty": b["always_empty"],
             }
         )
 
@@ -544,6 +902,17 @@ def _to_world_frame(
         "z": origin_z,
         "yaw_deg": round(_world_yaw(sp["yaw_deg"], heading_deg), 2),
     }
+
+    # Transform extra spawn points (optional)
+    world_extra_spawns = []
+    for esp in local_layout.get("extra_spawns", []):
+        esx, esy = _translate(esp["x"], esp["y"], origin_x, origin_y, h_rad)
+        world_extra_spawns.append({
+            "x": round(esx, 3),
+            "y": round(esy, 3),
+            "z": origin_z,
+            "yaw_deg": round(_world_yaw(esp["yaw_deg"], heading_deg), 2),
+        })
 
     # Transform patrol waypoints
     world_patrol = []
@@ -572,6 +941,7 @@ def _to_world_frame(
         "corners": world_corners,
         "bays": world_bays,
         "spawn_transform": world_spawn,
+        "extra_spawn_transforms": world_extra_spawns,
         "patrol_waypoints": world_patrol,
         "pedestrian_zones": world_ped_zones,
     }
@@ -616,6 +986,7 @@ def _write_layout_yaml(
             "heading_deg": heading_deg,
         },
         "spawn_transform": world_layout["spawn_transform"],
+        "extra_spawn_transforms": world_layout["extra_spawn_transforms"],
         "corners": world_layout["corners"],
         "bays": world_layout["bays"],
         "patrol_waypoints": world_layout["patrol_waypoints"],
@@ -678,12 +1049,75 @@ def _plot_layout(
     ax.set_xlabel("x (m)", fontsize=12)
     ax.set_ylabel("y (m)", fontsize=12)
 
-    # Lot boundary polygon
+    # Lot boundary polygon (filled, no edge — edges drawn per-segment with gaps for spawns)
     corner_pts = [(c["x"], c["y"]) for c in world_layout["corners"]]
     lot_patch = Polygon(
-        corner_pts, closed=True, facecolor="#DDDDDD", edgecolor="black", linewidth=2
+        corner_pts, closed=True, facecolor="#DDDDDD", edgecolor="none", linewidth=0
     )
     ax.add_patch(lot_patch)
+
+    # Draw perimeter with gaps at each spawn point (gap_half = 2.5 m each side -> 5 m gap)
+    all_spawns = [world_layout["spawn_transform"]] + world_layout.get("extra_spawn_transforms", [])
+    gap_half = 2.5  # metres each side of spawn centre
+
+    def _draw_perimeter_with_gaps(
+        ax: "plt.Axes",
+        corners: List[Tuple[float, float]],
+        spawns: List[Dict[str, Any]],
+        g: float,
+    ) -> None:
+        """Draw lot perimeter as thick black segments, leaving a gap around each spawn."""
+        n = len(corners)
+        for i in range(n):
+            p0 = corners[i]
+            p1 = corners[(i + 1) % n]
+            seg_dx = p1[0] - p0[0]
+            seg_dy = p1[1] - p0[1]
+            seg_len = math.hypot(seg_dx, seg_dy)
+            if seg_len < 1e-6:
+                continue
+            udx = seg_dx / seg_len
+            udy = seg_dy / seg_len
+
+            # Collect gap intervals (t in [0, seg_len]) for spawns near this segment
+            gaps: List[Tuple[float, float]] = []
+            for sp in spawns:
+                # Project spawn onto segment line
+                t = (sp["x"] - p0[0]) * udx + (sp["y"] - p0[1]) * udy
+                # Perpendicular distance from spawn to segment
+                perp = abs((sp["x"] - p0[0]) * udy - (sp["y"] - p0[1]) * udx)
+                if 0.0 <= t <= seg_len and perp < g + 0.5:
+                    gaps.append((t - g, t + g))
+
+            # Merge overlapping gaps
+            gaps.sort()
+            merged: List[Tuple[float, float]] = []
+            for lo, hi in gaps:
+                if merged and lo <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+                else:
+                    merged.append([lo, hi])
+
+            # Draw segments between gaps
+            draw_intervals = []
+            prev = 0.0
+            for lo, hi in merged:
+                if prev < lo:
+                    draw_intervals.append((max(prev, 0.0), min(lo, seg_len)))
+                prev = hi
+            if prev < seg_len:
+                draw_intervals.append((max(prev, 0.0), seg_len))
+
+            for t0, t1 in draw_intervals:
+                if t1 - t0 < 1e-3:
+                    continue
+                ax.plot(
+                    [p0[0] + udx * t0, p0[0] + udx * t1],
+                    [p0[1] + udy * t0, p0[1] + udy * t1],
+                    color="black", linewidth=2, solid_capstyle="butt",
+                )
+
+    _draw_perimeter_with_gaps(ax, corner_pts, all_spawns, gap_half)
 
     # Bay rectangles
     bay_colours = {
@@ -693,8 +1127,8 @@ def _plot_layout(
     }
     for bay in world_layout["bays"]:
         colour = bay_colours.get(bay["bay_type"], "grey")
-        alpha = 0.4 if bay["always_empty"] else 0.7
-        lw = 1 if bay["always_empty"] else 2
+        alpha = 0.7
+        lw = 2
         bx, by = bay["x"], bay["y"]
         yaw_rad = math.radians(bay["yaw_deg"])
         w, d = bay["width"], bay["depth"]
@@ -722,26 +1156,35 @@ def _plot_layout(
         )
         ax.add_patch(rect_patch)
 
-        # Yaw arrow
-        arrow_len = 1.5
-        ax.annotate(
-            "",
-            xy=(bx + math.cos(yaw_rad) * arrow_len, by + math.sin(yaw_rad) * arrow_len),
-            xytext=(bx, by),
-            arrowprops={"arrowstyle": "->", "color": colour, "lw": 1.5},
-        )
 
-    # Spawn triangle
-    sp = world_layout["spawn_transform"]
-    yaw_rad = math.radians(sp["yaw_deg"])
-    ax.plot(sp["x"], sp["y"], marker="^", markersize=12, color="cyan", zorder=5)
-    ax.annotate(
-        "",
-        xy=(sp["x"] + math.cos(yaw_rad) * 2.5, sp["y"] + math.sin(yaw_rad) * 2.5),
-        xytext=(sp["x"], sp["y"]),
-        arrowprops={"arrowstyle": "->", "color": "cyan", "lw": 2},
-    )
-    ax.text(sp["x"] + 0.5, sp["y"] + 0.5, "SPAWN", fontsize=8, color="cyan")
+    # Spawn triangles + detached direction arrows
+    for idx, sp in enumerate([world_layout["spawn_transform"]] + world_layout.get("extra_spawn_transforms", [])):
+        yaw_rad = math.radians(sp["yaw_deg"])
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        # Triangle at spawn point, rotated to face yaw direction
+        tri_size = 1.2
+        tri_local = [(tri_size, 0.0), (-tri_size * 0.6, tri_size * 0.6), (-tri_size * 0.6, -tri_size * 0.6)]
+        tri_world = [
+            (sp["x"] + cos_y * lx - sin_y * ly, sp["y"] + sin_y * lx + cos_y * ly)
+            for lx, ly in tri_local
+        ]
+        tri_patch = Polygon(tri_world, closed=True, facecolor="cyan", edgecolor="white", linewidth=1, zorder=6)
+        ax.add_patch(tri_patch)
+        label = f"SPAWN {idx + 1}"
+        # Per-spawn label offsets: perpendicular offset and vertical nudge
+        label_offset_perp = 1.5 if idx > 0 else 1.9
+        label_y_nudge = 2.0 if idx > 0 else -0.5
+
+        ax.text(
+            sp["x"] + cos_y * 0.2 - sin_y * label_offset_perp,
+            sp["y"] + sin_y * 0.2 + cos_y * label_offset_perp + label_y_nudge,
+            label, fontsize=10, color="cyan", fontweight="bold", zorder=7,
+            path_effects=[
+                __import__("matplotlib.patheffects", fromlist=["withStroke"]).withStroke(
+                    linewidth=2, foreground="black"
+                )
+            ],
+        )
 
     # Patrol path
     patrol = world_layout["patrol_waypoints"]
@@ -751,11 +1194,13 @@ def _plot_layout(
         ax.plot(px, py, "m--", linewidth=1.5, alpha=0.7, label="Patrol path")
 
     # Legend
+    from matplotlib.lines import Line2D
     handles = [
         mpatches.Patch(color="steelblue", label="Perpendicular bays"),
         mpatches.Patch(color="darkorange", label="Angled (45 deg) bays"),
         mpatches.Patch(color="forestgreen", label="Parallel bays"),
         mpatches.Patch(color="#DDDDDD", edgecolor="black", label="Lot boundary"),
+        Line2D([0], [0], color="magenta", linestyle="--", linewidth=1.5, label="Patrol path"),
     ]
     ax.legend(handles=handles, loc="upper right", fontsize=9)
     ax.grid(True, alpha=0.3)
@@ -855,7 +1300,7 @@ def _generate_one(
     if shape == "rectangle":
         local_layout = _rectangle_layout(width=35.0, depth=35.0)
     elif shape == "trapezoid":
-        local_layout = _trapezoid_layout(width_front=35.0, width_rear=25.0, depth=35.0)
+        local_layout = _trapezoid_layout(width_front=40.0, width_rear=30.0, depth=45.0)
     elif shape == "irregular_a":
         local_layout = _irregular_a_layout(width=35.0, depth=35.0)
     else:

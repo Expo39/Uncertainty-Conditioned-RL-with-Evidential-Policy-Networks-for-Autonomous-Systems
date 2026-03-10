@@ -477,17 +477,14 @@ class CARLAParkingEnv(gym.Env):
         @brief Stratified sample of target bay: 1/3 per type, then uniform within type.
 
         Bay types: perpendicular, angled, parallel.
-        Bays with always_empty=True are never selected as target.
 
         @note Sets self._target_bay with world-frame coordinates.
         """
         bays = self._current_layout.get("bays", [])
 
-        # Group by bay type, excluding always_empty bays
+        # Group by bay type
         by_type: Dict[str, List[Dict[str, Any]]] = {}
         for bay in bays:
-            if bay.get("always_empty", False):
-                continue
             bay_type = bay.get("bay_type", "perpendicular")
             by_type.setdefault(bay_type, []).append(bay)
 
@@ -552,19 +549,42 @@ class CARLAParkingEnv(gym.Env):
 
         logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
 
+    def _adjacent_bay_ids(self, target_id: str) -> List[str]:
+        """
+        @brief Return the bay IDs immediately adjacent (index +/-1, same type) to the target.
+
+        Bay IDs follow the convention '<type>_<index>' (e.g. 'parallel_3').
+        Adjacent bays are left empty each episode so the agent has clearance
+        to manoeuvre into the target bay.
+
+        @param target_id: Bay ID string of the selected target bay.
+        @return List of adjacent bay ID strings (may be empty if target is an end bay).
+        """
+        try:
+            bay_type, idx_str = target_id.rsplit("_", 1)
+            idx = int(idx_str)
+        except ValueError:
+            return []
+        return [f"{bay_type}_{idx - 1}", f"{bay_type}_{idx + 1}"]
+
     def _spawn_static_vehicles(self) -> None:
         """
         @brief Fill non-target bays with static parked vehicles at the configured
                occupancy rate.
 
-        Target bay and always_empty bays are never filled. Static vehicles have
-        physics disabled and act as obstacles for clearance checking.
+        Target bay and its immediate neighbours (same type, index +/-1) are
+        never filled. Keeping adjacent bays clear gives the agent realistic
+        manoeuvring clearance. Static vehicles have physics disabled and act
+        as obstacles for clearance checking.
         """
         if self.world is None:
             return
 
         bays = self._current_layout.get("bays", [])
         target_id = self._target_bay.get("bay_id", "")
+
+        # Exclude the target bay and its immediate neighbours
+        excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
 
         bp_lib = self.world.get_blueprint_library()
         vehicle_bps = bp_lib.filter("vehicle.*")
@@ -577,9 +597,7 @@ class CARLAParkingEnv(gym.Env):
         z = self._current_layout.get("origin_z", 0.0) + 0.1
 
         for bay in bays:
-            if bay.get("always_empty", False):
-                continue
-            if bay.get("bay_id", "") == target_id:
+            if bay.get("bay_id", "") in excluded_ids:
                 continue
             if random.random() > self._bay_occupancy_rate:
                 continue
