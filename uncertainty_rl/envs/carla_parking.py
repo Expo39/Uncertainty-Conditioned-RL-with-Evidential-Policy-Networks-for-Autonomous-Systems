@@ -1,26 +1,39 @@
 """
 @file carla_parking.py
-@brief CARLA parking environment with EKF covariance from robot_localisation.
+@brief CARLA parking environment with EKF covariance and lot geometry.
 
 This module implements a Gymnasium-compatible environment for autonomous parking
-in CARLA simulator. Localisation uncertainty comes from the robot_localisation
-EKF node (via ROS 2 DDS), driven by noisy CARLA sensors, weather conditions,
-and dynamic traffic - not from a simulated noise model.
+in CARLA simulator. The agent parks in one of three floor-plan geometries loaded
+from pre-computed layout YAMLs (configs/layouts/). Localisation uncertainty comes
+from the robot_localisation EKF node (via ROS 2 DDS), driven by noisy CARLA
+sensors, weather conditions, and dynamic traffic - not from a simulated noise model.
 
-The training container subscribes to the covariance topic published by
-CovarianceExtractorNode in the ros2-bridge container. Docker and ROS 2 are
-always required; there is no standalone fallback for training.
+The 18-dimensional observation comprises:
+  - indices  0-5:  EKF filtered pose (x, y, yaw, vx, vy, vyaw)
+  - indices  6-14: EKF covariance features (std_x, std_y, std_yaw,
+                   cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw)
+  - indices 15-17: target bay in ego body frame (dx, dy, dyaw)
+
+CARLA ground truth is used only for reward computation and clearance checks,
+not in the observation. This ensures sim-to-real transfer without retraining.
 """
 
+import collections
+import json
 import logging
+import math
+import os
 import random
 import threading
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Deque, Dict, List, Optional, Tuple, cast
 
 import gymnasium as gym
 import numpy as np
+import yaml
 from gymnasium import spaces
+from gymnasium.core import RenderFrame
 
 try:
     import carla
@@ -38,9 +51,13 @@ except ImportError:
     _ROS2_AVAILABLE = False
 
 from uncertainty_rl.utils.constants import (
+    CLEARANCE_THRESHOLD,
     COVARIANCE_FEATURES_DIM,
+    OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
+    SUCCESS_THRESHOLD_VELOCITY,
+    TARGET_POSE_DIM,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
@@ -48,13 +65,97 @@ from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
 logger = logging.getLogger(__name__)
 
+# Trail length for debug overlays and vis state
+_TRAJECTORY_MAXLEN = 50
+
 
 if TYPE_CHECKING:
-    # mypy always sees Node as the base class (rclpy is in ignore_missing_imports)
     from rclpy.node import Node as _NodeBase
 else:
-    # At runtime, fall back to object when rclpy is not installed
     _NodeBase = Node if _ROS2_AVAILABLE else object
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry helpers (unit-testable, no CARLA dependency)
+# ---------------------------------------------------------------------------
+
+
+def _interpolate_cone_positions(
+    corners: List[Tuple[float, float]],
+    spacing: float,
+) -> List[Tuple[float, float]]:
+    """
+    @brief Interpolate evenly spaced positions along a closed polygon perimeter.
+    @param corners: List of (x, y) polygon vertices in order (last edge closes
+                   back to first vertex automatically).
+    @param spacing: Desired spacing between consecutive cones (metres).
+    @return List of (x, y) positions for cone placement.
+
+    @note Uses adaptive spacing so the last cone on each edge aligns exactly
+          with the corner rather than leaving a gap.
+    """
+    positions: List[Tuple[float, float]] = []
+    n = len(corners)
+
+    for i in range(n):
+        x0, y0 = corners[i]
+        x1, y1 = corners[(i + 1) % n]
+
+        edge_len = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
+        if edge_len < 1e-6:
+            continue
+
+        # Number of intervals on this edge (at least 1)
+        num_intervals = max(1, int(round(edge_len / spacing)))
+        dx = (x1 - x0) / num_intervals
+        dy = (y1 - y0) / num_intervals
+
+        for k in range(num_intervals):
+            positions.append((x0 + k * dx, y0 + k * dy))
+
+    return positions
+
+
+def _compute_relative_target_pose(
+    x_ego: float,
+    y_ego: float,
+    yaw_ego: float,
+    x_target: float,
+    y_target: float,
+    yaw_target: float,
+) -> Tuple[float, float, float]:
+    """
+    @brief Compute target bay pose in the ego vehicle body frame.
+    @param x_ego: Ego x position (metres).
+    @param y_ego: Ego y position (metres).
+    @param yaw_ego: Ego heading (radians).
+    @param x_target: Target bay x position (metres).
+    @param y_target: Target bay y position (metres).
+    @param yaw_target: Target bay heading (radians).
+    @return Tuple (dx, dy, dyaw) where dx/dy are in the ego body frame and
+            dyaw is the heading error wrapped to (-pi, pi].
+
+    @note Body frame: +x forward, +y left. dx > 0 means target is ahead.
+    """
+    dx_world = x_target - x_ego
+    dy_world = y_target - y_ego
+
+    cos_yaw = math.cos(yaw_ego)
+    sin_yaw = math.sin(yaw_ego)
+
+    dx = cos_yaw * dx_world + sin_yaw * dy_world
+    dy = -sin_yaw * dx_world + cos_yaw * dy_world
+
+    raw_dyaw = yaw_target - yaw_ego
+    # Wrap to (-pi, pi]
+    dyaw = math.atan2(math.sin(raw_dyaw), math.cos(raw_dyaw))
+
+    return dx, dy, dyaw
+
+
+# ---------------------------------------------------------------------------
+# ROS 2 covariance subscriber
+# ---------------------------------------------------------------------------
 
 
 class _CovarianceSubscriber(_NodeBase):
@@ -109,8 +210,6 @@ class _CovarianceSubscriber(_NodeBase):
         @param msg: CovarianceEstimate with semantic fields (x, y, yaw, covariance).
         """
         cov_matrix = np.array(msg.covariance).reshape(3, 3)
-
-        # Extract the 9 uncertainty features used in the state vector
         features = extract_2d_covariance_features(cov_matrix)
 
         with self._lock:
@@ -137,18 +236,27 @@ class _CovarianceSubscriber(_NodeBase):
             return self._latest_uncertainty is not None
 
 
+# ---------------------------------------------------------------------------
+# Main environment
+# ---------------------------------------------------------------------------
+
+
 class CARLAParkingEnv(gym.Env):
     """
     @class CARLAParkingEnv
-    @brief CARLA-based parking environment with real EKF uncertainty.
+    @brief CARLA parking environment with lot geometry and EKF uncertainty.
 
-    This environment simulates an autonomous parking scenario where the agent must
-    park a vehicle whilst accounting for localisation uncertainty. Uncertainty is
-    produced naturally by the robot_localisation EKF processing noisy CARLA sensors
-    under varying weather and traffic conditions - not by a simulated noise model.
+    Each episode loads a floor plan from configs/layouts/, places cone perimeters,
+    static parked vehicles, NPC patrol vehicles, and pedestrians. The agent must
+    manoeuvre the ego vehicle into the target bay. Uncertainty is produced
+    naturally by the robot_localisation EKF processing noisy CARLA sensors.
 
-    @note Requires Docker containers running (CARLA, ros2-bridge, training).
-          There is no standalone fallback for training.
+    Observation space (18-dim when include_covariance=True, 9-dim when False):
+      [0-5]  EKF pose: x, y, yaw, vx, vy, vyaw
+      [6-14] EKF covariance features (omitted when include_covariance=False)
+      [15-17] (or [6-8] when no covariance): target bay in ego body frame
+
+    @note Docker + ROS 2 required for training. No standalone fallback.
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
@@ -157,28 +265,35 @@ class CARLAParkingEnv(gym.Env):
         self,
         carla_host: str = "localhost",
         carla_port: int = 2000,
-        town: str = "Town01",
+        town: str = "Town05_Opt",
         max_steps: int = 500,
-        target_parking_spot: Optional[Tuple[float, float, float]] = None,
         render_mode: Optional[str] = None,
         ros2_config: Optional[Dict[str, Any]] = None,
         carla_sensors_config: Optional[Dict[str, Any]] = None,
         carla_conditions_config: Optional[Dict[str, Any]] = None,
+        parking_scenarios_config: Optional[Dict[str, Any]] = None,
         include_covariance: bool = True,
+        vis_output_path: Optional[str] = None,
+        eval_mode: bool = False,
     ) -> None:
         """
-        @brief Constructor for CARLAParkingEnv.
+        @brief Construct the CARLA parking environment.
         @param carla_host: CARLA server host address.
         @param carla_port: CARLA server port.
-        @param town: CARLA town/map to use.
+        @param town: CARLA town/map to load.
         @param max_steps: Maximum episode length.
-        @param target_parking_spot: Target parking spot coordinates (x, y, yaw).
         @param render_mode: Rendering mode ('human', 'rgb_array', or None).
         @param ros2_config: ROS 2 settings (covariance_topic, covariance_timeout).
         @param carla_sensors_config: Sensor noise parameters (imu, gnss subsections).
-        @param carla_conditions_config: Weather and traffic settings.
-        @param include_covariance: If True, observation includes 9 EKF covariance
-               features (15-dim). If False, observation is vehicle state only (6-dim).
+        @param carla_conditions_config: Weather and environmental settings.
+        @param parking_scenarios_config: Parking lot configuration (floor_plans,
+               cone spacing, bay occupancy, NPC counts).
+        @param include_covariance: If True, 18-dim obs (pose + covariance + target).
+               If False, 9-dim obs (pose + target, no covariance subscription).
+        @param vis_output_path: Path for atomic vis_state.json writes. If None,
+               visualisation writes are skipped.
+        @param eval_mode: If True, OOD floor plans are included in sampling.
+               If False (training), only non-OOD floor plans are used.
         """
         super().__init__()
 
@@ -188,8 +303,8 @@ class CARLAParkingEnv(gym.Env):
         self.max_steps = max_steps
         self.render_mode = render_mode
         self._include_covariance = include_covariance
+        self._eval_mode = eval_mode
 
-        # Parse configs with defaults
         ros2_config = ros2_config or {}
         self._covariance_topic = ros2_config.get(
             "covariance_topic", "/ekf_uncertainty/covariance"
@@ -199,28 +314,67 @@ class CARLAParkingEnv(gym.Env):
         self._sensors_config = carla_sensors_config or {}
         self._conditions_config = carla_conditions_config or {}
 
-        # CARLA client and world (initialised in reset)
+        scenarios = parking_scenarios_config or {}
+        self._cone_spacing: float = scenarios.get("perimeter_cone_spacing", 2.0)
+        self._bay_occupancy_rate: float = scenarios.get("bay_occupancy_rate", 0.70)
+        self._num_patrol_max: int = scenarios.get("num_patrol_vehicles_max", 3)
+        self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
+        self._pedestrian_resample_steps: int = scenarios.get(
+            "pedestrian_heading_resample_steps", 30
+        )
+        self._floor_plans_config: Dict[str, Any] = scenarios.get("floor_plans", {})
+
+        # CARLA handles
         self.client: Optional[Any] = None
         self.world: Optional[Any] = None
         self.vehicle: Optional[Any] = None
-        self.spectator: Optional[Any] = None
 
-        # Spawned actors to clean up each episode
+        # Per-episode actor lists
         self._spawned_sensors: List[Any] = []
-        self._spawned_npcs: List[Any] = []
+        self._spawned_cones: List[Any] = []
+        self._spawned_static_vehicles: List[Any] = []
+        self._patrol_npcs: List[Any] = []
+        self._pedestrian_actors: List[Any] = []
 
-        # Parking spot (x, y, yaw in radians)
-        if target_parking_spot is None:
-            self.target_parking_spot = np.array([0.0, 0.0, 0.0])
-        else:
-            self.target_parking_spot = np.array(target_parking_spot)
+        # Target bay (world frame, set in reset)
+        self._target_bay: Dict[str, Any] = {
+            "x": 0.0,
+            "y": 0.0,
+            "yaw": 0.0,
+            "width": 2.5,
+            "depth": 5.0,
+        }
+
+        # Current floor plan layout (loaded from YAML in reset)
+        self._current_layout: Dict[str, Any] = {}
+        self._current_floor_plan_name: str = ""
+
+        # Patrol NPC step counters
+        self._patrol_waypoint_indices: List[int] = []
+
+        # Pedestrian step counters for heading re-randomisation
+        self._pedestrian_heading_steps: List[int] = []
+        self._pedestrian_headings: List[Tuple[float, float, float]] = []
+
+        # Trajectory buffer for debug overlays (ring buffer of (x, y) tuples)
+        self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
+            maxlen=_TRAJECTORY_MAXLEN
+        )
+
+        # Visualisation state writer
+        self._vis_output_path: Optional[Path] = (
+            Path(vis_output_path) if vis_output_path else None
+        )
 
         # Episode state
         self.steps = 0
-        self.done = False
 
         # Observation and action spaces
-        obs_dim = TOTAL_OBS_DIM if self._include_covariance else VEHICLE_STATE_DIM
+        if self._include_covariance:
+            obs_dim = TOTAL_OBS_DIM  # 18: pose(6) + cov(9) + target(3)
+        else:
+            obs_dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 9: pose(6) + target(3)
+
         self.observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
@@ -234,19 +388,23 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # ROS 2 covariance subscriber (only needed when including covariance)
+        # ROS 2 covariance subscriber (only when covariance included)
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
         self._spin_thread: Optional[threading.Thread] = None
         if self._include_covariance:
             self._init_ros2()
 
+    # ------------------------------------------------------------------
+    # ROS 2 initialisation
+    # ------------------------------------------------------------------
+
     def _init_ros2(self) -> None:
         """
-        @brief Initialise rclpy and start the covariance subscriber in a daemon thread.
+        @brief Initialise rclpy and start covariance subscriber in a daemon thread.
 
         Guards against double-initialisation when multiple env instances exist.
         When rclpy is unavailable (CI/tests), logs a warning and continues with
-        zero uncertainty in state - the env is non-functional for training in this case.
+        zero uncertainty in state.
         """
         if not _ROS2_AVAILABLE:
             logger.warning(
@@ -259,7 +417,6 @@ class CARLAParkingEnv(gym.Env):
         if not rclpy.ok():
             rclpy.init()
 
-        # Use unique node name to support multiple env instances
         node_name = f"covariance_subscriber_{id(self)}"
         self._cov_subscriber = _CovarianceSubscriber(
             covariance_topic=self._covariance_topic,
@@ -274,148 +431,695 @@ class CARLAParkingEnv(gym.Env):
         self._spin_thread.start()
         logger.info("ROS 2 covariance subscriber started in daemon thread.")
 
-    def _connect_to_carla(self) -> None:
-        """
-        @brief Establish connection to CARLA simulator.
-        """
-        try:
-            self.client = carla.Client(self.carla_host, self.carla_port)
-            self.client.set_timeout(10.0)
-            self.world = self.client.get_world()
+    # ------------------------------------------------------------------
+    # Floor plan loading and bay sampling
+    # ------------------------------------------------------------------
 
-            # Load the specified town if not already loaded
-            current_map = self.world.get_map()
-            if current_map.name.split("/")[-1] != self.town:
-                self.world = self.client.load_world(self.town)
-
-        except Exception as e:
-            logger.error(f"Could not connect to CARLA: {e}")
-            self.client = None
-            self.world = None
-
-    def _spawn_vehicle(self) -> None:
+    def _load_floor_plan(self) -> None:
         """
-        @brief Spawn the ego vehicle in the world.
+        @brief Select and load a floor plan layout YAML for this episode.
+
+        During training (eval_mode=False), only floor plans with ood=false are
+        eligible. During evaluation (eval_mode=True), all plans are eligible.
+
+        @warning Raises RuntimeError if no eligible floor plans are configured.
+        """
+        eligible = {}
+        for name, cfg in self._floor_plans_config.items():
+            is_ood = cfg.get("ood", False)
+            if self._eval_mode or not is_ood:
+                eligible[name] = cfg
+
+        if not eligible:
+            raise RuntimeError(
+                "No eligible floor plans found. "
+                "Check parking_scenarios.floor_plans in train_config.yaml."
+            )
+
+        name = random.choice(list(eligible.keys()))
+        layout_file = eligible[name].get("layout_file", "")
+
+        layout_path = Path(layout_file)
+        if not layout_path.exists():
+            raise FileNotFoundError(
+                f"Floor plan layout file not found: {layout_path}. "
+                f"Run 'make generate-layouts' to create it."
+            )
+
+        with open(layout_path, "r") as fh:
+            self._current_layout = yaml.safe_load(fh)
+
+        self._current_floor_plan_name = name
+        logger.info(f"Loaded floor plan: {name} from {layout_path}")
+
+    def _sample_target_bay(self) -> None:
+        """
+        @brief Stratified sample of target bay: 1/3 per type, then uniform within type.
+
+        Bay types: perpendicular, angled, parallel.
+        Bays with always_empty=True are never selected as target.
+
+        @note Sets self._target_bay with world-frame coordinates.
+        """
+        bays = self._current_layout.get("bays", [])
+
+        # Group by bay type, excluding always_empty bays
+        by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for bay in bays:
+            if bay.get("always_empty", False):
+                continue
+            bay_type = bay.get("bay_type", "perpendicular")
+            by_type.setdefault(bay_type, []).append(bay)
+
+        if not by_type:
+            raise RuntimeError("No eligible bays found in floor plan layout.")
+
+        # Stratified: sample type uniformly, then bay uniformly within type
+        bay_type = random.choice(list(by_type.keys()))
+        target = random.choice(by_type[bay_type])
+
+        self._target_bay = {
+            "x": float(target["x"]),
+            "y": float(target["y"]),
+            "yaw": float(target["yaw"]),
+            "width": float(target.get("width", 2.5)),
+            "depth": float(target.get("depth", 5.0)),
+            "bay_type": bay_type,
+            "bay_id": target.get("bay_id", ""),
+        }
+        logger.info(
+            f"Target bay: type={bay_type}, id={self._target_bay['bay_id']}, "
+            f"x={self._target_bay['x']:.1f}, y={self._target_bay['y']:.1f}"
+        )
+
+    # ------------------------------------------------------------------
+    # Actor spawning
+    # ------------------------------------------------------------------
+
+    def _spawn_perimeter_cones(self) -> None:
+        """
+        @brief Spawn static traffic cones along the lot perimeter polygon.
+
+        Cones are placed using _interpolate_cone_positions() and physics is
+        disabled so they don't move. Cones are appended to self._spawned_cones.
         """
         if self.world is None:
             return
 
-        blueprint_library = self.world.get_blueprint_library()
-        vehicle_bp = blueprint_library.filter("vehicle.tesla.model3")[0]
-
-        spawn_points = self.world.get_map().get_spawn_points()
-        if spawn_points:
-            spawn_point = random.choice(spawn_points)
-        else:
-            spawn_point = carla.Transform(
-                carla.Location(x=0, y=0, z=0.5),
-                carla.Rotation(pitch=0, yaw=0, roll=0),
-            )
-
-        self.vehicle = self.world.spawn_actor(vehicle_bp, spawn_point)
-        time.sleep(0.5)
-
-    def _spawn_sensors(self) -> None:
-        """
-        @brief Spawn noisy IMU and GNSS sensors attached to the ego vehicle.
-
-        Sensor noise parameters come from the carla_sensors config section.
-        These noisy readings feed into the CARLA ROS bridge, which publishes
-        them as ROS 2 topics consumed by the robot_localisation EKF.
-        """
-        if self.vehicle is None or self.world is None:
+        corners_raw = self._current_layout.get("corners", [])
+        if not corners_raw:
+            logger.warning("No perimeter corners found in layout, skipping cones.")
             return
 
-        blueprint_library = self.world.get_blueprint_library()
-        imu_config = self._sensors_config.get("imu", {})
-        gnss_config = self._sensors_config.get("gnss", {})
+        corners: List[Tuple[float, float]] = [
+            (float(c["x"]), float(c["y"])) for c in corners_raw
+        ]
+        cone_positions = _interpolate_cone_positions(corners, self._cone_spacing)
 
-        # --- IMU sensor ---
-        imu_bp = blueprint_library.find("sensor.other.imu")
-        imu_bp.set_attribute(
-            "noise_accel_stddev_x",
-            str(imu_config.get("noise_accel_stddev_x", 0.1)),
-        )
-        imu_bp.set_attribute(
-            "noise_accel_stddev_y",
-            str(imu_config.get("noise_accel_stddev_y", 0.1)),
-        )
-        imu_bp.set_attribute(
-            "noise_accel_stddev_z",
-            str(imu_config.get("noise_accel_stddev_z", 0.1)),
-        )
-        imu_bp.set_attribute(
-            "noise_gyro_stddev_x",
-            str(imu_config.get("noise_gyro_stddev_x", 0.01)),
-        )
-        imu_bp.set_attribute(
-            "noise_gyro_stddev_y",
-            str(imu_config.get("noise_gyro_stddev_y", 0.01)),
-        )
-        imu_bp.set_attribute(
-            "noise_gyro_stddev_z",
-            str(imu_config.get("noise_gyro_stddev_z", 0.01)),
-        )
-        imu_bp.set_attribute(
-            "sensor_tick",
-            str(imu_config.get("sensor_tick", 0.05)),
+        bp_lib = self.world.get_blueprint_library()
+        cone_bp = bp_lib.find("static.prop.trafficcone01")
+        z = self._current_layout.get("origin_z", 0.0) + 0.05
+
+        for cx, cy in cone_positions:
+            transform = carla.Transform(
+                carla.Location(x=cx, y=cy, z=z),
+                carla.Rotation(yaw=0.0),
+            )
+            cone = self.world.try_spawn_actor(cone_bp, transform)
+            if cone is not None:
+                cone.set_simulate_physics(False)
+                self._spawned_cones.append(cone)
+
+        logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
+
+    def _spawn_static_vehicles(self) -> None:
+        """
+        @brief Fill non-target bays with static parked vehicles at the configured
+               occupancy rate.
+
+        Target bay and always_empty bays are never filled. Static vehicles have
+        physics disabled and act as obstacles for clearance checking.
+        """
+        if self.world is None:
+            return
+
+        bays = self._current_layout.get("bays", [])
+        target_id = self._target_bay.get("bay_id", "")
+
+        bp_lib = self.world.get_blueprint_library()
+        vehicle_bps = bp_lib.filter("vehicle.*")
+        car_bps = [
+            bp
+            for bp in vehicle_bps
+            if int(bp.get_attribute("number_of_wheels").as_int()) == 4
+        ]
+
+        z = self._current_layout.get("origin_z", 0.0) + 0.1
+
+        for bay in bays:
+            if bay.get("always_empty", False):
+                continue
+            if bay.get("bay_id", "") == target_id:
+                continue
+            if random.random() > self._bay_occupancy_rate:
+                continue
+
+            bp = random.choice(car_bps)
+            if bp.has_attribute("color"):
+                color = random.choice(bp.get_attribute("color").recommended_values)
+                bp.set_attribute("color", color)
+
+            transform = carla.Transform(
+                carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z),
+                carla.Rotation(yaw=math.degrees(float(bay["yaw"]))),
+            )
+            actor = self.world.try_spawn_actor(bp, transform)
+            if actor is not None:
+                actor.set_simulate_physics(False)
+                self._spawned_static_vehicles.append(actor)
+
+        logger.debug(f"Spawned {len(self._spawned_static_vehicles)} static vehicles.")
+
+    def _spawn_npc_patrol(self) -> None:
+        """
+        @brief Spawn scripted patrol vehicles that follow waypoints in the lot.
+
+        Uses a proportional heading controller rather than the Traffic Manager,
+        since the lot is off-road and TM requires CARLA road network.
+        """
+        if self.world is None:
+            return
+
+        waypoints_raw = self._current_layout.get("patrol_waypoints", [])
+        if not waypoints_raw:
+            return
+
+        num_patrol = random.randint(0, self._num_patrol_max)
+        if num_patrol == 0:
+            return
+
+        bp_lib = self.world.get_blueprint_library()
+        vehicle_bps = bp_lib.filter("vehicle.*")
+        car_bps = [
+            bp
+            for bp in vehicle_bps
+            if int(bp.get_attribute("number_of_wheels").as_int()) == 4
+        ]
+
+        waypoints: List[Tuple[float, float]] = [
+            (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
+        ]
+        z = self._current_layout.get("origin_z", 0.0) + 0.1
+
+        for i in range(num_patrol):
+            bp = random.choice(car_bps)
+            start_idx = (i * len(waypoints) // num_patrol) % len(waypoints)
+            wp = waypoints[start_idx]
+            transform = carla.Transform(
+                carla.Location(x=wp[0], y=wp[1], z=z),
+                carla.Rotation(yaw=0.0),
+            )
+            actor = self.world.try_spawn_actor(bp, transform)
+            if actor is not None:
+                actor.set_simulate_physics(True)
+                self._patrol_npcs.append(actor)
+                self._patrol_waypoint_indices.append(start_idx)
+
+        logger.debug(f"Spawned {len(self._patrol_npcs)} patrol NPC vehicles.")
+
+    def _spawn_pedestrians(self) -> None:
+        """
+        @brief Spawn random-walk pedestrians inside the lot pedestrian zones.
+
+        Uses WalkerControl with a random direction, re-randomised every
+        pedestrian_heading_resample_steps steps.
+        """
+        if self.world is None:
+            return
+
+        zones_raw = self._current_layout.get("pedestrian_zones", [])
+        if not zones_raw:
+            return
+
+        num_peds = random.randint(0, self._num_pedestrians_max)
+        if num_peds == 0:
+            return
+
+        bp_lib = self.world.get_blueprint_library()
+        walker_bps = bp_lib.filter("walker.pedestrian.*")
+        z = self._current_layout.get("origin_z", 0.0) + 0.05
+
+        for _ in range(num_peds):
+            zone = random.choice(zones_raw)
+            px = random.uniform(float(zone["x_min"]), float(zone["x_max"]))
+            py = random.uniform(float(zone["y_min"]), float(zone["y_max"]))
+
+            bp = random.choice(walker_bps)
+            if bp.has_attribute("is_invincible"):
+                bp.set_attribute("is_invincible", "false")
+
+            transform = carla.Transform(
+                carla.Location(x=px, y=py, z=z),
+                carla.Rotation(yaw=random.uniform(0.0, 360.0)),
+            )
+            walker = self.world.try_spawn_actor(bp, transform)
+            if walker is not None:
+                # Random initial heading in body frame
+                heading_rad = random.uniform(0.0, 2.0 * math.pi)
+                self._pedestrian_actors.append(walker)
+                self._pedestrian_headings.append(
+                    (math.cos(heading_rad), math.sin(heading_rad), 0.0)
+                )
+                self._pedestrian_heading_steps.append(0)
+
+        logger.debug(f"Spawned {len(self._pedestrian_actors)} pedestrians.")
+
+    # ------------------------------------------------------------------
+    # Per-step NPC updates
+    # ------------------------------------------------------------------
+
+    def _update_patrol_npcs(self) -> None:
+        """
+        @brief Advance patrol NPC vehicles one step using a proportional heading
+               controller.
+
+        Proportional controller: steer = k_p * heading_error_to_next_waypoint.
+        Wraps to next waypoint when within 3 m.
+        """
+        waypoints_raw = self._current_layout.get("patrol_waypoints", [])
+        if not waypoints_raw:
+            return
+
+        waypoints: List[Tuple[float, float]] = [
+            (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
+        ]
+        k_p = 0.8  # Proportional steering gain
+
+        for i, npc in enumerate(self._patrol_npcs):
+            if not (npc is not None and npc.is_alive):
+                continue
+
+            wp_idx = self._patrol_waypoint_indices[i]
+            wp_x, wp_y = waypoints[wp_idx]
+
+            t = npc.get_transform()
+            dx = wp_x - t.location.x
+            dy = wp_y - t.location.y
+            dist = math.sqrt(dx * dx + dy * dy)
+
+            if dist < 3.0:
+                # Advance to next waypoint (cyclic)
+                wp_idx = (wp_idx + 1) % len(waypoints)
+                self._patrol_waypoint_indices[i] = wp_idx
+                wp_x, wp_y = waypoints[wp_idx]
+                dx = wp_x - t.location.x
+                dy = wp_y - t.location.y
+
+            # Heading error to waypoint
+            target_yaw = math.atan2(dy, dx)
+            ego_yaw = math.radians(t.rotation.yaw)
+            heading_error = math.atan2(
+                math.sin(target_yaw - ego_yaw),
+                math.cos(target_yaw - ego_yaw),
+            )
+
+            steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
+            control = carla.VehicleControl()
+            control.steer = steer
+            control.throttle = 0.3
+            control.brake = 0.0
+            npc.apply_control(control)
+
+    def _update_pedestrians(self) -> None:
+        """
+        @brief Advance pedestrians one step and re-randomise headings periodically.
+        """
+        for i, walker in enumerate(self._pedestrian_actors):
+            if not (walker is not None and walker.is_alive):
+                continue
+
+            self._pedestrian_heading_steps[i] += 1
+            if self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
+                heading_rad = random.uniform(0.0, 2.0 * math.pi)
+                self._pedestrian_headings[i] = (
+                    math.cos(heading_rad),
+                    math.sin(heading_rad),
+                    0.0,
+                )
+                self._pedestrian_heading_steps[i] = 0
+
+            dx, dy, dz = self._pedestrian_headings[i]
+            control = carla.WalkerControl()
+            control.direction = carla.Vector3D(x=dx, y=dy, z=dz)
+            control.speed = 1.2
+            walker.apply_control(control)
+
+    # ------------------------------------------------------------------
+    # Clearance and reward
+    # ------------------------------------------------------------------
+
+    def _check_clearance(self) -> bool:
+        """
+        @brief Check whether the ego vehicle is within clearance threshold of any
+               obstacle actor.
+        @return True if a clearance violation is detected (< CLEARANCE_THRESHOLD).
+        """
+        if self.vehicle is None:
+            return False
+
+        ego_loc = self.vehicle.get_location()
+
+        obstacle_actors = (
+            self._spawned_cones
+            + self._spawned_static_vehicles
+            + self._patrol_npcs
+            + self._pedestrian_actors
         )
 
-        imu_transform = carla.Transform(carla.Location(x=0.0, z=0.0))
-        imu_sensor = self.world.spawn_actor(
-            imu_bp, imu_transform, attach_to=self.vehicle
-        )
-        self._spawned_sensors.append(imu_sensor)
+        for actor in obstacle_actors:
+            if actor is None or not actor.is_alive:
+                continue
+            other_loc = actor.get_location()
+            dist = ego_loc.distance(other_loc)
+            if dist < CLEARANCE_THRESHOLD:
+                return True
 
-        # --- GNSS sensor ---
-        gnss_bp = blueprint_library.find("sensor.other.gnss")
-        gnss_bp.set_attribute(
-            "noise_alt_stddev",
-            str(gnss_config.get("noise_alt_stddev", 0.5)),
-        )
-        gnss_bp.set_attribute(
-            "noise_lat_stddev",
-            str(gnss_config.get("noise_lat_stddev", 0.00001)),
-        )
-        gnss_bp.set_attribute(
-            "noise_lon_stddev",
-            str(gnss_config.get("noise_lon_stddev", 0.00001)),
-        )
-        gnss_bp.set_attribute(
-            "noise_alt_bias",
-            str(gnss_config.get("noise_alt_bias", 0.0)),
-        )
-        gnss_bp.set_attribute(
-            "noise_lat_bias",
-            str(gnss_config.get("noise_lat_bias", 0.0)),
-        )
-        gnss_bp.set_attribute(
-            "noise_lon_bias",
-            str(gnss_config.get("noise_lon_bias", 0.0)),
-        )
-        gnss_bp.set_attribute(
-            "sensor_tick",
-            str(gnss_config.get("sensor_tick", 0.1)),
+        return False
+
+    def _compute_reward(self) -> Tuple[float, bool, bool]:
+        """
+        @brief Compute reward and termination flags for the current step.
+        @return Tuple of (reward, terminated, success).
+
+        Uses CARLA ground truth transform (not EKF pose) for position and
+        orientation errors. Reward formula kept from original implementation;
+        Task 9 rewrites it with potential-based shaping.
+
+        Termination conditions (priority order):
+          1. Clearance violation: < CLEARANCE_THRESHOLD to any obstacle
+          2. Success: position < SUCCESS_THRESHOLD_POSITION,
+             yaw < SUCCESS_THRESHOLD_ORIENTATION,
+             velocity < SUCCESS_THRESHOLD_VELOCITY
+          3. Out-of-bounds: > OUT_OF_BOUNDS_THRESHOLD from target
+          4. Time limit handled externally via truncated flag in step()
+        """
+        if self.vehicle is None:
+            return 0.0, False, False
+
+        transform = self.vehicle.get_transform()
+        velocity = self.vehicle.get_velocity()
+
+        x = transform.location.x
+        y = transform.location.y
+        yaw = math.radians(transform.rotation.yaw)
+
+        vx = velocity.x
+        vy = velocity.y
+        speed = math.sqrt(vx * vx + vy * vy)
+
+        target_x = self._target_bay["x"]
+        target_y = self._target_bay["y"]
+        target_yaw = self._target_bay["yaw"]
+
+        position_error = math.sqrt((x - target_x) ** 2 + (y - target_y) ** 2)
+        yaw_error_raw = yaw - target_yaw
+        orientation_error = abs(
+            math.atan2(math.sin(yaw_error_raw), math.cos(yaw_error_raw))
         )
 
-        gnss_transform = carla.Transform(carla.Location(x=0.0, z=0.0))
-        gnss_sensor = self.world.spawn_actor(
-            gnss_bp, gnss_transform, attach_to=self.vehicle
-        )
-        self._spawned_sensors.append(gnss_sensor)
+        # Check clearance violation (collision penalty + termination)
+        if self._check_clearance():
+            return -10.0, True, False
 
-        logger.debug(
-            f"Spawned IMU and GNSS sensors with noise config: "
-            f"imu={imu_config}, gnss={gnss_config}"
+        # Success condition
+        success = (
+            position_error < SUCCESS_THRESHOLD_POSITION
+            and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
+            and speed < SUCCESS_THRESHOLD_VELOCITY
         )
+        if success:
+            return 100.0, True, True
+
+        # Out-of-bounds
+        if position_error > OUT_OF_BOUNDS_THRESHOLD:
+            return -5.0, True, False
+
+        # Shaping reward
+        reward = -position_error - 0.5 * orientation_error - 0.1 * speed
+
+        return float(reward), False, False
+
+    # ------------------------------------------------------------------
+    # State
+    # ------------------------------------------------------------------
+
+    def _get_state(self) -> np.ndarray:
+        """
+        @brief Build the 18-dim (or 9-dim) observation vector.
+        @return Float32 array of shape (TOTAL_OBS_DIM,) or (VEHICLE_STATE_DIM
+                + TARGET_POSE_DIM,).
+
+        Indices 0-5: EKF pose (x, y, yaw, vx, vy, vyaw).
+                     Currently sourced from CARLA ground truth as a placeholder
+                     until the EKF ROS 2 bridge is integrated in Task 7.
+        Indices 6-14: EKF covariance features (only when include_covariance=True).
+        Indices 15-17 (or 6-8): relative target bay pose (dx, dy, dyaw).
+        """
+        if self.vehicle is None or self.world is None:
+            obs_dim = (
+                TOTAL_OBS_DIM
+                if self._include_covariance
+                else VEHICLE_STATE_DIM + TARGET_POSE_DIM
+            )
+            return np.zeros(obs_dim, dtype=np.float32)
+
+        transform = self.vehicle.get_transform()
+        velocity = self.vehicle.get_velocity()
+        angular_vel = self.vehicle.get_angular_velocity()
+
+        x = transform.location.x
+        y = transform.location.y
+        yaw = math.radians(transform.rotation.yaw)
+        vx = velocity.x
+        vy = velocity.y
+        vyaw = math.radians(angular_vel.z)
+
+        vehicle_state = np.array([x, y, yaw, vx, vy, vyaw], dtype=np.float32)
+
+        # Relative target pose in ego body frame
+        dx, dy, dyaw = _compute_relative_target_pose(
+            x,
+            y,
+            yaw,
+            self._target_bay["x"],
+            self._target_bay["y"],
+            self._target_bay["yaw"],
+        )
+        target_pose = np.array([dx, dy, dyaw], dtype=np.float32)
+
+        if not self._include_covariance:
+            return np.concatenate([vehicle_state, target_pose])
+
+        # EKF covariance features
+        if self._cov_subscriber is not None:
+            uncertainty = self._cov_subscriber.get_latest_uncertainty()
+        else:
+            uncertainty = None
+
+        if uncertainty is None:
+            uncertainty = np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32)
+        else:
+            uncertainty = uncertainty.astype(np.float32)
+
+        # [pose(6), covariance(9), target(3)] = 18
+        return np.concatenate([vehicle_state, uncertainty, target_pose])
+
+    # ------------------------------------------------------------------
+    # Debug overlays and visualisation
+    # ------------------------------------------------------------------
+
+    def _draw_debug_overlays(self) -> None:
+        """
+        @brief Draw server-side debug geometry visible in any connected CARLA spectator.
+
+        Called every step with life_time=0.05 (one frame at 20 Hz). No display
+        required -- overlays are rendered by the CARLA server.
+        """
+        if self.world is None or self.vehicle is None:
+            return
+
+        debug = self.world.debug
+        z = self._current_layout.get("origin_z", 0.0) + 0.05
+        target_id = self._target_bay.get("bay_id", "")
+
+        # Bay outlines -- colour by type
+        type_colours = {
+            "perpendicular": carla.Color(r=0, g=0, b=200),
+            "angled": carla.Color(r=200, g=100, b=0),
+            "parallel": carla.Color(r=0, g=150, b=0),
+        }
+
+        for bay in self._current_layout.get("bays", []):
+            bay_type = bay.get("bay_type", "perpendicular")
+            colour = type_colours.get(bay_type, carla.Color(r=100, g=100, b=100))
+            is_target = bay.get("bay_id", "") == target_id
+
+            if is_target:
+                colour = carla.Color(r=0, g=255, b=0)
+
+            width = float(bay.get("width", 2.5))
+            depth = float(bay.get("depth", 5.0))
+            bx = float(bay["x"])
+            by = float(bay["y"])
+            yaw_deg = math.degrees(float(bay["yaw"]))
+
+            box = carla.BoundingBox(
+                carla.Location(x=bx, y=by, z=z),
+                carla.Vector3D(x=depth / 2.0, y=width / 2.0, z=0.1),
+            )
+            rotation = carla.Rotation(yaw=yaw_deg)
+            thickness = 0.08 if is_target else 0.04
+            debug.draw_box(
+                box, rotation, thickness=thickness, color=colour, life_time=0.05
+            )
+
+            if is_target:
+                debug.draw_string(
+                    carla.Location(x=bx, y=by, z=z + 1.0),
+                    "TARGET",
+                    color=carla.Color(r=0, g=255, b=0),
+                    life_time=0.05,
+                )
+
+        # Ego bounding box
+        ego_transform = self.vehicle.get_transform()
+        ego_bb = self.vehicle.bounding_box
+        debug.draw_box(
+            ego_bb,
+            ego_transform.rotation,
+            thickness=0.06,
+            color=carla.Color(r=0, g=200, b=200),
+            life_time=0.05,
+        )
+
+        # Ego trajectory trail
+        for tx, ty in self._trajectory_buffer:
+            debug.draw_point(
+                carla.Location(x=tx, y=ty, z=z + 0.1),
+                size=0.05,
+                color=carla.Color(r=0, g=180, b=180),
+                life_time=0.05,
+            )
+
+    def _write_vis_state(self) -> None:
+        """
+        @brief Write the visualisation state JSON for the detachable 2D viewer.
+
+        Atomic write: tmp file then os.replace (POSIX atomic rename).
+        The visualiser process polls this file and redraws on change.
+        If vis_output_path is None, this method is a no-op.
+        """
+        if self._vis_output_path is None or self.vehicle is None:
+            return
+
+        transform = self.vehicle.get_transform()
+        x = transform.location.x
+        y = transform.location.y
+        yaw = transform.rotation.yaw
+
+        actor_transforms = []
+        for actor in self._patrol_npcs + self._spawned_static_vehicles:
+            if actor is not None and actor.is_alive:
+                at = actor.get_transform()
+                actor_transforms.append(
+                    {
+                        "x": at.location.x,
+                        "y": at.location.y,
+                        "yaw": at.rotation.yaw,
+                        "type": "npc" if actor in self._patrol_npcs else "static",
+                    }
+                )
+
+        pedestrian_transforms = []
+        for walker in self._pedestrian_actors:
+            if walker is not None and walker.is_alive:
+                wt = walker.get_transform()
+                pedestrian_transforms.append({"x": wt.location.x, "y": wt.location.y})
+
+        state = {
+            "ego": {"x": x, "y": y, "yaw": yaw},
+            "trajectory": list(self._trajectory_buffer),
+            "actors": actor_transforms,
+            "pedestrians": pedestrian_transforms,
+            "target_bay": self._target_bay,
+            "floor_plan": self._current_floor_plan_name,
+            "bays": self._current_layout.get("bays", []),
+            "corners": self._current_layout.get("corners", []),
+            "episode_step": self.steps,
+        }
+
+        try:
+            json_str = json.dumps(state)
+            output_path = self._vis_output_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Write to .tmp then rename atomically
+            tmp_path = output_path.with_suffix(".tmp")
+            tmp_path.write_text(json_str)
+            os.replace(str(tmp_path), str(output_path))
+        except Exception as exc:
+            # Non-fatal -- visualisation is optional
+            logger.debug(f"Could not write vis state: {exc}")
+
+    # ------------------------------------------------------------------
+    # CARLA world management
+    # ------------------------------------------------------------------
+
+    def _connect_to_carla(self) -> None:
+        """
+        @brief Establish connection to CARLA and load Town05_Opt.
+        """
+        try:
+            self.client = carla.Client(self.carla_host, self.carla_port)
+            self.client.set_timeout(60.0)
+            self.world = self.client.get_world()
+
+            current_map_name = self.world.get_map().name.split("/")[-1]
+            if current_map_name != self.town:
+                logger.info(f"Loading map: {self.town}")
+                self.world = self.client.load_world(self.town)
+                # Allow map layers to settle
+                time.sleep(8.0)
+
+        except Exception as exc:
+            logger.error(f"Could not connect to CARLA: {exc}")
+            self.client = None
+            self.world = None
+
+    def _unload_unnecessary_layers(self) -> None:
+        """
+        @brief Strip buildings, foliage, and props from the layered map to leave
+               only the ground mesh, reducing scene complexity.
+        """
+        if self.world is None or carla is None:
+            return
+
+        layers_to_unload = [
+            carla.MapLayer.Buildings,
+            carla.MapLayer.Foliage,
+            carla.MapLayer.Props,
+            carla.MapLayer.StreetLights,
+            carla.MapLayer.Walls,
+        ]
+        for layer in layers_to_unload:
+            try:
+                self.world.unload_map_layer(layer)
+            except Exception:
+                pass  # Layer may not exist for all maps
 
     def _configure_weather(self) -> None:
         """
-        @brief Set random weather conditions for the current episode.
-
-        Randomly selects a weather preset and adds randomised fog within
-        the configured range. This degrades sensor quality and increases
-        EKF uncertainty naturally.
+        @brief Randomise weather for the current episode.
         """
         if self.world is None:
             return
@@ -423,13 +1127,11 @@ class CARLAParkingEnv(gym.Env):
         presets = self._conditions_config.get("weather_presets", ["ClearNoon"])
         preset_name = random.choice(presets)
 
-        # Get the weather preset from CARLA
         weather = getattr(carla.WeatherParameters, preset_name, None)
         if weather is None:
             logger.warning(f"Unknown weather preset '{preset_name}', using ClearNoon.")
             weather = carla.WeatherParameters.ClearNoon
 
-        # Apply randomised fog on top of the preset
         fog_range = self._conditions_config.get("fog_density_range", [0.0, 0.0])
         fog_density = random.uniform(fog_range[0], fog_range[1])
 
@@ -443,229 +1145,140 @@ class CARLAParkingEnv(gym.Env):
 
         self.world.set_weather(weather)
         logger.info(
-            f"Weather: {preset_name}, fog_density={fog_density:.1f}, "
-            f"fog_distance={fog_distance:.1f}m"
+            f"Weather: {preset_name}, fog={fog_density:.1f}, "
+            f"fog_dist={fog_distance:.1f}m"
         )
 
-    def _spawn_traffic(self) -> None:
+    def _spawn_vehicle(self) -> None:
         """
-        @brief Spawn NPC vehicles and pedestrians via the CARLA traffic manager.
-
-        Moving objects in the scene cause dynamic occlusions and
-        data association challenges, increasing EKF uncertainty.
+        @brief Spawn the ego vehicle at the floor plan's spawn transform.
         """
-        if self.world is None or self.client is None:
+        if self.world is None:
             return
 
-        num_vehicles = self._conditions_config.get("num_vehicles", 0)
-        num_pedestrians = self._conditions_config.get("num_pedestrians", 0)
+        spawn_raw = self._current_layout.get("spawn_transform", {})
+        sx = float(spawn_raw.get("x", 0.0))
+        sy = float(spawn_raw.get("y", 0.0))
+        sz = self._current_layout.get("origin_z", 0.0) + 0.3
+        syaw = float(spawn_raw.get("yaw_deg", 0.0))
 
-        blueprint_library = self.world.get_blueprint_library()
-        spawn_points = self.world.get_map().get_spawn_points()
+        bp_lib = self.world.get_blueprint_library()
+        vehicle_bp = bp_lib.filter("vehicle.tesla.model3")[0]
 
-        # --- NPC vehicles ---
-        vehicle_bps = blueprint_library.filter("vehicle.*")
-        available_spawns = list(spawn_points)
-        random.shuffle(available_spawns)
-
-        traffic_manager = self.client.get_trafficmanager()
-        traffic_manager.set_global_distance_to_leading_vehicle(2.5)
-
-        for i in range(min(num_vehicles, len(available_spawns))):
-            bp = random.choice(vehicle_bps)
-            if bp.has_attribute("color"):
-                color = random.choice(bp.get_attribute("color").recommended_values)
-                bp.set_attribute("color", color)
-
-            npc = self.world.try_spawn_actor(bp, available_spawns[i])
-            if npc is not None:
-                npc.set_autopilot(True, traffic_manager.get_port())
-                self._spawned_npcs.append(npc)
-
-        # --- Pedestrians ---
-        walker_bps = blueprint_library.filter("walker.pedestrian.*")
-        walker_controller_bp = blueprint_library.find("controller.ai.walker")
-
-        for _ in range(num_pedestrians):
-            bp = random.choice(walker_bps)
-            if bp.has_attribute("is_invincible"):
-                bp.set_attribute("is_invincible", "false")
-
-            spawn_loc = self.world.get_random_location_from_navigation()
-            if spawn_loc is None:
-                continue
-
-            spawn_transform = carla.Transform(location=spawn_loc)
-            walker = self.world.try_spawn_actor(bp, spawn_transform)
-            if walker is None:
-                continue
-
-            controller = self.world.spawn_actor(
-                walker_controller_bp,
-                carla.Transform(),
-                attach_to=walker,
-            )
-            controller.start()
-            controller.go_to_location(self.world.get_random_location_from_navigation())
-            controller.set_max_speed(1.0 + random.random())
-
-            self._spawned_npcs.append(walker)
-            self._spawned_npcs.append(controller)
-
-        logger.info(
-            f"Spawned traffic: {num_vehicles} vehicles requested, "
-            f"{num_pedestrians} pedestrians requested."
+        spawn_transform = carla.Transform(
+            carla.Location(x=sx, y=sy, z=sz),
+            carla.Rotation(yaw=syaw),
         )
+
+        self.vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
+        if self.vehicle is None:
+            # Fall back to any valid spawn point on the map
+            spawn_points = self.world.get_map().get_spawn_points()
+            if spawn_points:
+                self.vehicle = self.world.try_spawn_actor(
+                    vehicle_bp, random.choice(spawn_points)
+                )
+            logger.warning("Primary spawn point occupied, using fallback spawn.")
+
+        if self.vehicle is not None:
+            time.sleep(0.5)
+
+    def _spawn_sensors(self) -> None:
+        """
+        @brief Spawn noisy IMU sensor attached to ego vehicle.
+
+        Sensor noise parameters come from carla_sensors_config. Sensor data
+        flows through the CARLA ROS bridge into the robot_localisation EKF.
+
+        @note GNSS is excluded from Suite A (unreliable indoors / at Lemonworx).
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        bp_lib = self.world.get_blueprint_library()
+        imu_config = self._sensors_config.get("imu", {})
+
+        imu_bp = bp_lib.find("sensor.other.imu")
+        for attr, default in [
+            ("noise_accel_stddev_x", 0.1),
+            ("noise_accel_stddev_y", 0.1),
+            ("noise_accel_stddev_z", 0.1),
+            ("noise_gyro_stddev_x", 0.01),
+            ("noise_gyro_stddev_y", 0.01),
+            ("noise_gyro_stddev_z", 0.01),
+            ("sensor_tick", 0.05),
+        ]:
+            imu_bp.set_attribute(attr, str(imu_config.get(attr, default)))
+
+        imu_sensor = self.world.spawn_actor(
+            imu_bp,
+            carla.Transform(carla.Location(x=0.0, z=0.0)),
+            attach_to=self.vehicle,
+        )
+        self._spawned_sensors.append(imu_sensor)
 
     def _wait_for_covariance(self) -> None:
         """
         @brief Block until the first EKF covariance message arrives.
 
-        Ticks the CARLA simulation while waiting so sensors produce data
-        for the EKF to process. Raises RuntimeError on timeout.
+        Ticks the CARLA simulation while waiting. Raises RuntimeError on timeout.
         """
         if self._cov_subscriber is None:
             return
 
         start = time.monotonic()
-        tick_interval = 0.05  # Match carla_timestep
+        tick_interval = 0.05
 
         while not self._cov_subscriber.has_data:
             elapsed = time.monotonic() - start
             if elapsed > self._covariance_timeout:
                 raise RuntimeError(
                     f"No covariance message received within "
-                    f"{self._covariance_timeout}s timeout. "
-                    f"Check that the ros2-bridge container is running and "
-                    f"the EKF + CovarianceExtractorNode are publishing."
+                    f"{self._covariance_timeout}s. "
+                    f"Ensure ros2-bridge container is healthy."
                 )
-
-            # Tick CARLA so sensors produce data
             if self.world is not None:
                 self.world.tick()
             time.sleep(tick_interval)
 
         logger.debug(
-            f"First covariance message received after "
-            f"{time.monotonic() - start:.2f}s."
+            f"First covariance received after {time.monotonic() - start:.2f}s."
         )
 
     def _cleanup_actors(self) -> None:
         """
-        @brief Destroy all spawned actors (sensors, NPCs, ego vehicle).
-
-        Called during reset() and close() to ensure clean state.
+        @brief Destroy all episode actors (sensors, cones, static vehicles, NPCs,
+               pedestrians, ego vehicle).
         """
-        # Destroy sensors
         for sensor in self._spawned_sensors:
             if sensor is not None and sensor.is_alive:
                 sensor.stop()
                 sensor.destroy()
         self._spawned_sensors.clear()
 
-        # Destroy NPCs (controllers first, then walkers/vehicles)
-        for npc in reversed(self._spawned_npcs):
-            if npc is not None and npc.is_alive:
-                if "controller" in npc.type_id:
-                    npc.stop()
-                npc.destroy()
-        self._spawned_npcs.clear()
+        for actor_list in [
+            self._spawned_cones,
+            self._spawned_static_vehicles,
+            self._patrol_npcs,
+            self._pedestrian_actors,
+        ]:
+            for actor in actor_list:
+                if actor is not None and actor.is_alive:
+                    actor.destroy()
+            actor_list.clear()
 
-        # Destroy ego vehicle
+        self._patrol_waypoint_indices.clear()
+        self._pedestrian_heading_steps.clear()
+        self._pedestrian_headings.clear()
+
         if self.vehicle is not None:
             if self.vehicle.is_alive:
                 self.vehicle.destroy()
             self.vehicle = None
 
-    def _get_state(self) -> np.ndarray:
-        """
-        @brief Get current state, optionally including EKF uncertainty.
-        @return State vector of shape (TOTAL_OBS_DIM,) when include_covariance
-                is True, or (VEHICLE_STATE_DIM,) when False.
-
-        Vehicle state (indices 0-5) comes from CARLA Python API (ground truth).
-        When include_covariance is True, uncertainty features (indices 6-14)
-        come from the EKF covariance subscriber.
-        """
-        obs_dim = TOTAL_OBS_DIM if self._include_covariance else VEHICLE_STATE_DIM
-        if self.vehicle is None or self.world is None:
-            return np.zeros(obs_dim, dtype=np.float32)
-
-        # Get vehicle transform and velocity from CARLA (ground truth)
-        transform = self.vehicle.get_transform()
-        velocity = self.vehicle.get_velocity()
-        angular_vel = self.vehicle.get_angular_velocity()
-
-        # Position and orientation
-        x = transform.location.x
-        y = transform.location.y
-        yaw = np.deg2rad(transform.rotation.yaw)
-
-        # Velocity
-        vx = velocity.x
-        vy = velocity.y
-        vyaw = np.deg2rad(angular_vel.z)
-
-        # Vehicle state vector (6 elements)
-        vehicle_state = np.array([x, y, yaw, vx, vy, vyaw], dtype=np.float32)
-
-        if not self._include_covariance:
-            return vehicle_state
-
-        # Uncertainty features from EKF covariance (9 elements)
-        if self._cov_subscriber is not None:
-            uncertainty = self._cov_subscriber.get_latest_uncertainty()
-        else:
-            uncertainty = None
-
-        if uncertainty is None:
-            uncertainty = np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32)
-        else:
-            uncertainty = uncertainty.astype(np.float32)
-
-        # Concatenate: [vehicle_state(6), uncertainty_features(9)] = 15
-        state: np.ndarray = np.concatenate([vehicle_state, uncertainty])
-        return state
-
-    def _compute_reward(self, state: np.ndarray) -> Tuple[float, bool]:
-        """
-        @brief Compute reward based on parking objective.
-        @param state: Current state vector.
-        @return Tuple of (reward, done) where done indicates episode termination.
-        """
-        x, y, yaw = state[0], state[1], state[2]
-        vx, vy = state[3], state[4]
-
-        # Distance to target parking spot
-        target_x, target_y, target_yaw = self.target_parking_spot
-        position_error = np.sqrt((x - target_x) ** 2 + (y - target_y) ** 2)
-        orientation_error = np.abs(
-            np.arctan2(np.sin(yaw - target_yaw), np.cos(yaw - target_yaw))
-        )
-
-        # Velocity magnitude
-        velocity_magnitude = np.sqrt(vx**2 + vy**2)
-
-        # Reward components
-        distance_reward = -position_error
-        orientation_reward = -orientation_error * 0.5
-        velocity_penalty = -velocity_magnitude * 0.1
-
-        # Success bonus (using shared constants)
-        success = (
-            position_error < SUCCESS_THRESHOLD_POSITION
-            and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
-            and velocity_magnitude < 0.1
-        )
-
-        success_bonus = 100.0 if success else 0.0
-
-        reward = distance_reward + orientation_reward + velocity_penalty + success_bonus
-
-        # Episode termination conditions
-        done = success or position_error > 20.0 or self.steps >= self.max_steps
-
-        return float(reward), bool(done)
+    # ------------------------------------------------------------------
+    # Gymnasium API
+    # ------------------------------------------------------------------
 
     def reset(
         self,
@@ -675,55 +1288,71 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Reset the environment for a new episode.
         @param seed: Random seed for reproducibility.
-        @param options: Additional options for reset.
-        @return Tuple of (initial_state, info_dict).
+        @param options: Additional options (currently unused).
+        @return Tuple of (initial_observation, info_dict).
 
-        Each reset randomises weather and traffic to expose the agent to
-        varied uncertainty conditions during training.
+        Each reset: cleans up previous episode, selects floor plan, samples target
+        bay, spawns cones/static vehicles/patrol NPCs/pedestrians, randomises weather.
         """
         super().reset(seed=seed)
 
-        # Reset episode state
         self.steps = 0
-        self.done = False
+        self._trajectory_buffer.clear()
 
-        # Clean up previous episode actors
         self._cleanup_actors()
 
-        # Connect to CARLA if not already connected
+        # Connect to CARLA on first reset
         if self.client is None:
             self._connect_to_carla()
 
-        # Set up new episode
+        if self.world is None:
+            obs_dim = (
+                TOTAL_OBS_DIM
+                if self._include_covariance
+                else VEHICLE_STATE_DIM + TARGET_POSE_DIM
+            )
+            return np.zeros(obs_dim, dtype=np.float32), {}
+
+        # Load floor plan and sample target bay
+        if self._floor_plans_config:
+            self._load_floor_plan()
+            self._sample_target_bay()
+
         self._configure_weather()
+        self._unload_unnecessary_layers()
+
         self._spawn_vehicle()
         self._spawn_sensors()
-        self._spawn_traffic()
+        self._spawn_perimeter_cones()
+        self._spawn_static_vehicles()
+        self._spawn_npc_patrol()
+        self._spawn_pedestrians()
 
-        # Wait for EKF to start producing covariance (only when needed)
         if self._include_covariance:
             self._wait_for_covariance()
 
-        # Get initial state
         state = self._get_state()
 
         info: Dict[str, Any] = {
-            "episode": {"r": 0, "l": 0},
+            "floor_plan": self._current_floor_plan_name,
+            "target_bay_id": self._target_bay.get("bay_id", ""),
+            "target_bay_type": self._target_bay.get("bay_type", ""),
+            "episode": {"r": 0.0, "l": 0},
         }
 
         return state, info
 
     def step(
-        self, action: np.ndarray
+        self,
+        action: np.ndarray,
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
         @brief Execute one environment step.
-        @param action: Action vector [steering, throttle, brake].
-        @return Tuple of (next_state, reward, terminated, truncated, info).
+        @param action: 3-dim action vector [steering, throttle, brake].
+        @return Tuple of (observation, reward, terminated, truncated, info).
         """
         self.steps += 1
 
-        # Apply action to vehicle
         if self.vehicle is not None:
             control = carla.VehicleControl()
             control.steer = float(np.clip(action[0], -1.0, 1.0))
@@ -731,26 +1360,32 @@ class CARLAParkingEnv(gym.Env):
             control.brake = float(np.clip(action[2], 0.0, 1.0))
             self.vehicle.apply_control(control)
 
-            # Step the simulation
             if self.world is not None:
+                self._update_patrol_npcs()
+                self._update_pedestrians()
                 self.world.tick()
 
-        # Get new state (includes real EKF uncertainty)
+                # Update trajectory buffer for debug overlays
+                t = self.vehicle.get_transform()
+                self._trajectory_buffer.append((t.location.x, t.location.y))
+
         state = self._get_state()
+        reward, terminated, success = self._compute_reward()
 
-        # Compute reward
-        reward, terminated = self._compute_reward(state)
-
-        # Truncation (time limit)
         truncated = self.steps >= self.max_steps
+
+        self._draw_debug_overlays()
+        self._write_vis_state()
 
         info: Dict[str, Any] = {
             "steps": self.steps,
+            "success": success,
+            "floor_plan": self._current_floor_plan_name,
         }
 
         return state, reward, terminated, truncated, info
 
-    def render(self):
+    def render(self) -> "RenderFrame | list[RenderFrame] | None":
         """
         @brief Render the environment.
         @return RGB array if render_mode is 'rgb_array', None otherwise.
@@ -766,8 +1401,7 @@ class CARLAParkingEnv(gym.Env):
                     )
                 )
         elif self.render_mode == "rgb_array":
-            return np.zeros((600, 800, 3), dtype=np.uint8)
-
+            return cast(RenderFrame, np.zeros((600, 800, 3), dtype=np.uint8))
         return None
 
     def close(self) -> None:
@@ -776,14 +1410,11 @@ class CARLAParkingEnv(gym.Env):
         """
         self._cleanup_actors()
 
-        # Shut down ROS 2 subscriber
         if self._cov_subscriber is not None:
             self._cov_subscriber.destroy_node()
             self._cov_subscriber = None
 
-        if self.client is not None:
-            self.client = None
-
+        self.client = None
         self.world = None
 
         super().close()
