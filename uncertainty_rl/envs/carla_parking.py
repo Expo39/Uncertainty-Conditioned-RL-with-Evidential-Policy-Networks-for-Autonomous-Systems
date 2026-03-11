@@ -163,6 +163,7 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_obstacle_distance: float = scenarios.get(
             "patrol_obstacle_stop_distance", 5.0
         )
+        self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
         self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
@@ -399,7 +400,7 @@ class CARLAParkingEnv(gym.Env):
 
         bp_lib = self.world.get_blueprint_library()
         cone_bp = bp_lib.find("static.prop.trafficcone01")
-        z = self._current_layout.get("origin_z", 0.0) + 0.05
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
         for cx, cy in cone_positions:
             transform = carla.Transform(
@@ -452,13 +453,22 @@ class CARLAParkingEnv(gym.Env):
 
         bp_lib = self.world.get_blueprint_library()
         vehicle_bps = bp_lib.filter("vehicle.*")
+        # Exclude large vehicles (vans, trucks, emergency) that overhang a 2.5 m bay.
+        _LARGE = (
+            "ambulance", "firetruck", "sprinter", "t2", "t2_2021",
+            "carlacola", "cybertruck", "fusorosa", "bus",
+        )
         car_bps = [
-            bp
-            for bp in vehicle_bps
+            bp for bp in vehicle_bps
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
+            and not any(excl in bp.id.lower() for excl in _LARGE)
         ]
 
-        z = self._current_layout.get("origin_z", 0.0) + 0.1
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
+        # Spawn 2 m above the floor so the vehicle bounding box clears perimeter
+        # cones whose tops reach ~1 m.  Physics is immediately disabled and the
+        # actor is teleported back to the correct z.
+        z_spawn = z + 2.0
 
         for bay in bays:
             if bay.get("id", bay.get("bay_id", "")) in excluded_ids:
@@ -471,13 +481,18 @@ class CARLAParkingEnv(gym.Env):
                 color = random.choice(bp.get_attribute("color").recommended_values)
                 bp.set_attribute("color", color)
 
+            yaw = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
             transform = carla.Transform(
-                carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z),
-                carla.Rotation(yaw=float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))),
+                carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z_spawn),
+                carla.Rotation(yaw=yaw),
             )
             actor = self.world.try_spawn_actor(bp, transform)
             if actor is not None:
                 actor.set_simulate_physics(False)
+                actor.set_transform(carla.Transform(
+                    carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z),
+                    carla.Rotation(yaw=yaw),
+                ))
                 self._spawned_static_vehicles.append(actor)
 
         logger.debug(f"Spawned {len(self._spawned_static_vehicles)} static vehicles.")
@@ -501,16 +516,20 @@ class CARLAParkingEnv(gym.Env):
 
         bp_lib = self.world.get_blueprint_library()
         vehicle_bps = bp_lib.filter("vehicle.*")
+        _LARGE = (
+            "ambulance", "firetruck", "sprinter", "t2", "t2_2021",
+            "carlacola", "cybertruck", "fusorosa", "bus",
+        )
         car_bps = [
-            bp
-            for bp in vehicle_bps
+            bp for bp in vehicle_bps
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
+            and not any(excl in bp.id.lower() for excl in _LARGE)
         ]
 
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
-        z = self._current_layout.get("origin_z", 0.0) + 0.1
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
 
         for i in range(num_patrol):
             bp = random.choice(car_bps)
@@ -542,13 +561,9 @@ class CARLAParkingEnv(gym.Env):
         if not zones_raw:
             return
 
-        num_peds = random.randint(0, self._num_pedestrians_max)
-        if num_peds == 0:
-            return
-
         bp_lib = self.world.get_blueprint_library()
         walker_bps = bp_lib.filter("walker.pedestrian.*")
-        z = self._current_layout.get("origin_z", 0.0) + 0.05
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
         def _zone_bbox(z: Dict[str, Any]) -> Dict[str, float]:
             """Convert zone dict to x_min/x_max/y_min/y_max regardless of YAML format."""
@@ -573,23 +588,34 @@ class CARLAParkingEnv(gym.Env):
 
         zones: List[Dict[str, float]] = [_zone_bbox(z) for z in zones_raw]
 
+        # Always fill every zone (one pedestrian each), up to the configured maximum.
+        num_peds = min(self._num_pedestrians_max, len(zones))
+        if num_peds == 0:
+            return
+
         for ped_i in range(num_peds):
             # Assign zones round-robin so all zones are populated evenly
             zone = zones[ped_i % len(zones)]
-            px = random.uniform(zone["x_min"], zone["x_max"])
-            py = random.uniform(zone["y_min"], zone["y_max"])
 
             bp = random.choice(walker_bps)
             if bp.has_attribute("is_invincible"):
                 bp.set_attribute("is_invincible", "false")
 
-            transform = carla.Transform(
-                carla.Location(x=px, y=py, z=z),
-                carla.Rotation(yaw=random.uniform(0.0, 360.0)),
-            )
-            walker = self.world.try_spawn_actor(bp, transform)
+            # Retry spawn with fresh random positions -- narrow zones mean the
+            # first attempt may collide with an existing actor or parked car.
+            walker = None
+            for _ in range(5):
+                px = random.uniform(zone["x_min"], zone["x_max"])
+                py = random.uniform(zone["y_min"], zone["y_max"])
+                transform = carla.Transform(
+                    carla.Location(x=px, y=py, z=z),
+                    carla.Rotation(yaw=random.uniform(0.0, 360.0)),
+                )
+                walker = self.world.try_spawn_actor(bp, transform)
+                if walker is not None:
+                    break
+
             if walker is not None:
-                # Random initial heading in body frame
                 heading_rad = random.uniform(0.0, 2.0 * math.pi)
                 self._pedestrian_actors.append(walker)
                 self._pedestrian_headings.append(
@@ -674,10 +700,14 @@ class CARLAParkingEnv(gym.Env):
                     blocked = True
                     break
 
+            v = npc.get_velocity()
+            speed = math.sqrt(v.x * v.x + v.y * v.y)
+            over_limit = speed > self._patrol_max_speed
+
             control = carla.VehicleControl()
             control.steer = steer
-            control.throttle = 0.0 if blocked else 0.3
-            control.brake = 1.0 if blocked else 0.0
+            control.throttle = 0.0 if (blocked or over_limit) else 0.3
+            control.brake = 1.0 if blocked else (0.3 if over_limit else 0.0)
             npc.apply_control(control)
 
     def _respawn_pedestrian(self, idx: int) -> None:
@@ -699,18 +729,25 @@ class CARLAParkingEnv(gym.Env):
 
         bp_lib = self.world.get_blueprint_library()
         walker_bps = bp_lib.filter("walker.pedestrian.*")
-        z = self._current_layout.get("origin_z", 0.0) + 0.05
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
-        px = random.uniform(zone["x_min"], zone["x_max"])
-        py = random.uniform(zone["y_min"], zone["y_max"])
         bp = random.choice(walker_bps)
         if bp.has_attribute("is_invincible"):
             bp.set_attribute("is_invincible", "false")
-        transform = carla.Transform(
-            carla.Location(x=px, y=py, z=z),
-            carla.Rotation(yaw=random.uniform(0.0, 360.0)),
-        )
-        walker = self.world.try_spawn_actor(bp, transform)
+
+        # Retry with fresh positions -- narrow zones can cause collision failures
+        walker = None
+        for _ in range(5):
+            px = random.uniform(zone["x_min"], zone["x_max"])
+            py = random.uniform(zone["y_min"], zone["y_max"])
+            transform = carla.Transform(
+                carla.Location(x=px, y=py, z=z),
+                carla.Rotation(yaw=random.uniform(0.0, 360.0)),
+            )
+            walker = self.world.try_spawn_actor(bp, transform)
+            if walker is not None:
+                break
+
         self._pedestrian_actors[idx] = walker
         heading_rad = random.uniform(0.0, 2.0 * math.pi)
         self._pedestrian_headings[idx] = (
@@ -724,9 +761,24 @@ class CARLAParkingEnv(gym.Env):
     def _update_pedestrians(self) -> None:
         """
         @brief Advance pedestrians one step, re-randomise headings periodically,
-               and despawn/respawn walkers that leave their assigned zone or
-               exceed their maximum lifetime.
+               and handle zone boundaries and lifetime expiry.
+
+        Boundary behaviour: when a pedestrian is within _BOUNDARY_MARGIN metres
+        of any zone edge, its heading is replaced with a direction toward the
+        zone centre. This avoids the oscillation produced by velocity reflection,
+        where the walker overshoots the boundary by one physics step, the heading
+        is negated, and on the next step the walker is still outside and is
+        negated again -- producing a standing vibration on the wall. The inward-
+        steering approach matches CARLA Scenario Runner, which assigns a new
+        interior waypoint when an actor approaches a trigger-region boundary.
+
+        Lifetime expiry: after pedestrian_max_lifetime_steps steps the walker
+        is destroyed and respawned at a new random position within its zone.
+        This provides episode variety without relying on boundary despawning.
         """
+        # Activate inward correction when this close to any zone edge (metres)
+        _BOUNDARY_MARGIN = 0.5
+
         for i, walker in enumerate(self._pedestrian_actors):
             if not (walker is not None and walker.is_alive):
                 continue
@@ -734,20 +786,34 @@ class CARLAParkingEnv(gym.Env):
             self._pedestrian_lifetime_steps[i] += 1
             self._pedestrian_heading_steps[i] += 1
 
-            # Zone boundary check: despawn and respawn if outside assigned bbox
-            loc = walker.get_location()
-            zone = self._pedestrian_zones[i]
-            outside_zone = (
-                loc.x < zone["x_min"]
-                or loc.x > zone["x_max"]
-                or loc.y < zone["y_min"]
-                or loc.y > zone["y_max"]
-            )
-            if outside_zone or self._pedestrian_lifetime_steps[i] >= self._pedestrian_max_lifetime:
+            # Lifetime expiry: respawn at random position within zone
+            if self._pedestrian_lifetime_steps[i] >= self._pedestrian_max_lifetime:
                 self._respawn_pedestrian(i)
                 continue
 
-            if self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
+            loc = walker.get_location()
+            zone = self._pedestrian_zones[i]
+
+            near_boundary = (
+                loc.x < zone["x_min"] + _BOUNDARY_MARGIN
+                or loc.x > zone["x_max"] - _BOUNDARY_MARGIN
+                or loc.y < zone["y_min"] + _BOUNDARY_MARGIN
+                or loc.y > zone["y_max"] - _BOUNDARY_MARGIN
+            )
+
+            if near_boundary:
+                # Steer toward zone centre so the walker moves back inward
+                cx = (zone["x_min"] + zone["x_max"]) / 2.0
+                cy = (zone["y_min"] + zone["y_max"]) / 2.0
+                to_cx = cx - loc.x
+                to_cy = cy - loc.y
+                magnitude = math.sqrt(to_cx * to_cx + to_cy * to_cy)
+                if magnitude > 1e-6:
+                    to_cx, to_cy = to_cx / magnitude, to_cy / magnitude
+                self._pedestrian_headings[i] = (to_cx, to_cy, 0.0)
+                self._pedestrian_heading_steps[i] = 0
+            elif self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
+                # Periodic random direction change while comfortably inside zone
                 heading_rad = random.uniform(0.0, 2.0 * math.pi)
                 self._pedestrian_headings[i] = (
                     math.cos(heading_rad),
@@ -932,12 +998,30 @@ class CARLAParkingEnv(gym.Env):
 
         Called every step with life_time=0.05 (one frame at 20 Hz). No display
         required -- overlays are rendered by the CARLA server.
+
+        @note The spectator is repositioned above the lot centre each step.
+              CARLA culls draw_box geometry that is far from the spectator
+              camera, so without this the far side of the lot goes invisible.
         """
         if self.world is None or self.vehicle is None:
             return
 
+        # Keep spectator above lot centre so all debug geometry stays in view
+        corners = self._current_layout.get("corners", [])
+        if corners:
+            cx = sum(float(c["x"]) for c in corners) / len(corners)
+            cy = sum(float(c["y"]) for c in corners) / len(corners)
+            cz = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 50.0
+            spectator = self.world.get_spectator()
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=cx, y=cy, z=cz),
+                    carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0),
+                )
+            )
+
         debug = self.world.debug
-        z = self._current_layout.get("origin_z", 0.0) + 0.05
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
         target_id = self._target_bay.get("bay_id", "")  # set from "id" key at sample time
 
         # Bay outlines -- colour by type
@@ -1168,7 +1252,8 @@ class CARLAParkingEnv(gym.Env):
         spawn_raw = self._current_layout.get("spawn_transform", {})
         sx = float(spawn_raw.get("x", 0.0))
         sy = float(spawn_raw.get("y", 0.0))
-        sz = self._current_layout.get("origin_z", 0.0) + 0.3
+        # spawn_transform.z is already the world-frame road height; add clearance offset
+        sz = float(spawn_raw.get("z", self._current_layout.get("origin", {}).get("z", 0.3)))
         syaw = float(spawn_raw.get("yaw_deg", 0.0))
 
         bp_lib = self.world.get_blueprint_library()
