@@ -41,18 +41,20 @@ install: ## Install package and dev dependencies
 # Layout Generation (no CARLA needed)
 # ----------------------------------------------------------------------
 
-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed)
+generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
 	mkdir -p configs/layouts outputs/layouts
-	$(PYTHON_VIS) scripts/generate_lot_layout.py \
+	$(PYTHON_VIS) scripts/generate_layouts.py \
 		--output-dir configs/layouts \
-		--plot-dir outputs/layouts
+		--plot-dir outputs/layouts \
+		$(if $(LAYOUT),--layout $(LAYOUT),)
 
-docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container
+docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container. Usage: make docker-generate-layouts [LAYOUT=trapezoid]
 	$(DOCKER_COMPOSE) exec training bash -c \
 		"mkdir -p configs/layouts outputs/layouts && \
-		 python scripts/generate_lot_layout.py \
+		 python scripts/generate_layouts.py \
 		   --output-dir configs/layouts \
-		   --plot-dir outputs/layouts"
+		   --plot-dir outputs/layouts \
+		   $(if $(LAYOUT),--layout $(LAYOUT),)"
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side, detachable from training)
@@ -222,15 +224,15 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
 
-LAYOUT ?= trapezoid
-docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [LAYOUT=trapezoid]
+INSPECT_LAYOUT ?= trapezoid
+docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
 	xhost -local:docker 2>/dev/null || true
 
 
