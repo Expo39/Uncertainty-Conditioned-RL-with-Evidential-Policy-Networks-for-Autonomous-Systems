@@ -1,13 +1,55 @@
 """
 @file geometry.py
-@brief Pure geometry helpers for parking lot layout computations.
+@brief Shared geometry utilities for parking lot layout processing.
 
-All functions are free of CARLA and ROS 2 dependencies and are unit-testable
-on CPU without any simulator running.
+Provides helpers for converting zone dictionaries (from layout YAML files)
+into normalised bounding-box tuples, interpolating cone positions along a
+polygon perimeter, and computing target bay pose in the ego vehicle body frame.
+Used by both the training environment and the inspect_layout script so the
+geometry logic lives in one place.
 """
 
 import math
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+
+
+def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
+    """
+    @brief Convert a pedestrian zone dict to a bounding-box tuple.
+
+    Handles two YAML formats produced by generate_lot_layout.py:
+
+    Format A -- explicit extents::
+
+        x_min: <float>
+        x_max: <float>
+        y_min: <float>
+        y_max: <float>
+
+    Format B -- centre + half-extents::
+
+        centre_x: <float>
+        centre_y: <float>
+        half_width: <float>
+        half_height: <float>
+
+    @param zone_raw: Raw zone dict loaded from the layout YAML.
+    @return Tuple (x_min, x_max, y_min, y_max) as world-frame floats.
+    """
+    if "x_min" in zone_raw:
+        return (
+            float(zone_raw["x_min"]),
+            float(zone_raw["x_max"]),
+            float(zone_raw["y_min"]),
+            float(zone_raw["y_max"]),
+        )
+
+    # Format B: derive extents from centre + half-extents
+    cx = float(zone_raw["centre_x"])
+    cy = float(zone_raw["centre_y"])
+    hw = float(zone_raw["half_width"])
+    hh = float(zone_raw["half_height"])
+    return cx - hw, cx + hw, cy - hh, cy + hh
 
 
 def _interpolate_cone_positions(
