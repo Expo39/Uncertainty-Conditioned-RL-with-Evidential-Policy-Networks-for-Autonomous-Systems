@@ -2,7 +2,7 @@
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration verify
-.PHONY: lint format typecheck clean
+.PHONY: lint format typecheck clean syntax-check
 .PHONY: backup-configs restore-configs
 .PHONY: train train-short evaluate ros2 experiment-dry
 .PHONY: generate-layouts visualise visualise-record
@@ -320,6 +320,9 @@ typecheck: ## Run mypy type checking
 
 sanity: ## Quick import check
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
+
+syntax-check: ## Check Python syntax with py_compile (no execution)
+	$(PYTHON) -m py_compile uncertainty_rl/envs/carla_parking.py && echo "Syntax OK: carla_parking.py"
 
 # ----------------------------------------------------------------------
 # Cleanup
