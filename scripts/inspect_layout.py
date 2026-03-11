@@ -32,6 +32,7 @@ except ImportError:
     sys.exit(1)
 
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.utils.geometry import zone_bbox
 
 
 # ---------------------------------------------------------------------------
@@ -142,24 +143,9 @@ def _draw_inspect_overlays(
         )
 
     # Pedestrian zones -- purple outlines
-    def _zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
-        """@brief Convert zone dict to (x_min, x_max, y_min, y_max)."""
-        if "x_min" in zone_raw:
-            return (
-                float(zone_raw["x_min"]),
-                float(zone_raw["x_max"]),
-                float(zone_raw["y_min"]),
-                float(zone_raw["y_max"]),
-            )
-        cx = float(zone_raw["centre_x"])
-        cy = float(zone_raw["centre_y"])
-        hw = float(zone_raw["half_width"])
-        hh = float(zone_raw["half_height"])
-        return cx - hw, cx + hw, cy - hh, cy + hh
-
     purple = carla.Color(r=180, g=0, b=220)
     for zone_idx, zone_raw in enumerate(layout.get("pedestrian_zones", [])):
-        x_min, x_max, y_min, y_max = _zone_bbox(zone_raw)
+        x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
         zone_corners = [
             carla.Location(x=x_min, y=y_min, z=z),
             carla.Location(x=x_max, y=y_min, z=z),

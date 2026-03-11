@@ -48,7 +48,7 @@ except ImportError:
     _ROS2_AVAILABLE = False
 
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
-from uncertainty_rl.envs.geometry import (
+from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
 )
@@ -63,11 +63,25 @@ from uncertainty_rl.utils.constants import (
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
+from uncertainty_rl.utils.geometry import zone_bbox
 
 logger = logging.getLogger(__name__)
 
 # Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
+
+# Vehicle types that overhang a standard 2.5 m bay - excluded from parking spawns.
+_LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
+    "ambulance",
+    "firetruck",
+    "sprinter",
+    "t2",
+    "t2_2021",
+    "carlacola",
+    "cybertruck",
+    "fusorosa",
+    "bus",
+)
 
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
@@ -101,6 +115,10 @@ class CARLAParkingEnv(gym.Env):
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
+
+    # Class-level layout cache shared across all instances to avoid re-reading
+    # the same YAML from disk on every episode reset.
+    _layout_cache: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -164,6 +182,7 @@ class CARLAParkingEnv(gym.Env):
             "patrol_obstacle_stop_distance", 5.0
         )
         self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
+        self._patrol_heading_gain: float = scenarios.get("patrol_heading_gain", 0.8)
         self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
@@ -184,6 +203,27 @@ class CARLAParkingEnv(gym.Env):
         self._spawned_static_vehicles: List[Any] = []
         self._patrol_npcs: List[Any] = []
         self._pedestrian_actors: List[Any] = []
+
+        # Performance-optimisation caches - cleared in _cleanup_actors()
+        # Static obstacle (x, y) positions: cones + static vehicles.  No
+        # get_location() call needed for these since they never move.
+        self._static_obstacle_positions: List[Tuple[float, float]] = []
+
+        # Cached actor list for patrol obstacle proximity checks.  Rebuilt
+        # once after all vehicles are spawned; avoids per-step world queries.
+        self._all_vehicle_actors: List[Any] = []
+
+        # Cached filtered blueprint lists - rebuilt once per reset.
+        self._car_blueprints: List[Any] = []
+        self._walker_blueprints: List[Any] = []
+
+        # Pre-allocated observation buffer - reused every step to avoid
+        # repeated small heap allocations.
+        if self._include_covariance:
+            _obs_dim = TOTAL_OBS_DIM
+        else:
+            _obs_dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
+        self._obs_buffer: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
 
         # Target bay (world frame, set in reset)
         self._target_bay: Dict[str, Any] = {
@@ -241,7 +281,6 @@ class CARLAParkingEnv(gym.Env):
 
         # ROS 2 covariance subscriber (only when covariance included)
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
-        self._spin_thread: Optional[threading.Thread] = None
         if self._include_covariance:
             self._init_ros2()
 
@@ -274,12 +313,9 @@ class CARLAParkingEnv(gym.Env):
             node_name=node_name,
         )
 
-        self._spin_thread = threading.Thread(
-            target=rclpy.spin,
-            args=(self._cov_subscriber,),
-            daemon=True,
-        )
-        self._spin_thread.start()
+        threading.Thread(
+            target=rclpy.spin, args=(self._cov_subscriber,), daemon=True
+        ).start()
         logger.info("ROS 2 covariance subscriber started in daemon thread.")
 
     # ------------------------------------------------------------------
@@ -317,8 +353,14 @@ class CARLAParkingEnv(gym.Env):
                 f"Run 'make generate-layouts' to create it."
             )
 
-        with open(layout_path, "r") as fh:
-            self._current_layout = yaml.safe_load(fh)
+        cache_key = str(layout_path.resolve())
+        if cache_key in CARLAParkingEnv._layout_cache:
+            self._current_layout = CARLAParkingEnv._layout_cache[cache_key]
+        else:
+            with open(layout_path, "r") as fh:
+                self._current_layout = yaml.safe_load(fh)
+            CARLAParkingEnv._layout_cache[cache_key] = self._current_layout
+            logger.debug(f"Cached floor plan layout: {layout_path}")
 
         self._current_floor_plan_name = name
         logger.info(f"Loaded floor plan: {name} from {layout_path}")
@@ -332,6 +374,9 @@ class CARLAParkingEnv(gym.Env):
         @note Sets self._target_bay with world-frame coordinates.
         """
         bays = self._current_layout.get("bays", [])
+
+        # Exclude always-empty bays before sampling the target
+        bays = [b for b in bays if not b.get("always_empty", False)]
 
         # Group by bay type
         by_type: Dict[str, List[Dict[str, Any]]] = {}
@@ -367,6 +412,33 @@ class CARLAParkingEnv(gym.Env):
     # ------------------------------------------------------------------
     # Actor spawning
     # ------------------------------------------------------------------
+
+    def _cache_blueprints(self) -> None:
+        """
+        @brief Fetch and filter blueprint lists once per reset.
+
+        Stores results in self._car_blueprints and self._walker_blueprints so
+        that _spawn_static_vehicles(), _spawn_npc_patrol(), _spawn_pedestrians(),
+        and _respawn_pedestrian() can reuse the filtered lists without repeated
+        world queries.
+
+        Car blueprints: four-wheeled vehicles excluding _LARGE_VEHICLE_TYPES.
+        Walker blueprints: all walker.pedestrian.* blueprints.
+        """
+        if self.world is None:
+            return
+
+        bp_lib = self.world.get_blueprint_library()
+
+        vehicle_bps = bp_lib.filter("vehicle.*")
+        self._car_blueprints = [
+            bp
+            for bp in vehicle_bps
+            if int(bp.get_attribute("number_of_wheels").as_int()) == 4
+            and not any(excl in bp.id.lower() for excl in _LARGE_VEHICLE_TYPES)
+        ]
+
+        self._walker_blueprints = list(bp_lib.filter("walker.pedestrian.*"))
 
     def _spawn_perimeter_cones(self) -> None:
         """
@@ -411,6 +483,8 @@ class CARLAParkingEnv(gym.Env):
             if cone is not None:
                 cone.set_simulate_physics(False)
                 self._spawned_cones.append(cone)
+                # Cache static position so _check_clearance() needs no get_location()
+                self._static_obstacle_positions.append((cx, cy))
 
         logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
 
@@ -451,19 +525,6 @@ class CARLAParkingEnv(gym.Env):
         # Exclude the target bay and its immediate neighbours
         excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
 
-        bp_lib = self.world.get_blueprint_library()
-        vehicle_bps = bp_lib.filter("vehicle.*")
-        # Exclude large vehicles (vans, trucks, emergency) that overhang a 2.5 m bay.
-        _LARGE = (
-            "ambulance", "firetruck", "sprinter", "t2", "t2_2021",
-            "carlacola", "cybertruck", "fusorosa", "bus",
-        )
-        car_bps = [
-            bp for bp in vehicle_bps
-            if int(bp.get_attribute("number_of_wheels").as_int()) == 4
-            and not any(excl in bp.id.lower() for excl in _LARGE)
-        ]
-
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
         # Spawn 2 m above the floor so the vehicle bounding box clears perimeter
         # cones whose tops reach ~1 m.  Physics is immediately disabled and the
@@ -473,27 +534,35 @@ class CARLAParkingEnv(gym.Env):
         for bay in bays:
             if bay.get("id", bay.get("bay_id", "")) in excluded_ids:
                 continue
+            if bay.get("always_empty", False):
+                continue
             if random.random() > self._bay_occupancy_rate:
                 continue
 
-            bp = random.choice(car_bps)
+            bp = random.choice(self._car_blueprints)
             if bp.has_attribute("color"):
                 color = random.choice(bp.get_attribute("color").recommended_values)
                 bp.set_attribute("color", color)
 
+            bay_x = float(bay["x"])
+            bay_y = float(bay["y"])
             yaw = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
             transform = carla.Transform(
-                carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z_spawn),
+                carla.Location(x=bay_x, y=bay_y, z=z_spawn),
                 carla.Rotation(yaw=yaw),
             )
             actor = self.world.try_spawn_actor(bp, transform)
             if actor is not None:
                 actor.set_simulate_physics(False)
-                actor.set_transform(carla.Transform(
-                    carla.Location(x=float(bay["x"]), y=float(bay["y"]), z=z),
-                    carla.Rotation(yaw=yaw),
-                ))
+                actor.set_transform(
+                    carla.Transform(
+                        carla.Location(x=bay_x, y=bay_y, z=z),
+                        carla.Rotation(yaw=yaw),
+                    )
+                )
                 self._spawned_static_vehicles.append(actor)
+                # Cache static position so _check_clearance() needs no get_location()
+                self._static_obstacle_positions.append((bay_x, bay_y))
 
         logger.debug(f"Spawned {len(self._spawned_static_vehicles)} static vehicles.")
 
@@ -514,25 +583,13 @@ class CARLAParkingEnv(gym.Env):
         # Always spawn at least 1 patrol vehicle so the agent always encounters a moving obstacle.
         num_patrol = random.randint(1, max(1, self._num_patrol_max))
 
-        bp_lib = self.world.get_blueprint_library()
-        vehicle_bps = bp_lib.filter("vehicle.*")
-        _LARGE = (
-            "ambulance", "firetruck", "sprinter", "t2", "t2_2021",
-            "carlacola", "cybertruck", "fusorosa", "bus",
-        )
-        car_bps = [
-            bp for bp in vehicle_bps
-            if int(bp.get_attribute("number_of_wheels").as_int()) == 4
-            and not any(excl in bp.id.lower() for excl in _LARGE)
-        ]
-
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
 
         for i in range(num_patrol):
-            bp = random.choice(car_bps)
+            bp = random.choice(self._car_blueprints)
             start_idx = (i * len(waypoints) // num_patrol) % len(waypoints)
             wp = waypoints[start_idx]
             transform = carla.Transform(
@@ -561,32 +618,14 @@ class CARLAParkingEnv(gym.Env):
         if not zones_raw:
             return
 
-        bp_lib = self.world.get_blueprint_library()
-        walker_bps = bp_lib.filter("walker.pedestrian.*")
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
-        def _zone_bbox(z: Dict[str, Any]) -> Dict[str, float]:
-            """Convert zone dict to x_min/x_max/y_min/y_max regardless of YAML format."""
-            if "x_min" in z:
-                return {
-                    "x_min": float(z["x_min"]),
-                    "x_max": float(z["x_max"]),
-                    "y_min": float(z["y_min"]),
-                    "y_max": float(z["y_max"]),
-                }
-            # World-frame YAML format: centre_x/y + half_width/height
-            cx = float(z["centre_x"])
-            cy = float(z["centre_y"])
-            hw = float(z["half_width"])
-            hh = float(z["half_height"])
-            return {
-                "x_min": cx - hw,
-                "x_max": cx + hw,
-                "y_min": cy - hh,
-                "y_max": cy + hh,
-            }
+        def _to_zone_dict(zone_raw: Dict[str, Any]) -> Dict[str, float]:
+            """@brief Wrap zone_bbox tuple into the dict format used internally."""
+            x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
+            return {"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max}
 
-        zones: List[Dict[str, float]] = [_zone_bbox(z) for z in zones_raw]
+        zones: List[Dict[str, float]] = [_to_zone_dict(zr) for zr in zones_raw]
 
         # Always fill every zone (one pedestrian each), up to the configured maximum.
         num_peds = min(self._num_pedestrians_max, len(zones))
@@ -597,7 +636,7 @@ class CARLAParkingEnv(gym.Env):
             # Assign zones round-robin so all zones are populated evenly
             zone = zones[ped_i % len(zones)]
 
-            bp = random.choice(walker_bps)
+            bp = random.choice(self._walker_blueprints)
             if bp.has_attribute("is_invincible"):
                 bp.set_attribute("is_invincible", "false")
 
@@ -646,12 +685,10 @@ class CARLAParkingEnv(gym.Env):
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
-        k_p = 0.8  # Proportional steering gain
+        k_p = self._patrol_heading_gain
 
-        # Fetch all vehicles once per tick for obstacle proximity checks
-        all_vehicles: List[Any] = (
-            list(self.world.get_actors().filter("vehicle.*")) if self.world else []
-        )
+        # Use cached actor list; rebuilt once after spawn, avoids per-step world query
+        all_vehicles: List[Any] = self._all_vehicle_actors
 
         for i, npc in enumerate(self._patrol_npcs):
             if not (npc is not None and npc.is_alive):
@@ -683,7 +720,7 @@ class CARLAParkingEnv(gym.Env):
 
             steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
 
-            # Obstacle proximity check — brake if any vehicle is ahead within stop distance
+            # Obstacle proximity check - brake if any vehicle is ahead within stop distance
             npc_yaw = math.radians(t.rotation.yaw)
             fwd_x = math.cos(npc_yaw)
             fwd_y = math.sin(npc_yaw)
@@ -727,11 +764,9 @@ class CARLAParkingEnv(gym.Env):
         if old is not None and old.is_alive:
             old.destroy()
 
-        bp_lib = self.world.get_blueprint_library()
-        walker_bps = bp_lib.filter("walker.pedestrian.*")
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
-        bp = random.choice(walker_bps)
+        bp = random.choice(self._walker_blueprints)
         if bp.has_attribute("is_invincible"):
             bp.set_attribute("is_invincible", "false")
 
@@ -836,26 +871,34 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Check whether the ego vehicle is within clearance threshold of any
                obstacle actor.
+
+        Static obstacles (cones and parked vehicles) use pre-cached 2D positions
+        from self._static_obstacle_positions, avoiding a get_location() RPC per
+        actor per step.  Dynamic actors (patrol NPCs and pedestrians) still
+        require a live get_location() call because they move each step.
+
         @return True if a clearance violation is detected (< CLEARANCE_THRESHOLD).
         """
         if self.vehicle is None:
             return False
 
         ego_loc = self.vehicle.get_location()
+        ego_x = ego_loc.x
+        ego_y = ego_loc.y
 
-        obstacle_actors = (
-            self._spawned_cones
-            + self._spawned_static_vehicles
-            + self._patrol_npcs
-            + self._pedestrian_actors
-        )
+        # Static obstacles: use cached (x, y) -- no get_location() needed
+        for ox, oy in self._static_obstacle_positions:
+            dx = ego_x - ox
+            dy = ego_y - oy
+            if math.sqrt(dx * dx + dy * dy) < CLEARANCE_THRESHOLD:
+                return True
 
-        for actor in obstacle_actors:
+        # Dynamic actors: patrol NPCs and pedestrians require live position
+        for actor in self._patrol_npcs + self._pedestrian_actors:
             if actor is None or not actor.is_alive:
                 continue
             other_loc = actor.get_location()
-            dist = ego_loc.distance(other_loc)
-            if dist < CLEARANCE_THRESHOLD:
+            if ego_loc.distance(other_loc) < CLEARANCE_THRESHOLD:
                 return True
 
         return False
@@ -958,8 +1001,6 @@ class CARLAParkingEnv(gym.Env):
         vy = velocity.y
         vyaw = math.radians(angular_vel.z)
 
-        vehicle_state = np.array([x, y, yaw, vx, vy, vyaw], dtype=np.float32)
-
         # Relative target pose in ego body frame
         dx, dy, dyaw = _compute_relative_target_pose(
             x,
@@ -969,10 +1010,19 @@ class CARLAParkingEnv(gym.Env):
             self._target_bay["y"],
             self._target_bay["yaw"],
         )
-        target_pose = np.array([dx, dy, dyaw], dtype=np.float32)
 
         if not self._include_covariance:
-            return np.concatenate([vehicle_state, target_pose])
+            # Fill pre-allocated 9-dim buffer in-place: [pose(6), target(3)]
+            self._obs_buffer[0] = x
+            self._obs_buffer[1] = y
+            self._obs_buffer[2] = yaw
+            self._obs_buffer[3] = vx
+            self._obs_buffer[4] = vy
+            self._obs_buffer[5] = vyaw
+            self._obs_buffer[6] = dx
+            self._obs_buffer[7] = dy
+            self._obs_buffer[8] = dyaw
+            return self._obs_buffer.copy()
 
         # EKF covariance features
         if self._cov_subscriber is not None:
@@ -985,103 +1035,23 @@ class CARLAParkingEnv(gym.Env):
         else:
             uncertainty = uncertainty.astype(np.float32)
 
-        # [pose(6), covariance(9), target(3)] = 18
-        return np.concatenate([vehicle_state, uncertainty, target_pose])
+        # Fill pre-allocated 18-dim buffer in-place: [pose(6), covariance(9), target(3)]
+        self._obs_buffer[0] = x
+        self._obs_buffer[1] = y
+        self._obs_buffer[2] = yaw
+        self._obs_buffer[3] = vx
+        self._obs_buffer[4] = vy
+        self._obs_buffer[5] = vyaw
+        self._obs_buffer[6:15] = uncertainty
+        self._obs_buffer[15] = dx
+        self._obs_buffer[16] = dy
+        self._obs_buffer[17] = dyaw
+        return self._obs_buffer.copy()
+
 
     # ------------------------------------------------------------------
-    # Debug overlays and visualisation
+    # Visualisation
     # ------------------------------------------------------------------
-
-    def _draw_debug_overlays(self) -> None:
-        """
-        @brief Draw server-side debug geometry visible in any connected CARLA spectator.
-
-        Called every step with life_time=0.05 (one frame at 20 Hz). No display
-        required -- overlays are rendered by the CARLA server.
-
-        @note The spectator is repositioned above the lot centre each step.
-              CARLA culls draw_box geometry that is far from the spectator
-              camera, so without this the far side of the lot goes invisible.
-        """
-        if self.world is None or self.vehicle is None:
-            return
-
-        # Keep spectator above lot centre so all debug geometry stays in view
-        corners = self._current_layout.get("corners", [])
-        if corners:
-            cx = sum(float(c["x"]) for c in corners) / len(corners)
-            cy = sum(float(c["y"]) for c in corners) / len(corners)
-            cz = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 50.0
-            spectator = self.world.get_spectator()
-            spectator.set_transform(
-                carla.Transform(
-                    carla.Location(x=cx, y=cy, z=cz),
-                    carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0),
-                )
-            )
-
-        debug = self.world.debug
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
-        target_id = self._target_bay.get("bay_id", "")  # set from "id" key at sample time
-
-        # Bay outlines -- colour by type
-        type_colours = {
-            "perpendicular": carla.Color(r=0, g=0, b=200),
-            "angled": carla.Color(r=200, g=100, b=0),
-            "parallel": carla.Color(r=0, g=150, b=0),
-        }
-
-        for bay in self._current_layout.get("bays", []):
-            bay_type = bay.get("bay_type", "perpendicular")
-            colour = type_colours.get(bay_type, carla.Color(r=100, g=100, b=100))
-            is_target = bay.get("id", bay.get("bay_id", "")) == target_id
-
-            if is_target:
-                colour = carla.Color(r=0, g=255, b=0)
-
-            width = float(bay.get("width", 2.5))
-            depth = float(bay.get("depth", 5.0))
-            bx = float(bay["x"])
-            by = float(bay["y"])
-            yaw_deg = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
-
-            box = carla.BoundingBox(
-                carla.Location(x=bx, y=by, z=z),
-                carla.Vector3D(x=depth / 2.0, y=width / 2.0, z=0.1),
-            )
-            rotation = carla.Rotation(yaw=yaw_deg)
-            thickness = 0.08 if is_target else 0.04
-            debug.draw_box(
-                box, rotation, thickness=thickness, color=colour, life_time=0.05
-            )
-
-            if is_target:
-                debug.draw_string(
-                    carla.Location(x=bx, y=by, z=z + 1.0),
-                    "TARGET",
-                    color=carla.Color(r=0, g=255, b=0),
-                    life_time=0.05,
-                )
-
-        # Ego bounding box
-        ego_transform = self.vehicle.get_transform()
-        ego_bb = self.vehicle.bounding_box
-        debug.draw_box(
-            ego_bb,
-            ego_transform.rotation,
-            thickness=0.06,
-            color=carla.Color(r=0, g=200, b=200),
-            life_time=0.05,
-        )
-
-        # Ego trajectory trail
-        for tx, ty in self._trajectory_buffer:
-            debug.draw_point(
-                carla.Location(x=tx, y=ty, z=z + 0.1),
-                size=0.05,
-                color=carla.Color(r=0, g=180, b=180),
-                life_time=0.05,
-            )
 
     def _write_vis_state(self) -> None:
         """
@@ -1152,7 +1122,7 @@ class CARLAParkingEnv(gym.Env):
         @brief Connect to CARLA and load the world.
 
         @note When town is "FlatPlane", loads configs/flat_plane.xodr via
-              generate_opendrive_world() — a clean flat plane with no roads or
+              generate_opendrive_world() - a clean flat plane with no roads or
               buildings. Otherwise uses load_world() for named CARLA towns.
         """
         try:
@@ -1367,6 +1337,10 @@ class CARLAParkingEnv(gym.Env):
         self._pedestrian_lifetime_steps.clear()
         self._pedestrian_zones.clear()
 
+        # Clear per-episode performance caches
+        self._static_obstacle_positions.clear()
+        self._all_vehicle_actors.clear()
+
         if self.vehicle is not None:
             if self.vehicle.is_alive:
                 self.vehicle.destroy()
@@ -1417,12 +1391,23 @@ class CARLAParkingEnv(gym.Env):
         self._configure_weather()
         self._unload_unnecessary_layers()
 
+        # Cache blueprint lists once before any spawning to avoid repeated
+        # world queries inside each spawn method.
+        self._cache_blueprints()
+
         self._spawn_vehicle()
         self._spawn_sensors()
         self._spawn_perimeter_cones()
         self._spawn_static_vehicles()
         self._spawn_npc_patrol()
         self._spawn_pedestrians()
+
+        # Rebuild vehicle actor cache after all vehicles are spawned so
+        # _update_patrol_npcs() can use it without a per-step world query.
+        if self.world is not None:
+            self._all_vehicle_actors = list(
+                self.world.get_actors().filter("vehicle.*")
+            )
 
         if self._include_covariance:
             self._wait_for_covariance()
@@ -1461,7 +1446,7 @@ class CARLAParkingEnv(gym.Env):
                 self._update_pedestrians()
                 self.world.tick()
 
-                # Update trajectory buffer for debug overlays
+                # Update trajectory buffer for vis state writer
                 t = self.vehicle.get_transform()
                 self._trajectory_buffer.append((t.location.x, t.location.y))
 
@@ -1470,7 +1455,6 @@ class CARLAParkingEnv(gym.Env):
 
         truncated = self.steps >= self.max_steps
 
-        self._draw_debug_overlays()
         self._write_vis_state()
 
         info: Dict[str, Any] = {
