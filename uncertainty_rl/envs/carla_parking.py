@@ -83,6 +83,27 @@ _LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
     "bus",
 )
 
+# Micro/novelty vehicles excluded from parked car pool — unrealistically small
+# for a standard parking bay and visually confusing during inspection.
+_SMALL_VEHICLE_TYPES: Tuple[str, ...] = (
+    "microlino",
+    "isetta",
+    "micro",
+    "omafiets",
+    "crossbike",
+    "low_rider",
+    "ninja",
+    "yzf",
+    "century",
+    "harley",
+    "kawasaki",
+    "yamaha",
+    "vespa",
+    "zx125",
+    "bike",
+    "bicycle",
+)
+
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
     "CARLAParkingEnv",
@@ -204,6 +225,10 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_npcs: List[Any] = []
         self._pedestrian_actors: List[Any] = []
 
+        # The spawn transform chosen for this episode (set in _spawn_vehicle()).
+        # Used by _spawn_perimeter_cones() to cut the correct entrance gap.
+        self._chosen_spawn: Dict[str, float] = {}
+
         # Performance-optimisation caches - cleared in _cleanup_actors()
         # Static obstacle (x, y) positions: cones + static vehicles.  No
         # get_location() call needed for these since they never move.
@@ -240,6 +265,8 @@ class CARLAParkingEnv(gym.Env):
 
         # Patrol NPC step counters
         self._patrol_waypoint_indices: List[int] = []
+        # +1 = CCW (forward through waypoints), -1 = CW (reverse). Randomised per NPC per episode.
+        self._patrol_waypoint_directions: List[int] = []
 
         # Pedestrian step counters for heading re-randomisation and zone confinement
         self._pedestrian_heading_steps: List[int] = []
@@ -436,6 +463,7 @@ class CARLAParkingEnv(gym.Env):
             for bp in vehicle_bps
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
             and not any(excl in bp.id.lower() for excl in _LARGE_VEHICLE_TYPES)
+            and not any(excl in bp.id.lower() for excl in _SMALL_VEHICLE_TYPES)
         ]
 
         self._walker_blueprints = list(bp_lib.filter("walker.pedestrian.*"))
@@ -459,10 +487,13 @@ class CARLAParkingEnv(gym.Env):
             (float(c["x"]), float(c["y"])) for c in corners_raw
         ]
         spawn_raw = self._current_layout.get("spawn_transform", {})
+        # Only open a gap at the spawn chosen this episode — other entry points
+        # stay walled off so the lot looks realistic from inside.
+        chosen = self._chosen_spawn if self._chosen_spawn else spawn_raw
         entrance: Optional[Tuple[float, float]] = (
-            float(spawn_raw["x"]),
-            float(spawn_raw["y"]),
-        ) if spawn_raw else None
+            float(chosen["x"]),
+            float(chosen["y"]),
+        ) if chosen else None
         cone_positions = _interpolate_cone_positions(
             corners,
             self._cone_spacing,
@@ -547,6 +578,10 @@ class CARLAParkingEnv(gym.Env):
             bay_x = float(bay["x"])
             bay_y = float(bay["y"])
             yaw = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
+            # Randomly reverse the parked car 50 % of the time — both nose-in
+            # and nose-out orientations are valid in a real car park.
+            if random.random() < 0.5:
+                yaw = (yaw + 180.0) % 360.0
             transform = carla.Transform(
                 carla.Location(x=bay_x, y=bay_y, z=z_spawn),
                 carla.Rotation(yaw=yaw),
@@ -591,16 +626,25 @@ class CARLAParkingEnv(gym.Env):
         for i in range(num_patrol):
             bp = random.choice(self._car_blueprints)
             start_idx = (i * len(waypoints) // num_patrol) % len(waypoints)
+            # Randomly choose patrol direction before spawn so the initial yaw matches.
+            direction = random.choice([-1, 1])
+            next_idx = (start_idx + direction) % len(waypoints)
             wp = waypoints[start_idx]
+            next_wp = waypoints[next_idx]
+            # Face toward the first waypoint the NPC will drive to.
+            spawn_yaw = math.degrees(
+                math.atan2(next_wp[1] - wp[1], next_wp[0] - wp[0])
+            )
             transform = carla.Transform(
                 carla.Location(x=wp[0], y=wp[1], z=z),
-                carla.Rotation(yaw=0.0),
+                carla.Rotation(yaw=spawn_yaw),
             )
             actor = self.world.try_spawn_actor(bp, transform)
             if actor is not None:
                 actor.set_simulate_physics(True)
                 self._patrol_npcs.append(actor)
                 self._patrol_waypoint_indices.append(start_idx)
+                self._patrol_waypoint_directions.append(direction)
 
         logger.debug(f"Spawned {len(self._patrol_npcs)} patrol NPC vehicles.")
 
@@ -703,8 +747,9 @@ class CARLAParkingEnv(gym.Env):
             dist = math.sqrt(dx * dx + dy * dy)
 
             if dist < 3.0:
-                # Advance to next waypoint (cyclic)
-                wp_idx = (wp_idx + 1) % len(waypoints)
+                # Advance to next waypoint in the NPC's chosen direction (cyclic)
+                direction = self._patrol_waypoint_directions[i]
+                wp_idx = (wp_idx + direction) % len(waypoints)
                 self._patrol_waypoint_indices[i] = wp_idx
                 wp_x, wp_y = waypoints[wp_idx]
                 dx = wp_x - t.location.x
@@ -1214,20 +1259,32 @@ class CARLAParkingEnv(gym.Env):
 
     def _spawn_vehicle(self) -> None:
         """
-        @brief Spawn the ego vehicle at the floor plan's spawn transform.
+        @brief Spawn the ego vehicle at a randomly selected spawn transform.
+
+        All spawn transforms (primary + extra_spawn_transforms) are collected
+        and one is chosen uniformly at random each episode to ensure the agent
+        learns to park from varied entry angles and distances.
         """
         if self.world is None:
             return
 
-        spawn_raw = self._current_layout.get("spawn_transform", {})
-        sx = float(spawn_raw.get("x", 0.0))
-        sy = float(spawn_raw.get("y", 0.0))
-        # spawn_transform.z is already the world-frame road height; add clearance offset
-        sz = float(spawn_raw.get("z", self._current_layout.get("origin", {}).get("z", 0.3)))
-        syaw = float(spawn_raw.get("yaw_deg", 0.0))
+        default_z = float(
+            self._current_layout.get("origin", {}).get("z", 0.3)
+        )
+        primary = self._current_layout.get("spawn_transform", {})
+        extras: List[Any] = self._current_layout.get("extra_spawn_transforms", [])
+        all_spawns = [primary] + list(extras)
+
+        chosen = random.choice(all_spawns)
+        # Store for _spawn_perimeter_cones() so only this entry gap is opened.
+        self._chosen_spawn = chosen
+        sx = float(chosen.get("x", 0.0))
+        sy = float(chosen.get("y", 0.0))
+        sz = float(chosen.get("z", default_z))
+        syaw = float(chosen.get("yaw_deg", 0.0))
 
         bp_lib = self.world.get_blueprint_library()
-        vehicle_bp = bp_lib.filter("vehicle.tesla.model3")[0]
+        vehicle_bp = bp_lib.filter("vehicle.bmw.grandtourer")[0]
 
         spawn_transform = carla.Transform(
             carla.Location(x=sx, y=sy, z=sz),
@@ -1242,7 +1299,7 @@ class CARLAParkingEnv(gym.Env):
                 self.vehicle = self.world.try_spawn_actor(
                     vehicle_bp, random.choice(spawn_points)
                 )
-            logger.warning("Primary spawn point occupied, using fallback spawn.")
+            logger.warning("Chosen spawn point occupied, using fallback spawn.")
 
         if self.vehicle is not None:
             time.sleep(0.5)
@@ -1332,6 +1389,7 @@ class CARLAParkingEnv(gym.Env):
             actor_list.clear()
 
         self._patrol_waypoint_indices.clear()
+        self._patrol_waypoint_directions.clear()
         self._pedestrian_heading_steps.clear()
         self._pedestrian_headings.clear()
         self._pedestrian_lifetime_steps.clear()

@@ -25,6 +25,8 @@ import sys
 import time
 from typing import Any, Dict, List, Tuple
 
+import yaml
+
 try:
     import carla
 except ImportError:
@@ -240,18 +242,18 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    # Inspect mode
-    scenarios = {
-        "floor_plans": {
-            args.layout: {
-                "weight": 1.0,
-                "always_empty": [],
-                "layout_file": f"configs/layouts/{args.layout}.yaml",
-            }
-        },
-        "num_patrol_vehicles_max": 1,
-        "num_pedestrians_max": 4,
-        "bay_occupancy_rate": 0.6,
+    # Load parking_scenarios from train_config.yaml so inspection matches training
+    # conditions exactly (same pedestrian count, bay occupancy, patrol vehicles, etc.).
+    with open("configs/train_config.yaml", "r") as _f:
+        _train_cfg = yaml.safe_load(_f)
+    scenarios = dict(_train_cfg.get("parking_scenarios", {}))
+    # Override floor_plans to show only the requested layout.
+    scenarios["floor_plans"] = {
+        args.layout: {
+            "weight": 1.0,
+            "always_empty": [],
+            "layout_file": f"configs/layouts/{args.layout}.yaml",
+        }
     }
     env = CARLAParkingEnv(
         carla_host=args.host,
