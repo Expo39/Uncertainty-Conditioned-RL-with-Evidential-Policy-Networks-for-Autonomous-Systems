@@ -216,19 +216,21 @@ docker-dev: ## Start stack + open training shell (development mode)
 
 MODEL ?= checkpoints/final_model
 docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make docker-demo MODEL=<path>
-	@test -n "$$DISPLAY" || (echo "ERROR: DISPLAY is not set. Run: export DISPLAY=:0" && exit 1)
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)"
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$$DISPLAY MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
+	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
 
 LAYOUT ?= trapezoid
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [LAYOUT=trapezoid]
-	@test -n "$$DISPLAY" || (echo "ERROR: DISPLAY is not set. Run: export DISPLAY=:1" && exit 1)
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$$DISPLAY LAYOUT=$(LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
+	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
 	xhost -local:docker 2>/dev/null || true
 
 

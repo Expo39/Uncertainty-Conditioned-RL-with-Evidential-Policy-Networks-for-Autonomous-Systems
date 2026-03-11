@@ -263,36 +263,28 @@ bays:
   width: 2.5
   depth: 8.0
 patrol_waypoints:
-- x: 4.435
+- x: 4.935
   y: -79.5
 - x: 34.185
   y: -75.5
 - x: 34.185
   y: -53.5
-- x: 4.435
+- x: 4.935
   y: -49.5
 pedestrian_zones:
 - centre_x: 16.87
-  centre_y: -73.5
-  half_width: 10.0
-  half_height: 1.0
-- centre_x: 16.87
-  centre_y: -66.5
-  half_width: 10.0
-  half_height: 1.0
-- centre_x: 16.87
-  centre_y: -55.5
-  half_width: 10.0
-  half_height: 1.0
-- centre_x: 40.5
-  centre_y: -66.0
-  half_width: 1.0
-  half_height: 12.0
-- centre_x: 1.0
   centre_y: -74.0
-  half_width: 1.0
-  half_height: 4.0
-- centre_x: 1.0
-  centre_y: -58.0
-  half_width: 1.0
-  half_height: 4.0
+  half_width: 10.0
+  half_height: 1.5
+- centre_x: 16.87
+  centre_y: -66.0
+  half_width: 10.0
+  half_height: 1.5
+- centre_x: 16.87
+  centre_y: -55.0
+  half_width: 10.0
+  half_height: 1.5
+- centre_x: 40.0
+  centre_y: -66.0
+  half_width: 1.5
+  half_height: 12.0

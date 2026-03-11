@@ -777,7 +777,7 @@ def _trapezoid_layout(
     aisle1_cy = perp_row_a_cy - dims_perp["depth"] / 2.0 - dims_perp["aisle"] / 2.0
     aisle2_cy = perp_mid_y  # midpoint of the 6 m back-to-back gap
     aisle3_cy = perp_row_b_cy + dims_perp["depth"] / 2.0 + dims_perp["aisle"] / 2.0
-    PED_STRIP = 2.0  # width of pedestrian zones in metres
+    PED_STRIP = 3.0  # width of pedestrian zones in metres (must be < aisle width of 6.0 m)
 
     # Patrol path: rectangular loop equidistant between the perp cluster and its neighbours.
     # Left leg:   midpoint between ped zone right edge and left edge of perp cluster.
@@ -831,21 +831,6 @@ def _trapezoid_layout(
             "x_max": par_bay_x_min,
             "y_min": par_right_y_start,
             "y_max": par_right_y_start + 3 * dims_par["depth"],
-        },
-        # Aisles 5a/5b: equal-height 2 m strips hugging left wall (x=0), either side of spawn 1.
-        # Both zones are the same height: from 4 m above/below spawn to 12 m above/below spawn.
-        # This keeps them symmetric around the entrance and fully inside the lot boundary.
-        {
-            "x_min": 0.0,
-            "x_max": PED_STRIP,
-            "y_min": width_front / 2.0 - 12.0,
-            "y_max": width_front / 2.0 - 4.0,
-        },
-        {
-            "x_min": 0.0,
-            "x_max": PED_STRIP,
-            "y_min": width_front / 2.0 + 4.0,
-            "y_max": width_front / 2.0 + 12.0,
         },
     ]
 
