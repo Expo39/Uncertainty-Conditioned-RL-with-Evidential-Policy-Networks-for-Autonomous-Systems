@@ -17,7 +17,7 @@ def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
     """
     @brief Convert a pedestrian zone dict to a bounding-box tuple.
 
-    Handles two YAML formats produced by generate_lot_layout.py:
+    Handles two YAML formats produced by scripts/generate_layouts.py:
 
     Format A -- explicit extents::
 
@@ -57,21 +57,31 @@ def _interpolate_cone_positions(
     spacing: float,
     entrance_point: Optional[Tuple[float, float]] = None,
     entrance_half_width: float = 4.0,
+    extra_entrance_points: Optional[List[Tuple[float, float]]] = None,
 ) -> List[Tuple[float, float]]:
     """
     @brief Interpolate evenly spaced positions along a closed polygon perimeter.
     @param corners: List of (x, y) polygon vertices in order (last edge closes
                    back to first vertex automatically).
     @param spacing: Desired spacing between consecutive cones (metres).
-    @param entrance_point: Optional (x, y) of the entrance centre. Cones within
-                           entrance_half_width metres of this point are omitted,
-                           creating a driveable gap in the perimeter wall.
-    @param entrance_half_width: Half-width of the entrance gap in metres (default 4.0).
+    @param entrance_point: Optional (x, y) of the primary entrance centre. Cones
+                           within entrance_half_width metres are omitted.
+    @param entrance_half_width: Half-width of each entrance gap in metres (default 4.0).
+    @param extra_entrance_points: Optional list of additional (x, y) entrance centres
+                                  (e.g. extra spawn transforms). Each receives the same
+                                  entrance_half_width gap as the primary entrance.
     @return List of (x, y) positions for cone placement.
 
     @note Uses adaptive spacing so the last cone on each edge aligns exactly
           with the corner rather than leaving a gap.
     """
+    # Collect all entrance centres into one list for uniform gap logic.
+    all_entrances: List[Tuple[float, float]] = []
+    if entrance_point is not None:
+        all_entrances.append(entrance_point)
+    if extra_entrance_points:
+        all_entrances.extend(extra_entrance_points)
+
     positions: List[Tuple[float, float]] = []
     n = len(corners)
 
@@ -90,12 +100,12 @@ def _interpolate_cone_positions(
         for k in range(num_intervals):
             cx = x0 + k * dx
             cy = y0 + k * dy
-            if entrance_point is not None:
-                ex, ey = entrance_point
-                dist = math.sqrt((cx - ex) ** 2 + (cy - ey) ** 2)
-                if dist < entrance_half_width:
-                    continue
-            positions.append((cx, cy))
+            in_gap = any(
+                math.sqrt((cx - ex) ** 2 + (cy - ey) ** 2) < entrance_half_width
+                for ex, ey in all_entrances
+            )
+            if not in_gap:
+                positions.append((cx, cy))
 
     return positions
 
