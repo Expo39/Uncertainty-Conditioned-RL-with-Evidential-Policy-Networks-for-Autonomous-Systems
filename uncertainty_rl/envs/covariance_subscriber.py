@@ -7,13 +7,12 @@ Consumed by CARLAParkingEnv when include_covariance=True.
 """
 
 import threading
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import numpy as np
-from typing import cast
 
 try:
-    import rclpy
+    import rclpy  # noqa: F401
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
     from uncertainty_rl_msgs.msg import CovarianceEstimate

@@ -9,7 +9,7 @@ Nothing in this module is layout-specific.
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -106,8 +106,7 @@ def _bay_corners(
     hd = depth / 2.0
     local = [(-hd, -hw), (hd, -hw), (hd, hw), (-hd, hw)]
     return [
-        (cx + cos_y * lx - sin_y * ly, cy + sin_y * lx + cos_y * ly)
-        for lx, ly in local
+        (cx + cos_y * lx - sin_y * ly, cy + sin_y * lx + cos_y * ly) for lx, ly in local
     ]
 
 
@@ -212,8 +211,10 @@ def warn_narrow_corridors(
             if gap < min_width:
                 print(
                     f"  WARNING [{shape_name}]: corridor between "
-                    f"'{a.get('bay_type','?')}' ({a['local_x']:.1f},{a['local_y']:.1f}) "
-                    f"and '{b.get('bay_type','?')}' ({b['local_x']:.1f},{b['local_y']:.1f}) "
+                    f"'{a.get('bay_type','?')}'"
+                    f" ({a['local_x']:.1f},{a['local_y']:.1f}) "
+                    f"and '{b.get('bay_type','?')}'"
+                    f" ({b['local_x']:.1f},{b['local_y']:.1f}) "
                     f"is {gap:.2f} m (min {min_width:.1f} m)."
                 )
 
@@ -531,7 +532,7 @@ def plot_layout(
         spawns: List[Dict[str, Any]],
         g: float,
     ) -> None:
-        """Draw lot perimeter as thick black segments, leaving a gap around each spawn."""
+        """Draw lot perimeter as thick black lines, leaving a gap around each spawn."""
         n = len(corners)
         for i in range(n):
             p0 = corners[i]
@@ -620,7 +621,6 @@ def plot_layout(
         )
         ax.add_patch(rect_patch)
 
-
     for zone in world_layout.get("pedestrian_zones", []):
         zw = zone["half_width"] * 2.0
         zh = zone["half_height"] * 2.0
@@ -676,7 +676,12 @@ def plot_layout(
             for lx, ly in tri_local
         ]
         tri_patch = MPoly(
-            tri_world, closed=True, facecolor="cyan", edgecolor="white", linewidth=1, zorder=6
+            tri_world,
+            closed=True,
+            facecolor="cyan",
+            edgecolor="white",
+            linewidth=1,
+            zorder=6,
         )
         ax.add_patch(tri_patch)
         label = f"SPAWN {idx + 1}"
@@ -691,9 +696,9 @@ def plot_layout(
             fontweight="bold",
             zorder=7,
             path_effects=[
-                __import__("matplotlib.patheffects", fromlist=["withStroke"]).withStroke(
-                    linewidth=2, foreground="black"
-                )
+                __import__(
+                    "matplotlib.patheffects", fromlist=["withStroke"]
+                ).withStroke(linewidth=2, foreground="black")
             ],
         )
 
@@ -701,7 +706,15 @@ def plot_layout(
     if patrol:
         px = [wp["x"] for wp in patrol] + [patrol[0]["x"]]
         py = [wp["y"] for wp in patrol] + [patrol[0]["y"]]
-        ax.plot(px, py, "--", color=HEX_PATROL_PATH, linewidth=1.5, alpha=0.9, label="Patrol path")
+        ax.plot(
+            px,
+            py,
+            "--",
+            color=HEX_PATROL_PATH,
+            linewidth=1.5,
+            alpha=0.9,
+            label="Patrol path",
+        )
 
     from matplotlib.lines import Line2D
 
@@ -711,7 +724,12 @@ def plot_layout(
         mpatches.Patch(color=BAY_HEX["parallel"], label="Parallel bays"),
         mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
         Line2D(
-            [0], [0], color=HEX_PATROL_PATH, linestyle="--", linewidth=1.5, label="Patrol path"
+            [0],
+            [0],
+            color=HEX_PATROL_PATH,
+            linestyle="--",
+            linewidth=1.5,
+            label="Patrol path",
         ),
         mpatches.FancyBboxPatch(
             (0, 0),

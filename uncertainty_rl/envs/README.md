@@ -8,7 +8,7 @@ Gymnasium-compatible CARLA parking environment with real EKF covariance from `ro
 
 A `gymnasium.Env` subclass that places an ego vehicle in a configurable open-space parking lot (Town05\_Opt) and requires it to navigate to a target parking bay while accounting for localisation uncertainty from the robot\_localisation EKF.
 
-**Requires the full Docker stack** (carla-server + ros2-bridge + training containers) for training. No standalone fallback — Docker + ROS 2 are always required.
+**Requires the full Docker stack** (carla-server + ros2-bridge + training containers) for training. No standalone fallback -Docker + ROS 2 are always required.
 
 ### Constructor Parameters
 
@@ -29,7 +29,7 @@ CARLAParkingEnv(
 
 ### State Space (18-dimensional)
 
-**All 18 dimensions are available at the Lemonworx deployment site without retraining.** CARLA ground truth is used only for reward computation — never in the observation. This ensures identical inputs in simulation and on the real vehicle.
+**All 18 dimensions are available at the Lemonworx deployment site without retraining.** CARLA ground truth is used only for reward computation -never in the observation. This ensures identical inputs in simulation and on the real vehicle.
 
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|
@@ -57,7 +57,7 @@ dyaw = angle_wrap(yaw_target - yaw_ego)
 | Action | Range | Description |
 |--------|-------|-------------|
 | Steering | [-1, 1] | Left/right |
-| Throttle | [0, 1] | Acceleration (forward only — no reverse) |
+| Throttle | [0, 1] | Acceleration (forward only -no reverse) |
 | Brake | [0, 1] | Deceleration |
 
 ### Reward Function
@@ -89,13 +89,13 @@ Three floor plans are defined, all placed on Town05\_Opt at episode startup (no 
 |------------|-------|----------------|
 | `rectangle` | Standard rectangular perimeter | Training (sampled uniformly) |
 | `trapezoid` | Widened at one end | Training (sampled uniformly) |
-| `irregular_a` | Five-sided irregular polygon | OOD only — never sampled during training |
+| `irregular_a` | Nine-sided irregular polygon (~80x50 m) | OOD only -never sampled during training |
 
 Floor plan geometry (corners, bay positions, spawn transform, patrol waypoints, pedestrian zones) is pre-computed offline and stored in `configs/layouts/*.yaml`. Regenerate with `make generate-layouts`.
 
 ### Bay Types (German EAR 05 / FGSV 2005)
 
-Each floor plan has 15 bays — 5 of each type:
+Each floor plan has 15 bays -5 of each type:
 
 | Type | Width | Depth | Aisle |
 |------|-------|-------|-------|
@@ -109,7 +109,7 @@ Each episode: sample bay type uniformly (1/3 each), then sample one bay of that 
 
 ### Dynamic Actors
 
-- **NPC patrol vehicles** (0-3 per episode): scripted proportional controller cycling through layout waypoints. No Traffic Manager — Town05\_Opt has no OpenDRIVE road network in the parking area.
+- **NPC patrol vehicles** (0-3 per episode): scripted proportional controller cycling through layout waypoints. No Traffic Manager -Town05\_Opt has no OpenDRIVE road network in the parking area.
 - **Pedestrians** (0-4 per episode): random-walk via `WalkerControl`. No NavMesh required.
 - **Perimeter cones**: `static.prop.trafficcone01` at 2 m spacing along floor plan edges. LiDAR-visible, physics-blocking, `set_simulate_physics(False)`.
 - **Static parked vehicles**: spawned at occupied bay positions, `set_simulate_physics(False)`.
@@ -133,7 +133,7 @@ Each episode: sample bay type uniformly (1/3 each), then sample one bay of that 
 | Class | Purpose |
 |-------|---------|
 | `CARLAParkingEnv` | Main Gymnasium env |
-| `_CovarianceSubscriber` | rclpy daemon thread — subscribes to EKF covariance, caches pose + uncertainty |
+| `_CovarianceSubscriber` | rclpy daemon thread -subscribes to EKF covariance, caches pose + uncertainty |
 | `VisStateWriter` | Atomic JSON writer for detachable 2D visualiser (`scripts/visualise_training.py`) |
 
 ### Module-level helpers

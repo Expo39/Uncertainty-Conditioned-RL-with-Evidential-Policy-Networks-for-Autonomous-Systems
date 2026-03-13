@@ -79,7 +79,7 @@ Code directories are bind-mounted. Edit files on the host and changes reflect im
 
 ### Host-Side Python Setup (Required for Visualisation)
 
-A small subset of commands **must run on the host** because they open GUI windows — Docker containers run headless with no display server. These are:
+A small subset of commands **must run on the host** because they open GUI windows -Docker containers run headless with no display server. These are:
 
 | Command | What it does | Host dep |
 |---------|-------------|----------|
@@ -87,7 +87,7 @@ A small subset of commands **must run on the host** because they open GUI window
 | `make visualise-record` | Same + saves MP4 to `outputs/recordings/` on window close | `matplotlib`, `numpy` |
 | `make generate-layouts` | Generates lot layout YAMLs and bird's-eye PNGs into `outputs/layouts/` | `matplotlib`, `numpy` (PNGs only; YAML generation works without them) |
 
-Set up a lightweight virtualenv for these — no CARLA, ROS 2, or GPU needed:
+Set up a lightweight virtualenv for these -no CARLA, ROS 2, or GPU needed:
 
 ```bash
 sudo apt install python3-venv python3-pip  # once, if not already installed
@@ -133,9 +133,9 @@ make docker-down     # stop all containers when done
 | `make docker-logs` | Follow all container logs | Yes |
 | `make docker-dev` | Start stack + drop into training shell | Yes |
 | `make docker-clean` | Stop and remove volumes | No |
-| `make generate-layouts` | Generate lot layout YAMLs + bird's-eye PNGs — **host only**, no CARLA needed | No |
-| `make visualise` | Live 2D bird's-eye window — **host only**, reads `outputs/vis_state.json` from container | No |
-| `make visualise-record` | Same as `visualise` + saves MP4 to `outputs/recordings/` on close — **host only** | No |
+| `make generate-layouts` | Generate lot layout YAMLs + bird's-eye PNGs -**host only**, no CARLA needed | No |
+| `make visualise` | Live 2D bird's-eye window -**host only**, reads `outputs/vis_state.json` from container | No |
+| `make visualise-record` | Same as `visualise` + saves MP4 to `outputs/recordings/` on close -**host only** | No |
 | `make docker-demo MODEL=` | Windowed 3D CARLA demo with checkpoint (requires X11) | Yes |
 
 Run `make help` for the full list.
@@ -177,13 +177,13 @@ Inspect the PNGs to confirm bay placement and aisle clearances.
 ### Step 2 -- Verify layout in windowed CARLA
 
 ```bash
-make docker-inspect LAYOUT=trapezoid
-make docker-inspect LAYOUT=rectangle
-make docker-inspect LAYOUT=irregular_a
+make docker-inspect INSPECT_LAYOUT=trapezoid
+make docker-inspect INSPECT_LAYOUT=rectangle
+make docker-inspect INSPECT_LAYOUT=irregular_a
 ```
 
 Spawns each layout in windowed CARLA with full debug overlays (bay outlines, spawn points,
-pedestrian zones, patrol path). Origins are pre-set for the FlatPlane map — no coordinate
+pedestrian zones, patrol path). Origins are pre-set for the FlatPlane map -no coordinate
 discovery step needed.
 
 ## Visualisation
