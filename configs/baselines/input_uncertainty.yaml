@@ -1,15 +1,16 @@
 # Baseline: Input Uncertainty Only
-# 15-dim EKF state (pose + covariance), standard MlpPolicy.
+# 18-dim EKF state (pose + covariance + relative target), standard MlpPolicy.
 # The agent sees localisation uncertainty but uses a standard Gaussian policy.
+# (6-dim EKF pose + 9-dim EKF covariance + 3-dim relative target pose = 18-dim)
 #
 # Ablation dimensions:
-#   include_covariance: true   (15-dim observation)
+#   include_covariance: true   (18-dim observation: full EKF state + target)
 #   policy_type: standard      (SB3 MlpPolicy + PPO)
 #
 # All other parameters inherited from configs/train_config.yaml.
 
 baseline_name: "input_uncertainty"
-baseline_description: "15-dim EKF state (pose + covariance), standard actor"
+baseline_description: "18-dim EKF state (pose + covariance + target), standard actor"
 
 include_covariance: true
 policy_type: "standard"

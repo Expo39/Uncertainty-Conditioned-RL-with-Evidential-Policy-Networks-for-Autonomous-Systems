@@ -24,10 +24,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.ppo import PPO
 
 from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.networks import (
-    EvidentialActorCriticPolicy,
-    EvidentialPPO,
-)
+from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
 
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
@@ -120,7 +117,7 @@ def train(config: Dict[str, Any]) -> None:
     print("Creating training environment...")
     train_vec_env = DummyVecEnv([make_env(config)])
 
-    # Normalise observations but not rewards — reward components will be
+    # Normalise observations but not rewards - reward components will be
     # manually scaled via potential-based shaping (see reward TODO in config)
     env = VecNormalize(
         train_vec_env,

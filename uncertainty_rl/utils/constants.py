@@ -36,8 +36,12 @@ VEHICLE_STATE_DIM = 6
 # cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
 COVARIANCE_FEATURES_DIM = 9
 
-# Total observation dimension (with uncertainty conditioning)
-TOTAL_OBS_DIM = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM  # 15
+# Relative target pose features: [dx, dy, dyaw] in ego body frame
+TARGET_POSE_DIM = 3
+
+# Total observation dimension (with uncertainty conditioning and target pose)
+# Indices 0-5: EKF vehicle state, 6-14: EKF covariance, 15-17: relative target pose
+TOTAL_OBS_DIM = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM + TARGET_POSE_DIM  # 18
 
 # ============================================================================
 # Action Space Dimensions
@@ -45,3 +49,13 @@ TOTAL_OBS_DIM = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM  # 15
 
 # Continuous action: [steering, throttle, brake]
 ACTION_DIM = 3
+
+# ============================================================================
+# Environment Safety and Termination Thresholds
+# ============================================================================
+
+# Minimum clearance to any obstacle before episode terminates (metres)
+CLEARANCE_THRESHOLD = 0.8
+
+# Maximum distance from target bay before out-of-bounds termination (metres)
+OUT_OF_BOUNDS_THRESHOLD = 20.0
