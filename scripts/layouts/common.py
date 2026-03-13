@@ -24,7 +24,6 @@ BAY_DIMS: Dict[str, Dict[str, float]] = {
 }
 
 BAYS_PER_TYPE = 5  # Exactly 5 bays per type per floor plan
-FLOOR_Z = 0.3  # CARLA ground z for all lots
 
 
 # ---------------------------------------------------------------------------
@@ -224,36 +223,6 @@ def warn_narrow_corridors(
 # ---------------------------------------------------------------------------
 
 
-def perpendicular_bays(
-    n: int,
-    row_x: float,
-    row_y_start: float,
-    facing_yaw_deg: float,
-) -> List[Dict[str, Any]]:
-    """
-    @brief Generate n perpendicular bay centres in a row along the Y axis.
-    @param n: Number of bays.
-    @param row_x: X position of bay centre row.
-    @param row_y_start: Y position of the first bay centre.
-    @param facing_yaw_deg: Yaw of a parked vehicle (degrees, local frame).
-    @return List of bay dicts.
-    """
-    dims = BAY_DIMS["perpendicular"]
-    bays = []
-    for i in range(n):
-        bays.append(
-            {
-                "bay_type": "perpendicular",
-                "local_x": row_x,
-                "local_y": row_y_start + i * dims["width"],
-                "local_yaw_deg": facing_yaw_deg,
-                "width": dims["width"],
-                "depth": dims["depth"],
-            }
-        )
-    return bays
-
-
 def angled_bays_along_wall(
     n: int,
     wall_x0: float,
@@ -301,67 +270,9 @@ def angled_bays_along_wall(
     return bays
 
 
-def parallel_bays(
-    n: int,
-    row_y: float,
-    row_x_start: float,
-    facing_yaw_deg: float,
-) -> List[Dict[str, Any]]:
-    """
-    @brief Generate n parallel (pull-in) bay centres along the X axis.
-    @param n: Number of bays.
-    @param row_y: Y position of bay centre row.
-    @param row_x_start: X position of the first bay centre.
-    @param facing_yaw_deg: Yaw of a parked vehicle (degrees, local frame).
-    @return List of bay dicts.
-    """
-    dims = BAY_DIMS["parallel"]
-    bays = []
-    for i in range(n):
-        bays.append(
-            {
-                "bay_type": "parallel",
-                "local_x": row_x_start + i * dims["width"],
-                "local_y": row_y,
-                "local_yaw_deg": facing_yaw_deg,
-                "width": dims["width"],
-                "depth": dims["depth"],
-            }
-        )
-    return bays
-
-
 # ---------------------------------------------------------------------------
 # Bay offset helpers
 # ---------------------------------------------------------------------------
-
-
-def perp_centre_x_from_wall(wall_x: float, depth: float, inward: bool = True) -> float:
-    """
-    @brief Compute perpendicular bay centre x so back edge touches a vertical wall.
-    @param wall_x: X coordinate of the wall.
-    @param depth: Bay depth (metres).
-    @param inward: True if bays face away from the wall (nose inward).
-    @return Bay centre x.
-    """
-    if inward:
-        return wall_x - depth / 2.0
-    else:
-        return wall_x + depth / 2.0
-
-
-def perp_centre_y_from_wall(wall_y: float, depth: float, inward: bool = True) -> float:
-    """
-    @brief Compute perpendicular bay centre y so back edge touches a horizontal wall.
-    @param wall_y: Y coordinate of the wall.
-    @param depth: Bay depth (metres).
-    @param inward: True if nose faces away from wall.
-    @return Bay centre y.
-    """
-    if inward:
-        return wall_y - depth / 2.0
-    else:
-        return wall_y + depth / 2.0
 
 
 def ang_offset_from_wall(bay_depth: float, bay_width: float) -> float:
@@ -382,22 +293,6 @@ def ang_x_margin(bay_depth: float, bay_width: float) -> float:
     @return Start offset along the wall direction.
     """
     return (bay_depth / 2.0 + bay_width / 2.0) * math.cos(math.radians(45.0)) + 0.5
-
-
-def par_centre_from_wall(
-    wall_coord: float, bay_depth: float, inward: bool = True
-) -> float:
-    """
-    @brief Compute parallel bay centre so back edge touches a wall.
-    @param wall_coord: Wall coordinate.
-    @param bay_depth: Bay depth (metres).
-    @param inward: True if nose faces away from the wall.
-    @return Bay centre coordinate.
-    """
-    if inward:
-        return wall_coord - bay_depth / 2.0
-    else:
-        return wall_coord + bay_depth / 2.0
 
 
 # ---------------------------------------------------------------------------
@@ -436,18 +331,21 @@ def to_world_frame(
     for i, b in enumerate(local_layout["bays"]):
         wx, wy = _translate(b["local_x"], b["local_y"], origin_x, origin_y, h_rad)
         world_yaw = _world_yaw(b["local_yaw_deg"], heading_deg)
-        world_bays.append(
-            {
-                "id": f"{b['bay_type']}_{i}",
-                "bay_type": b["bay_type"],
-                "x": round(wx, 3),
-                "y": round(wy, 3),
-                "z": origin_z,
-                "yaw_deg": round(world_yaw, 2),
-                "width": b["width"],
-                "depth": b["depth"],
-            }
-        )
+        world_bay: Dict[str, Any] = {
+            "id": f"{b['bay_type']}_{i}",
+            "bay_type": b["bay_type"],
+            "x": round(wx, 3),
+            "y": round(wy, 3),
+            "z": origin_z,
+            "yaw_deg": round(world_yaw, 2),
+            "width": b["width"],
+            "depth": b["depth"],
+        }
+        if b.get("always_empty"):
+            world_bay["always_empty"] = True
+        if b.get("occupant"):
+            world_bay["occupant"] = b["occupant"]
+        world_bays.append(world_bay)
 
     sp = local_layout["spawn"]
     sx, sy = _translate(sp["x"], sp["y"], origin_x, origin_y, h_rad)
@@ -491,6 +389,25 @@ def to_world_frame(
             }
         )
 
+    # Transform obstacle rectangles to world frame.
+    # Each obstacle is stored as centre + half-extents so the CARLA spawner
+    # can place cones around the perimeter without re-computing the bounds.
+    world_obstacles = []
+    for obs in local_layout.get("obstacles", []):
+        cx_loc = (obs["x_min"] + obs["x_max"]) / 2.0
+        cy_loc = (obs["y_min"] + obs["y_max"]) / 2.0
+        half_w = (obs["x_max"] - obs["x_min"]) / 2.0
+        half_h = (obs["y_max"] - obs["y_min"]) / 2.0
+        wcx, wcy = _translate(cx_loc, cy_loc, origin_x, origin_y, h_rad)
+        world_obstacles.append(
+            {
+                "centre_x": round(wcx, 3),
+                "centre_y": round(wcy, 3),
+                "half_width": round(half_w, 3),
+                "half_height": round(half_h, 3),
+            }
+        )
+
     return {
         "corners": world_corners,
         "bays": world_bays,
@@ -498,6 +415,7 @@ def to_world_frame(
         "extra_spawn_transforms": world_extra_spawns,
         "patrol_waypoints": world_patrol,
         "pedestrian_zones": world_ped_zones,
+        "obstacles": world_obstacles,
     }
 
 
@@ -543,6 +461,7 @@ def write_layout_yaml(
         "bays": world_layout["bays"],
         "patrol_waypoints": world_layout["patrol_waypoints"],
         "pedestrian_zones": world_layout["pedestrian_zones"],
+        "obstacles": world_layout.get("obstacles", []),
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -662,13 +581,18 @@ def plot_layout(
 
     _draw_perimeter_with_gaps(ax, corner_pts, all_spawns, gap_half)
 
-    bay_colours = {
-        "perpendicular": "steelblue",
-        "angled": "darkorange",
-        "parallel": "forestgreen",
-    }
+    from scripts.layouts.colours import (
+        BAY_HEX,
+        HEX_LOT,
+        HEX_PATROL_PATH,
+        HEX_PEDESTRIAN_ZONE,
+        HEX_PEDESTRIAN_ZONE_EDGE,
+    )
+
     for bay in world_layout["bays"]:
-        colour = bay_colours.get(bay["bay_type"], "grey")
+        bay_type = bay["bay_type"]
+        is_motorcycle = bay_type == "motorcycle"
+        colour = "#888888" if is_motorcycle else BAY_HEX.get(bay_type, "grey")
         bx, by = bay["x"], bay["y"]
         yaw_rad = math.radians(bay["yaw_deg"])
         w, d = bay["width"], bay["depth"]
@@ -689,11 +613,13 @@ def plot_layout(
             world_rect,
             closed=True,
             facecolor=colour,
-            edgecolor=colour,
-            linewidth=2,
-            alpha=0.7,
+            edgecolor="white",
+            linewidth=1.5,
+            alpha=0.6,
+            zorder=3,
         )
         ax.add_patch(rect_patch)
+
 
     for zone in world_layout.get("pedestrian_zones", []):
         zw = zone["half_width"] * 2.0
@@ -706,14 +632,29 @@ def plot_layout(
             zw,
             zh,
             boxstyle="round,pad=0.4",
-            facecolor="yellow",
-            edgecolor="goldenrod",
+            facecolor=HEX_PEDESTRIAN_ZONE,
+            edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
             alpha=0.40,
             linewidth=1.5,
             linestyle="--",
             zorder=4,
         )
         ax.add_patch(cloud)
+
+    for obs in world_layout.get("obstacles", []):
+        obs_patch = mpatches.Rectangle(
+            (
+                obs["centre_x"] - obs["half_width"],
+                obs["centre_y"] - obs["half_height"],
+            ),
+            obs["half_width"] * 2.0,
+            obs["half_height"] * 2.0,
+            linewidth=2.5,
+            edgecolor="black",
+            facecolor="white",
+            zorder=5,
+        )
+        ax.add_patch(obs_patch)
 
     for idx, sp in enumerate(
         [world_layout["spawn_transform"]]
@@ -760,25 +701,25 @@ def plot_layout(
     if patrol:
         px = [wp["x"] for wp in patrol] + [patrol[0]["x"]]
         py = [wp["y"] for wp in patrol] + [patrol[0]["y"]]
-        ax.plot(px, py, "m--", linewidth=1.5, alpha=0.7, label="Patrol path")
+        ax.plot(px, py, "--", color=HEX_PATROL_PATH, linewidth=1.5, alpha=0.9, label="Patrol path")
 
     from matplotlib.lines import Line2D
 
     handles = [
-        mpatches.Patch(color="steelblue", label="Perpendicular bays"),
-        mpatches.Patch(color="darkorange", label="Angled (45 deg) bays"),
-        mpatches.Patch(color="forestgreen", label="Parallel bays"),
-        mpatches.Patch(color="#DDDDDD", edgecolor="black", label="Lot boundary"),
+        mpatches.Patch(color=BAY_HEX["perpendicular"], label="Perpendicular bays"),
+        mpatches.Patch(color=BAY_HEX["angled"], label="Angled (45 deg) bays"),
+        mpatches.Patch(color=BAY_HEX["parallel"], label="Parallel bays"),
+        mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
         Line2D(
-            [0], [0], color="magenta", linestyle="--", linewidth=1.5, label="Patrol path"
+            [0], [0], color=HEX_PATROL_PATH, linestyle="--", linewidth=1.5, label="Patrol path"
         ),
         mpatches.FancyBboxPatch(
             (0, 0),
             1,
             1,
             boxstyle="round,pad=0.2",
-            facecolor="yellow",
-            edgecolor="goldenrod",
+            facecolor=HEX_PEDESTRIAN_ZONE,
+            edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
             alpha=0.5,
             linestyle="--",
             label="Pedestrian zones",

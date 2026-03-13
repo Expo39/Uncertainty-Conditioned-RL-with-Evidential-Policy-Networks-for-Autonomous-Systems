@@ -2,15 +2,28 @@
 @file trapezoid.py
 @brief Trapezoid parking lot floor plan (front=48, rear=30, depth=44 m).
 
-Wider at the entrance end, narrower at the rear. The non-parallel sides give
-a subtly different LiDAR wall profile compared to the rectangle layout.
+Wider at the entrance end (y=0..48) and narrower at the rear (y=9..39),
+giving non-parallel top and bottom walls. The tapered profile produces a
+subtly different LiDAR/sensor wall signature compared to the rectangle layout,
+which helps the agent generalise to non-rectangular geometry.
 
 Bay zones:
-  - Two back-to-back perpendicular rows in the centre (8 bays per row).
-  - Angled row following the diagonal bottom wall, 7 bays at 45 deg to the wall.
-  - Parallel bays: 3 along the sloped top wall + 3 along the right wall.
+  - Centre cluster: 8 back-to-back perpendicular bays per row (yaw=90/270),
+    left-shifted slightly from lot centre so the cluster clears the right-wall
+    parallel group. Bay count = BAYS_PER_TYPE + 3 (geometry-driven).
+  - Angled row: 7 bays following the diagonal bottom wall (P0->P1) at 45 deg
+    to the wall slope, starting 6 m clear of the left corner.
+  - Top-wall parallel group: 3 bays along the sloped top wall (P3->P2),
+    starting 9 m from the left corner.
+  - Right-wall parallel group: 3 bays against the right wall (x=44),
+    nose facing +Y (yaw=90).
 
-Used as a training layout (ood=False).
+Two spawn transforms:
+  - Primary   (S1): left wall centre (x=0, y=24), facing +X into the lot.
+  - Secondary (S2): diagonal bottom wall near x=38, facing inward
+    perpendicular to the wall slope.
+
+Used as a training layout (OOD=False).
 """
 
 import math
@@ -33,6 +46,8 @@ ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False
 
+_WALL_GAP = 0.5  # minimum clearance between bay back face and perimeter wall/cones
+
 
 def generate() -> Dict[str, Any]:
     """
@@ -41,35 +56,41 @@ def generate() -> Dict[str, Any]:
             patrol_waypoints, pedestrian_zones.
     """
     width_front = 48.0
-    width_rear = 30.0
-    depth = 44.0
+    width_rear  = 30.0
+    depth       = 44.0
 
-    y_offset = (width_front - width_rear) / 2.0  # taper per side
+    # y_offset: how much each sloped wall tapers inward from front to rear.
+    y_offset = (width_front - width_rear) / 2.0   # 9.0
 
     corners = [
-        {"x": 0.0, "y": 0.0},
-        {"x": depth, "y": y_offset},
-        {"x": depth, "y": width_front - y_offset},
-        {"x": 0.0, "y": width_front},
+        {"x": 0.0,   "y": 0.0},               # P0 bottom-left (front)
+        {"x": depth, "y": y_offset},            # P1 bottom-right (rear)
+        {"x": depth, "y": width_front - y_offset},  # P2 top-right (rear)
+        {"x": 0.0,   "y": width_front},         # P3 top-left (front)
     ]
 
-    dims_perp = BAY_DIMS["perpendicular"]
-    dims_ang = BAY_DIMS["angled"]
-    dims_par = BAY_DIMS["parallel"]
+    dims_perp = BAY_DIMS["perpendicular"]   # width=2.5, depth=5.0
+    dims_ang  = BAY_DIMS["angled"]          # width=2.5, depth=5.4
+    dims_par  = BAY_DIMS["parallel"]        # width=2.5, depth=8.0
 
-    # Perpendicular bays: two back-to-back rows in the centre of the lot.
-    # Row A: yaw=90  (nose toward +Y), Row B: yaw=270 (nose toward -Y).
-    # 8 bays per row: base 5 + 2 left + 1 right.
-    PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3
-    perp_mid_y = 25.5
+    # ------------------------------------------------------------------
+    # Centre cluster: back-to-back perpendicular rows along X.
+    # Row A (lower): yaw=90  (nose +Y). Row B (upper): yaw=270 (nose -Y).
+    # PERP_BAYS_PER_ROW = 8: base BAYS_PER_TYPE + 3 to fill the lot width.
+    # Rows are offset slightly left from lot centre (_cx_shift) to keep
+    # the right corridor clear of the right-wall parallel group.
+    # _cx_shift = -1.5 (centre shift) - 3.63 (half an angled-bay pitch).
+    # ------------------------------------------------------------------
+    PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3   # 8 bays per row
+    _cx_shift = -1.5 - 3.63
+    perp_mid_y    = 25.5
     perp_row_a_cy = perp_mid_y - dims_perp["aisle"] / 2.0 - dims_perp["depth"] / 2.0
     perp_row_b_cy = perp_mid_y + dims_perp["aisle"] / 2.0 + dims_perp["depth"] / 2.0
     perp_cx_start = (
         depth / 2.0
         - (PERP_BAYS_PER_ROW * dims_perp["width"]) / 2.0
         + dims_perp["width"] / 2.0
-        - 1.5
-        - 3.63
+        + _cx_shift
     )
     perp_bays = []
     for i in range(PERP_BAYS_PER_ROW):
@@ -95,16 +116,18 @@ def generate() -> Dict[str, Any]:
             }
         )
 
-    _WALL_GAP = 0.5  # minimum clearance between bay back face and perimeter wall/cones
-
-    # Angled row: follow the diagonal bottom wall from (0,0) to (depth, y_offset).
+    # ------------------------------------------------------------------
+    # Angled row: 7 bays along the diagonal bottom wall P0(0,0)->P1(44,9).
+    # Wall direction normalised; CCW inward normal points into lot interior.
+    # ang_start: skip 6 m from the P0 corner so the first bay clears the
+    # entrance gate and the diagonal wall cones.
+    # ------------------------------------------------------------------
     wall_len = math.hypot(depth, y_offset)
     wdx = depth / wall_len
     wdy = y_offset / wall_len
-    ang_yaw = (math.degrees(math.atan2(wdx, -wdy)) + 45.0) % 360.0
-
+    ang_yaw   = (math.degrees(math.atan2(wdx, -wdy)) + 45.0) % 360.0
     ang_offset = ang_offset_from_wall(dims_ang["depth"], dims_ang["width"]) + _WALL_GAP
-    ang_start = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 6.0
+    ang_start  = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 6.0
     ang_bays = angled_bays_along_wall(
         7,
         wall_x0=0.0,
@@ -117,22 +140,25 @@ def generate() -> Dict[str, Any]:
         facing_yaw_deg=ang_yaw,
     )
 
-    # Parallel bays: short-side adjacent (8 m along wall, 2.5 m deep from wall).
-    # Group A: 3 bays along the sloped top wall.
-    top_wall_len = math.hypot(depth, y_offset)
-    top_wdx = depth / top_wall_len
-    top_wdy = -y_offset / top_wall_len
-    # Inward normal (CW 90 from wall dir, pointing into lot).
-    top_nx = top_wdy
-    top_ny = -top_wdx
-    top_par_yaw = math.degrees(math.atan2(top_wdy, top_wdx))
-    par_top_spacing = dims_par["depth"]
-    par_top_along_start = 9.0 + dims_par["depth"] / 2.0
+    # ------------------------------------------------------------------
+    # Top-wall parallel group: 3 bays along the sloped top wall P3(0,48)->P2(44,39).
+    # Wall direction from P3 toward P2: dx=+depth, dy=-y_offset (same length as bottom wall).
+    # CCW inward normal from (wdx_top, wdy_top): (wdy_top, -wdx_top) points into lot.
+    # par_top_along_start: first bay placed 9 m along the wall from P3 so it
+    # clears the left-wall corner cones.
+    # facing_yaw: computed from wall direction so bays align with the slope.
+    # ------------------------------------------------------------------
+    top_wdx = depth / wall_len       # same magnitude as bottom wall (symmetric taper)
+    top_wdy = -y_offset / wall_len
+    top_nx  = top_wdy               # CCW inward normal x component
+    top_ny  = -top_wdx              # CCW inward normal y component
+    top_par_yaw          = math.degrees(math.atan2(top_wdy, top_wdx))
+    par_top_along_start  = 9.0 + dims_par["depth"] / 2.0
     par_top_normal_offset = dims_par["width"] / 2.0 + _WALL_GAP
     par_bays_top = []
     for i in range(3):
-        along = par_top_along_start + i * par_top_spacing
-        wx = 0.0 + top_wdx * along
+        along = par_top_along_start + i * dims_par["depth"]
+        wx = 0.0        + top_wdx * along
         wy = width_front + top_wdy * along
         cx = wx + top_nx * par_top_normal_offset
         cy = wy + top_ny * par_top_normal_offset
@@ -147,8 +173,12 @@ def generate() -> Dict[str, Any]:
             }
         )
 
-    # Group B: 3 bays on right wall (x=depth), yaw=90 (nose +Y, depth=8 m along Y).
-    par_cx_right = depth - dims_par["width"] / 2.0 - _WALL_GAP
+    # ------------------------------------------------------------------
+    # Right-wall parallel group: 3 bays against the right wall (x=depth).
+    # yaw=90: depth (8 m) along Y, nose facing +Y. Back against x=depth.
+    # par_right_y_start: 3 m clear of the bottom-right corner (y_offset + 3).
+    # ------------------------------------------------------------------
+    par_cx_right    = depth - dims_par["width"] / 2.0 - _WALL_GAP
     par_right_y_start = y_offset + 3.0
     par_bays_right = []
     for i in range(3):
@@ -156,9 +186,7 @@ def generate() -> Dict[str, Any]:
             {
                 "bay_type": "parallel",
                 "local_x": par_cx_right,
-                "local_y": par_right_y_start
-                + dims_par["depth"] / 2.0
-                + i * dims_par["depth"],
+                "local_y": par_right_y_start + dims_par["depth"] / 2.0 + i * dims_par["depth"],
                 "local_yaw_deg": 90.0,
                 "width": dims_par["width"],
                 "depth": dims_par["depth"],
@@ -171,67 +199,78 @@ def generate() -> Dict[str, Any]:
     validate_bays_in_polygon(all_bays, corners, "trapezoid")
     warn_narrow_corridors(all_bays, "trapezoid")
 
-    # Spawn 1: entrance in left wall (x=0).
-    spawn = {"x": 0.0, "y": width_front / 2.0, "yaw_deg": 0.0}
-
-    # Spawn 2: entrance in the diagonal bottom wall near x=38.
-    _bw_len = math.hypot(depth, y_offset)
-    _bwdx = depth / _bw_len
-    _bwdy = y_offset / _bw_len
-    _spawn2_yaw = math.degrees(math.atan2(_bwdx, -_bwdy))
+    # ------------------------------------------------------------------
+    # Spawn transforms.
+    # S1: left wall centre (x=0, y=24), facing +X into the lot.
+    # S2: diagonal bottom wall near x=38, facing inward perpendicular to slope.
+    #     y interpolated along P0(0,0)->P1(depth, y_offset).
+    #     Inward normal yaw = atan2(wdx, -wdy) (CCW 90 from wall direction).
+    # ------------------------------------------------------------------
+    _spawn2_yaw = math.degrees(math.atan2(wdx, -wdy))
+    spawn  = {"x": 0.0,  "y": width_front / 2.0,       "yaw_deg": 0.0}
     spawn2 = {
         "x": 38.0,
         "y": y_offset * (38.0 / depth),
         "yaw_deg": round(_spawn2_yaw, 1),
     }
 
-    # Patrol path: rectangular loop through all three horizontal aisles.
-    PED_STRIP = 3.0
+    # ------------------------------------------------------------------
+    # Patrol path: 4-waypoint loop through the lower and upper aisles.
+    #
+    # Corridor y values:
+    #   aisle1_cy: midpoint below row A nose face (centre perp row, faces -Y).
+    #   aisle3_cy: midpoint above row B nose face (centre perp row, faces +Y).
+    # The x extents are offset by 4 m inside the lot boundary so the patrol
+    # vehicle stays clear of the entrance gate (left) and right-wall bays.
+    #   x_enter: between left lot boundary and left edge of perp cluster.
+    #   x_exit:  between right edge of perp cluster and right-wall parallel bays.
+    # ------------------------------------------------------------------
     perp_cluster_x_min = perp_cx_start - dims_perp["width"] / 2.0
     perp_cluster_x_max = perp_cx_start + (PERP_BAYS_PER_ROW - 0.5) * dims_perp["width"]
-    par_right_inner_x = par_cx_right - dims_par["width"] / 2.0
+    par_right_inner_x  = par_cx_right - dims_par["width"] / 2.0
     aisle1_cy = perp_row_a_cy - dims_perp["depth"] / 2.0 - dims_perp["aisle"] / 2.0
     aisle3_cy = perp_row_b_cy + dims_perp["depth"] / 2.0 + dims_perp["aisle"] / 2.0
-    x_enter = (PED_STRIP + perp_cluster_x_min) / 2.0
-    x_exit = (perp_cluster_x_max + par_right_inner_x) / 2.0
+    # 4 m inset from each end keeps the patrol path inside the tapered boundary.
+    x_enter = perp_cluster_x_min / 2.0
+    x_exit  = (perp_cluster_x_max + par_right_inner_x) / 2.0
     patrol = [
-        {"x": x_enter, "y": aisle1_cy - 4},
-        {"x": x_exit, "y": aisle1_cy},
-        {"x": x_exit, "y": aisle3_cy},
-        {"x": x_enter, "y": aisle3_cy + 4},
+        {"x": x_enter, "y": aisle1_cy - 4.0},   # WP1: lower-left, clear of entrance
+        {"x": x_exit,  "y": aisle1_cy},           # WP2: lower-right
+        {"x": x_exit,  "y": aisle3_cy},           # WP3: upper-right
+        {"x": x_enter, "y": aisle3_cy + 4.0},     # WP4: upper-left, clear of entrance
     ]
 
-    # Pedestrian zones: 3 m strips along aisle faces and right-wall parallel bays.
-    # _PED_MARGIN insets every edge that touches a bay face so pedestrians
-    # cannot overlap a parked car's footprint.
+    # ------------------------------------------------------------------
+    # Pedestrian zones -- one strip per distinct aisle face (PED_STRIP = 3.0 m).
+    # ------------------------------------------------------------------
+    PED_STRIP  = 3.0
     _PED_MARGIN = 0.5
-    par_bay_x_min = par_cx_right - dims_par["width"] / 2.0
     ped_zones = [
-        # Aisle 1: strip against row A nose face (below row A in Y)
+        # Zone 1: aisle below row A nose face (row A faces -Y, yaw=90).
         {
             "x_min": perp_cluster_x_min + _PED_MARGIN,
             "x_max": perp_cluster_x_max - _PED_MARGIN,
             "y_min": perp_row_a_cy - dims_perp["depth"] / 2.0 - PED_STRIP,
             "y_max": perp_row_a_cy - dims_perp["depth"] / 2.0 - _PED_MARGIN,
         },
-        # Aisle 2: full back-to-back gap between row A back face and row B back face.
+        # Zone 2: back-to-back aisle between row A back face and row B back face.
         {
             "x_min": perp_cluster_x_min + _PED_MARGIN,
             "x_max": perp_cluster_x_max - _PED_MARGIN,
             "y_min": perp_row_a_cy + dims_perp["depth"] / 2.0 + _PED_MARGIN,
             "y_max": perp_row_b_cy - dims_perp["depth"] / 2.0 - _PED_MARGIN,
         },
-        # Aisle 3: strip against row B nose face (above row B in Y)
+        # Zone 3: aisle above row B nose face (row B faces +Y, yaw=270).
         {
             "x_min": perp_cluster_x_min + _PED_MARGIN,
             "x_max": perp_cluster_x_max - _PED_MARGIN,
             "y_min": perp_row_b_cy + dims_perp["depth"] / 2.0 + _PED_MARGIN,
             "y_max": perp_row_b_cy + dims_perp["depth"] / 2.0 + PED_STRIP,
         },
-        # Aisle 4: vertical strip against left face of right-wall parallel bays
+        # Zone 4: vertical strip against the left face of the right-wall parallel group.
         {
-            "x_min": par_bay_x_min - PED_STRIP,
-            "x_max": par_bay_x_min - _PED_MARGIN,
+            "x_min": par_right_inner_x - PED_STRIP,
+            "x_max": par_right_inner_x - _PED_MARGIN,
             "y_min": par_right_y_start + _PED_MARGIN,
             "y_max": par_right_y_start + 3 * dims_par["depth"] - _PED_MARGIN,
         },

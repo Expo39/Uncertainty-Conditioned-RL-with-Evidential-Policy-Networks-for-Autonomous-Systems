@@ -263,13 +263,13 @@ bays:
   width: 2.5
   depth: 8.0
 patrol_waypoints:
-- x: 4.935
+- x: 3.435
   y: -79.5
 - x: 33.935
   y: -75.5
 - x: 33.935
   y: -53.5
-- x: 4.935
+- x: 3.435
   y: -49.5
 pedestrian_zones:
 - centre_x: 16.87
@@ -288,3 +288,4 @@ pedestrian_zones:
   centre_y: -66.0
   half_width: 1.25
   half_height: 11.5
+obstacles: []
