@@ -245,6 +245,7 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
       - CARLA_HOST=carla-server-demo
       - CARLA_PORT=2100
     depends_on:

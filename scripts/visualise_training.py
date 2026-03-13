@@ -13,7 +13,7 @@ Usage:
 Layers drawn (back to front):
   1. Lot boundary polygon (light grey fill)
   2. Perimeter cones (red circles)
-  3. Bay outlines by type: perpendicular=blue, angled=orange, parallel=green
+  3. Bay outlines by type: perpendicular=blue, angled=yellow, parallel=violet
   4. Target bay (bright green, thick outline + heading arrow)
   5. Static parked vehicles (dark grey rectangles)
   6. Patrol NPC vehicles (orange rectangles)
@@ -35,21 +35,32 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 
+from scripts.layouts.colours import (
+    BAY_HEX,
+    HEX_CONE,
+    HEX_EGO,
+    HEX_LOT,
+    HEX_PATROL_VEHICLE,
+    HEX_PEDESTRIAN_ZONE,
+    HEX_STATIC_VEHICLE,
+    HEX_TARGET_BAY,
+)
+
 # Default path to the shared state file written by VisStateWriter
 _DEFAULT_STATE_FILE = Path("outputs/vis_state.json")
 
-# Colours
-_COLOUR_LOT = "#DDDDDD"
-_COLOUR_TARGET_BAY = "#00FF00"
-_COLOUR_PERP_BAY = "#0000CC"
-_COLOUR_ANGLED_BAY = "#CC6600"
-_COLOUR_PARALLEL_BAY = "#006600"
-_COLOUR_STATIC_VEHICLE = "#444444"
-_COLOUR_PATROL_VEHICLE = "#FF8800"
-_COLOUR_PEDESTRIAN = "#FF00FF"
-_COLOUR_EGO = "#00CCCC"
-_COLOUR_TRAIL = "#00CCCC"
-_COLOUR_CONE = "#FF2222"
+# Colours -- all sourced from scripts/layouts/colours.py
+_COLOUR_LOT = HEX_LOT
+_COLOUR_TARGET_BAY = HEX_TARGET_BAY
+_COLOUR_PERP_BAY = BAY_HEX["perpendicular"]
+_COLOUR_ANGLED_BAY = BAY_HEX["angled"]
+_COLOUR_PARALLEL_BAY = BAY_HEX["parallel"]
+_COLOUR_STATIC_VEHICLE = HEX_STATIC_VEHICLE
+_COLOUR_PATROL_VEHICLE = HEX_PATROL_VEHICLE
+_COLOUR_PEDESTRIAN = HEX_PEDESTRIAN_ZONE
+_COLOUR_EGO = HEX_EGO
+_COLOUR_TRAIL = HEX_EGO
+_COLOUR_CONE = HEX_CONE
 
 # Vehicle dimensions for rectangle drawing (metres)
 _EGO_HALF_LENGTH = 2.25
