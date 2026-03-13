@@ -8,7 +8,7 @@ model_path: "checkpoints/final_model"  # Path to trained model
 # Environment settings
 carla_host: "localhost"
 carla_port: 2000
-town: "Town01"
+town: "FlatPlane"  # Special value: loads configs/flat_plane.xodr via generate_opendrive_world()
 max_steps: 500
 
 # ROS 2 covariance subscription (same topic as training)
@@ -22,81 +22,113 @@ deterministic: true  # Use deterministic actions
 render: false  # Render episodes (requires display)
 
 # Evaluation conditions sweep
-# Each condition specifies weather, sensor noise multipliers, and traffic.
-# Base sensor noise comes from train_config.yaml; multipliers scale it.
+# Each condition specifies weather, IMU noise multiplier, fog, and traffic.
+# Base IMU noise comes from train_config.yaml carla_sensors.imu.*; multiplier scales it.
+# No GNSS: excluded from Suite A (unreliable in covered parking lots).
+# EKF uncertainty variation comes from LiDAR scan-matching quality + IMU drift.
 # Ordered from easiest (low uncertainty) to hardest (extreme uncertainty).
 eval_conditions:
   - name: "clear_low_noise"
-    description: "Clear weather, low sensor noise, no traffic"
+    description: "Clear weather, low IMU noise, no traffic -- best-case LiDAR conditions"
     weather_preset: "ClearNoon"
     fog_density: 0.0
     imu_noise_multiplier: 0.5
-    gnss_noise_multiplier: 0.5
-    num_vehicles: 0
+    num_patrol_vehicles: 0
     num_pedestrians: 0
 
   - name: "clear_nominal"
-    description: "Clear weather, nominal sensor noise, light traffic"
+    description: "Clear weather, nominal IMU noise, light traffic"
     weather_preset: "ClearNoon"
     fog_density: 0.0
     imu_noise_multiplier: 1.0
-    gnss_noise_multiplier: 1.0
-    num_vehicles: 10
-    num_pedestrians: 5
+    num_patrol_vehicles: 1
+    num_pedestrians: 2
 
   - name: "cloudy_moderate"
-    description: "Cloudy with moderate noise and traffic"
+    description: "Cloudy, moderate IMU noise, moderate traffic -- partial LiDAR occlusion"
     weather_preset: "CloudyNoon"
     fog_density: 10.0
     imu_noise_multiplier: 1.5
-    gnss_noise_multiplier: 1.5
-    num_vehicles: 20
-    num_pedestrians: 10
+    num_patrol_vehicles: 2
+    num_pedestrians: 3
 
   - name: "rain_degraded"
-    description: "Rain with degraded sensors and moderate traffic"
+    description: "Rain, degraded IMU, moderate traffic -- rain scatter reduces LiDAR range"
     weather_preset: "SoftRainNoon"
     fog_density: 20.0
     imu_noise_multiplier: 2.0
-    gnss_noise_multiplier: 2.0
-    num_vehicles: 25
-    num_pedestrians: 15
+    num_patrol_vehicles: 2
+    num_pedestrians: 3
 
   - name: "heavy_rain_noisy"
-    description: "Heavy rain, high noise, dense traffic"
+    description: "Heavy rain, high IMU noise, dense traffic -- heavy scan-match degradation"
     weather_preset: "HardRainNoon"
     fog_density: 30.0
     imu_noise_multiplier: 3.0
-    gnss_noise_multiplier: 3.0
-    num_vehicles: 40
-    num_pedestrians: 20
+    num_patrol_vehicles: 3
+    num_pedestrians: 4
 
   - name: "fog_moderate"
-    description: "Moderate fog causing GNSS multipath, moderate traffic"
+    description: "Moderate fog, moderate IMU noise -- LiDAR returns attenuated at range"
     weather_preset: "CloudyNoon"
     fog_density: 50.0
     imu_noise_multiplier: 2.0
-    gnss_noise_multiplier: 5.0
-    num_vehicles: 30
-    num_pedestrians: 15
+    num_patrol_vehicles: 2
+    num_pedestrians: 3
 
   - name: "fog_heavy"
-    description: "Dense fog, severely degraded sensors, heavy traffic"
+    description: "Dense fog, high IMU noise -- severe LiDAR attenuation, covariance rises sharply"
     weather_preset: "CloudySunset"
     fog_density: 75.0
     imu_noise_multiplier: 4.0
-    gnss_noise_multiplier: 8.0
-    num_vehicles: 50
-    num_pedestrians: 30
+    num_patrol_vehicles: 3
+    num_pedestrians: 4
 
   - name: "fog_extreme"
-    description: "Extreme fog, nearly useless sensors, maximum traffic"
+    description: "Extreme fog, very high IMU noise -- near-total LiDAR loss, maximum covariance"
     weather_preset: "CloudySunset"
     fog_density: 95.0
     imu_noise_multiplier: 8.0
-    gnss_noise_multiplier: 15.0
-    num_vehicles: 60
-    num_pedestrians: 40
+    num_patrol_vehicles: 3
+    num_pedestrians: 4
+
+  # OOD floor plan evaluation (calibration experiment)
+  # Uses irregular_a (five-sided polygon, held out entirely from training).
+  # Tests whether epistemic uncertainty rises on novel lot geometry
+  # without any reward signal indicating novelty -- a calibration check on the
+  # evidential policy's NIG prior.
+  - name: "ood_nominal"
+    description: "OOD floor plan (irregular_a), nominal conditions -- calibration check"
+    weather_preset: "ClearNoon"
+    fog_density: 0.0
+    imu_noise_multiplier: 1.0
+    num_patrol_vehicles: 1
+    num_pedestrians: 2
+    floor_plan: "irregular_a"   # Override: use OOD floor plan
+
+  - name: "ood_degraded"
+    description: "OOD floor plan (irregular_a) + degraded sensors -- compound novelty"
+    weather_preset: "SoftRainNoon"
+    fog_density: 30.0
+    imu_noise_multiplier: 2.0
+    num_patrol_vehicles: 2
+    num_pedestrians: 3
+    floor_plan: "irregular_a"
+
+  # Worst-case / safety handoff demonstration
+  # Familiar training geometry under conditions far beyond the training distribution.
+  # Expected: fog attenuates LiDAR, empty lot removes scan-match anchors,
+  # EKF covariance spikes, evidential epistemic uncertainty crosses the safety
+  # handoff threshold -- demonstrating the core safety capability.
+  - name: "worst_case"
+    description: "Safety handoff demo: dense fog + empty lot + max pedestrians"
+    weather_preset: "CloudySunset"
+    fog_density: 90.0          # Beyond training range (training: 0-50)
+    imu_noise_multiplier: 6.0
+    num_patrol_vehicles: 0     # Empty lot -- no parked-car LiDAR anchors
+    num_pedestrians: 4         # Maximum -- moving occlusions add scan noise
+    bay_occupancy_rate: 0.0    # Override: zero parked vehicles in bays
+    floor_plan: "rectangle"    # Familiar training geometry (not OOD)
 
 # Output settings
 output_dir: "evaluation_results"

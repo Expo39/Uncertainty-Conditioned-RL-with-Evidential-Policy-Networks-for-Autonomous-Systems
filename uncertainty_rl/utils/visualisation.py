@@ -3,13 +3,88 @@
 @brief Visualisation utilities for uncertainty and performance metrics.
 
 This module provides visualisation tools for understanding agent behaviour
-and uncertainty evolution during training and evaluation.
+and uncertainty evolution during training and evaluation. It also contains
+VisStateWriter, which streams environment state to a detachable 2D bird's-eye
+visualiser via an atomically-written JSON file.
 """
 
-from typing import Dict, List, Optional
+import json
+import logging
+import os
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
+
+logger = logging.getLogger(__name__)
+
+
+class VisStateWriter:
+    """
+    @class VisStateWriter
+    @brief Writes vis_state.json every step for the detachable 2D visualiser.
+
+    Atomic write via tmp file + os.replace -- the visualiser process never reads
+    partial data. Training writes to outputs/vis_state.json; the visualiser polls
+    that file every 100 ms and redraws on change.
+
+    Usage in training:
+        writer = VisStateWriter(Path("outputs/vis_state.json"))
+        writer.write(ego_transform, actor_transforms, target_bay, episode_info)
+
+    Visualiser reads outputs/vis_state.json.
+    Close the visualiser window at any time -- training is unaffected.
+    """
+
+    def __init__(self, output_path: Path) -> None:
+        """
+        @brief Initialise the writer.
+        @param output_path: Destination path for vis_state.json.
+        """
+        self._output_path = output_path
+
+    def write(
+        self,
+        ego_transform: Dict[str, Any],
+        actor_transforms: List[Dict[str, Any]],
+        target_bay: Dict[str, Any],
+        episode_info: Dict[str, Any],
+        trajectory: Optional[List[Tuple[float, float]]] = None,
+        bays: Optional[List[Dict[str, Any]]] = None,
+        corners: Optional[List[Dict[str, Any]]] = None,
+        pedestrians: Optional[List[Dict[str, Any]]] = None,
+    ) -> None:
+        """
+        @brief Serialise and atomically write the visualisation state.
+        @param ego_transform: Dict with keys x, y, yaw.
+        @param actor_transforms: List of dicts with x, y, yaw, type ('npc'/'static').
+        @param target_bay: Dict with x, y, yaw, bay_type, width, depth.
+        @param episode_info: Dict with episode metadata (step, floor_plan, etc.).
+        @param trajectory: List of (x, y) tuples for the ego trail.
+        @param bays: Full list of bay dicts from the floor plan layout.
+        @param corners: Perimeter corner dicts from the floor plan layout.
+        @param pedestrians: List of dicts with x, y for pedestrian positions.
+        """
+        state: Dict[str, Any] = {
+            "ego": ego_transform,
+            "actors": actor_transforms,
+            "target_bay": target_bay,
+            "episode_info": episode_info,
+            "trajectory": trajectory or [],
+            "bays": bays or [],
+            "corners": corners or [],
+            "pedestrians": pedestrians or [],
+        }
+
+        try:
+            json_str = json.dumps(state)
+            self._output_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self._output_path.with_suffix(".tmp")
+            tmp_path.write_text(json_str)
+            os.replace(str(tmp_path), str(self._output_path))
+        except Exception as exc:
+            logger.debug(f"VisStateWriter: could not write state: {exc}")
 
 
 def plot_uncertainty_evolution(

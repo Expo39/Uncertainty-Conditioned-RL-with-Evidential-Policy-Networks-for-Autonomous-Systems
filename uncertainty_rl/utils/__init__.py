@@ -17,6 +17,11 @@ from uncertainty_rl.utils.covariance_utils import (
     get_covariance_dimension,
     validate_covariance_matrix,
 )
+from uncertainty_rl.utils.geometry import (
+    _compute_relative_target_pose,
+    _interpolate_cone_positions,
+    zone_bbox,
+)
 from uncertainty_rl.utils.logging import MetricsLogger, UncertaintyTracker
 from uncertainty_rl.utils.visualisation import (
     plot_training_curves,
@@ -44,4 +49,8 @@ __all__ = [
     "extract_2d_covariance_features",
     "get_covariance_dimension",
     "validate_covariance_matrix",
+    # Geometry utilities
+    "zone_bbox",
+    "_interpolate_cone_positions",
+    "_compute_relative_target_pose",
 ]
