@@ -410,6 +410,26 @@ bays:
   yaw_deg: 270.0
   width: 2.5
   depth: 8.0
+- id: motorcycle_47
+  bay_type: motorcycle
+  x: -142.0
+  y: 43.75
+  z: 0.3
+  yaw_deg: 0.0
+  width: 1.5
+  depth: 3.0
+  always_empty: true
+  occupant: Kawasaki Ninja
+- id: motorcycle_48
+  bay_type: motorcycle
+  x: -142.0
+  y: 42.25
+  z: 0.3
+  yaw_deg: 0.0
+  width: 1.5
+  depth: 3.0
+  always_empty: true
+  occupant: Yamaha YZF-R
 patrol_waypoints:
 - x: -196.125
   y: 10.247
@@ -446,3 +466,4 @@ pedestrian_zones:
   centre_y: 25.0
   half_width: 1.25
   half_height: 11.5
+obstacles: []

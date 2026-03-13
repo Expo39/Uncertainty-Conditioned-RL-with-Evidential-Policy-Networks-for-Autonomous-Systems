@@ -202,8 +202,15 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_obstacle_distance: float = scenarios.get(
             "patrol_obstacle_stop_distance", 5.0
         )
+        self._patrol_pedestrian_distance: float = scenarios.get(
+            "patrol_pedestrian_stop_distance", 1.5
+        )
         self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
         self._patrol_heading_gain: float = scenarios.get("patrol_heading_gain", 0.8)
+        self._patrol_stuck_speed_threshold: float = scenarios.get(
+            "patrol_stuck_speed_threshold", 0.3
+        )
+        self._patrol_stuck_steps_max: int = scenarios.get("patrol_stuck_steps_max", 30)
         self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
@@ -241,6 +248,9 @@ class CARLAParkingEnv(gym.Env):
         # Cached filtered blueprint lists - rebuilt once per reset.
         self._car_blueprints: List[Any] = []
         self._walker_blueprints: List[Any] = []
+        # Easter-egg motorcycle blueprints (None when CARLA unavailable).
+        self._ninja_bp: Optional[Any] = None
+        self._yzf_bp: Optional[Any] = None
 
         # Pre-allocated observation buffer - reused every step to avoid
         # repeated small heap allocations.
@@ -267,6 +277,8 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_waypoint_indices: List[int] = []
         # +1 = CCW (forward through waypoints), -1 = CW (reverse). Randomised per NPC per episode.
         self._patrol_waypoint_directions: List[int] = []
+        # Steps each patrol NPC has been below the stuck speed threshold while receiving throttle.
+        self._patrol_stuck_counters: List[int] = []
 
         # Pedestrian step counters for heading re-randomisation and zone confinement
         self._pedestrian_heading_steps: List[int] = []
@@ -468,6 +480,10 @@ class CARLAParkingEnv(gym.Env):
 
         self._walker_blueprints = list(bp_lib.filter("walker.pedestrian.*"))
 
+        # Easter-egg motorcycles: always parked in the two motorcycle bays.
+        self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
+        self._yzf_bp = bp_lib.find("vehicle.yamaha.yzf")
+
     def _spawn_perimeter_cones(self) -> None:
         """
         @brief Spawn static traffic cones along the lot perimeter polygon.
@@ -502,7 +518,7 @@ class CARLAParkingEnv(gym.Env):
         )
 
         bp_lib = self.world.get_blueprint_library()
-        cone_bp = bp_lib.find("static.prop.trafficcone01")
+        cone_bp = bp_lib.find("static.prop.constructioncone")
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
         for cx, cy in cone_positions:
@@ -518,6 +534,63 @@ class CARLAParkingEnv(gym.Env):
                 self._static_obstacle_positions.append((cx, cy))
 
         logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
+
+    def _spawn_obstacle_cones(self) -> None:
+        """
+        @brief Spawn static traffic cones around interior obstacle rectangles.
+
+        Each obstacle in the layout YAML is a centre + half-extents rectangle.
+        Cones are placed along the four sides at the same spacing used for
+        perimeter cones. Physics is disabled so they act as static LiDAR targets.
+        Spawned cones are appended to self._spawned_cones so they are cleaned up
+        with the rest of the episode actors.
+        """
+        if self.world is None:
+            return
+
+        obstacles = self._current_layout.get("obstacles", [])
+        if not obstacles:
+            return
+
+        bp_lib = self.world.get_blueprint_library()
+        cone_bp = bp_lib.find("static.prop.constructioncone")
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
+
+        for obs in obstacles:
+            cx = float(obs["centre_x"])
+            cy = float(obs["centre_y"])
+            hw = float(obs["half_width"])
+            hh = float(obs["half_height"])
+
+            # Build cone positions around all four sides of the rectangle.
+            cone_positions: List[Tuple[float, float]] = []
+            # Bottom and top horizontal edges (y constant).
+            for edge_y in (cy - hh, cy + hh):
+                t = -hw
+                while t <= hw + 1e-6:
+                    cone_positions.append((cx + t, edge_y))
+                    t += self._cone_spacing
+            # Left and right vertical edges (x constant), excluding corners.
+            for edge_x in (cx - hw, cx + hw):
+                t = -hh + self._cone_spacing
+                while t < hh - 1e-6:
+                    cone_positions.append((edge_x, cy + t))
+                    t += self._cone_spacing
+
+            for px, py in cone_positions:
+                transform = carla.Transform(
+                    carla.Location(x=px, y=py, z=z),
+                    carla.Rotation(yaw=0.0),
+                )
+                cone = self.world.try_spawn_actor(cone_bp, transform)
+                if cone is not None:
+                    cone.set_simulate_physics(False)
+                    self._spawned_cones.append(cone)
+                    self._static_obstacle_positions.append((px, py))
+
+        logger.debug(
+            f"Spawned obstacle cones for {len(obstacles)} interior obstacle(s)."
+        )
 
     def _adjacent_bay_ids(self, target_id: str) -> List[str]:
         """
@@ -599,6 +672,38 @@ class CARLAParkingEnv(gym.Env):
                 # Cache static position so _check_clearance() needs no get_location()
                 self._static_obstacle_positions.append((bay_x, bay_y))
 
+        # Easter egg: always spawn the Kawasaki Ninja and Yamaha YZF in their
+        # dedicated motorcycle bays (bay_type="motorcycle", occupant field set).
+        _OCCUPANT_BP = {
+            "Kawasaki Ninja": self._ninja_bp,
+            "Yamaha YZF-R": self._yzf_bp,
+        }
+        for bay in bays:
+            if bay.get("bay_type") != "motorcycle":
+                continue
+            occupant = bay.get("occupant", "")
+            bp = _OCCUPANT_BP.get(occupant)
+            if bp is None:
+                continue
+            bay_x = float(bay["x"])
+            bay_y = float(bay["y"])
+            yaw = float(bay.get("yaw_deg", 0.0))
+            transform = carla.Transform(
+                carla.Location(x=bay_x, y=bay_y, z=z_spawn),
+                carla.Rotation(yaw=yaw),
+            )
+            actor = self.world.try_spawn_actor(bp, transform)
+            if actor is not None:
+                actor.set_simulate_physics(False)
+                actor.set_transform(
+                    carla.Transform(
+                        carla.Location(x=bay_x, y=bay_y, z=z),
+                        carla.Rotation(yaw=yaw),
+                    )
+                )
+                self._spawned_static_vehicles.append(actor)
+                self._static_obstacle_positions.append((bay_x, bay_y))
+
         logger.debug(f"Spawned {len(self._spawned_static_vehicles)} static vehicles.")
 
     def _spawn_npc_patrol(self) -> None:
@@ -625,15 +730,20 @@ class CARLAParkingEnv(gym.Env):
 
         for i in range(num_patrol):
             bp = random.choice(self._car_blueprints)
-            start_idx = (i * len(waypoints) // num_patrol) % len(waypoints)
+            # Randomise start waypoint so NPCs don't always begin at the same position.
+            start_idx = random.randrange(len(waypoints))
             # Randomly choose patrol direction before spawn so the initial yaw matches.
             direction = random.choice([-1, 1])
-            next_idx = (start_idx + direction) % len(waypoints)
+            # The NPC's first target is the waypoint it will immediately drive toward.
+            first_target_idx = (start_idx + direction) % len(waypoints)
             wp = waypoints[start_idx]
-            next_wp = waypoints[next_idx]
-            # Face toward the first waypoint the NPC will drive to.
+            first_target_wp = waypoints[first_target_idx]
+            # Face toward the first target so the NPC never drives away from it at spawn.
             spawn_yaw = math.degrees(
-                math.atan2(next_wp[1] - wp[1], next_wp[0] - wp[0])
+                math.atan2(
+                    first_target_wp[1] - wp[1],
+                    first_target_wp[0] - wp[0],
+                )
             )
             transform = carla.Transform(
                 carla.Location(x=wp[0], y=wp[1], z=z),
@@ -643,8 +753,11 @@ class CARLAParkingEnv(gym.Env):
             if actor is not None:
                 actor.set_simulate_physics(True)
                 self._patrol_npcs.append(actor)
-                self._patrol_waypoint_indices.append(start_idx)
+                # Store first_target_idx as the current waypoint so _update_patrol_npcs
+                # immediately drives toward it, consistent with the spawn orientation.
+                self._patrol_waypoint_indices.append(first_target_idx)
                 self._patrol_waypoint_directions.append(direction)
+                self._patrol_stuck_counters.append(0)
 
         logger.debug(f"Spawned {len(self._patrol_npcs)} patrol NPC vehicles.")
 
@@ -765,7 +878,7 @@ class CARLAParkingEnv(gym.Env):
 
             steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
 
-            # Obstacle proximity check - brake if any vehicle is ahead within stop distance
+            # Obstacle proximity check - brake if any vehicle or pedestrian is ahead
             npc_yaw = math.radians(t.rotation.yaw)
             fwd_x = math.cos(npc_yaw)
             fwd_y = math.sin(npc_yaw)
@@ -777,14 +890,55 @@ class CARLAParkingEnv(gym.Env):
                 to_y = other.get_location().y - t.location.y
                 fwd_proj = to_x * fwd_x + to_y * fwd_y
                 lat = abs(to_x * fwd_y - to_y * fwd_x)
-                dist = math.sqrt(to_x * to_x + to_y * to_y)
-                if 0.0 < fwd_proj and dist < self._patrol_obstacle_distance and lat < 2.0:
+                other_dist = math.sqrt(to_x * to_x + to_y * to_y)
+                if 0.0 < fwd_proj and other_dist < self._patrol_obstacle_distance and lat < 2.0:
                     blocked = True
                     break
+
+            if not blocked:
+                # Brake if any pedestrian is within the stop radius (all directions)
+                for walker in self._pedestrian_actors:
+                    if walker is None or not walker.is_alive:
+                        continue
+                    to_x = walker.get_location().x - t.location.x
+                    to_y = walker.get_location().y - t.location.y
+                    walker_dist = math.sqrt(to_x * to_x + to_y * to_y)
+                    if walker_dist < self._patrol_pedestrian_distance:
+                        blocked = True
+                        break
 
             v = npc.get_velocity()
             speed = math.sqrt(v.x * v.x + v.y * v.y)
             over_limit = speed > self._patrol_max_speed
+
+            # Stuck detection: count steps below speed threshold while throttle would be applied.
+            # If stuck too long, teleport to the next waypoint to recover.
+            applying_throttle = not blocked and not over_limit
+            if applying_throttle and speed < self._patrol_stuck_speed_threshold:
+                self._patrol_stuck_counters[i] += 1
+            else:
+                self._patrol_stuck_counters[i] = 0
+
+            if self._patrol_stuck_counters[i] >= self._patrol_stuck_steps_max:
+                # Advance two waypoints ahead to clear whatever is blocking the NPC.
+                direction = self._patrol_waypoint_directions[i]
+                wp_idx = (wp_idx + 2 * direction) % len(waypoints)
+                self._patrol_waypoint_indices[i] = wp_idx
+                self._patrol_stuck_counters[i] = 0
+                recover_x, recover_y = waypoints[wp_idx]
+                next_recover_idx = (wp_idx + direction) % len(waypoints)
+                next_recover_x, next_recover_y = waypoints[next_recover_idx]
+                recover_yaw = math.degrees(
+                    math.atan2(next_recover_y - recover_y, next_recover_x - recover_x)
+                )
+                npc.set_transform(
+                    carla.Transform(
+                        carla.Location(x=recover_x, y=recover_y, z=t.location.z),
+                        carla.Rotation(yaw=recover_yaw),
+                    )
+                )
+                logger.debug(f"Patrol NPC {i} was stuck; teleported to waypoint {wp_idx}.")
+                continue
 
             control = carla.VehicleControl()
             control.steer = steer
@@ -1390,6 +1544,7 @@ class CARLAParkingEnv(gym.Env):
 
         self._patrol_waypoint_indices.clear()
         self._patrol_waypoint_directions.clear()
+        self._patrol_stuck_counters.clear()
         self._pedestrian_heading_steps.clear()
         self._pedestrian_headings.clear()
         self._pedestrian_lifetime_steps.clear()
@@ -1456,6 +1611,7 @@ class CARLAParkingEnv(gym.Env):
         self._spawn_vehicle()
         self._spawn_sensors()
         self._spawn_perimeter_cones()
+        self._spawn_obstacle_cones()
         self._spawn_static_vehicles()
         self._spawn_npc_patrol()
         self._spawn_pedestrians()

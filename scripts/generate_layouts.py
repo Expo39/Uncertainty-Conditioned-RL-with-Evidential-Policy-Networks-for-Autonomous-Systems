@@ -8,10 +8,11 @@ consumed by CARLAParkingEnv. Optionally produces bird's-eye PNG plots.
 
 Three floor plan shapes are supported:
 
-  rectangle   -- Standard axis-aligned rectangle (35x35 m). Training layout.
+  rectangle   -- Standard axis-aligned rectangle (60x45 m). Training layout.
   trapezoid   -- Wider at entrance, narrower at rear (front=48, rear=30, depth=44 m).
                  Training layout.
-  irregular_a -- Five-sided polygon with diagonal cut (OOD, held out from training).
+  irregular_a -- Nine-sided polygon with diagonal top wall and bottom notch
+                 (OOD, held out from training).
 
 Each shape is defined in its own module under scripts/layouts/:
   scripts/layouts/rectangle.py

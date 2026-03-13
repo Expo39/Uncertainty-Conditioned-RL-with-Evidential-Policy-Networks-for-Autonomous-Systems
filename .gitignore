@@ -80,6 +80,9 @@ ENVIRONMENT_DESIGN.md
 # Project config archive (local portability)
 project_configs.tar.gz
 
+# coordinates for different layouts
+configs/layouts/
+
 # Generated layout artefacts and visualiser state
 outputs/layouts/
 outputs/vis_state.json

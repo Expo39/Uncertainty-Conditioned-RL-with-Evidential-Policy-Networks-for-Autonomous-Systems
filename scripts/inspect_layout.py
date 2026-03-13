@@ -33,6 +33,7 @@ except ImportError:
     print("ERROR: carla Python package not found. Run inside the training container.")
     sys.exit(1)
 
+from scripts.layouts.colours import BAY_HEX, HEX_PATROL_PATH, HEX_PEDESTRIAN_ZONE, HEX_TARGET_BAY, hex_to_carla_color
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.geometry import zone_bbox
 
@@ -65,19 +66,19 @@ def _draw_inspect_overlays(
     debug = world.debug
     life = life_time
     z = float(layout.get("origin", {}).get("z", 0.3)) + 0.15
-    _SEG = 4.0  # max line segment length (m) -- keeps CARLA midpoint cull from dropping long edges
+    # draw_line ignores color in CARLA 0.9.16 -- use draw_point at 0.5 m spacing instead.
+    _DOT_SPACING = 0.5
 
     # Bay outlines coloured by type
-    type_colours = {
-        "perpendicular": carla.Color(r=0, g=0, b=220),
-        "angled": carla.Color(r=220, g=100, b=0),
-        "parallel": carla.Color(r=0, g=160, b=0),
-    }
+    type_colours = {k: hex_to_carla_color(v) for k, v in BAY_HEX.items()}
+    _target_colour = hex_to_carla_color(HEX_TARGET_BAY)
+    _ped_colour = hex_to_carla_color(HEX_PEDESTRIAN_ZONE)
+    _patrol_colour = hex_to_carla_color(HEX_PATROL_PATH)
 
     for bay_idx, bay in enumerate(layout.get("bays", [])):
         bay_type = bay.get("bay_type", "perpendicular")
         is_target = bay.get("id", bay.get("bay_id", "")) == target_bay_id
-        colour = carla.Color(r=0, g=255, b=0) if is_target else type_colours.get(
+        colour = _target_colour if is_target else type_colours.get(
             bay_type, carla.Color(r=120, g=120, b=120)
         )
         thickness = 0.10 if is_target else 0.05
@@ -86,23 +87,46 @@ def _draw_inspect_overlays(
         by = float(bay["y"])
         width = float(bay.get("width", 2.5))
         depth = float(bay.get("depth", 5.0))
-        yaw_deg = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
-
-        box = carla.BoundingBox(
-            carla.Location(x=bx, y=by, z=z),
-            carla.Vector3D(x=depth / 2.0, y=width / 2.0, z=0.05),
-        )
-        debug.draw_box(
-            box,
-            carla.Rotation(yaw=yaw_deg),
-            thickness=thickness,
-            color=colour,
-            life_time=life,
+        yaw_rad = math.radians(
+            float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
         )
 
-        # Overlay the bay index number in the bay colour (or green for target)
+        # Compute the four corners in world space by rotating the local half-extents.
+        cos_y = math.cos(yaw_rad)
+        sin_y = math.sin(yaw_rad)
+        hd = depth / 2.0
+        hw = width / 2.0
+        local = [(hd, hw), (hd, -hw), (-hd, -hw), (-hd, hw)]
+        corners_world = [
+            carla.Location(
+                x=bx + lx * cos_y - ly * sin_y,
+                y=by + lx * sin_y + ly * cos_y,
+                z=z,
+            )
+            for lx, ly in local
+        ]
+        pt_size = 0.08 if is_target else 0.05
+        # Draw target bay slightly higher so it renders on top of other bay outlines.
+        pt_z = z + 0.05 if is_target else z
+        for j in range(4):
+            a = corners_world[j]
+            b = corners_world[(j + 1) % 4]
+            edge_dx = b.x - a.x
+            edge_dy = b.y - a.y
+            edge_len = math.sqrt(edge_dx * edge_dx + edge_dy * edge_dy)
+            n_pts = max(2, int(math.ceil(edge_len / _DOT_SPACING)))
+            for s in range(n_pts):
+                t = s / (n_pts - 1)
+                debug.draw_point(
+                    carla.Location(x=a.x + t * edge_dx, y=a.y + t * edge_dy, z=pt_z),
+                    size=pt_size,
+                    color=colour,
+                    life_time=life,
+                )
+
+        # Label: use bay colour for normal bays, target green for the target bay.
         label = "T" if is_target else str(bay_idx)
-        label_colour = carla.Color(r=255, g=255, b=255) if is_target else colour
+        label_colour = _target_colour if is_target else colour
         debug.draw_string(
             carla.Location(x=bx, y=by, z=z + 1.5),
             label,
@@ -144,8 +168,7 @@ def _draw_inspect_overlays(
             life_time=life,
         )
 
-    # Pedestrian zones -- purple outlines
-    purple = carla.Color(r=180, g=0, b=220)
+    # Pedestrian zones
     for zone_idx, zone_raw in enumerate(layout.get("pedestrian_zones", [])):
         x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
         zone_corners = [
@@ -160,15 +183,13 @@ def _draw_inspect_overlays(
             edge_dx = b.x - a.x
             edge_dy = b.y - a.y
             edge_len = math.sqrt(edge_dx * edge_dx + edge_dy * edge_dy)
-            n_segs = max(1, int(math.ceil(edge_len / _SEG)))
-            for s in range(n_segs):
-                t0 = s / n_segs
-                t1 = (s + 1) / n_segs
-                debug.draw_line(
-                    carla.Location(x=a.x + t0 * edge_dx, y=a.y + t0 * edge_dy, z=z),
-                    carla.Location(x=a.x + t1 * edge_dx, y=a.y + t1 * edge_dy, z=z),
-                    thickness=0.05,
-                    color=purple,
+            n_pts = max(2, int(math.ceil(edge_len / _DOT_SPACING)))
+            for s in range(n_pts):
+                t = s / (n_pts - 1)
+                debug.draw_point(
+                    carla.Location(x=a.x + t * edge_dx, y=a.y + t * edge_dy, z=z),
+                    size=0.05,
+                    color=_ped_colour,
                     life_time=life,
                 )
         # Label at zone centre
@@ -177,7 +198,7 @@ def _draw_inspect_overlays(
         debug.draw_string(
             carla.Location(x=zone_cx, y=zone_cy, z=z + 1.5),
             f"PED {zone_idx}",
-            color=purple,
+            color=_ped_colour,
             life_time=life,
         )
 
@@ -188,12 +209,11 @@ def _draw_inspect_overlays(
         (float(wp["x"]), float(wp["y"]))
         for wp in layout.get("patrol_waypoints", [])
     ]
-    red = carla.Color(r=220, g=0, b=0)
     for i, (wx, wy) in enumerate(waypoints):
         debug.draw_point(
             carla.Location(x=wx, y=wy, z=z + 0.2),
             size=0.12,
-            color=red,
+            color=_patrol_colour,
             life_time=life,
         )
         if len(waypoints) > 1:
@@ -201,15 +221,13 @@ def _draw_inspect_overlays(
             seg_dx = nx - wx
             seg_dy = ny - wy
             seg_len = math.sqrt(seg_dx * seg_dx + seg_dy * seg_dy)
-            n_segs = max(1, int(math.ceil(seg_len / _SEG)))
-            for s in range(n_segs):
-                t0 = s / n_segs
-                t1 = (s + 1) / n_segs
-                debug.draw_line(
-                    carla.Location(x=wx + t0 * seg_dx, y=wy + t0 * seg_dy, z=z + 0.2),
-                    carla.Location(x=wx + t1 * seg_dx, y=wy + t1 * seg_dy, z=z + 0.2),
-                    thickness=0.04,
-                    color=red,
+            n_pts = max(2, int(math.ceil(seg_len / _DOT_SPACING)))
+            for s in range(n_pts):
+                t = s / (n_pts - 1)
+                debug.draw_point(
+                    carla.Location(x=wx + t * seg_dx, y=wy + t * seg_dy, z=z + 0.2),
+                    size=0.04,
+                    color=_patrol_colour,
                     life_time=life,
                 )
 
@@ -273,31 +291,38 @@ def main() -> None:
         sys.exit(1)
 
     # Position spectator above lot centroid so all debug geometry stays in view.
-    # Using spawn point as spectator origin cuts off far bay outlines because
-    # CARLA culls draw_box geometry beyond ~60 m from the spectator camera.
+    # CARLA culls debug geometry beyond ~60 m from the spectator camera.
     if env._current_layout:
         corners = env._current_layout.get("corners", [])
         if corners:
-            cx = sum(float(c["x"]) for c in corners) / len(corners)
-            cy = sum(float(c["y"]) for c in corners) / len(corners)
+            xs = [float(c["x"]) for c in corners]
+            ys = [float(c["y"]) for c in corners]
+            cx = (min(xs) + max(xs)) / 2.0
+            cy = (min(ys) + max(ys)) / 2.0
+            # Set height so the full lot fits in view. CARLA's spectator FOV is
+            # roughly 90 deg, so height ~= max(span_x, span_y) * 1.1 ensures all
+            # corners remain within the ~60 m debug-geometry cull radius.
+            span = max(max(xs) - min(xs), max(ys) - min(ys))
+            cam_z_offset = max(span * 1.1, 80.0)
         else:
             spawn = env._current_layout.get("spawn_transform", {})
             cx = float(spawn.get("x", 0.0))
             cy = float(spawn.get("y", 0.0))
+            cam_z_offset = 80.0
         sz = float(env._current_layout.get("origin", {}).get("z", 0.3))
         spectator = env.world.get_spectator()
         spectator.set_transform(
             carla.Transform(
-                carla.Location(x=cx, y=cy, z=sz + 80.0),
+                carla.Location(x=cx, y=cy, z=sz + cam_z_offset),
                 carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0),
             )
         )
-        print(f"Spectator at centroid ({cx:.0f}, {cy:.0f}, {sz + 80.0:.0f}) -- bird's-eye view.")
+        print(f"Spectator at bbox centre ({cx:.0f}, {cy:.0f}, {sz + cam_z_offset:.0f}) -- bird's-eye view.")
 
     target_bay_id = env._target_bay.get("bay_id", "")
     print("Debug overlays active (redrawn every tick):")
-    print("  blue=perpendicular bays, orange=angled bays, green=parallel bays")
-    print("  bright green=TARGET bay, yellow=spawn, purple=pedestrian zones, red=patrol path")
+    print("  blue=perpendicular bays, yellow=angled bays, violet=parallel bays")
+    print("  bright green=TARGET bay, yellow=spawn, turquoise=pedestrian zones, red=patrol path")
 
     # Tick at 20 Hz. Overlays are redrawn every 3 s with life_time=3.5 s so
     # they persist between redraws without flickering, yet the buffer never
