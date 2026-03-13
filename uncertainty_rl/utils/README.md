@@ -6,7 +6,7 @@ Shared utilities for logging, metrics tracking, visualisation, and covariance pr
 
 ### `constants.py`
 
-Structural constants fixed by system architecture. **Not tuneable** — changing these requires coordinated updates across all consumers (env, networks, training, evaluation, tests). Tuneable values (timesteps, noise levels, seeds) live in `configs/` YAML files.
+Structural constants fixed by system architecture. **Not tuneable** -changing these requires coordinated updates across all consumers (env, networks, training, evaluation, tests). Tuneable values (timesteps, noise levels, seeds) live in `configs/` YAML files.
 
 | Constant | Value | Description |
 |----------|-------|-------------|

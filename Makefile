@@ -19,6 +19,7 @@ PYTEST := pytest
 CONFIG_DIR := configs
 SRC_DIR := uncertainty_rl
 TESTS_DIR := tests
+SCRIPTS_DIR := scripts
 DOCKER_COMPOSE := docker compose
 
 # ----------------------------------------------------------------------
@@ -294,9 +295,9 @@ test-integration: ## Run integration tests (requires CARLA + ROS 2 + GPU)
 
 verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
-	flake8 $(SRC_DIR) $(TESTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR)
-	black --check $(SRC_DIR) $(TESTS_DIR)
+	flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 	mypy $(SRC_DIR) --ignore-missing-imports
 	$(PYTHON) -c "import uncertainty_rl; print('All checks passed.')"
 
@@ -305,13 +306,13 @@ verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
 # ----------------------------------------------------------------------
 
 lint: ## Run all linters (flake8 + isort + black)
-	flake8 $(SRC_DIR) $(TESTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR)
-	black --check $(SRC_DIR) $(TESTS_DIR)
+	flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 
 format: ## Auto-format code with black + isort
-	isort $(SRC_DIR) $(TESTS_DIR)
-	black $(SRC_DIR) $(TESTS_DIR)
+	isort $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	black $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 
 typecheck: ## Run mypy type checking
 	mypy $(SRC_DIR) --ignore-missing-imports

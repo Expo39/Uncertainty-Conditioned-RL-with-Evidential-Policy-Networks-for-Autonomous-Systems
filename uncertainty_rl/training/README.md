@@ -10,7 +10,7 @@ RL training scripts for uncertainty-conditioned parking using Stable-Baselines3.
 
 Config-driven PPO training loop with:
 
-- **Policy switching**: reads `policy_type` from config — `"evidential"` uses `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` uses SB3 `PPO` + `MlpPolicy`
+- **Policy switching**: reads `policy_type` from config -`"evidential"` uses `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` uses SB3 `PPO` + `MlpPolicy`
 - **VecNormalize** wraps the environment for observation and reward normalisation
 - **Checkpointing** saves model and VecNormalize statistics together
 - **TensorBoard** logging for training metrics (including evidential reg loss and uncertainty estimates)
@@ -55,7 +55,7 @@ See `configs/train_config.yaml` for the full parameter list with per-parameter j
 
 ## Ablation Study Orchestration: `scripts/run_experiment.py`
 
-Runs the full 2x2 ablation study (4 baselines x 10 seeds). Each baseline config in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` — all baselines share identical PPO hyperparameters.
+Runs the full 2x2 ablation study (4 baselines x 10 seeds). Each baseline config in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` -all baselines share identical PPO hyperparameters.
 
 ```bash
 make experiment-dry       # Plan runs without training (no Docker needed)

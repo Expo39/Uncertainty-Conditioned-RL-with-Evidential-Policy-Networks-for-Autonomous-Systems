@@ -32,7 +32,6 @@ from uncertainty_rl.utils.constants import (
 )
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
-
 # ---------------------------------------------------------------------------
 # Pure geometry: _interpolate_cone_positions
 # ---------------------------------------------------------------------------
@@ -67,9 +66,9 @@ class TestInterpolateConePositions:
             dx = edge_pts[i + 1][0] - edge_pts[i][0]
             dy = edge_pts[i + 1][1] - edge_pts[i][1]
             dist = math.sqrt(dx * dx + dy * dy)
-            assert dist <= spacing + 0.5, (
-                f"Spacing {dist:.2f} exceeds {spacing + 0.5:.2f}"
-            )
+            assert (
+                dist <= spacing + 0.5
+            ), f"Spacing {dist:.2f} exceeds {spacing + 0.5:.2f}"
 
     def test_count_scales_with_perimeter(self) -> None:
         """
@@ -106,8 +105,12 @@ class TestComputeRelativeTargetPose:
         @brief When ego is at target, relative pose should be (0, 0, 0).
         """
         dx, dy, dyaw = _compute_relative_target_pose(
-            x_ego=5.0, y_ego=3.0, yaw_ego=0.5,
-            x_target=5.0, y_target=3.0, yaw_target=0.5,
+            x_ego=5.0,
+            y_ego=3.0,
+            yaw_ego=0.5,
+            x_target=5.0,
+            y_target=3.0,
+            yaw_target=0.5,
         )
         assert abs(dx) < 1e-6
         assert abs(dy) < 1e-6
@@ -118,8 +121,12 @@ class TestComputeRelativeTargetPose:
         @brief Target directly ahead (same yaw, positive x offset) -> dx > 0, dy ~ 0.
         """
         dx, dy, dyaw = _compute_relative_target_pose(
-            x_ego=0.0, y_ego=0.0, yaw_ego=0.0,
-            x_target=10.0, y_target=0.0, yaw_target=0.0,
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.0,
+            x_target=10.0,
+            y_target=0.0,
+            yaw_target=0.0,
         )
         assert dx > 0.0
         assert abs(dy) < 1e-6
@@ -130,8 +137,12 @@ class TestComputeRelativeTargetPose:
         @brief Target 5m to the left (ego facing +x) -> dy > 0, dx ~ 0.
         """
         dx, dy, dyaw = _compute_relative_target_pose(
-            x_ego=0.0, y_ego=0.0, yaw_ego=0.0,
-            x_target=0.0, y_target=5.0, yaw_target=0.0,
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.0,
+            x_target=0.0,
+            y_target=5.0,
+            yaw_target=0.0,
         )
         assert abs(dx) < 1e-6
         assert dy > 0.0
@@ -141,8 +152,12 @@ class TestComputeRelativeTargetPose:
         @brief dyaw always in (-pi, pi] regardless of raw angle difference.
         """
         _, _, dyaw = _compute_relative_target_pose(
-            x_ego=0.0, y_ego=0.0, yaw_ego=0.1,
-            x_target=0.0, y_target=0.0, yaw_target=3.0,
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.1,
+            x_target=0.0,
+            y_target=0.0,
+            yaw_target=3.0,
         )
         assert -math.pi < dyaw <= math.pi
 
@@ -152,8 +167,12 @@ class TestComputeRelativeTargetPose:
         """
         yaw_ego = math.pi / 2.0  # Facing +y
         dx, dy, dyaw = _compute_relative_target_pose(
-            x_ego=0.0, y_ego=0.0, yaw_ego=yaw_ego,
-            x_target=0.0, y_target=8.0, yaw_target=yaw_ego,
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=yaw_ego,
+            x_target=0.0,
+            y_target=8.0,
+            yaw_target=yaw_ego,
         )
         assert dx > 0.0
         assert abs(dy) < 1e-5
@@ -318,9 +337,7 @@ class TestBaySampling:
     @brief Tests for _sample_target_bay() via mocked floor plan layouts.
     """
 
-    def _make_env_with_layout(
-        self, layout: Dict[str, Any]
-    ) -> Any:
+    def _make_env_with_layout(self, layout: Dict[str, Any]) -> Any:
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
@@ -333,15 +350,39 @@ class TestBaySampling:
         """
         bays: List[Dict[str, Any]] = []
         for i in range(5):
-            bays.append({"bay_id": f"perp_{i}", "bay_type": "perpendicular",
-                         "x": float(i * 3), "y": 0.0, "yaw": 0.0,
-                         "width": 2.5, "depth": 5.0})
-            bays.append({"bay_id": f"angl_{i}", "bay_type": "angled",
-                         "x": float(i * 3), "y": 10.0, "yaw": 0.785,
-                         "width": 2.5, "depth": 5.4})
-            bays.append({"bay_id": f"para_{i}", "bay_type": "parallel",
-                         "x": float(i * 9), "y": 20.0, "yaw": 0.0,
-                         "width": 2.5, "depth": 8.0})
+            bays.append(
+                {
+                    "bay_id": f"perp_{i}",
+                    "bay_type": "perpendicular",
+                    "x": float(i * 3),
+                    "y": 0.0,
+                    "yaw": 0.0,
+                    "width": 2.5,
+                    "depth": 5.0,
+                }
+            )
+            bays.append(
+                {
+                    "bay_id": f"angl_{i}",
+                    "bay_type": "angled",
+                    "x": float(i * 3),
+                    "y": 10.0,
+                    "yaw": 0.785,
+                    "width": 2.5,
+                    "depth": 5.4,
+                }
+            )
+            bays.append(
+                {
+                    "bay_id": f"para_{i}",
+                    "bay_type": "parallel",
+                    "x": float(i * 9),
+                    "y": 20.0,
+                    "yaw": 0.0,
+                    "width": 2.5,
+                    "depth": 8.0,
+                }
+            )
 
         env = self._make_env_with_layout({"bays": bays})
 
@@ -377,7 +418,10 @@ class TestVisStateWriter:
                 ego_transform={"x": 1.0, "y": 2.0, "yaw": 0.3},
                 actor_transforms=[{"x": 5.0, "y": 5.0, "yaw": 0.0, "type": "npc"}],
                 target_bay={
-                    "x": 10.0, "y": 0.0, "yaw": 1.5, "bay_type": "perpendicular"
+                    "x": 10.0,
+                    "y": 0.0,
+                    "yaw": 1.5,
+                    "bay_type": "perpendicular",
                 },
                 episode_info={"step": 42, "floor_plan": "rectangle"},
                 trajectory=[(0.0, 0.0), (0.5, 0.1)],
@@ -425,8 +469,16 @@ class TestVisStateWriter:
             )
 
             data = json.loads(out.read_text())
-            for key in ["ego", "actors", "target_bay", "episode_info",
-                        "trajectory", "bays", "corners", "pedestrians"]:
+            for key in [
+                "ego",
+                "actors",
+                "target_bay",
+                "episode_info",
+                "trajectory",
+                "bays",
+                "corners",
+                "pedestrians",
+            ]:
                 assert key in data, f"Missing key: {key}"
 
     def test_write_creates_parent_dirs(self) -> None:

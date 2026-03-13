@@ -33,10 +33,15 @@ except ImportError:
     print("ERROR: carla Python package not found. Run inside the training container.")
     sys.exit(1)
 
-from scripts.layouts.colours import BAY_HEX, HEX_PATROL_PATH, HEX_PEDESTRIAN_ZONE, HEX_TARGET_BAY, hex_to_carla_color
+from scripts.layouts.colours import (
+    BAY_HEX,
+    HEX_PATROL_PATH,
+    HEX_PEDESTRIAN_ZONE,
+    HEX_TARGET_BAY,
+    hex_to_carla_color,
+)
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.geometry import zone_bbox
-
 
 # ---------------------------------------------------------------------------
 # Debug overlay helpers (inspect-only, not used during training)
@@ -66,7 +71,7 @@ def _draw_inspect_overlays(
     debug = world.debug
     life = life_time
     z = float(layout.get("origin", {}).get("z", 0.3)) + 0.15
-    # draw_line ignores color in CARLA 0.9.16 -- use draw_point at 0.5 m spacing instead.
+    # draw_line ignores color in CARLA 0.9.16 -- use draw_point at 0.5 m spacing.
     _DOT_SPACING = 0.5
 
     # Bay outlines coloured by type
@@ -78,11 +83,11 @@ def _draw_inspect_overlays(
     for bay_idx, bay in enumerate(layout.get("bays", [])):
         bay_type = bay.get("bay_type", "perpendicular")
         is_target = bay.get("id", bay.get("bay_id", "")) == target_bay_id
-        colour = _target_colour if is_target else type_colours.get(
-            bay_type, carla.Color(r=120, g=120, b=120)
+        colour = (
+            _target_colour
+            if is_target
+            else type_colours.get(bay_type, carla.Color(r=120, g=120, b=120))
         )
-        thickness = 0.10 if is_target else 0.05
-
         bx = float(bay["x"])
         by = float(bay["y"])
         width = float(bay.get("width", 2.5))
@@ -206,8 +211,7 @@ def _draw_inspect_overlays(
     # Lines are split into 4 m segments so CARLA's midpoint-based cull never
     # drops a segment whose midpoint is close to the spectator.
     waypoints: List[Tuple[float, float]] = [
-        (float(wp["x"]), float(wp["y"]))
-        for wp in layout.get("patrol_waypoints", [])
+        (float(wp["x"]), float(wp["y"])) for wp in layout.get("patrol_waypoints", [])
     ]
     for i, (wx, wy) in enumerate(waypoints):
         debug.draw_point(
@@ -317,19 +321,25 @@ def main() -> None:
                 carla.Rotation(pitch=-90.0, yaw=0.0, roll=0.0),
             )
         )
-        print(f"Spectator at bbox centre ({cx:.0f}, {cy:.0f}, {sz + cam_z_offset:.0f}) -- bird's-eye view.")
+        print(
+            f"Spectator at bbox centre ({cx:.0f}, {cy:.0f},"
+            f" {sz + cam_z_offset:.0f}) -- bird's-eye view."
+        )
 
     target_bay_id = env._target_bay.get("bay_id", "")
     print("Debug overlays active (redrawn every tick):")
     print("  blue=perpendicular bays, yellow=angled bays, violet=parallel bays")
-    print("  bright green=TARGET bay, yellow=spawn, turquoise=pedestrian zones, red=patrol path")
+    print(
+        "  bright green=TARGET bay, yellow=spawn,"
+        " turquoise=pedestrian zones, red=patrol path"
+    )
 
     # Tick at 20 Hz. Overlays are redrawn every 3 s with life_time=3.5 s so
     # they persist between redraws without flickering, yet the buffer never
     # accumulates enough entries to overflow and drop older primitives.
     tick_hz = 20
     total_ticks = args.duration * tick_hz
-    overlay_redraw_ticks = 3 * tick_hz   # redraw every 3 s
+    overlay_redraw_ticks = 3 * tick_hz  # redraw every 3 s
     log_ticks = 10 * tick_hz
 
     print(f"Scene live for {args.duration}s. Press Ctrl+C to exit early.")

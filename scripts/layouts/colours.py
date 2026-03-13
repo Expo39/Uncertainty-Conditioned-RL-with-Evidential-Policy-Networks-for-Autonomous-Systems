@@ -19,16 +19,16 @@ from typing import Tuple
 # ---------------------------------------------------------------------------
 
 # Bay types
-HEX_PERP_BAY = "#0000DC"       # Blue
-HEX_ANGLED_BAY = "#FFD700"     # Yellow
-HEX_PARALLEL_BAY = "#B400FF"   # Violet
-HEX_TARGET_BAY = "#00FF00"     # Bright green
+HEX_PERP_BAY = "#0000DC"  # Blue
+HEX_ANGLED_BAY = "#FFD700"  # Yellow
+HEX_PARALLEL_BAY = "#B400FF"  # Violet
+HEX_TARGET_BAY = "#00FF00"  # Bright green
 
 # Lot features
-HEX_PEDESTRIAN_ZONE = "#00CED1"        # Dark turquoise
-HEX_PEDESTRIAN_ZONE_EDGE = "#008B8B"   # Dark cyan
-HEX_PATROL_PATH = "#DC0000"            # Red
-HEX_LOT = "#DDDDDD"                    # Light grey
+HEX_PEDESTRIAN_ZONE = "#00CED1"  # Dark turquoise
+HEX_PEDESTRIAN_ZONE_EDGE = "#008B8B"  # Dark cyan
+HEX_PATROL_PATH = "#DC0000"  # Red
+HEX_LOT = "#DDDDDD"  # Light grey
 
 # Bay type lookup (hex, for matplotlib)
 BAY_HEX: dict = {
@@ -53,7 +53,9 @@ def hex_to_rgb(hex_colour: str) -> Tuple[int, int, int]:
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
 
 
-def hex_to_carla_color(hex_colour: str) -> "carla.Color":  # type: ignore[name-defined]
+def hex_to_carla_color(
+    hex_colour: str,
+) -> "carla.Color":  # type: ignore[name-defined]  # noqa: F821
     """
     @brief Convert a hex colour string to a carla.Color instance.
     @param hex_colour: Colour string in #RRGGBB format.

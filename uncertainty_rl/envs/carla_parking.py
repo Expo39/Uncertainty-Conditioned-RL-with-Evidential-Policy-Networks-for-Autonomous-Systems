@@ -48,10 +48,6 @@ except ImportError:
     _ROS2_AVAILABLE = False
 
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
-from uncertainty_rl.utils.geometry import (
-    _compute_relative_target_pose,
-    _interpolate_cone_positions,
-)
 from uncertainty_rl.utils.constants import (
     CLEARANCE_THRESHOLD,
     COVARIANCE_FEATURES_DIM,
@@ -63,7 +59,11 @@ from uncertainty_rl.utils.constants import (
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
-from uncertainty_rl.utils.geometry import zone_bbox
+from uncertainty_rl.utils.geometry import (
+    _compute_relative_target_pose,
+    _interpolate_cone_positions,
+    zone_bbox,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ _LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
     "bus",
 )
 
-# Micro/novelty vehicles excluded from parked car pool — unrealistically small
+# Micro/novelty vehicles excluded from parked car pool - unrealistically small
 # for a standard parking bay and visually confusing during inspection.
 _SMALL_VEHICLE_TYPES: Tuple[str, ...] = (
     "microlino",
@@ -275,9 +275,9 @@ class CARLAParkingEnv(gym.Env):
 
         # Patrol NPC step counters
         self._patrol_waypoint_indices: List[int] = []
-        # +1 = CCW (forward through waypoints), -1 = CW (reverse). Randomised per NPC per episode.
+        # +1 = CCW (forward), -1 = CW (reverse). Randomised per episode.
         self._patrol_waypoint_directions: List[int] = []
-        # Steps each patrol NPC has been below the stuck speed threshold while receiving throttle.
+        # Steps each NPC has been below stuck speed threshold while receiving throttle.
         self._patrol_stuck_counters: List[int] = []
 
         # Pedestrian step counters for heading re-randomisation and zone confinement
@@ -503,13 +503,17 @@ class CARLAParkingEnv(gym.Env):
             (float(c["x"]), float(c["y"])) for c in corners_raw
         ]
         spawn_raw = self._current_layout.get("spawn_transform", {})
-        # Only open a gap at the spawn chosen this episode — other entry points
+        # Only open a gap at the spawn chosen this episode - other entry points
         # stay walled off so the lot looks realistic from inside.
         chosen = self._chosen_spawn if self._chosen_spawn else spawn_raw
         entrance: Optional[Tuple[float, float]] = (
-            float(chosen["x"]),
-            float(chosen["y"]),
-        ) if chosen else None
+            (
+                float(chosen["x"]),
+                float(chosen["y"]),
+            )
+            if chosen
+            else None
+        )
         cone_positions = _interpolate_cone_positions(
             corners,
             self._cone_spacing,
@@ -594,7 +598,7 @@ class CARLAParkingEnv(gym.Env):
 
     def _adjacent_bay_ids(self, target_id: str) -> List[str]:
         """
-        @brief Return the bay IDs immediately adjacent (index +/-1, same type) to the target.
+        @brief Return bay IDs adjacent (index +/-1, same type) to the target.
 
         Bay IDs follow the convention '<type>_<index>' (e.g. 'parallel_3').
         Adjacent bays are left empty each episode so the agent has clearance
@@ -651,7 +655,7 @@ class CARLAParkingEnv(gym.Env):
             bay_x = float(bay["x"])
             bay_y = float(bay["y"])
             yaw = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
-            # Randomly reverse the parked car 50 % of the time — both nose-in
+            # Randomly reverse the parked car 50 % of the time - both nose-in
             # and nose-out orientations are valid in a real car park.
             if random.random() < 0.5:
                 yaw = (yaw + 180.0) % 360.0
@@ -720,7 +724,7 @@ class CARLAParkingEnv(gym.Env):
         if not waypoints_raw:
             return
 
-        # Always spawn at least 1 patrol vehicle so the agent always encounters a moving obstacle.
+        # Spawn at least 1 patrol vehicle so the agent encounters a moving obstacle.
         num_patrol = random.randint(1, max(1, self._num_patrol_max))
 
         waypoints: List[Tuple[float, float]] = [
@@ -738,7 +742,7 @@ class CARLAParkingEnv(gym.Env):
             first_target_idx = (start_idx + direction) % len(waypoints)
             wp = waypoints[start_idx]
             first_target_wp = waypoints[first_target_idx]
-            # Face toward the first target so the NPC never drives away from it at spawn.
+            # Face toward first target so the NPC never drives away from it at spawn.
             spawn_yaw = math.degrees(
                 math.atan2(
                     first_target_wp[1] - wp[1],
@@ -891,7 +895,11 @@ class CARLAParkingEnv(gym.Env):
                 fwd_proj = to_x * fwd_x + to_y * fwd_y
                 lat = abs(to_x * fwd_y - to_y * fwd_x)
                 other_dist = math.sqrt(to_x * to_x + to_y * to_y)
-                if 0.0 < fwd_proj and other_dist < self._patrol_obstacle_distance and lat < 2.0:
+                if (
+                    0.0 < fwd_proj
+                    and other_dist < self._patrol_obstacle_distance
+                    and lat < 2.0
+                ):
                     blocked = True
                     break
 
@@ -911,7 +919,7 @@ class CARLAParkingEnv(gym.Env):
             speed = math.sqrt(v.x * v.x + v.y * v.y)
             over_limit = speed > self._patrol_max_speed
 
-            # Stuck detection: count steps below speed threshold while throttle would be applied.
+            # Stuck detection: count steps below speed threshold while throttle applied.
             # If stuck too long, teleport to the next waypoint to recover.
             applying_throttle = not blocked and not over_limit
             if applying_throttle and speed < self._patrol_stuck_speed_threshold:
@@ -937,7 +945,9 @@ class CARLAParkingEnv(gym.Env):
                         carla.Rotation(yaw=recover_yaw),
                     )
                 )
-                logger.debug(f"Patrol NPC {i} was stuck; teleported to waypoint {wp_idx}.")
+                logger.debug(
+                    f"Patrol NPC {i} was stuck; teleported to waypoint {wp_idx}."
+                )
                 continue
 
             control = carla.VehicleControl()
@@ -1247,7 +1257,6 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[17] = dyaw
         return self._obs_buffer.copy()
 
-
     # ------------------------------------------------------------------
     # Visualisation
     # ------------------------------------------------------------------
@@ -1422,9 +1431,7 @@ class CARLAParkingEnv(gym.Env):
         if self.world is None:
             return
 
-        default_z = float(
-            self._current_layout.get("origin", {}).get("z", 0.3)
-        )
+        default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
         primary = self._current_layout.get("spawn_transform", {})
         extras: List[Any] = self._current_layout.get("extra_spawn_transforms", [])
         all_spawns = [primary] + list(extras)
@@ -1619,9 +1626,7 @@ class CARLAParkingEnv(gym.Env):
         # Rebuild vehicle actor cache after all vehicles are spawned so
         # _update_patrol_npcs() can use it without a per-step world query.
         if self.world is not None:
-            self._all_vehicle_actors = list(
-                self.world.get_actors().filter("vehicle.*")
-            )
+            self._all_vehicle_actors = list(self.world.get_actors().filter("vehicle.*"))
 
         if self._include_covariance:
             self._wait_for_covariance()

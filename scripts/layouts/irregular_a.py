@@ -73,20 +73,20 @@ def generate() -> Dict[str, Any]:
     # Diagonal top wall runs from P6(80,37) to P7(20,50), then flat to P8(0,50).
     # ------------------------------------------------------------------
     corners = [
-        {"x":  0.0, "y":  0.0},   # P0 bottom-left
-        {"x": 53.0, "y":  0.0},   # P1 notch-left bottom
-        {"x": 53.0, "y":  8.0},   # P2 notch-left top
-        {"x": 65.0, "y":  8.0},   # P3 notch-right top
-        {"x": 65.0, "y":  0.0},   # P4 notch-right bottom
-        {"x": 80.0, "y":  0.0},   # P5 bottom-right
-        {"x": 80.0, "y": 37.0},   # P6 top-right (diagonal wall start)
-        {"x": 20.0, "y": 50.0},   # P7 diagonal/flat wall junction
-        {"x":  0.0, "y": 50.0},   # P8 left-wall top corner
+        {"x": 0.0, "y": 0.0},  # P0 bottom-left
+        {"x": 53.0, "y": 0.0},  # P1 notch-left bottom
+        {"x": 53.0, "y": 8.0},  # P2 notch-left top
+        {"x": 65.0, "y": 8.0},  # P3 notch-right top
+        {"x": 65.0, "y": 0.0},  # P4 notch-right bottom
+        {"x": 80.0, "y": 0.0},  # P5 bottom-right
+        {"x": 80.0, "y": 37.0},  # P6 top-right (diagonal wall start)
+        {"x": 20.0, "y": 50.0},  # P7 diagonal/flat wall junction
+        {"x": 0.0, "y": 50.0},  # P8 left-wall top corner
     ]
 
-    dims_perp = BAY_DIMS["perpendicular"]   # width=2.5, depth=5.0
-    dims_ang  = BAY_DIMS["angled"]          # width=2.5, depth=5.4
-    dims_par  = BAY_DIMS["parallel"]        # width=2.5, depth=8.0
+    dims_perp = BAY_DIMS["perpendicular"]  # width=2.5, depth=5.0
+    dims_ang = BAY_DIMS["angled"]  # width=2.5, depth=5.4
+    dims_par = BAY_DIMS["parallel"]  # width=2.5, depth=8.0
 
     # ------------------------------------------------------------------
     # Perpendicular bays: back-to-back rows on all four faces of the central
@@ -101,18 +101,17 @@ def generate() -> Dict[str, Any]:
     OBSTACLE_X_MAX = 39.25
     OBSTACLE_Y_MIN = 17.0
     OBSTACLE_Y_MAX = 21.0
-    PERP_OBS_TB = 6   # top/bottom rows: 6 * 2.5 m = 15 m, fits in 16 m span
-    PERP_OBS_LR = 2   # left/right rows: 2 * 2.5 m =  5 m, fits in  4 m span
+    PERP_OBS_TB = 6  # top/bottom rows: 6 * 2.5 m = 15 m, fits in 16 m span
+    PERP_OBS_LR = 2  # left/right rows: 2 * 2.5 m =  5 m, fits in  4 m span
 
     perp_bays: List[Dict] = []
 
     # Rows C/D: top and bottom faces of obstacle, bays oriented nose along Y.
     obs_row_c_cy = OBSTACLE_Y_MIN - _WALL_GAP - dims_perp["depth"] / 2.0
     obs_row_d_cy = OBSTACLE_Y_MAX + _WALL_GAP + dims_perp["depth"] / 2.0
-    obs_tb_cx_start = (
-        (OBSTACLE_X_MIN + OBSTACLE_X_MAX) / 2.0
-        - (PERP_OBS_TB - 1) / 2.0 * dims_perp["width"]
-    )
+    obs_tb_cx_start = (OBSTACLE_X_MIN + OBSTACLE_X_MAX) / 2.0 - (
+        PERP_OBS_TB - 1
+    ) / 2.0 * dims_perp["width"]
     for i in range(PERP_OBS_TB):
         cx = obs_tb_cx_start + i * dims_perp["width"]
         perp_bays.append(
@@ -139,10 +138,9 @@ def generate() -> Dict[str, Any]:
     # Rows E/F: left and right faces of obstacle, bays oriented nose along X.
     obs_row_e_cx = OBSTACLE_X_MIN - _WALL_GAP - dims_perp["depth"] / 2.0
     obs_row_f_cx = OBSTACLE_X_MAX + _WALL_GAP + dims_perp["depth"] / 2.0
-    obs_lr_cy_start = (
-        (OBSTACLE_Y_MIN + OBSTACLE_Y_MAX) / 2.0
-        - (PERP_OBS_LR - 1) / 2.0 * dims_perp["width"]
-    )
+    obs_lr_cy_start = (OBSTACLE_Y_MIN + OBSTACLE_Y_MAX) / 2.0 - (
+        PERP_OBS_LR - 1
+    ) / 2.0 * dims_perp["width"]
     for i in range(PERP_OBS_LR):
         cy = obs_lr_cy_start + i * dims_perp["width"]
         perp_bays.append(
@@ -175,7 +173,9 @@ def generate() -> Dict[str, Any]:
     ANG_BAYS_LEFT = 4
     _left_spacing = dims_ang["width"] / math.sin(math.radians(45.0))
     _left_end_margin = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + _WALL_GAP
-    _left_offset = ang_offset_from_wall(dims_ang["depth"], dims_ang["width"]) + _WALL_GAP
+    _left_offset = (
+        ang_offset_from_wall(dims_ang["depth"], dims_ang["width"]) + _WALL_GAP
+    )
     # wall_y0 chosen so that the first bay placed (bottom of group) centres at y=3.
     # First bay centre = wall_y0 - _left_end_margin, so wall_y0 = 3 + _left_end_margin
     # + (n-1)*spacing accounts for all n bays above the bottom one.
@@ -205,8 +205,8 @@ def generate() -> Dict[str, Any]:
     # ------------------------------------------------------------------
     ANG_BAYS_DIAGONAL = 11
 
-    top_wall_dx_raw = 20.0 - 80.0   # -60
-    top_wall_dy_raw = 50.0 - 37.0   # +13
+    top_wall_dx_raw = 20.0 - 80.0  # -60
+    top_wall_dy_raw = 50.0 - 37.0  # +13
     top_wall_len = math.hypot(top_wall_dx_raw, top_wall_dy_raw)
     wdx_top = top_wall_dx_raw / top_wall_len
     wdy_top = top_wall_dy_raw / top_wall_len
@@ -236,8 +236,10 @@ def generate() -> Dict[str, Any]:
     # 5 bays span 40 m; centred in the 53 m wall -> left edge at x=6.5.
     # ------------------------------------------------------------------
     PAR_BAYS_BOTTOM = 5
-    par_cy = dims_par["width"] / 2.0 + _WALL_GAP   # 1.75
-    par_x_start = (53.0 - PAR_BAYS_BOTTOM * dims_par["depth"]) / 2.0 + dims_par["depth"] / 2.0
+    par_cy = dims_par["width"] / 2.0 + _WALL_GAP  # 1.75
+    par_x_start = (53.0 - PAR_BAYS_BOTTOM * dims_par["depth"]) / 2.0 + dims_par[
+        "depth"
+    ] / 2.0
 
     # ------------------------------------------------------------------
     # Parallel bays: 3 bays against the right wall (x=80), y=0..37.
@@ -273,16 +275,16 @@ def generate() -> Dict[str, Any]:
         )
 
     # ------------------------------------------------------------------
-    # Perpendicular bays: back-to-back rows against the flat top wall P8(0,50)->P7(20,50).
+    # Perpendicular bays: back-to-back rows, flat top wall P8->P7 (0,50)->(20,50).
     # Row 1 (yaw=270, nose -Y): back against y=50, 7 bays centred over the 20 m span.
     # Row 2 (yaw=90,  nose +Y): facing row 1 across a 6 m aisle.
     # Centre-to-centre gap = aisle + depth = 6 + 5 = 11 m.
     # ------------------------------------------------------------------
     PERP_TOP_FLAT = 7
-    top_flat_perp_cy = 50.0 - _WALL_GAP - dims_perp["depth"] / 2.0   # 44.5
-    top_flat_perp_cx_start = (
-        (0.0 + 20.0) / 2.0 - (PERP_TOP_FLAT - 1) / 2.0 * dims_perp["width"]
-    )
+    top_flat_perp_cy = 50.0 - _WALL_GAP - dims_perp["depth"] / 2.0  # 44.5
+    top_flat_perp_cx_start = (0.0 + 20.0) / 2.0 - (PERP_TOP_FLAT - 1) / 2.0 * dims_perp[
+        "width"
+    ]
     for i in range(PERP_TOP_FLAT):
         perp_bays.append(
             {
@@ -295,7 +297,7 @@ def generate() -> Dict[str, Any]:
             }
         )
 
-    top_flat_perp2_cy = top_flat_perp_cy - (6.0 + dims_perp["depth"])   # 33.5
+    top_flat_perp2_cy = top_flat_perp_cy - (6.0 + dims_perp["depth"])  # 33.5
     for i in range(PERP_TOP_FLAT):
         perp_bays.append(
             {
@@ -313,10 +315,10 @@ def generate() -> Dict[str, Any]:
     # Back against y=8, nose +Y (yaw=90). 4 * 2.5 m = 10 m, centred in 12 m span.
     # ------------------------------------------------------------------
     PERP_NOTCH = 4
-    notch_perp_cy = 8.0 + _WALL_GAP + dims_perp["depth"] / 2.0   # 11.0
-    notch_perp_cx_start = (
-        (53.0 + 65.0) / 2.0 - (PERP_NOTCH - 1) / 2.0 * dims_perp["width"]
-    )
+    notch_perp_cy = 8.0 + _WALL_GAP + dims_perp["depth"] / 2.0  # 11.0
+    notch_perp_cx_start = (53.0 + 65.0) / 2.0 - (PERP_NOTCH - 1) / 2.0 * dims_perp[
+        "width"
+    ]
     for i in range(PERP_NOTCH):
         perp_bays.append(
             {
@@ -339,16 +341,16 @@ def generate() -> Dict[str, Any]:
     # S1: left wall mid-height, facing +X into lot.
     # S2: diagonal top wall at local x=70, facing inward perpendicular to the slope.
     #     y interpolated along P6(80,37)->P7(20,50).
-    #     Inward normal direction: wall vec is (-60,13)/len, CCW normal = (-13/len, -60/len).
+    #     Inward normal: wall vec (-60,13)/len, CCW normal = (-13/len, -60/len).
     # S3: bottom wall right section (right of notch), facing +Y.
     # ------------------------------------------------------------------
     _s2_y = 37.0 + (50.0 - 37.0) / (20.0 - 80.0) * (70.0 - 80.0)
     _top_wlen = math.hypot(60.0, 13.0)
     _s2_yaw = math.degrees(math.atan2(-60.0 / _top_wlen, -13.0 / _top_wlen)) % 360.0
 
-    spawn  = {"x":  0.0, "y": 25.0, "yaw_deg":  0.0}
+    spawn = {"x": 0.0, "y": 25.0, "yaw_deg": 0.0}
     spawn2 = {"x": 70.0, "y": round(_s2_y, 2), "yaw_deg": round(_s2_yaw, 1)}
-    spawn3 = {"x": 70.0, "y":  0.0, "yaw_deg": 90.0}
+    spawn3 = {"x": 70.0, "y": 0.0, "yaw_deg": 90.0}
 
     # ------------------------------------------------------------------
     # Patrol path: CCW orbit around the central obstacle (5 waypoints).
@@ -365,7 +367,9 @@ def generate() -> Dict[str, Any]:
     #              approximate lowest y of the diagonal top-wall bay footprints.
     # WP2b chamfers the top-left corner to avoid clipping the top-left perp cluster.
     # ------------------------------------------------------------------
-    _left_ang_right_x = _left_offset + dims_ang["depth"] / 2.0 * math.cos(math.radians(45.0))
+    _left_ang_right_x = _left_offset + dims_ang["depth"] / 2.0 * math.cos(
+        math.radians(45.0)
+    )
     _obs_row_e_left_x = obs_row_e_cx - dims_perp["depth"] / 2.0
     _obs_row_f_nose_x = obs_row_f_cx + dims_perp["depth"] / 2.0
     _notch_left_x = notch_perp_cx_start - dims_perp["width"] / 2.0
@@ -382,11 +386,11 @@ def generate() -> Dict[str, Any]:
     _left_x = (_left_ang_right_x + _obs_row_e_left_x) / 2.0
 
     patrol = [
-        {"x": _left_x, "y": _lower_y},   # WP1: left corridor, lower level
-        {"x": _left_x, "y": 28.0},        # WP2: left corridor, upper level
-        {"x": 26.0,    "y": 34.0},        # WP3: chamfer cut toward top-right
-        {"x": _right_x, "y": _upper_y},   # WP4: upper corridor, right end
-        {"x": _right_x, "y": _lower_y},   # WP5: right corridor, drop to lower level
+        {"x": _left_x, "y": _lower_y},  # WP1: left corridor, lower level
+        {"x": _left_x, "y": 28.0},  # WP2: left corridor, upper level
+        {"x": 26.0, "y": 34.0},  # WP3: chamfer cut toward top-right
+        {"x": _right_x, "y": _upper_y},  # WP4: upper corridor, right end
+        {"x": _right_x, "y": _lower_y},  # WP5: right corridor, drop to lower level
     ]
 
     # ------------------------------------------------------------------
@@ -396,12 +400,16 @@ def generate() -> Dict[str, Any]:
     _PED_MARGIN = 0.5
 
     obs_tb_cx_end = obs_tb_cx_start + (PERP_OBS_TB - 1) * dims_perp["width"]
-    obs_row_c_nose_y = obs_row_c_cy - dims_perp["depth"] / 2.0   # 11.5
-    obs_row_d_nose_y = obs_row_d_cy + dims_perp["depth"] / 2.0   # 26.5
+    obs_row_c_nose_y = obs_row_c_cy - dims_perp["depth"] / 2.0  # 11.5
+    obs_row_d_nose_y = obs_row_d_cy + dims_perp["depth"] / 2.0  # 26.5
 
-    top_flat_perp_cx_end = top_flat_perp_cx_start + (PERP_TOP_FLAT - 1) * dims_perp["width"]
-    top_row1_nose_y = top_flat_perp_cy - dims_perp["depth"] / 2.0    # row 1 nose faces -Y
-    top_row2_nose_y = top_flat_perp2_cy + dims_perp["depth"] / 2.0   # row 2 nose faces +Y
+    top_flat_perp_cx_end = (
+        top_flat_perp_cx_start + (PERP_TOP_FLAT - 1) * dims_perp["width"]
+    )
+    top_row1_nose_y = top_flat_perp_cy - dims_perp["depth"] / 2.0  # row 1 nose faces -Y
+    top_row2_nose_y = (
+        top_flat_perp2_cy + dims_perp["depth"] / 2.0
+    )  # row 2 nose faces +Y
 
     notch_perp_cx_end = notch_perp_cx_start + (PERP_NOTCH - 1) * dims_perp["width"]
     notch_nose_y = notch_perp_cy + dims_perp["depth"] / 2.0
@@ -410,14 +418,14 @@ def generate() -> Dict[str, Any]:
     par_right_y_end = par_right_cy_start + (PAR_BAYS_RIGHT - 1) * dims_par["depth"]
 
     ped_zones = [
-        # Zone 1: aisle below obstacle row C nose faces (row C faces +Y, nose at y=11.5).
+        # Zone 1: aisle below obstacle row C nose faces (faces +Y, nose at y=11.5).
         {
             "x_min": obs_tb_cx_start - dims_perp["width"] / 2.0 + _PED_MARGIN,
             "x_max": obs_tb_cx_end + dims_perp["width"] / 2.0 - _PED_MARGIN,
             "y_min": obs_row_c_nose_y - PED_STRIP,
             "y_max": obs_row_c_nose_y - _PED_MARGIN,
         },
-        # Zone 2: aisle above obstacle row D nose faces (row D faces -Y, nose at y=26.5).
+        # Zone 2: aisle above obstacle row D nose faces (faces -Y, nose at y=26.5).
         {
             "x_min": obs_tb_cx_start - dims_perp["width"] / 2.0 + _PED_MARGIN,
             "x_max": obs_tb_cx_end + dims_perp["width"] / 2.0 - _PED_MARGIN,
@@ -439,7 +447,7 @@ def generate() -> Dict[str, Any]:
             "y_min": notch_nose_y + _PED_MARGIN,
             "y_max": notch_nose_y + PED_STRIP,
         },
-        # Zone 5: strip to the left of right-wall parallel bay nose faces (bays face -X).
+        # Zone 5: strip left of right-wall parallel bay nose faces (bays face -X).
         {
             "x_min": par_right_nose_x - PED_STRIP,
             "x_max": par_right_nose_x - _PED_MARGIN,

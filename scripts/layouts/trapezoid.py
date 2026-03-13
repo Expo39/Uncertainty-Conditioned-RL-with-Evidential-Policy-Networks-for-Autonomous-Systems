@@ -56,22 +56,22 @@ def generate() -> Dict[str, Any]:
             patrol_waypoints, pedestrian_zones.
     """
     width_front = 48.0
-    width_rear  = 30.0
-    depth       = 44.0
+    width_rear = 30.0
+    depth = 44.0
 
     # y_offset: how much each sloped wall tapers inward from front to rear.
-    y_offset = (width_front - width_rear) / 2.0   # 9.0
+    y_offset = (width_front - width_rear) / 2.0  # 9.0
 
     corners = [
-        {"x": 0.0,   "y": 0.0},               # P0 bottom-left (front)
-        {"x": depth, "y": y_offset},            # P1 bottom-right (rear)
+        {"x": 0.0, "y": 0.0},  # P0 bottom-left (front)
+        {"x": depth, "y": y_offset},  # P1 bottom-right (rear)
         {"x": depth, "y": width_front - y_offset},  # P2 top-right (rear)
-        {"x": 0.0,   "y": width_front},         # P3 top-left (front)
+        {"x": 0.0, "y": width_front},  # P3 top-left (front)
     ]
 
-    dims_perp = BAY_DIMS["perpendicular"]   # width=2.5, depth=5.0
-    dims_ang  = BAY_DIMS["angled"]          # width=2.5, depth=5.4
-    dims_par  = BAY_DIMS["parallel"]        # width=2.5, depth=8.0
+    dims_perp = BAY_DIMS["perpendicular"]  # width=2.5, depth=5.0
+    dims_ang = BAY_DIMS["angled"]  # width=2.5, depth=5.4
+    dims_par = BAY_DIMS["parallel"]  # width=2.5, depth=8.0
 
     # ------------------------------------------------------------------
     # Centre cluster: back-to-back perpendicular rows along X.
@@ -81,9 +81,9 @@ def generate() -> Dict[str, Any]:
     # the right corridor clear of the right-wall parallel group.
     # _cx_shift = -1.5 (centre shift) - 3.63 (half an angled-bay pitch).
     # ------------------------------------------------------------------
-    PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3   # 8 bays per row
+    PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3  # 8 bays per row
     _cx_shift = -1.5 - 3.63
-    perp_mid_y    = 25.5
+    perp_mid_y = 25.5
     perp_row_a_cy = perp_mid_y - dims_perp["aisle"] / 2.0 - dims_perp["depth"] / 2.0
     perp_row_b_cy = perp_mid_y + dims_perp["aisle"] / 2.0 + dims_perp["depth"] / 2.0
     perp_cx_start = (
@@ -125,9 +125,9 @@ def generate() -> Dict[str, Any]:
     wall_len = math.hypot(depth, y_offset)
     wdx = depth / wall_len
     wdy = y_offset / wall_len
-    ang_yaw   = (math.degrees(math.atan2(wdx, -wdy)) + 45.0) % 360.0
+    ang_yaw = (math.degrees(math.atan2(wdx, -wdy)) + 45.0) % 360.0
     ang_offset = ang_offset_from_wall(dims_ang["depth"], dims_ang["width"]) + _WALL_GAP
-    ang_start  = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 6.0
+    ang_start = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 6.0
     ang_bays = angled_bays_along_wall(
         7,
         wall_x0=0.0,
@@ -142,23 +142,23 @@ def generate() -> Dict[str, Any]:
 
     # ------------------------------------------------------------------
     # Top-wall parallel group: 3 bays along the sloped top wall P3(0,48)->P2(44,39).
-    # Wall direction from P3 toward P2: dx=+depth, dy=-y_offset (same length as bottom wall).
+    # Wall direction P3->P2: dx=+depth, dy=-y_offset (same length as bottom wall).
     # CCW inward normal from (wdx_top, wdy_top): (wdy_top, -wdx_top) points into lot.
     # par_top_along_start: first bay placed 9 m along the wall from P3 so it
     # clears the left-wall corner cones.
     # facing_yaw: computed from wall direction so bays align with the slope.
     # ------------------------------------------------------------------
-    top_wdx = depth / wall_len       # same magnitude as bottom wall (symmetric taper)
+    top_wdx = depth / wall_len  # same magnitude as bottom wall (symmetric taper)
     top_wdy = -y_offset / wall_len
-    top_nx  = top_wdy               # CCW inward normal x component
-    top_ny  = -top_wdx              # CCW inward normal y component
-    top_par_yaw          = math.degrees(math.atan2(top_wdy, top_wdx))
-    par_top_along_start  = 9.0 + dims_par["depth"] / 2.0
+    top_nx = top_wdy  # CCW inward normal x component
+    top_ny = -top_wdx  # CCW inward normal y component
+    top_par_yaw = math.degrees(math.atan2(top_wdy, top_wdx))
+    par_top_along_start = 9.0 + dims_par["depth"] / 2.0
     par_top_normal_offset = dims_par["width"] / 2.0 + _WALL_GAP
     par_bays_top = []
     for i in range(3):
         along = par_top_along_start + i * dims_par["depth"]
-        wx = 0.0        + top_wdx * along
+        wx = 0.0 + top_wdx * along
         wy = width_front + top_wdy * along
         cx = wx + top_nx * par_top_normal_offset
         cy = wy + top_ny * par_top_normal_offset
@@ -178,7 +178,7 @@ def generate() -> Dict[str, Any]:
     # yaw=90: depth (8 m) along Y, nose facing +Y. Back against x=depth.
     # par_right_y_start: 3 m clear of the bottom-right corner (y_offset + 3).
     # ------------------------------------------------------------------
-    par_cx_right    = depth - dims_par["width"] / 2.0 - _WALL_GAP
+    par_cx_right = depth - dims_par["width"] / 2.0 - _WALL_GAP
     par_right_y_start = y_offset + 3.0
     par_bays_right = []
     for i in range(3):
@@ -186,7 +186,9 @@ def generate() -> Dict[str, Any]:
             {
                 "bay_type": "parallel",
                 "local_x": par_cx_right,
-                "local_y": par_right_y_start + dims_par["depth"] / 2.0 + i * dims_par["depth"],
+                "local_y": par_right_y_start
+                + dims_par["depth"] / 2.0
+                + i * dims_par["depth"],
                 "local_yaw_deg": 90.0,
                 "width": dims_par["width"],
                 "depth": dims_par["depth"],
@@ -207,7 +209,7 @@ def generate() -> Dict[str, Any]:
     #     Inward normal yaw = atan2(wdx, -wdy) (CCW 90 from wall direction).
     # ------------------------------------------------------------------
     _spawn2_yaw = math.degrees(math.atan2(wdx, -wdy))
-    spawn  = {"x": 0.0,  "y": width_front / 2.0,       "yaw_deg": 0.0}
+    spawn = {"x": 0.0, "y": width_front / 2.0, "yaw_deg": 0.0}
     spawn2 = {
         "x": 38.0,
         "y": y_offset * (38.0 / depth),
@@ -227,23 +229,23 @@ def generate() -> Dict[str, Any]:
     # ------------------------------------------------------------------
     perp_cluster_x_min = perp_cx_start - dims_perp["width"] / 2.0
     perp_cluster_x_max = perp_cx_start + (PERP_BAYS_PER_ROW - 0.5) * dims_perp["width"]
-    par_right_inner_x  = par_cx_right - dims_par["width"] / 2.0
+    par_right_inner_x = par_cx_right - dims_par["width"] / 2.0
     aisle1_cy = perp_row_a_cy - dims_perp["depth"] / 2.0 - dims_perp["aisle"] / 2.0
     aisle3_cy = perp_row_b_cy + dims_perp["depth"] / 2.0 + dims_perp["aisle"] / 2.0
     # 4 m inset from each end keeps the patrol path inside the tapered boundary.
     x_enter = perp_cluster_x_min / 2.0
-    x_exit  = (perp_cluster_x_max + par_right_inner_x) / 2.0
+    x_exit = (perp_cluster_x_max + par_right_inner_x) / 2.0
     patrol = [
-        {"x": x_enter, "y": aisle1_cy - 4.0},   # WP1: lower-left, clear of entrance
-        {"x": x_exit,  "y": aisle1_cy},           # WP2: lower-right
-        {"x": x_exit,  "y": aisle3_cy},           # WP3: upper-right
-        {"x": x_enter, "y": aisle3_cy + 4.0},     # WP4: upper-left, clear of entrance
+        {"x": x_enter, "y": aisle1_cy - 4.0},  # WP1: lower-left, clear of entrance
+        {"x": x_exit, "y": aisle1_cy},  # WP2: lower-right
+        {"x": x_exit, "y": aisle3_cy},  # WP3: upper-right
+        {"x": x_enter, "y": aisle3_cy + 4.0},  # WP4: upper-left, clear of entrance
     ]
 
     # ------------------------------------------------------------------
     # Pedestrian zones -- one strip per distinct aisle face (PED_STRIP = 3.0 m).
     # ------------------------------------------------------------------
-    PED_STRIP  = 3.0
+    PED_STRIP = 3.0
     _PED_MARGIN = 0.5
     ped_zones = [
         # Zone 1: aisle below row A nose face (row A faces -Y, yaw=90).

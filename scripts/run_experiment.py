@@ -61,7 +61,7 @@ import copy
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -272,7 +272,7 @@ def main() -> None:
             print(f"\n[{completed}/{total_runs}]")
             run_single(config, seed, dry_run=args.dry_run)
     else:
-        # Parallel execution — assign each run a CARLA port based on its
+        # Parallel execution - assign each run a CARLA port based on its
         # position in the worker pool (worker_index cycles 0..workers-1)
         worker_args: List[Tuple[Dict[str, Any], int, bool]] = []
         for i, (config, seed) in enumerate(all_runs):

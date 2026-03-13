@@ -28,7 +28,8 @@ Usage::
   make generate-layouts LAYOUT=trapezoid
 
   # Override output directories:
-  python scripts/generate_layouts.py --output-dir configs/layouts --plot-dir outputs/layouts
+  python scripts/generate_layouts.py \
+      --output-dir configs/layouts --plot-dir outputs/layouts
 
   # Generate one layout with custom origin:
   python scripts/generate_layouts.py --layout rectangle --origin -200 0 0.3 --heading 0
@@ -42,8 +43,12 @@ from typing import Optional
 # Allow importing scripts/layouts as a package when run directly.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from scripts.layouts import irregular_a, rectangle, trapezoid
-from scripts.layouts.common import plot_layout, to_world_frame, write_layout_yaml
+from scripts.layouts import irregular_a, rectangle, trapezoid  # noqa: E402
+from scripts.layouts.common import (  # noqa: E402
+    plot_layout,
+    to_world_frame,
+    write_layout_yaml,
+)
 
 _LAYOUTS = {
     "rectangle": rectangle,
@@ -135,7 +140,9 @@ def _generate_one(
     """
     module = _LAYOUTS[name]
     local_layout = module.generate()
-    world_layout = to_world_frame(local_layout, origin_x, origin_y, origin_z, heading_deg)
+    world_layout = to_world_frame(
+        local_layout, origin_x, origin_y, origin_z, heading_deg
+    )
     write_layout_yaml(
         name, origin_x, origin_y, origin_z, heading_deg, world_layout, output_path, ood
     )
