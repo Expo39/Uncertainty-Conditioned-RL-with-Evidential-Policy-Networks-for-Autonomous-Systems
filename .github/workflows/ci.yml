@@ -32,13 +32,13 @@ jobs:
           pip install autoflake
 
       - name: Remove unused imports (autoflake)
-        run: autoflake --in-place --remove-all-unused-imports --recursive uncertainty_rl tests
+        run: autoflake --in-place --remove-all-unused-imports --recursive uncertainty_rl tests scripts
 
       - name: Sort imports (isort)
-        run: isort uncertainty_rl tests
+        run: isort uncertainty_rl tests scripts
 
       - name: Format code (black)
-        run: black uncertainty_rl tests
+        run: black uncertainty_rl tests scripts
 
       - name: Commit and push changes
         uses: stefanzweifel/git-auto-commit-action@v5
@@ -46,7 +46,7 @@ jobs:
           commit_message: Apply auto-formatting fixes
 
       - name: Run flake8
-        run: flake8 uncertainty_rl tests/ --max-line-length 88 --extend-ignore E203,W503
+        run: flake8 uncertainty_rl tests scripts --max-line-length 88 --extend-ignore E203,W503
 
   test:
     name: Test
