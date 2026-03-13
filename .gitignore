@@ -25,6 +25,7 @@ venv/
 env/
 ENV/
 .venv
+.venv-vis
 
 # IDE
 .vscode/
@@ -70,7 +71,20 @@ htmlcov/
 TODO.md
 
 # Documentation (local dissertation notes, meeting agendas, references)
-documentation/
+# documentation/
+meeting_agendas/
+references/
+claude_plans/
+ENVIRONMENT_DESIGN.md
 
 # Project config archive (local portability)
 project_configs.tar.gz
+
+# coordinates for different layouts
+configs/layouts/
+
+# Generated layout artefacts and visualiser state
+outputs/layouts/
+outputs/vis_state.json
+outputs/vis_state.tmp
+outputs/recordings/

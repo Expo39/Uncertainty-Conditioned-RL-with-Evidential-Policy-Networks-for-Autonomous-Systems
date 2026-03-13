@@ -24,9 +24,9 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 `launch/carla_bridge.launch.py` orchestrates the full pipeline:
 
-1. **CARLA ROS bridge** — publishes sensor topics from CARLA simulator
-2. **robot_localisation EKF** — fuses odometry + IMU (optionally GNSS), outputs `/odometry/filtered`
-3. **CovarianceExtractorNode** — extracts 3x3 covariance, publishes to `/ekf_uncertainty/covariance`
+1. **CARLA ROS bridge** -publishes sensor topics from CARLA simulator
+2. **robot_localisation EKF** -fuses odometry + IMU (optionally GNSS), outputs `/odometry/filtered`
+3. **CovarianceExtractorNode** -extracts 3x3 covariance, publishes to `/ekf_uncertainty/covariance`
 
 ## Nodes
 

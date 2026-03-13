@@ -2,20 +2,24 @@
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration verify
-.PHONY: lint format typecheck clean
+.PHONY: lint format typecheck clean syntax-check
 .PHONY: backup-configs restore-configs
 .PHONY: train train-short evaluate ros2 experiment-dry
+.PHONY: generate-layouts visualise visualise-record
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
 .PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect
+.PHONY: docker-generate-layouts
 
-PYTHON := python
+PYTHON := python3
+PYTHON_VIS := .venv-vis/bin/python3
 PYTEST := pytest
 CONFIG_DIR := configs
 SRC_DIR := uncertainty_rl
 TESTS_DIR := tests
+SCRIPTS_DIR := scripts
 DOCKER_COMPOSE := docker compose
 
 # ----------------------------------------------------------------------
@@ -33,6 +37,35 @@ help: ## Show this help
 install: ## Install package and dev dependencies
 	pip install -e ".[dev]"
 	pre-commit install
+
+# ----------------------------------------------------------------------
+# Layout Generation (no CARLA needed)
+# ----------------------------------------------------------------------
+
+generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
+	mkdir -p configs/layouts outputs/layouts
+	$(PYTHON_VIS) scripts/generate_layouts.py \
+		--output-dir configs/layouts \
+		--plot-dir outputs/layouts \
+		$(if $(LAYOUT),--layout $(LAYOUT),)
+
+docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container. Usage: make docker-generate-layouts [LAYOUT=trapezoid]
+	$(DOCKER_COMPOSE) exec training bash -c \
+		"mkdir -p configs/layouts outputs/layouts && \
+		 python scripts/generate_layouts.py \
+		   --output-dir configs/layouts \
+		   --plot-dir outputs/layouts \
+		   $(if $(LAYOUT),--layout $(LAYOUT),)"
+
+# ----------------------------------------------------------------------
+# Visualisation (host-side, detachable from training)
+# ----------------------------------------------------------------------
+
+visualise: ## Open 2D bird's-eye visualiser (polls outputs/vis_state.json, detachable)
+	$(PYTHON_VIS) scripts/visualise_training.py
+
+visualise-record: ## Open 2D visualiser + save MP4 on window close
+	$(PYTHON_VIS) scripts/visualise_training.py --record
 
 
 
@@ -184,6 +217,27 @@ docker-dev: ## Start stack + open training shell (development mode)
 	sleep 15
 	$(DOCKER_COMPOSE) exec training /bin/bash
 
+MODEL ?= checkpoints/final_model
+docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make docker-demo MODEL=<path>
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)"
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
+	xhost -local:docker 2>/dev/null || true
+
+INSPECT_LAYOUT ?= trapezoid
+docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)"
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
+	$(DOCKER_COMPOSE) down 2>/dev/null || true
+	docker network prune -f 2>/dev/null || true
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
+	xhost -local:docker 2>/dev/null || true
+
+
+
 
 
 
@@ -241,9 +295,9 @@ test-integration: ## Run integration tests (requires CARLA + ROS 2 + GPU)
 
 verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
-	flake8 $(SRC_DIR) $(TESTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR)
-	black --check $(SRC_DIR) $(TESTS_DIR)
+	flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 	mypy $(SRC_DIR) --ignore-missing-imports
 	$(PYTHON) -c "import uncertainty_rl; print('All checks passed.')"
 
@@ -252,13 +306,13 @@ verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
 # ----------------------------------------------------------------------
 
 lint: ## Run all linters (flake8 + isort + black)
-	flake8 $(SRC_DIR) $(TESTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR)
-	black --check $(SRC_DIR) $(TESTS_DIR)
+	flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 
 format: ## Auto-format code with black + isort
-	isort $(SRC_DIR) $(TESTS_DIR)
-	black $(SRC_DIR) $(TESTS_DIR)
+	isort $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	black $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 
 typecheck: ## Run mypy type checking
 	mypy $(SRC_DIR) --ignore-missing-imports
@@ -269,6 +323,9 @@ typecheck: ## Run mypy type checking
 
 sanity: ## Quick import check
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
+
+syntax-check: ## Check Python syntax with py_compile (no execution)
+	$(PYTHON) -m py_compile uncertainty_rl/envs/carla_parking.py && echo "Syntax OK: carla_parking.py"
 
 # ----------------------------------------------------------------------
 # Cleanup

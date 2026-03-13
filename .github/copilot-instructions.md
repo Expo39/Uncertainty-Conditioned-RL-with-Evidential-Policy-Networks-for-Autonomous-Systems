@@ -87,13 +87,13 @@ Use `-> None` for void functions. Import from `typing`. Use `Optional[X]` not `X
 - `snake_case` functions/variables, `PascalCase` classes, `UPPER_SNAKE_CASE` constants.
 - **ASCII only - no non-ASCII characters anywhere**. Every character must be printable ASCII (U+0020 to U+007E). No Greek letters, em-dashes, multiplication signs, degree symbols, smart quotes, or arrows. Use `gamma` not the Greek letter, `-` not em-dash, `3x3` with letter x, `deg` not degree symbol, `->` not arrow.
 - Never hardcode hyperparameters - use YAML config with `.get()` defaults.
-- Use `constants.py` for structural values: import dimensions and thresholds from `uncertainty_rl.utils.constants` rather than hardcoding `15`, `9`, `6`, `3`, `0.5`, `0.1`, etc.
+- Use `constants.py` for structural values: import dimensions and thresholds from `uncertainty_rl.utils.constants` rather than hardcoding `18`, `9`, `6`, `3`, `0.5`, `0.1`, etc.
 - Specific exceptions, not bare `except:`.
 
 ## Technical Context
 
 - **Evidential deep learning** on the **actor only** (not critic). Outputs NIG distribution: (gamma, nu, alpha, beta).
-- **State space**: 15-dim - `[x, y, yaw, vx, vy, vyaw, std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]`. 2D only, no z-axis. All 15 dimensions come from the EKF via ROS 2.
+- **State space**: 18-dim - `[x, y, yaw, vx, vy, vyaw, std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw, dx, dy, dyaw]`. Indices 0-14 from EKF via ROS 2; indices 15-17 are relative target pose. 2D only, no z-axis.
 - **Localisation**: EKF via `robot_localization`. Covariance extracted from 6x6 at indices [0,1,5] for [x, y, yaw].
 - **RL**: PPO via Stable-Baselines3.
 - **Simulator**: CARLA 0.9.16 with ROS 2 Jazzy bridge.
@@ -137,7 +137,7 @@ Consult these when modifying Dockerfiles, docker-compose.yml, or debugging conta
 Core novel component. `EvidentialLayer` outputs 4 NIG params per action dim. `EvidentialPolicyNetwork` is the full actor. `UncertaintyConditionedActor` has dual encoders (state + uncertainty). `LayerNorm` used, not `BatchNorm`. Softplus + offset constraints on nu, alpha, beta are mandatory. `get_action()` must always return `(action, uncertainty_dict)` with keys: `epistemic`, `aleatoric`, `total`, `gamma`, `nu`, `alpha`, `beta`.
 
 ### `uncertainty_rl/envs/`
-Gymnasium-compatible CARLA parking env. 15-dim state, 3-dim action `[steering, throttle, brake]`. EKF uncertainty comes from real `robot_localisation` covariance via ROS 2 (Docker required). No standalone fallback for training. Reward: `-distance - 0.5*orientation_error - 0.1*velocity + 100*success`. Success: <0.5m, <10deg, <0.1 m/s.
+Gymnasium-compatible CARLA parking env. 18-dim state (indices 0-14 from EKF, 15-17 relative target pose), 3-dim action `[steering, throttle, brake]`. EKF uncertainty comes from real `robot_localisation` covariance via ROS 2 (Docker required). No standalone fallback for training. Reward: `-distance - 0.5*orientation_error - 0.1*velocity + 100*success`. Success: <0.5m, <10deg, <0.1 m/s.
 
 ### `uncertainty_rl/training/`
 `train_ppo.py` implements SB3 PPO training with config-driven hyperparameters. `VecNormalize` wraps envs. Eval env uses `training=False`. Currently uses standard `MlpPolicy` - the evidential policy is not yet integrated as a custom SB3 policy class.

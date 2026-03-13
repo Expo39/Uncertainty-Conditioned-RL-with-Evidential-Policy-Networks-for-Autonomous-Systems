@@ -61,7 +61,7 @@ import copy
 import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -77,9 +77,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def merge_configs(
-    base: Dict[str, Any], overrides: Dict[str, Any]
-) -> Dict[str, Any]:
+def merge_configs(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, Any]:
     """
     @brief Deep-merge overrides into a copy of base config.
 
@@ -92,20 +90,14 @@ def merge_configs(
     """
     merged = copy.deepcopy(base)
     for key, value in overrides.items():
-        if (
-            key in merged
-            and isinstance(merged[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in merged and isinstance(merged[key], dict) and isinstance(value, dict):
             merged[key] = merge_configs(merged[key], value)
         else:
             merged[key] = copy.deepcopy(value)
     return merged
 
 
-def _assign_carla_port(
-    config: Dict[str, Any], worker_index: int
-) -> Dict[str, Any]:
+def _assign_carla_port(config: Dict[str, Any], worker_index: int) -> Dict[str, Any]:
     """
     @brief Assign a CARLA port to a run based on its worker index.
 
@@ -122,9 +114,7 @@ def _assign_carla_port(
     return run_config
 
 
-def run_single(
-    config: Dict[str, Any], seed: int, dry_run: bool = False
-) -> None:
+def run_single(config: Dict[str, Any], seed: int, dry_run: bool = False) -> None:
     """
     @brief Run a single training experiment with the given config and seed.
     @param config: Fully merged config dict (will be copied and modified).
@@ -282,7 +272,7 @@ def main() -> None:
             print(f"\n[{completed}/{total_runs}]")
             run_single(config, seed, dry_run=args.dry_run)
     else:
-        # Parallel execution — assign each run a CARLA port based on its
+        # Parallel execution - assign each run a CARLA port based on its
         # position in the worker pool (worker_index cycles 0..workers-1)
         worker_args: List[Tuple[Dict[str, Any], int, bool]] = []
         for i, (config, seed) in enumerate(all_runs):
@@ -301,13 +291,8 @@ def main() -> None:
                 f"(ports {base_config.get('carla_port', 2000)}"
                 f"-{base_config.get('carla_port', 2000) + 3 * (parallel_workers - 1)})"
             )
-            with ProcessPoolExecutor(
-                max_workers=parallel_workers
-            ) as executor:
-                futures = {
-                    executor.submit(_run_worker, wa): wa
-                    for wa in worker_args
-                }
+            with ProcessPoolExecutor(max_workers=parallel_workers) as executor:
+                futures = {executor.submit(_run_worker, wa): wa for wa in worker_args}
                 completed = 0
                 for future in as_completed(futures):
                     completed += 1

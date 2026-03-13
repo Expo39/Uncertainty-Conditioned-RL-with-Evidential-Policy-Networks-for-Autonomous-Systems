@@ -14,17 +14,10 @@ from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, cast
 import numpy as np
 import torch as th
 from gymnasium import spaces
-from stable_baselines3.common.distributions import (
-    Distribution,
-    sum_independent_dims,
-)
+from stable_baselines3.common.distributions import Distribution, sum_independent_dims
 from stable_baselines3.common.policies import ActorCriticPolicy
 from stable_baselines3.common.preprocessing import get_action_dim
-from stable_baselines3.common.type_aliases import (
-    GymEnv,
-    PyTorchObs,
-    Schedule,
-)
+from stable_baselines3.common.type_aliases import GymEnv, PyTorchObs, Schedule
 from stable_baselines3.common.utils import explained_variance
 from stable_baselines3.ppo import PPO
 from torch import nn

@@ -1,16 +1,17 @@
 # Baseline: Full Method (Main Contribution)
-# 15-dim EKF state (pose + covariance), evidential actor.
+# 18-dim EKF state (pose + covariance + relative target), evidential actor.
 # The agent sees localisation uncertainty AND the policy quantifies its own
 # epistemic and aleatoric uncertainty. This is the main contribution.
+# (6-dim EKF pose + 9-dim EKF covariance + 3-dim relative target pose = 18-dim)
 #
 # Ablation dimensions:
-#   include_covariance: true   (15-dim observation)
+#   include_covariance: true   (18-dim observation: full EKF state + target)
 #   policy_type: evidential    (EvidentialActorCriticPolicy + EvidentialPPO)
 #
 # All other parameters inherited from configs/train_config.yaml.
 
 baseline_name: "full_method"
-baseline_description: "15-dim EKF state, evidential actor (main contribution)"
+baseline_description: "18-dim EKF state (pose + covariance + target), evidential actor (main contribution)"
 
 include_covariance: true
 policy_type: "evidential"

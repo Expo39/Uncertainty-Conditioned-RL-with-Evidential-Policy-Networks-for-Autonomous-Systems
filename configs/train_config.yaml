@@ -3,13 +3,13 @@
 # with evidential actor networks for autonomous parking in CARLA.
 #
 # Hyperparameters are calibrated for a SINGLE CARLA environment (sequential
-# data collection) with 15-dim vector observations and 3-dim continuous
+# data collection) with 18-dim vector observations and 3-dim continuous
 # actions. See the references below each parameter for justification.
 
 # Environment settings
 carla_host: "localhost"
 carla_port: 2000
-town: "Town01"
+town: "FlatPlane"  # Loads configs/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 
@@ -19,9 +19,11 @@ ros2:
   covariance_topic: "/ekf_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
   covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
 
-# CARLA sensor noise configuration
-# These parameters control the noise injected into CARLA's virtual sensors,
-# which in turn drives EKF uncertainty. Higher noise -> higher covariance.
+# CARLA sensor noise configuration (Suite A: 2D LiDAR + IMU + wheel odometry + steering)
+# GNSS is excluded: unreliable in covered/indoor parking lots (building occlusion,
+# multipath interference) and not feasible at the Lemonworx deployment site.
+# EKF uncertainty arises from LiDAR scan-matching quality against parked car bodies
+# and perimeter cones, not from GNSS noise. See ENVIRONMENT_DESIGN.md Section 12.
 carla_sensors:
   imu:
     noise_accel_stddev_x: 0.1   # Accelerometer noise (m/s^2)
@@ -31,14 +33,14 @@ carla_sensors:
     noise_gyro_stddev_y: 0.01
     noise_gyro_stddev_z: 0.01
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
-  gnss:
-    noise_alt_stddev: 0.5       # Altitude noise (metres)
-    noise_lat_stddev: 0.00001   # Latitude noise (degrees, ~1.1 m at equator)
-    noise_lon_stddev: 0.00001   # Longitude noise (degrees, ~1.1 m at equator)
-    noise_alt_bias: 0.0
-    noise_lat_bias: 0.0
-    noise_lon_bias: 0.0
-    sensor_tick: 0.1            # Publish rate (seconds)
+  lidar:
+    channels: 1                 # Single-channel 2D LiDAR (SICK TiM / Hokuyo style)
+    range: 30.0                 # Maximum range (metres)
+    points_per_second: 56000    # Horizontal resolution proxy for scan density
+    rotation_frequency: 10.0   # Scans per second
+    upper_fov: 0.0              # Horizontal plane at bumper height (2D scan)
+    lower_fov: 0.0
+    sensor_tick: 0.05           # Matches carla_timestep (20 Hz)
 
 # CARLA environmental conditions
 # Randomised per episode during training to expose the agent to varied uncertainty
@@ -53,13 +55,47 @@ carla_conditions:
     - "CloudySunset"
   fog_density_range: [0.0, 50.0]     # Uniform random range per episode (0-100 scale)
   fog_distance_range: [20.0, 100.0]  # Minimum fog distance (metres)
-  num_vehicles: 20                    # NPC vehicles via traffic manager
-  num_pedestrians: 10                 # NPC pedestrians
+
+# ---------------------------------------------------------------------------
+# Parking lot scenario configuration (Task 5)
+# Floor plan geometry is pre-computed offline (make generate-layouts) and
+# stored in configs/layouts/. The env reads from these YAML files directly.
+# ---------------------------------------------------------------------------
+parking_scenarios:
+  perimeter_cone_spacing: 2.0          # Metres between perimeter cones
+  entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
+  bay_occupancy_rate: 0.60             # Fraction of non-target bays filled
+  num_patrol_vehicles_max: 1           # Max NPC patrol vehicles per episode (min 1 always spawned)
+  patrol_obstacle_stop_distance: 5.0  # Metres ahead - patrol brakes if any vehicle within range
+  patrol_pedestrian_stop_distance: 1.5  # Metres ahead - patrol brakes if any pedestrian within range
+  patrol_max_speed_ms: 3.0            # Max patrol speed in m/s (~11 km/h, typical car park speed)
+  patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
+  patrol_stuck_speed_threshold: 0.3   # m/s below which NPC is considered stuck (while throttle applied)
+  patrol_stuck_steps_max: 30          # Steps below threshold before teleporting NPC to next waypoint
+  num_pedestrians_max: 5               # Max random-walk pedestrians per episode (one per zone)
+  pedestrian_heading_resample_steps: 30  # Steps between pedestrian direction changes
+  pedestrian_max_lifetime_steps: 200  # Steps before a pedestrian despawns and respawns in its zone
+  floor_plans:
+    rectangle:
+      layout_file: configs/layouts/rectangle.yaml
+      ood: false   # Used during training
+    trapezoid:
+      layout_file: configs/layouts/trapezoid.yaml
+      ood: false   # Used during training
+    irregular_a:
+      layout_file: configs/layouts/irregular_a.yaml
+      ood: true    # Never sampled during training; held out for OOD evaluation
+
+# Sensor suite selection (Task 7 activates sensor spawning for the chosen suite)
+# suite_a: 2D LiDAR + IMU + wheel odometry + steering angle (primary)
+# suite_b: 3D LiDAR + IMU + wheel odometry + steering angle (upgrade if needed)
+# suite_c: 3D LiDAR + camera + IMU + steering + odometry (last resort)
+sensor_suite: suite_a
 
 # ---------------------------------------------------------------------------
 # PPO hyperparameters
 # Calibrated for single-CARLA-env parking (sequential data collection,
-# 15-dim state, 3-dim action, 500-step episodes, weather randomisation).
+# 18-dim state, 3-dim action, 500-step episodes, weather randomisation).
 # ---------------------------------------------------------------------------
 
 # Learning rate: 3e-4 is validated by Andrychowicz et al. (2021) across
@@ -106,8 +142,8 @@ target_kl: 0.02
 # [256,256] for both actor and critic. The evidential actor head outputs
 # 4 x 3 = 12 NIG parameters, requiring rich intermediate representations.
 # Andrychowicz et al. (2021) recommend separate sizing; we keep both at
-# [256,256] since the 15-dim state includes 9 covariance features encoding
-# complex non-linear uncertainty structure.
+# [256,256] since the 18-dim state includes 9 covariance features encoding
+# complex non-linear uncertainty structure plus 3 relative target pose features.
 net_arch: [256, 256]
 activation: "relu"  # Validated for evidential architectures (EPPO, Amini et al. 2020)
 
@@ -120,7 +156,8 @@ activation: "relu"  # Validated for evidential architectures (EPPO, Amini et al.
 # ---------------------------------------------------------------------------
 # VecNormalize with norm_obs=True is "one of the most impactful
 # implementation details" (Andrychowicz et al. 2021). Essential for our
-# mixed-scale 15-dim state (metres, radians, covariance values 1e-6 to 100+).
+# mixed-scale 18-dim state (metres, radians, covariance values 1e-6 to 100+,
+# relative target pose in metres and radians).
 #
 # @todo(AG) Apply log1p transform to covariance features (indices 6-14) in
 # _get_state() before VecNormalize sees them. Compresses heavy tails from
@@ -141,7 +178,8 @@ log_interval: 10        # Log every N episodes
 total_timesteps: 1000000
 seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for final ablation
-eval_freq: 10000  # Evaluate every N training steps
+eval_freq: 10000   # Evaluate every N training steps
+n_eval_episodes: 10  # Episodes per evaluation run (used by EvalCallback)
 
 # Parallel execution settings
 # Number of training runs to execute in parallel. Each worker spawns its own
