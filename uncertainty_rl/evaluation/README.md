@@ -1,6 +1,6 @@
 # evaluation/
 
-Performance evaluation across varying physical conditions — the centrepiece of the dissertation's experimental chapter. Tests whether the uncertainty-conditioned policy degrades more gracefully than baselines as localisation uncertainty increases.
+Performance evaluation across varying physical conditions -the centrepiece of the dissertation's experimental chapter. Tests whether the uncertainty-conditioned policy degrades more gracefully than baselines as localisation uncertainty increases.
 
 ## Module: `evaluate.py`
 
@@ -40,7 +40,7 @@ Three distinct experiment types, all using the same environment code:
 
 | Condition | Description |
 |-----------|-------------|
-| `worst_case` | Fog 90% + empty lot (zero parked cars) + max pedestrians — LiDAR collapses, EKF covariance spikes, evidential epistemic uncertainty should cross the safety handoff threshold |
+| `worst_case` | Fog 90% + empty lot (zero parked cars) + max pedestrians -LiDAR collapses, EKF covariance spikes, evidential epistemic uncertainty should cross the safety handoff threshold |
 
 ### Metrics Collected
 
@@ -63,5 +63,5 @@ Or via `make docker-eval`.
 
 ### Output
 
-- `evaluation_results/*.csv` — per-condition metrics
-- `evaluation_results/*.png` — seaborn bar charts: success rate vs condition, uncertainty estimates, error distributions
+- `evaluation_results/*.csv` -per-condition metrics
+- `evaluation_results/*.png` -seaborn bar charts: success rate vs condition, uncertainty estimates, error distributions

@@ -117,7 +117,7 @@ def train(config: Dict[str, Any]) -> None:
     print("Creating training environment...")
     train_vec_env = DummyVecEnv([make_env(config)])
 
-    # Normalise observations but not rewards — reward components will be
+    # Normalise observations but not rewards - reward components will be
     # manually scaled via potential-based shaping (see reward TODO in config)
     env = VecNormalize(
         train_vec_env,
