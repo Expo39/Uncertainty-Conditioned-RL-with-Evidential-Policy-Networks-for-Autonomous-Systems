@@ -28,11 +28,11 @@ Usage::
   make generate-layouts LAYOUT=trapezoid
 
   # Override output directories:
-  python scripts/generate_layouts.py \
+  python scripts/layouts/generate_layouts.py \
       --output-dir configs/layouts --plot-dir outputs/layouts
 
   # Generate one layout with custom origin:
-  python scripts/generate_layouts.py --layout rectangle --origin -200 0 0.3 --heading 0
+  python scripts/layouts/generate_layouts.py --layout rectangle --origin -200 0 0.3 --heading 0
 """
 
 import argparse
@@ -41,7 +41,8 @@ from pathlib import Path
 from typing import Optional
 
 # Allow importing scripts/layouts as a package when run directly.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+# __file__ is scripts/layouts/generate_layouts.py -> .parent.parent.parent = project root.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from scripts.layouts import irregular_a, rectangle, trapezoid  # noqa: E402
 from scripts.layouts.common import (  # noqa: E402

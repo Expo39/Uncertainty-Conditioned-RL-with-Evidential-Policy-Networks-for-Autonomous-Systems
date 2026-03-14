@@ -33,7 +33,7 @@ except ImportError:
     print("ERROR: carla Python package not found. Run inside the training container.")
     sys.exit(1)
 
-from scripts.layouts.colours import (
+from scripts.colours import (
     BAY_HEX,
     HEX_PATROL_PATH,
     HEX_PEDESTRIAN_ZONE,

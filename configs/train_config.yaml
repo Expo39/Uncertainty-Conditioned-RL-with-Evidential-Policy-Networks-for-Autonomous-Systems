@@ -3,13 +3,13 @@
 # with evidential actor networks for autonomous parking in CARLA.
 #
 # Hyperparameters are calibrated for a SINGLE CARLA environment (sequential
-# data collection) with 18-dim vector observations and 3-dim continuous
+# data collection) with 21-dim vector observations and 3-dim continuous
 # actions. See the references below each parameter for justification.
 
 # Environment settings
 carla_host: "localhost"
 carla_port: 2000
-town: "FlatPlane"  # Loads configs/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
+town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 
@@ -19,11 +19,14 @@ ros2:
   covariance_topic: "/ekf_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
   covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
 
-# CARLA sensor noise configuration (Suite A: 2D LiDAR + IMU + wheel odometry + steering)
-# GNSS is excluded: unreliable in covered/indoor parking lots (building occlusion,
-# multipath interference) and not feasible at the Lemonworx deployment site.
-# EKF uncertainty arises from LiDAR scan-matching quality against parked car bodies
-# and perimeter cones, not from GNSS noise. See ENVIRONMENT_DESIGN.md Section 12.
+# CARLA sensor noise configuration
+# Sensor suites (selected by sensor_suite key below):
+#   suite_a: 2D LiDAR (front bumper) + IMU -- primary configuration
+#   suite_b: 3D LiDAR (roof) + IMU -- upgrade if suite_a covariance variation insufficient
+#   suite_c: 3D LiDAR (roof) + RGB camera (windscreen) + IMU -- visual odometry future work
+#
+# Mount positions are in vehicle body frame (BMW Grand Tourer):
+#   x = longitudinal (positive = forward), y = lateral (positive = left), z = vertical
 carla_sensors:
   imu:
     noise_accel_stddev_x: 0.1   # Accelerometer noise (m/s^2)
@@ -33,14 +36,50 @@ carla_sensors:
     noise_gyro_stddev_y: 0.01
     noise_gyro_stddev_z: 0.01
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
-  lidar:
-    channels: 1                 # Single-channel 2D LiDAR (SICK TiM / Hokuyo style)
+    mount:
+      x: 0.0    # Centre of mass (longitudinal)
+      y: 0.0
+      z: 0.3    # Centre-of-mass height (metres)
+
+  lidar:        # Suite A: 2D LiDAR (SICK TiM 5xx / Hokuyo style)
+    channels: 1                 # Single-channel horizontal scan
     range: 30.0                 # Maximum range (metres)
     points_per_second: 56000    # Horizontal resolution proxy for scan density
     rotation_frequency: 10.0   # Scans per second
-    upper_fov: 0.0              # Horizontal plane at bumper height (2D scan)
+    upper_fov: 0.0              # Horizontal plane scan (both FOV limits at 0 = 2D)
     lower_fov: 0.0
     sensor_tick: 0.05           # Matches carla_timestep (20 Hz)
+    # @note CARLA sensor.lidar.ray_cast always scans 360 deg (no FOV restriction).
+    # Real SICK TiM 5xx scans 270 deg. The ROS bridge laser_filter pipeline clips
+    # the rear 90 deg before Cartographer (see carla_bridge.launch.py).
+    mount:
+      x: 2.4    # Front bumper centre (longitudinal)
+      y: 0.0
+      z: 0.3    # Bumper height for horizontal 2D scan
+
+  lidar_3d:     # Suite B/C: 3D LiDAR (Velodyne VLP-16 style)
+    channels: 16
+    range: 100.0                # Maximum range (metres)
+    points_per_second: 300000
+    rotation_frequency: 10.0
+    upper_fov: 15.0             # +15 deg elevation (VLP-16 half-FOV)
+    lower_fov: -15.0            # -15 deg elevation
+    sensor_tick: 0.05
+    mount:
+      x: 0.0    # Roof centre (longitudinal)
+      y: 0.0
+      z: 1.5    # Roof height (metres)
+
+  camera_rgb:   # Suite C: forward-facing RGB camera
+    image_size_x: 640
+    image_size_y: 480
+    fov: 90.0                   # Horizontal field of view (degrees)
+    sensor_tick: 0.05
+    mount:
+      x: 2.0    # Front windscreen (longitudinal)
+      y: 0.0
+      z: 1.2    # Windscreen height (metres)
+      pitch: -5.0               # Slight downward tilt for near-field coverage
 
 # CARLA environmental conditions
 # Randomised per episode during training to expose the agent to varied uncertainty
@@ -57,7 +96,7 @@ carla_conditions:
   fog_distance_range: [20.0, 100.0]  # Minimum fog distance (metres)
 
 # ---------------------------------------------------------------------------
-# Parking lot scenario configuration (Task 5)
+# Parking lot scenario configuration
 # Floor plan geometry is pre-computed offline (make generate-layouts) and
 # stored in configs/layouts/. The env reads from these YAML files directly.
 # ---------------------------------------------------------------------------
@@ -86,11 +125,18 @@ parking_scenarios:
       layout_file: configs/layouts/irregular_a.yaml
       ood: true    # Never sampled during training; held out for OOD evaluation
 
-# Sensor suite selection (Task 7 activates sensor spawning for the chosen suite)
-# suite_a: 2D LiDAR + IMU + wheel odometry + steering angle (primary)
-# suite_b: 3D LiDAR + IMU + wheel odometry + steering angle (upgrade if needed)
-# suite_c: 3D LiDAR + camera + IMU + steering + odometry (last resort)
+# Sensor suite selection - controls which sensors are spawned in _spawn_sensors()
+# suite_a: 2D LiDAR + IMU (primary)
+# suite_b: 3D LiDAR + IMU (upgrade if Suite A covariance variation is insufficient)
+# suite_c: 3D LiDAR + camera + IMU (last resort, adds visual odometry)
 sensor_suite: suite_a
+
+# Observation space flags
+# include_covariance: when true, EKF covariance features (indices 6-14) are included
+# include_obstacle_obs: when true, 3 obstacle awareness dims are appended (21-dim total)
+#   Set include_obstacle_obs: false to revert to 18-dim obs with no other changes.
+include_covariance: true
+include_obstacle_obs: true  # Adds nearest_dist_m, nearest_bearing_rad, obstacle_type
 
 # ---------------------------------------------------------------------------
 # PPO hyperparameters
@@ -98,14 +144,10 @@ sensor_suite: suite_a
 # 18-dim state, 3-dim action, 500-step episodes, weather randomisation).
 # ---------------------------------------------------------------------------
 
-# Learning rate: 3e-4 is validated by Andrychowicz et al. (2021) across
-# 250,000+ agents. Linear decay to 0 is applied in train_ppo.py following
-# Defazio et al. (2023) who proved linear decay optimal across RL tasks.
+# Learning rate: 3e-4, linear decay to 0 applied in train_ppo.py.
 learning_rate: 0.0003
 
-# n_steps: With a single CARLA env, 2048 steps = ~4 complete episodes per
-# PPO update. Provides trajectory diversity across weather randomisation.
-# CaRL (Jaeger et al. 2025) used lower values but with 4-8 parallel envs.
+# n_steps: 2048 steps = ~4 complete episodes per PPO update with a single CARLA env.
 n_steps: 2048
 
 # batch_size x n_epochs: Controls off-policy gradient steps per rollout.
@@ -119,14 +161,12 @@ n_epochs: 5
 # (invisible). If switching to potential-based reward shaping, 0.98 is viable.
 gamma: 0.99
 
-gae_lambda: 0.95    # Standard default (Andrychowicz et al. 2021)
-clip_range: 0.2     # Standard default (Schulman et al. 2017)
+gae_lambda: 0.95    # Standard default
+clip_range: 0.2     # Standard default
 clip_range_vf: null  # No VF clipping (SB3 default, avoids loss overshooting)
 
-# ent_coef: Zero for continuous control. Andrychowicz et al. (2021) found
-# "no evidence that the entropy term improves performance on continuous
-# control environments" across 250,000+ agents. Exploration is handled by
-# the Gaussian policy's learned standard deviation.
+# ent_coef: Zero for continuous control. Exploration is handled by the
+# Gaussian policy's learned standard deviation.
 ent_coef: 0.0
 
 vf_coef: 0.5        # Standard default
@@ -140,33 +180,27 @@ target_kl: 0.02
 
 # Network architecture
 # [256,256] for both actor and critic. The evidential actor head outputs
-# 4 x 3 = 12 NIG parameters, requiring rich intermediate representations.
-# Andrychowicz et al. (2021) recommend separate sizing; we keep both at
-# [256,256] since the 18-dim state includes 9 covariance features encoding
-# complex non-linear uncertainty structure plus 3 relative target pose features.
+# 4 x 3 = 12 NIG parameters. [256,256] gives enough capacity for the
+# 21-dim state with its covariance, target pose, and obstacle features.
 net_arch: [256, 256]
-activation: "relu"  # Validated for evidential architectures (EPPO, Amini et al. 2020)
+activation: "relu"  # Validated for evidential architectures
 
-# @todo(AG) Add LayerNorm support to EvidentialActorCriticPolicy. EPPO uses
-# LayerNorm after each hidden layer to preserve network plasticity under
-# non-stationary training (weather randomisation). See Dohare et al. (2024).
+# @todo(AG) Add LayerNorm after each hidden layer in EvidentialActorCriticPolicy
+# to preserve network plasticity under non-stationary training (weather randomisation).
 
 # ---------------------------------------------------------------------------
 # Observation normalisation
 # ---------------------------------------------------------------------------
-# VecNormalize with norm_obs=True is "one of the most impactful
-# implementation details" (Andrychowicz et al. 2021). Essential for our
-# mixed-scale 18-dim state (metres, radians, covariance values 1e-6 to 100+,
-# relative target pose in metres and radians).
+# VecNormalize with norm_obs=True is essential for the mixed-scale 21-dim
+# state (metres, radians, covariance values 1e-6 to 100+, obstacle distance).
 #
 # @todo(AG) Apply log1p transform to covariance features (indices 6-14) in
 # _get_state() before VecNormalize sees them. Compresses heavy tails from
 # high-uncertainty conditions (fog, rain) that would distort running stats.
 #
-# norm_reward=False is set in train_ppo.py because with potential-based
-# reward shaping (planned), reward components are already normalised to
-# similar scales. Auto-normalisation can obscure the success signal when
-# reward distributions change dramatically during training.
+# norm_reward=False: reward components in the planned potential-based design
+# are already on similar scales; auto-normalisation can obscure the success
+# signal when reward distributions shift during training.
 
 # ---------------------------------------------------------------------------
 # Logging and checkpointing
@@ -194,9 +228,7 @@ parallel_workers: 1
 # ---------------------------------------------------------------------------
 evidential:
   # Regularisation coefficient for evidential loss.
-  # Matches EPPO xi=0.01. Validated range [0.001, 0.1] across evidential
-  # DL literature. TrustGeo (KDD 2023) showed too-low lambda causes
-  # epistemic uncertainty to collapse; too-high inflates uncertainty.
+  # Too low: epistemic uncertainty collapses. Too high: uncertainty is over-inflated.
   lambda_reg: 0.01
 
   # @todo(AG) Implement lambda_reg annealing from 0 to 0.01 over first
@@ -218,16 +250,12 @@ uncertainty:
 # ---------------------------------------------------------------------------
 # Reward function
 # ---------------------------------------------------------------------------
-# @todo(AG) CRITICAL: Fix reward scale imbalance (Task 9). Current reward:
+# @todo(AG) CRITICAL: Fix reward scale imbalance. Current reward:
 #   R = -distance - 0.5*orientation - 0.1*velocity + 100*success
 # Over 500 steps at ~5m avg distance, cumulative penalty ~ -2500, dwarfing
-# the +100 success bonus. Agent learns to fail fast (less penalty) rather
-# than succeed (penalty accumulates). Switch to potential-based shaping:
-#   R_distance = (prev_distance - curr_distance) / max_distance
-# This rewards PROGRESS not absolute position. Also add:
-#   - Collision penalty (-5 to -10, early termination)
-#   - Action smoothness (-0.05 * ||a_t - a_{t-1}||^2)
-#   - Time penalty (-0.01 per step)
-# See Ng et al. (1999) for potential-based shaping theory,
-# highway-env parking benchmark (Farama Foundation) for reference design,
-# RARLAP (2024) for milestone-augmented rewards with PPO.
+# the +100 success bonus. Agent learns to fail fast rather than succeed.
+# Switch to potential-based shaping:
+#   R_distance = (prev_distance - curr_distance) / max_distance  (rewards progress)
+#   + collision penalty (-5 to -10, early termination)
+#   + action smoothness (-0.05 * ||a_t - a_{t-1}||^2)
+#   + time penalty (-0.01 per step)

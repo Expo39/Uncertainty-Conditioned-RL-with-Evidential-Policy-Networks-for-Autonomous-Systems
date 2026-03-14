@@ -582,7 +582,7 @@ def plot_layout(
 
     _draw_perimeter_with_gaps(ax, corner_pts, all_spawns, gap_half)
 
-    from scripts.layouts.colours import (
+    from scripts.colours import (
         BAY_HEX,
         HEX_LOT,
         HEX_PATROL_PATH,

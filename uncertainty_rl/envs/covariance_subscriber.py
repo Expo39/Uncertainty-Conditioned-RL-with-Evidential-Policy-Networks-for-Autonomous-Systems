@@ -34,13 +34,15 @@ class _CovarianceSubscriber(_NodeBase):
     @class _CovarianceSubscriber
     @brief Lightweight rclpy Node that subscribes to EKF covariance.
 
-    Caches the latest 9-element uncertainty feature vector in a thread-safe
-    manner. Runs via rclpy.spin() in a daemon thread so it does not block
-    Gymnasium step().
+    Caches the latest 9-element uncertainty feature vector and 6-element pose
+    + velocity vector in a thread-safe manner. Runs via rclpy.spin() in a
+    daemon thread so it does not block Gymnasium step().
 
     The CovarianceExtractorNode publishes a CovarianceEstimate message with
-    semantic fields (x, y, yaw, covariance[9]). We reshape the covariance
-    field into a 3x3 matrix and call extract_2d_covariance_features().
+    semantic fields (x, y, yaw, vx, vy, vyaw, covariance[9]). We reshape the
+    covariance field into a 3x3 matrix and call extract_2d_covariance_features().
+    The pose + velocity fields are cached separately so _get_state() can use
+    EKF estimates for obs indices 0-5 rather than CARLA ground truth.
     """
 
     def __init__(
@@ -60,6 +62,7 @@ class _CovarianceSubscriber(_NodeBase):
 
         self._lock = threading.Lock()
         self._latest_uncertainty: Optional[np.ndarray] = None
+        self._latest_pose: Optional[np.ndarray] = None
         self._message_count = 0
 
         qos = QoSProfile(
@@ -78,13 +81,17 @@ class _CovarianceSubscriber(_NodeBase):
     def _covariance_callback(self, msg: "CovarianceEstimate") -> None:
         """
         @brief Callback for incoming covariance messages.
-        @param msg: CovarianceEstimate with semantic fields (x, y, yaw, covariance).
+        @param msg: CovarianceEstimate with semantic fields
+                    (x, y, yaw, vx, vy, vyaw, covariance[9]).
         """
         cov_matrix = np.array(msg.covariance).reshape(3, 3)
         features = extract_2d_covariance_features(cov_matrix)
 
         with self._lock:
             self._latest_uncertainty = features
+            self._latest_pose = np.array(
+                [msg.x, msg.y, msg.yaw, msg.vx, msg.vy, msg.vyaw], dtype=np.float64
+            )
             self._message_count += 1
 
     def get_latest_uncertainty(self) -> Optional[np.ndarray]:
@@ -95,6 +102,17 @@ class _CovarianceSubscriber(_NodeBase):
         with self._lock:
             if self._latest_uncertainty is not None:
                 return cast(np.ndarray, self._latest_uncertainty.copy())
+            return None
+
+    def get_latest_pose(self) -> Optional[np.ndarray]:
+        """
+        @brief Get the most recent EKF pose and velocity estimate.
+        @return Array of shape (6,) = [x, y, yaw, vx, vy, vyaw] or None if no
+                message has been received yet.
+        """
+        with self._lock:
+            if self._latest_pose is not None:
+                return cast(np.ndarray, self._latest_pose.copy())
             return None
 
     @property

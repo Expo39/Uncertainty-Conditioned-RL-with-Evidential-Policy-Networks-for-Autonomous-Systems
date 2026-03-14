@@ -106,3 +106,56 @@ class TestROS2CovariancePipeline:
             ), "Uncertainty features should be non-zero with real EKF data"
         finally:
             env.close()
+
+    def test_obs_pose_uses_ekf_not_carla_ground_truth(self) -> None:
+        """
+        @brief Verify obs indices 0-5 come from the EKF estimate, not CARLA ground truth.
+
+        After a few steps with a running EKF, the filtered pose should differ from
+        CARLA ground truth due to sensor noise and filter lag. The difference should
+        exceed the sensor noise floor (~0.001 m) in at least one dimension.
+
+        @note This test requires the full Docker stack: make docker-up
+        """
+        import time
+
+        from uncertainty_rl.envs import CARLAParkingEnv
+
+        env = CARLAParkingEnv(
+            max_steps=20,
+            ros2_config={
+                "covariance_topic": "/ekf_uncertainty/covariance",
+                "covariance_timeout": 30.0,
+            },
+        )
+        try:
+            obs, _ = env.reset()
+
+            # Step a few times to let the EKF accumulate filter lag
+            for _ in range(5):
+                action = env.action_space.sample()
+                obs, _, terminated, truncated, _ = env.step(action)
+                if terminated or truncated:
+                    obs, _ = env.reset()
+                time.sleep(0.05)
+
+            # Read CARLA ground truth directly via the vehicle handle
+            assert env.vehicle is not None, "Vehicle not spawned"
+            gt_transform = env.vehicle.get_transform()
+
+            gt_x = gt_transform.location.x
+            gt_y = gt_transform.location.y
+
+            ekf_x = float(obs[0])
+            ekf_y = float(obs[1])
+
+            # EKF pose must differ from ground truth by at least sensor noise magnitude.
+            # A perfectly zero difference would mean the env is still using CARLA GT.
+            position_diff = np.sqrt((ekf_x - gt_x) ** 2 + (ekf_y - gt_y) ** 2)
+            assert position_diff > 1e-3, (
+                f"EKF pose (x={ekf_x:.4f}, y={ekf_y:.4f}) is identical to CARLA "
+                f"ground truth (x={gt_x:.4f}, y={gt_y:.4f}). "
+                f"obs[0:6] must come from the EKF subscriber, not CARLA API."
+            )
+        finally:
+            env.close()
