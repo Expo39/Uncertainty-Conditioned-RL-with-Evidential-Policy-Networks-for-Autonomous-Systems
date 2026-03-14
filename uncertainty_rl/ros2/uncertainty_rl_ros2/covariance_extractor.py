@@ -63,7 +63,7 @@ class CovarianceExtractorNode(Node):
 
         # Store latest covariance
         self.latest_covariance: Optional[np.ndarray] = None
-        self.latest_pose: Optional[Tuple[float, float, float]] = None
+        self.latest_pose: Optional[Tuple[float, float, float, float, float, float]] = None
         self._log_counter: int = 0
 
         # Create timer for publishing
@@ -78,7 +78,9 @@ class CovarianceExtractorNode(Node):
         """
         @brief Callback for odometry messages.
 
-        Extracts pose covariance from the odometry message and stores it.
+        Extracts pose, velocity, and covariance from the odometry message and
+        stores them. Velocity comes from msg.twist.twist which robot_localization
+        populates with EKF-filtered linear and angular velocity estimates.
         @param msg: Odometry message from robot_localization.
         """
         # Extract pose
@@ -96,7 +98,12 @@ class CovarianceExtractorNode(Node):
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
         yaw = np.arctan2(siny_cosp, cosy_cosp)
 
-        self.latest_pose = (x, y, yaw)
+        # Extract EKF-filtered velocity from twist
+        vx = msg.twist.twist.linear.x
+        vy = msg.twist.twist.linear.y
+        vyaw = msg.twist.twist.angular.z
+
+        self.latest_pose = (x, y, yaw, vx, vy, vyaw)
 
         # Extract covariance matrix (6x6) for pose
         # Format: [x, y, z, roll, pitch, yaw]
@@ -125,8 +132,9 @@ class CovarianceExtractorNode(Node):
         """
         @brief Publish the latest covariance as a CovarianceEstimate message.
 
-        Uses semantic fields (x, y, yaw, covariance) instead of a flat array.
-        Includes a timestamped header for latency measurement and ordering.
+        Uses semantic fields (x, y, yaw, vx, vy, vyaw, covariance) instead of
+        a flat array. Includes a timestamped header for latency measurement and
+        ordering.
         """
         if self.latest_covariance is None or self.latest_pose is None:
             return
@@ -137,6 +145,9 @@ class CovarianceExtractorNode(Node):
         msg.x = self.latest_pose[0]
         msg.y = self.latest_pose[1]
         msg.yaw = self.latest_pose[2]
+        msg.vx = self.latest_pose[3]
+        msg.vy = self.latest_pose[4]
+        msg.vyaw = self.latest_pose[5]
         msg.covariance = self.latest_covariance.flatten().tolist()
 
         self.covariance_publisher.publish(msg)
@@ -232,6 +243,7 @@ class CovarianceMonitorNode(Node):
 
         self.get_logger().info(
             f"Pose: ({msg.x:.2f}, {msg.y:.2f}, {np.rad2deg(msg.yaw):.1f}deg) | "
+            f"Vel: ({msg.vx:.2f}, {msg.vy:.2f}, {np.rad2deg(msg.vyaw):.2f}deg/s) | "
             f"Uncertainty: std_x={std_x:.4f}m, "
             f"std_y={std_y:.4f}m, std_yaw={np.rad2deg(std_yaw):.2f}deg"
         )

@@ -10,7 +10,7 @@
 .PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors
 .PHONY: docker-generate-layouts
 
 PYTHON := python3
@@ -44,7 +44,7 @@ install: ## Install package and dev dependencies
 
 generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
 	mkdir -p configs/layouts outputs/layouts
-	$(PYTHON_VIS) scripts/generate_layouts.py \
+	$(PYTHON_VIS) scripts/layouts/generate_layouts.py \
 		--output-dir configs/layouts \
 		--plot-dir outputs/layouts \
 		$(if $(LAYOUT),--layout $(LAYOUT),)
@@ -52,7 +52,7 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container. Usage: make docker-generate-layouts [LAYOUT=trapezoid]
 	$(DOCKER_COMPOSE) exec training bash -c \
 		"mkdir -p configs/layouts outputs/layouts && \
-		 python scripts/generate_layouts.py \
+		 python scripts/layouts/generate_layouts.py \
 		   --output-dir configs/layouts \
 		   --plot-dir outputs/layouts \
 		   $(if $(LAYOUT),--layout $(LAYOUT),)"
@@ -236,6 +236,17 @@ docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage
 	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
 	xhost -local:docker 2>/dev/null || true
 
+INSPECT_SUITE ?= suite_a
+docker-inspect-sensors: ## Visualise sensor mount positions in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c]
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)"
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-sensors 2>/dev/null || true
+	$(DOCKER_COMPOSE) down 2>/dev/null || true
+	docker network prune -f 2>/dev/null || true
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) $(DOCKER_COMPOSE) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
+	xhost -local:docker 2>/dev/null || true
+
 
 
 
@@ -341,7 +352,7 @@ clean: ## Remove build artefacts, caches, and generated outputs
 # Config Backup
 # ----------------------------------------------------------------------
 
-backup-configs: ## Pack all CLAUDE.md, TODO.md, documentation/, and .github/ into project_configs.tar.gz
+backup-configs: ## Pack all CLAUDE.md, TODO.md and documentation/ into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
 	@echo "TODO.md" >> /tmp/_backup_files.txt
 	@find ./documentation -type f >> /tmp/_backup_files.txt 2>/dev/null || true

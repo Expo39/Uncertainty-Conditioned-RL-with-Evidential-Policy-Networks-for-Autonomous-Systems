@@ -37,7 +37,7 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 ## EKF Sensor Fusion
 
-EKF sensor inputs are an open decision (see TODO.md Task 4). Preferred: **odometry + IMU only** (parking manoeuvres are short, drift stays small). Alternatives: add GNSS or LiDAR-based localisation. Configured with `two_d_mode: true`. See `configs/ros2_config.yaml` for full EKF parameters including topic remappings and fusion matrix configs.
+EKF sensor fusion: **2D LiDAR + IMU** (Suite A). Configured with `two_d_mode: true`. See `configs/ros2_config.yaml` for full EKF parameters including topic remappings and fusion matrix configs.
 
 ## Configuration
 

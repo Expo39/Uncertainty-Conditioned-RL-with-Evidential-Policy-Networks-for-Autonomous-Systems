@@ -59,7 +59,7 @@ def make_env(
         env = CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
             carla_port=config.get("carla_port", 2000) + rank,
-            town=config.get("town", "Town01"),
+            town=config.get("town", "Town05_Opt"),
             max_steps=config.get("max_steps", 500),
             ros2_config=config.get("ros2", {}),
             carla_sensors_config=(
@@ -72,7 +72,10 @@ def make_env(
                 if carla_conditions_override is not None
                 else config.get("carla_conditions", {})
             ),
+            parking_scenarios_config=config.get("parking_scenarios", {}),
             include_covariance=config.get("include_covariance", True),
+            include_obstacle_obs=config.get("include_obstacle_obs", True),
+            sensor_suite=config.get("sensor_suite", "suite_a"),
         )
         return env
 

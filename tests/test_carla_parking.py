@@ -5,7 +5,7 @@
 All tests are CPU-only (no CARLA server, no ROS 2, no GPU). The environment
 falls back gracefully when CARLA and rclpy are unavailable. Tests exercise:
   - Pure geometry helpers (cone interpolation, relative target pose)
-  - Observation space shape (18-dim with covariance, 9-dim without)
+  - Observation space shape (21-dim with covariance + obstacles, 9-dim without)
   - Bay sampling logic (stratified sampling by bay type)
   - VisStateWriter (atomic write, valid JSON, tmp file cleaned up)
   - Gymnasium API contract (reset/step return shapes, dtypes)
@@ -189,14 +189,14 @@ class TestObservationSpaceShape:
     @brief Verify obs space dim based on include_covariance flag.
     """
 
-    def test_18_dim_with_covariance(self) -> None:
+    def test_21_dim_with_covariance(self) -> None:
         """
-        @brief include_covariance=True -> 18-dim observation space.
+        @brief include_covariance=True -> 21-dim observation space (default).
         """
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 18
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 21
         env.close()
 
     def test_9_dim_without_covariance(self) -> None:
@@ -257,9 +257,9 @@ class TestGymnasiumAPIContract:
         assert isinstance(info, dict)
         env.close()
 
-    def test_reset_obs_shape_18(self) -> None:
+    def test_reset_obs_shape_21(self) -> None:
         """
-        @brief reset() observation shape must be (18,) when include_covariance=True.
+        @brief reset() observation shape must be (21,) when include_covariance=True (default).
         """
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 

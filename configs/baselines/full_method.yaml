@@ -14,6 +14,7 @@ baseline_name: "full_method"
 baseline_description: "18-dim EKF state (pose + covariance + target), evidential actor (main contribution)"
 
 include_covariance: true
+include_obstacle_obs: true
 policy_type: "evidential"
 
 log_dir: "./logs/full_method"
