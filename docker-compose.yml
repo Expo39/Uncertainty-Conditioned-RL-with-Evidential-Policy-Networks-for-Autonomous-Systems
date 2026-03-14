@@ -162,6 +162,7 @@ services:
     profiles:
       - demo
       - inspect
+      - inspect-sensors
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
@@ -235,7 +236,8 @@ services:
               capabilities: [gpu]
 
   # Inspect container - spawns a layout in windowed CARLA for visual inspection (no training).
-  # Usage: make docker-inspect LAYOUT=trapezoid
+  # Uses the unified inspect.py script in layout mode.
+  # Usage: make docker-inspect INSPECT_LAYOUT=trapezoid
   training-inspect:
     build:
       context: .
@@ -264,7 +266,8 @@ services:
       - ./outputs:/workspace/outputs:rw
     working_dir: /workspace
     command: >
-      python scripts/inspect/inspect_layout.py
+      python scripts/inspect/lot_inspector.py
+      --mode layout
       --layout ${LAYOUT:-trapezoid}
       --host carla-server-demo
       --port 2100
@@ -277,8 +280,9 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Sensor inspector container - draws sensor mount overlays in windowed CARLA.
-  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a]
+  # Sensor inspector container - draws sensor mount + FOV overlays on the actual parking lot.
+  # Uses the unified inspect.py script in sensors mode.
+  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle] [INSPECT_VIEW=birds_eye|side]
   training-inspect-sensors:
     build:
       context: .
@@ -307,11 +311,14 @@ services:
       - ./outputs:/workspace/outputs:rw
     working_dir: /workspace
     command: >
-      python scripts/inspect/inspect_sensors.py
+      python scripts/inspect/lot_inspector.py
+      --mode sensors
       --suite ${SUITE:-suite_a}
+      --layout ${LAYOUT:-rectangle}
+      --view ${VIEW:-birds_eye}
       --host carla-server-demo
       --port 2100
-      --duration 120
+      --duration 300
     deploy:
       resources:
         reservations:
