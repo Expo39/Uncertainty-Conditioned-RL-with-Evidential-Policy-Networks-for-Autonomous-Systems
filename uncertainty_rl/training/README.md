@@ -48,7 +48,7 @@ The `include_covariance` flag (from baseline YAML) controls observation dimensio
 | `target_kl` | 0.02 | Early epoch stopping; 0.02 for noisy weather-randomised landscape |
 | `total_timesteps` | 1,000,000 | |
 | `evidential.lambda_reg` | 0.01 | NIG regularisation coefficient |
-| `sensor_suite` | suite\_a | 2D LiDAR + IMU + wheel odometry + steering angle |
+| `sensor_suite` | suite\_a | 2D LiDAR + IMU |
 | `parking_scenarios.*` | see YAML | Floor plan files, bay occupancy, cone spacing, NPC counts |
 
 See `configs/train_config.yaml` for the full parameter list with per-parameter justifications.

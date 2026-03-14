@@ -29,14 +29,21 @@ RUN apt-get update && apt-get install -y \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Install robot_localisation for EKF + cv_bridge (needed by carla_ros_bridge camera.py import)
-# derived-object-msgs is a direct import in carla_ros_bridge/traffic_participant.py
+# Install ROS 2 packages:
+# - robot-localization: EKF node (fuses IMU + odometry, outputs /odometry/filtered)
+# - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
+# - pointcloud-to-laserscan: converts LiDAR PointCloud2 to LaserScan for the filter pipeline
+# - laser-filters: clips the 360 deg CARLA scan to 270 deg (rear 90 deg blocked by vehicle)
+# - cartographer-ros: 2D SLAM / scan-matching; publishes /scan_matched_odometry for EKF correction
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-cv-bridge \
     ros-${ROS_DISTRO}-derived-object-msgs \
+    ros-${ROS_DISTRO}-pointcloud-to-laserscan \
+    ros-${ROS_DISTRO}-laser-filters \
+    ros-${ROS_DISTRO}-cartographer-ros \
     && rm -rf /var/lib/apt/lists/*
 
 # Create workspace
@@ -82,6 +89,9 @@ COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
 # Copy ROS 2 config (loaded at launch time)
 COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
+
+# Copy Cartographer configs (Suite A: 2D LiDAR; Suite B/C: 3D LiDAR)
+COPY configs/cartographer /workspace/configs/cartographer
 
 # Build custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \

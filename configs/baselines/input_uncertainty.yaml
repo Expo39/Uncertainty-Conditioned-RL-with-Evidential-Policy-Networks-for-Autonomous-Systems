@@ -13,6 +13,7 @@ baseline_name: "input_uncertainty"
 baseline_description: "18-dim EKF state (pose + covariance + target), standard actor"
 
 include_covariance: true
+include_obstacle_obs: true
 policy_type: "standard"
 
 log_dir: "./logs/input_uncertainty"

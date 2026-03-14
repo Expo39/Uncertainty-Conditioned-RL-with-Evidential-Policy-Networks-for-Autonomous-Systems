@@ -59,6 +59,10 @@ services:
       - ROS_DOMAIN_ID=42
       - CARLA_HOST=carla-server
       - CARLA_PORT=2000
+      # Selects Cartographer config: suite_a (default), suite_b, or suite_c.
+      # suite_a: cartographer_config.lua (LaserScan, 270 deg filtered)
+      # suite_b/c: cartographer_config_3d.lua (PointCloud2, 16-channel 3D LiDAR)
+      - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
     depends_on:
       carla-server:
         condition: service_healthy
@@ -260,11 +264,54 @@ services:
       - ./outputs:/workspace/outputs:rw
     working_dir: /workspace
     command: >
-      python scripts/inspect_layout.py
+      python scripts/inspect/inspect_layout.py
       --layout ${LAYOUT:-trapezoid}
       --host carla-server-demo
       --port 2100
       --duration 300
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Sensor inspector container - draws sensor mount overlays in windowed CARLA.
+  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a]
+  training-inspect-sensors:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-sensors
+    runtime: nvidia
+    profiles:
+      - inspect-sensors
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect/inspect_sensors.py
+      --suite ${SUITE:-suite_a}
+      --host carla-server-demo
+      --port 2100
+      --duration 120
     deploy:
       resources:
         reservations:
