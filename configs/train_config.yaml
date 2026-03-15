@@ -105,7 +105,7 @@ parking_scenarios:
   entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
   bay_occupancy_rate: 0.60             # Fraction of non-target bays filled
   num_patrol_vehicles_max: 1           # Max NPC patrol vehicles per episode (min 1 always spawned)
-  patrol_obstacle_stop_distance: 5.0  # Metres ahead - patrol brakes if any vehicle within range
+  patrol_obstacle_stop_distance: 5.2  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego)
   patrol_pedestrian_stop_distance: 1.5  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Max patrol speed in m/s (~11 km/h, typical car park speed)
   patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
