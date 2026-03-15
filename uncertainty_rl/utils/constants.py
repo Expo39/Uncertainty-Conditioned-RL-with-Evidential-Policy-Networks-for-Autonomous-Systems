@@ -39,9 +39,23 @@ COVARIANCE_FEATURES_DIM = 9
 # Relative target pose features: [dx, dy, dyaw] in ego body frame
 TARGET_POSE_DIM = 3
 
+# Obstacle awareness features: [nearest_dist_m, nearest_bearing_rad, obstacle_type]
+# obstacle_type: 0.0 = static (parked car/cone/wall), 1.0 = dynamic (pedestrian/patrol)
+# Appended to the observation when include_obstacle_obs=True. Easily removable:
+# set include_obstacle_obs: false in train_config.yaml to restore 18-dim obs.
+OBSTACLE_FEATURES_DIM = 3
+
 # Total observation dimension (with uncertainty conditioning and target pose)
-# Indices 0-5: EKF vehicle state, 6-14: EKF covariance, 15-17: relative target pose
-TOTAL_OBS_DIM = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM + TARGET_POSE_DIM  # 18
+# Indices  0-5:  EKF vehicle state (x, y, yaw, vx, vy, vyaw)
+# Indices  6-14: EKF covariance features
+# Indices 15-17: relative target pose
+# Indices 18-20: obstacle awareness (nearest dist, bearing, type)
+TOTAL_OBS_DIM = (
+    VEHICLE_STATE_DIM
+    + COVARIANCE_FEATURES_DIM
+    + TARGET_POSE_DIM
+    + OBSTACLE_FEATURES_DIM
+)  # 21
 
 # ============================================================================
 # Action Space Dimensions

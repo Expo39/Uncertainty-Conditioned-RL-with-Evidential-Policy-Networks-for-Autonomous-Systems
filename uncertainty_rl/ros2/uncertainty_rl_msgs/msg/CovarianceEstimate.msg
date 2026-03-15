@@ -13,6 +13,11 @@ float64 x
 float64 y
 float64 yaw
 
+# EKF-filtered 2D velocity estimate (from msg.twist.twist)
+float64 vx       # Longitudinal velocity (m/s)
+float64 vy       # Lateral velocity (m/s)
+float64 vyaw     # Yaw rate (rad/s)
+
 # 3x3 covariance submatrix for [x, y, yaw], row-major order.
 # Extracted from the EKF's 6x6 pose covariance at indices [0, 1, 5].
 float64[9] covariance

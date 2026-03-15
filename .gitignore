@@ -80,8 +80,8 @@ ENVIRONMENT_DESIGN.md
 # Project config archive (local portability)
 project_configs.tar.gz
 
-# coordinates for different layouts
-configs/layouts/
+# Generated layout YAMLs (re-created by make generate-layouts; not version-controlled)
+configs/layouts/*.yaml
 
 # Generated layout artefacts and visualiser state
 outputs/layouts/
