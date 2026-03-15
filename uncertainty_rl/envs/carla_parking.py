@@ -8,11 +8,16 @@ from pre-computed layout YAMLs (configs/layouts/). Localisation uncertainty come
 from the robot_localisation EKF node (via ROS 2 DDS), driven by noisy CARLA
 sensors, weather conditions, and dynamic traffic - not from a simulated noise model.
 
-The 18-dimensional observation comprises:
+The observation comprises up to 21 dimensions (default, include_obstacle_obs=true):
   - indices  0-5:  EKF filtered pose (x, y, yaw, vx, vy, vyaw)
   - indices  6-14: EKF covariance features (std_x, std_y, std_yaw,
                    cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw)
   - indices 15-17: target bay in ego body frame (dx, dy, dyaw)
+  - indices 18-20: nearest obstacle (distance_m, bearing_rad, type 0=static/1=dynamic)
+                   only present when include_obstacle_obs=true (default)
+
+Actual obs dim depends on include_covariance and include_obstacle_obs flags;
+use _compute_obs_dim() rather than TOTAL_OBS_DIM directly inside the env.
 
 CARLA ground truth is used only for reward computation (position error, collision
 detection) not in the observation. This ensures sim-to-real transfer without retraining.
