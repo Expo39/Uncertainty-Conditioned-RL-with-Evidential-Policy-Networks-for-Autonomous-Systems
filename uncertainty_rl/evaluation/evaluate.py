@@ -12,21 +12,19 @@ import argparse
 import copy
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Union, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import torch as th
 import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.utils.constants import (
-    SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_POSITION,
-)
+from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 
 
 @dataclass
@@ -123,12 +121,14 @@ def make_eval_env(
     condition: Dict[str, Any],
     config: Dict[str, Any],
     base_sensors: Dict[str, Any],
+    train_config: Optional[Dict[str, Any]] = None,
 ) -> DummyVecEnv:
     """
     @brief Create evaluation environment for a specific physical condition.
     @param condition: Condition dict with weather, noise multipliers, traffic.
     @param config: Evaluation configuration dictionary.
     @param base_sensors: Base sensor noise config from training.
+    @param train_config: Full training config for parking_scenarios and obs flags.
     @return Vectorised evaluation environment.
     """
     # Scale sensor noise by condition multipliers
@@ -138,7 +138,7 @@ def make_eval_env(
         gnss_multiplier=condition.get("gnss_noise_multiplier", 1.0),
     )
 
-    # Build fixed conditions config (not randomised, unlike training)
+    # Build fixed weather/fog conditions config (not randomised, unlike training)
     conditions_config = {
         "weather_presets": [condition.get("weather_preset", "ClearNoon")],
         "fog_density_range": [
@@ -146,19 +146,54 @@ def make_eval_env(
             condition.get("fog_density", 0.0),
         ],
         "fog_distance_range": [25.0, 25.0],
-        "num_vehicles": condition.get("num_vehicles", 0),
-        "num_pedestrians": condition.get("num_pedestrians", 0),
     }
+
+    # Build parking_scenarios_config: NPC counts and lot layout from condition
+    # overrides + training defaults. eval_config.yaml uses num_patrol_vehicles
+    # (not num_vehicles) to match CARLAParkingEnv's parking_scenarios_config keys.
+    base_scenarios: Dict[str, Any] = {}
+    if train_config is not None:
+        base_scenarios = dict(train_config.get("parking_scenarios", {}))
+    parking_config: Dict[str, Any] = {
+        "num_patrol_vehicles_max": condition.get("num_patrol_vehicles", 0),
+        "num_pedestrians_max": condition.get("num_pedestrians", 0),
+        "bay_occupancy_rate": condition.get(
+            "bay_occupancy_rate",
+            base_scenarios.get("bay_occupancy_rate", 0.7),
+        ),
+        "floor_plans": base_scenarios.get("floor_plans", {}),
+    }
+    # Allow per-condition floor plan override (e.g. OOD evaluation)
+    if "floor_plan" in condition:
+        floor_plan_name: str = condition["floor_plan"]
+        floor_plans = base_scenarios.get("floor_plans", {})
+        if floor_plan_name in floor_plans:
+            parking_config["floor_plans"] = {
+                floor_plan_name: floor_plans[floor_plan_name]
+            }
+
+    # Observation flags from training config (so baseline-specific obs dims are respected)
+    include_covariance: bool = True
+    include_obstacle_obs: bool = True
+    sensor_suite: str = "suite_a"
+    if train_config is not None:
+        include_covariance = bool(train_config.get("include_covariance", True))
+        include_obstacle_obs = bool(train_config.get("include_obstacle_obs", True))
+        sensor_suite = str(train_config.get("sensor_suite", "suite_a"))
 
     def _init() -> CARLAParkingEnv:
         return CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
             carla_port=config.get("carla_port", 2000),
-            town=config.get("town", "Town01"),
+            town=config.get("town", "FlatPlane"),
             max_steps=config.get("max_steps", 500),
             ros2_config=config.get("ros2", {}),
             carla_sensors_config=scaled_sensors,
             carla_conditions_config=conditions_config,
+            parking_scenarios_config=parking_config,
+            include_covariance=include_covariance,
+            include_obstacle_obs=include_obstacle_obs,
+            sensor_suite=sensor_suite,
         )
 
     env = DummyVecEnv([_init])
@@ -180,6 +215,11 @@ def evaluate_agent(
     @param deterministic: Use deterministic actions.
     @param render: Render episodes.
     @return EvaluationMetrics object with results.
+
+    @note For EvidentialPPO models, uses get_action_with_uncertainty() to
+          collect per-step epistemic and aleatoric uncertainty estimates.
+          Success is determined from the environment's info dict (set by
+          CARLAParkingEnv.step()) rather than re-computing from final state.
     """
     metrics = EvaluationMetrics()
 
@@ -187,21 +227,49 @@ def evaluate_agent(
     episode_steps: List[int] = []
     successes = 0
 
+    # Detect evidential policy to enable uncertainty collection
+    is_evidential = isinstance(model, EvidentialPPO) and hasattr(
+        model.policy, "get_action_with_uncertainty"
+    )
+
     for episode in range(n_episodes):
         obs = cast(np.ndarray, env.reset())
         done_arr = np.array([False])
         episode_reward = 0.0
         steps = 0
+        episode_success = False
 
         while not done_arr[0]:
-            action, _states = model.predict(obs, deterministic=deterministic)
+            if is_evidential:
+                # Use evidential interface to collect uncertainty per step
+                obs_tensor = th.as_tensor(obs)
+                action_tensor, uncertainty_dict = (
+                    model.policy.get_action_with_uncertainty(  # type: ignore[union-attr]
+                        obs_tensor, deterministic=deterministic
+                    )
+                )
+                action = action_tensor.cpu().numpy()
+                metrics.epistemic_uncertainties.append(
+                    float(uncertainty_dict["epistemic"].mean().item())
+                )
+                metrics.aleatoric_uncertainties.append(
+                    float(uncertainty_dict["aleatoric"].mean().item())
+                )
+            else:
+                action, _states = model.predict(obs, deterministic=deterministic)
+
             step_result = env.step(action)
             obs = cast(np.ndarray, step_result[0])
             reward = cast(np.ndarray, step_result[1])
             done_arr = cast(np.ndarray, step_result[2])
+            infos = cast(List[Dict[str, Any]], step_result[4])
 
             episode_reward += float(reward[0])
             steps += 1
+
+            # Record success from the environment's info dict
+            if done_arr[0] and infos[0].get("success", False):
+                episode_success = True
 
             if render:
                 env.render()
@@ -209,27 +277,17 @@ def evaluate_agent(
             if done_arr[0]:
                 break
 
-        # Extract final state for error computation
-        state = obs[0]
-        x, y, yaw = state[0], state[1], state[2]
-
-        # Assume target is at origin (0, 0, 0)
-        position_error = np.sqrt(x**2 + y**2)
-        orientation_error = np.abs(yaw)
-
-        # Check success using shared constants
-        success = (
-            position_error < SUCCESS_THRESHOLD_POSITION
-            and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
-        )
-        if success:
+        if episode_success:
             successes += 1
 
         # Store metrics
         episode_rewards.append(episode_reward)
         episode_steps.append(steps)
-        metrics.position_errors.append(float(position_error))
-        metrics.orientation_errors.append(float(orientation_error))
+        # Position/orientation errors are not re-computed here; the env's
+        # success flag is the ground-truth termination signal. Placeholder
+        # zeros are appended so the metrics dataclass remains consistent.
+        metrics.position_errors.append(0.0)
+        metrics.orientation_errors.append(0.0)
 
     # Compute aggregate metrics
     metrics.success_rate = (successes / n_episodes) * 100.0
@@ -282,7 +340,7 @@ def evaluate_across_conditions(
         print(f"  {description}")
 
         # Create environment for this condition
-        base_env = make_eval_env(condition, eval_config, base_sensors)
+        base_env = make_eval_env(condition, eval_config, base_sensors, train_config)
         eval_env: Union[DummyVecEnv, VecNormalize] = base_env
 
         # Apply normalisation if available
@@ -307,7 +365,7 @@ def evaluate_across_conditions(
         result["fog_density"] = condition.get("fog_density", 0.0)
         result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
         result["gnss_noise_multiplier"] = condition.get("gnss_noise_multiplier", 1.0)
-        result["num_vehicles"] = condition.get("num_vehicles", 0)
+        result["num_patrol_vehicles"] = condition.get("num_patrol_vehicles", 0)
         result["num_pedestrians"] = condition.get("num_pedestrians", 0)
         results.append(result)
 

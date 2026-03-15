@@ -204,7 +204,8 @@ class TestObservationSpaceShape:
         """
         @brief include_covariance=False, include_obstacle_obs=True (default) -> 12-dim.
 
-        Without covariance but with obstacle obs: pose(6) + target(3) + obstacle(3) = 12.
+        Without covariance but with obstacle obs:
+        pose(6) + target(3) + obstacle(3) = 12.
         """
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
@@ -513,3 +514,89 @@ class TestVisStateWriter:
             )
 
             assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# log1p covariance transform
+# ---------------------------------------------------------------------------
+
+
+class TestLog1pCovarianceTransform:
+    """
+    @class TestLog1pCovarianceTransform
+    @brief Verify covariance features are log1p-transformed in _get_state().
+
+    In simulation (no CARLA), _get_state() returns zeros because the vehicle
+    is None.  We test the transform by injecting a mock _cov_subscriber and
+    constructing the obs buffer directly via the env internals.
+    """
+
+    def test_log1p_applied_to_nonzero_covariance(self) -> None:
+        """
+        @brief Covariance features in obs[6:15] equal log1p(raw_uncertainty).
+        """
+        from unittest.mock import MagicMock
+
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM
+
+        env = CARLAParkingEnv(max_steps=5, include_covariance=True)
+
+        # Inject a mock subscriber that returns known covariance values
+        raw = np.array([1.0, 4.0, 9.0, 0.5, 2.5, 0.1, 0.0, 0.3, 7.0], dtype=np.float32)
+        assert len(raw) == COVARIANCE_FEATURES_DIM
+
+        mock_sub = MagicMock()
+        mock_sub.get_latest_pose.return_value = None
+        mock_sub.get_latest_uncertainty.return_value = raw.copy()
+        env._cov_subscriber = mock_sub
+
+        # Simulate a minimal vehicle mock so _get_state() doesn't early-return
+        mock_vehicle = MagicMock()
+        mock_vehicle.get_transform.return_value = MagicMock(
+            location=MagicMock(x=0.0, y=0.0),
+            rotation=MagicMock(yaw=0.0),
+        )
+        mock_vehicle.get_velocity.return_value = MagicMock(x=0.0, y=0.0)
+        mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
+        env.vehicle = mock_vehicle
+        env.world = MagicMock()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        obs = env._get_state()
+
+        expected_cov = np.log1p(raw)
+        np.testing.assert_allclose(
+            obs[6:15], expected_cov, rtol=1e-5,
+            err_msg="Covariance features must be log1p-transformed"
+        )
+
+    def test_log1p_zero_uncertainty_stays_zero(self) -> None:
+        """
+        @brief log1p(0) == 0: zero uncertainty should remain zero in obs.
+        """
+        from unittest.mock import MagicMock
+
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5, include_covariance=True)
+
+        zero_cov = np.zeros(9, dtype=np.float32)
+        mock_sub = MagicMock()
+        mock_sub.get_latest_pose.return_value = None
+        mock_sub.get_latest_uncertainty.return_value = zero_cov.copy()
+        env._cov_subscriber = mock_sub
+
+        mock_vehicle = MagicMock()
+        mock_vehicle.get_transform.return_value = MagicMock(
+            location=MagicMock(x=0.0, y=0.0),
+            rotation=MagicMock(yaw=0.0),
+        )
+        mock_vehicle.get_velocity.return_value = MagicMock(x=0.0, y=0.0)
+        mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
+        env.vehicle = mock_vehicle
+        env.world = MagicMock()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        obs = env._get_state()
+        np.testing.assert_array_equal(obs[6:15], np.zeros(9))
