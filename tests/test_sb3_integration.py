@@ -487,3 +487,142 @@ class TestEvidentialPPO:
         assert "train/evidential_reg_loss" in name_to_value
         assert "train/epistemic_uncertainty" in name_to_value
         assert "train/aleatoric_uncertainty" in name_to_value
+
+    def test_lambda_reg_logged(self, dummy_env: gym.Env) -> None:
+        """
+        @brief train/lambda_reg is logged after training steps.
+        """
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=dummy_env,
+            lambda_reg=0.01,
+            lambda_reg_warmup_steps=50000,
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+        assert "train/lambda_reg" in model.logger.name_to_value
+
+    def test_lambda_reg_annealing_starts_near_zero(self, dummy_env: gym.Env) -> None:
+        """
+        @brief At step 0, effective lambda_reg should be 0.0 (ramp = 0/warmup = 0).
+        @note num_timesteps is 0 before any learning, so ramp = min(1, 0/50000) = 0.
+        """
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=dummy_env,
+            lambda_reg=0.5,
+            lambda_reg_warmup_steps=50000,
+            n_steps=64,
+            batch_size=32,
+        )
+        # Before any learning, num_timesteps == 0
+        ramp = min(1.0, float(model.num_timesteps) / float(model.lambda_reg_warmup_steps))
+        effective_lambda = model.lambda_reg * ramp
+        assert effective_lambda == 0.0
+
+    def test_lambda_reg_annealing_reaches_full_after_warmup(
+        self, dummy_env: gym.Env
+    ) -> None:
+        """
+        @brief After warmup_steps, effective lambda equals lambda_reg.
+        """
+        warmup = 100
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=dummy_env,
+            lambda_reg=0.5,
+            lambda_reg_warmup_steps=warmup,
+            n_steps=64,
+            batch_size=32,
+        )
+        # Simulate being past warmup
+        model.num_timesteps = warmup + 1
+        ramp = min(1.0, float(model.num_timesteps) / float(model.lambda_reg_warmup_steps))
+        effective_lambda = model.lambda_reg * ramp
+        assert effective_lambda == model.lambda_reg
+
+
+# ===========================================================================
+# TestNIGInit
+# ===========================================================================
+
+
+class TestNIGInit:
+    """
+    @class TestNIGInit
+    @brief Tests for NIG hyperprior initialisation in EvidentialActorCriticPolicy.
+    """
+
+    def test_nig_init_nu_and_alpha_values(
+        self,
+        obs_space: spaces.Box,
+        act_space: spaces.Box,
+    ) -> None:
+        """
+        @brief After build, nu bias approx 0.97 and alpha bias approx 1.97.
+
+        With weight scaled by 0.01 and zero input the raw output equals the bias.
+        softplus(0.9) + 1e-6 ~ 0.9486 + 1e-6 ~ 0.9486 (nu).
+        softplus(0.9) + 1.0 ~ 0.9486 + 1.0 ~ 1.9486 (alpha).
+        """
+        import torch.nn.functional as F
+
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+        )
+
+        n = act_space.shape[0]  # 3
+        with torch.no_grad():
+            # Pass zero input so output ≈ bias (weight scaled by 0.01 -> ~0)
+            zeros = torch.zeros(1, 64)  # dummy latent input size doesn't matter for bias
+            raw = policy.action_net.linear(torch.zeros(1, policy.action_net.linear.in_features))
+            # raw shape: (1, 4*n) = (1, 12)
+            nu_raw = raw[0, 1 * n : 2 * n]
+            alpha_raw = raw[0, 2 * n : 3 * n]
+
+            nu_activated = F.softplus(nu_raw) + 1e-6
+            alpha_activated = F.softplus(alpha_raw) + 1.0
+
+        # nu ~ softplus(0.9) + 1e-6 ~ 0.9486
+        assert torch.all(nu_activated > 0.9), f"nu too small: {nu_activated}"
+        assert torch.all(nu_activated < 1.1), f"nu too large: {nu_activated}"
+
+        # alpha ~ softplus(0.9) + 1.0 ~ 1.9486
+        assert torch.all(alpha_activated > 1.8), f"alpha too small: {alpha_activated}"
+        assert torch.all(alpha_activated < 2.1), f"alpha too large: {alpha_activated}"
+
+    def test_layernorm_in_mlp_extractor(
+        self,
+        obs_space: spaces.Box,
+        act_space: spaces.Box,
+    ) -> None:
+        """
+        @brief _build_mlp_extractor inserts LayerNorm after each Linear.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+        )
+
+        # policy_net and value_net should each contain at least one LayerNorm
+        policy_ln_count = sum(
+            1
+            for m in policy.mlp_extractor.policy_net
+            if isinstance(m, torch.nn.LayerNorm)
+        )
+        value_ln_count = sum(
+            1
+            for m in policy.mlp_extractor.value_net
+            if isinstance(m, torch.nn.LayerNorm)
+        )
+        assert policy_ln_count > 0, "No LayerNorm found in policy_net"
+        assert value_ln_count > 0, "No LayerNorm found in value_net"

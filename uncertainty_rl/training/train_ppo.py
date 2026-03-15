@@ -181,9 +181,11 @@ def train(config: Dict[str, Any]) -> None:
     if policy_type == "evidential":
         evidential_config = config.get("evidential", {})
         lambda_reg = evidential_config.get("lambda_reg", 0.01)
+        lambda_reg_warmup_steps = evidential_config.get("lambda_reg_warmup_steps", 50000)
         model = EvidentialPPO(
             policy=EvidentialActorCriticPolicy,
             lambda_reg=lambda_reg,
+            lambda_reg_warmup_steps=lambda_reg_warmup_steps,
             **ppo_kwargs,
         )
     elif policy_type == "standard":

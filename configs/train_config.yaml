@@ -185,8 +185,9 @@ target_kl: 0.02
 net_arch: [256, 256]
 activation: "relu"  # Validated for evidential architectures
 
-# @todo(AG) Add LayerNorm after each hidden layer in EvidentialActorCriticPolicy
-# to preserve network plasticity under non-stationary training (weather randomisation).
+# LayerNorm is inserted after each hidden Linear in EvidentialActorCriticPolicy
+# via _build_mlp_extractor() override. Preserves plasticity under non-stationary
+# training (weather randomisation). Implemented in sb3_integration.py.
 
 # ---------------------------------------------------------------------------
 # Observation normalisation
@@ -194,13 +195,12 @@ activation: "relu"  # Validated for evidential architectures
 # VecNormalize with norm_obs=True is essential for the mixed-scale 21-dim
 # state (metres, radians, covariance values 1e-6 to 100+, obstacle distance).
 #
-# @todo(AG) Apply log1p transform to covariance features (indices 6-14) in
-# _get_state() before VecNormalize sees them. Compresses heavy tails from
-# high-uncertainty conditions (fog, rain) that would distort running stats.
+# Covariance features (indices 6-14) are log1p-transformed in _get_state()
+# before VecNormalize sees them. Compresses heavy tails from high-uncertainty
+# conditions (fog, rain). Implemented in carla_parking.py.
 #
-# norm_reward=False: reward components in the planned potential-based design
-# are already on similar scales; auto-normalisation can obscure the success
-# signal when reward distributions shift during training.
+# norm_reward=False: potential-based reward components are already on similar
+# scales; auto-normalisation can obscure the success signal.
 
 # ---------------------------------------------------------------------------
 # Logging and checkpointing
@@ -227,18 +227,20 @@ parallel_workers: 1
 # Evidential network settings
 # ---------------------------------------------------------------------------
 evidential:
-  # Regularisation coefficient for evidential loss.
+  # Regularisation coefficient for evidential loss (target value after warmup).
   # Too low: epistemic uncertainty collapses. Too high: uncertainty is over-inflated.
   lambda_reg: 0.01
 
-  # @todo(AG) Implement lambda_reg annealing from 0 to 0.01 over first
-  # 50K steps. Lets NLL establish good predictions before regularisation.
+  # Number of environment steps over which lambda_reg is linearly annealed from 0
+  # to lambda_reg. Lets the NLL loss establish good predictions before regularisation.
+  lambda_reg_warmup_steps: 50000
 
-  # @todo(AG) Implement NIG hyperprior initialisation in EvidentialLayer:
-  #   nu bias ~ 0.5   -> softplus(0.5) ~ 0.97 (high initial epistemic)
-  #   alpha bias ~ 0.5 -> softplus(0.5)+1 ~ 1.97 (well-defined variance)
-  #   beta bias ~ 0.0  -> softplus(0) ~ 0.69 (moderate scale)
+  # NIG hyperprior initialisation is implemented in EvidentialLayer.__init__():
+  #   nu bias ~ 0.9   -> softplus(0.9)+1e-6 ~ 0.97
+  #   alpha bias ~ 0.9 -> softplus(0.9)+1.0 ~ 1.97
+  #   beta bias ~ 0.0  -> softplus(0)+1e-6 ~ 0.69
   #   output weights scaled by 0.01 (start near bias-determined values)
+  # Biases re-applied after ortho_init in EvidentialActorCriticPolicy._build().
 
   use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty
 
@@ -250,12 +252,9 @@ uncertainty:
 # ---------------------------------------------------------------------------
 # Reward function
 # ---------------------------------------------------------------------------
-# @todo(AG) CRITICAL: Fix reward scale imbalance. Current reward:
-#   R = -distance - 0.5*orientation - 0.1*velocity + 100*success
-# Over 500 steps at ~5m avg distance, cumulative penalty ~ -2500, dwarfing
-# the +100 success bonus. Agent learns to fail fast rather than succeed.
-# Switch to potential-based shaping:
-#   R_distance = (prev_distance - curr_distance) / max_distance  (rewards progress)
-#   + collision penalty (-5 to -10, early termination)
-#   + action smoothness (-0.05 * ||a_t - a_{t-1}||^2)
-#   + time penalty (-0.01 per step)
+# Reward function: potential-based shaping (Ng et al. 1999).
+#   R = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD - 0.01/step
+#   + collision: -10.0 + termination
+#   + success:   +10.0 + termination
+#   + out-of-bounds: -5.0 + termination
+# Implemented in CARLAParkingEnv._compute_reward().

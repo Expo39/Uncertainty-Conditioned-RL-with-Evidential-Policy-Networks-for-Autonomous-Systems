@@ -29,6 +29,22 @@ from uncertainty_rl.networks.evidential_policy import EvidentialLayer
 SelfEvidentialPPO = TypeVar("SelfEvidentialPPO", bound="EvidentialPPO")
 
 
+def _insert_layernorm(seq: nn.Sequential) -> nn.Sequential:
+    """
+    @brief Rebuild an nn.Sequential, inserting LayerNorm after each Linear layer.
+    @param seq: Original sequential module from MlpExtractor.
+    @return New sequential with LayerNorm inserted after every nn.Linear.
+    @note Used by EvidentialActorCriticPolicy._build_mlp_extractor() to match
+          the LayerNorm-equipped EvidentialPolicyNetwork architecture.
+    """
+    layers: List[nn.Module] = []
+    for layer in seq:
+        layers.append(layer)
+        if isinstance(layer, nn.Linear):
+            layers.append(nn.LayerNorm(layer.out_features))
+    return nn.Sequential(*layers)
+
+
 class EvidentialDistribution(Distribution):
     """
     @class EvidentialDistribution
@@ -217,6 +233,22 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             **kwargs,
         )
 
+    def _build_mlp_extractor(self) -> None:
+        """
+        @brief Build MLP extractor with LayerNorm after each hidden Linear layer.
+
+        Calls the parent implementation then injects nn.LayerNorm into the
+        policy and value MLP sequences. This matches the LayerNorm architecture
+        used in EvidentialPolicyNetwork for RL training stability (Dohare et al. 2024).
+        """
+        super()._build_mlp_extractor()
+        self.mlp_extractor.policy_net = _insert_layernorm(
+            self.mlp_extractor.policy_net
+        )
+        self.mlp_extractor.value_net = _insert_layernorm(
+            self.mlp_extractor.value_net
+        )
+
     def _build(self, lr_schedule: Schedule) -> None:
         """
         @brief Build networks with evidential actor head and standard critic.
@@ -250,6 +282,16 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
+
+            # Re-apply NIG hyperprior biases: ortho_init zeroes all biases,
+            # overwriting the values set in EvidentialLayer.__init__.
+            # Must come AFTER the init_weights loop above.
+            with th.no_grad():
+                n = get_action_dim(self.action_space)
+                self.action_net.linear.bias[0 * n : 1 * n].fill_(0.0)
+                self.action_net.linear.bias[1 * n : 2 * n].fill_(0.9)
+                self.action_net.linear.bias[2 * n : 3 * n].fill_(0.9)
+                self.action_net.linear.bias[3 * n : 4 * n].fill_(0.0)
 
         # Set up optimiser
         optimizer_kwargs = dict(lr=cast(float, lr_schedule(1)), **self.optimizer_kwargs)
@@ -373,15 +415,20 @@ class EvidentialPPO(PPO):
         policy: Union[str, type],
         env: Union[GymEnv, str],
         lambda_reg: float = 0.01,
+        lambda_reg_warmup_steps: int = 50000,
         **kwargs: Any,
     ) -> None:
         """
         @brief Initialise EvidentialPPO.
         @param policy: Policy class or string.
         @param env: Environment.
-        @param lambda_reg: Evidential regularisation weight.
+        @param lambda_reg: Evidential regularisation weight (target value after warmup).
+        @param lambda_reg_warmup_steps: Number of environment steps over which lambda_reg
+               is linearly annealed from 0 to lambda_reg. Allows the NLL loss to
+               establish good predictions before the regularisation term fires.
         """
         self.lambda_reg = lambda_reg
+        self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
         # Pass lambda_reg to policy_kwargs
         policy_kwargs = kwargs.get("policy_kwargs") or {}
         policy_kwargs["lambda_reg"] = lambda_reg
@@ -398,6 +445,13 @@ class EvidentialPPO(PPO):
         """
         self.policy.set_training_mode(True)
         self._update_learning_rate(self.policy.optimizer)
+
+        # Linearly anneal lambda_reg from 0 to self.lambda_reg over the first
+        # lambda_reg_warmup_steps environment steps. This lets the NLL loss
+        # establish good predictions before the evidential regularisation fires.
+        ramp = min(1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps))
+        current_lambda_reg = self.lambda_reg * ramp
+
         clip_range_fn = cast(Schedule, self.clip_range)
         clip_range = clip_range_fn(self._current_progress_remaining)
         clip_range_vf: Optional[float] = None
@@ -480,12 +534,12 @@ class EvidentialPPO(PPO):
                     entropy_loss = -th.mean(entropy)
                 entropy_losses.append(entropy_loss.item())
 
-                # Combined loss with evidential regularisation
+                # Combined loss with annealed evidential regularisation
                 loss = (
                     policy_loss
                     + self.ent_coef * entropy_loss
                     + self.vf_coef * value_loss
-                    + self.lambda_reg * evidential_reg
+                    + current_lambda_reg * evidential_reg
                 )
                 evidential_reg_losses.append(evidential_reg.item())
 
@@ -555,3 +609,4 @@ class EvidentialPPO(PPO):
             "train/aleatoric_uncertainty",
             np.mean(aleatoric_uncertainties),
         )
+        self.logger.record("train/lambda_reg", current_lambda_reg)

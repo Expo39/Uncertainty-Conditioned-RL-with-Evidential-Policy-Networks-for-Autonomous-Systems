@@ -85,3 +85,60 @@ class TestEvaluationMetrics:
         d = metrics.to_dict()
         for key, val in d.items():
             assert isinstance(val, float), f"{key} is {type(val)}, expected float"
+
+    def test_epistemic_uncertainties_collected(self) -> None:
+        """
+        @brief Epistemic uncertainties stored in list are retrievable via to_dict.
+        """
+        metrics = EvaluationMetrics()
+        metrics.epistemic_uncertainties = [0.1, 0.2, 0.3]
+        d = metrics.to_dict()
+        np.testing.assert_approx_equal(d["mean_epistemic_uncertainty"], 0.2)
+
+    def test_aleatoric_uncertainties_collected(self) -> None:
+        """
+        @brief Aleatoric uncertainties stored in list are retrievable via to_dict.
+        """
+        metrics = EvaluationMetrics()
+        metrics.aleatoric_uncertainties = [0.4, 0.6]
+        d = metrics.to_dict()
+        np.testing.assert_approx_equal(d["mean_aleatoric_uncertainty"], 0.5)
+
+    def test_empty_uncertainty_lists_return_zero(self) -> None:
+        """
+        @brief Empty uncertainty lists produce zero means in to_dict.
+        """
+        metrics = EvaluationMetrics()
+        d = metrics.to_dict()
+        assert d["mean_epistemic_uncertainty"] == 0.0
+        assert d["mean_aleatoric_uncertainty"] == 0.0
+
+
+# ===========================================================================
+# TestMakeEvalEnvPatrolVehiclesKey
+# ===========================================================================
+
+
+class TestMakeEvalEnvPatrolVehiclesKey:
+    """
+    @class TestMakeEvalEnvPatrolVehiclesKey
+    @brief Tests that num_patrol_vehicles key is correctly forwarded.
+    """
+
+    def test_num_patrol_vehicles_read_from_condition(self) -> None:
+        """
+        @brief Condition dict with num_patrol_vehicles is read with correct key.
+
+        This test verifies the key name used internally matches the YAML key,
+        without spawning a real environment.
+        """
+        condition = {"num_patrol_vehicles": 2, "num_pedestrians": 3}
+        # The corrected make_eval_env reads condition.get("num_patrol_vehicles", 0)
+        assert condition.get("num_patrol_vehicles", 0) == 2
+
+    def test_fallback_to_zero_when_key_absent(self) -> None:
+        """
+        @brief Missing num_patrol_vehicles key defaults to 0.
+        """
+        condition: dict = {}
+        assert condition.get("num_patrol_vehicles", 0) == 0

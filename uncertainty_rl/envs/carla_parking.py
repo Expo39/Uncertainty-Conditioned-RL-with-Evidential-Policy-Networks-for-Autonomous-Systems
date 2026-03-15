@@ -328,6 +328,8 @@ class CARLAParkingEnv(gym.Env):
 
         # Episode state
         self.steps = 0
+        # Previous distance to target for potential-based reward shaping
+        self._prev_distance: float = 0.0
 
         # Observation and action spaces
         obs_dim = self._compute_obs_dim()
@@ -1142,8 +1144,16 @@ class CARLAParkingEnv(gym.Env):
         @return Tuple of (reward, terminated, success).
 
         Uses CARLA ground truth transform (not EKF pose) for position and
-        orientation errors. Reward formula kept from original implementation;
-        Reward shaping will be improved in a future pass.
+        orientation errors. Potential-based reward shaping (Ng et al. 1999)
+        ensures the success bonus is never dominated by the distance penalty.
+
+        Reward structure:
+          - Progress: (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
+            Positive when closing on target, negative when moving away.
+          - Time penalty: -0.01 per step to discourage stalling.
+          - Collision: -10.0 + termination.
+          - Success: +10.0 + termination.
+          - Out-of-bounds: -5.0 + termination.
 
         Termination conditions (priority order):
           1. Collision: physical contact detected by collision sensor
@@ -1182,6 +1192,7 @@ class CARLAParkingEnv(gym.Env):
         if self._collision_detected:
             self._collision_detected = False
             self._collision_impulse = 0.0
+            self._prev_distance = position_error
             return -10.0, True, False
 
         # Success condition
@@ -1191,14 +1202,19 @@ class CARLAParkingEnv(gym.Env):
             and speed < SUCCESS_THRESHOLD_VELOCITY
         )
         if success:
-            return 100.0, True, True
+            self._prev_distance = position_error
+            return 10.0, True, True
 
         # Out-of-bounds
         if position_error > OUT_OF_BOUNDS_THRESHOLD:
+            self._prev_distance = position_error
             return -5.0, True, False
 
-        # Shaping reward
-        reward = -position_error - 0.5 * orientation_error - 0.1 * speed
+        # Potential-based progress reward (Ng et al. 1999)
+        # Positive when closing on the target, negative when drifting away.
+        progress = (self._prev_distance - position_error) / OUT_OF_BOUNDS_THRESHOLD
+        reward = progress - 0.01  # 0.01/step time penalty
+        self._prev_distance = position_error
 
         return float(reward), False, False
 
@@ -1215,7 +1231,7 @@ class CARLAParkingEnv(gym.Env):
                      Read from _CovarianceSubscriber.get_latest_pose() when the
                      EKF subscriber is available. Falls back to CARLA ground truth
                      when rclpy is unavailable (CI / unit tests).
-        Indices 6-14: EKF covariance features (only when include_covariance=True).
+        Indices 6-14: EKF covariance features log1p-transformed (only when include_covariance=True).
         Indices 15-17 (or 6-8 without covariance): relative target bay pose.
         Indices 18-20 (or 9-11 without covariance): obstacle awareness dims
                      (only when include_obstacle_obs=True).
@@ -1300,7 +1316,9 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[3] = vx
         self._obs_buffer[4] = vy
         self._obs_buffer[5] = vyaw
-        self._obs_buffer[6:15] = uncertainty
+        # log1p compresses heavy tails from high-uncertainty conditions (fog, rain)
+        # that would otherwise distort VecNormalize running statistics.
+        self._obs_buffer[6:15] = np.log1p(uncertainty)
         self._obs_buffer[15] = dx
         self._obs_buffer[16] = dy
         self._obs_buffer[17] = dyaw
@@ -2001,6 +2019,16 @@ class CARLAParkingEnv(gym.Env):
 
         if self._include_covariance:
             self._wait_for_covariance()
+
+        # Initialise prev_distance for potential-based reward shaping
+        if self.vehicle is not None:
+            t = self.vehicle.get_transform()
+            self._prev_distance = math.sqrt(
+                (t.location.x - self._target_bay["x"]) ** 2
+                + (t.location.y - self._target_bay["y"]) ** 2
+            )
+        else:
+            self._prev_distance = 0.0
 
         state = self._get_state()
 
