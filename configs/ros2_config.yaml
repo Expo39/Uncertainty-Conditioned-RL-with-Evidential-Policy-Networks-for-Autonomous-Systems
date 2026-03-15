@@ -1,18 +1,20 @@
 # ROS 2 Configuration for Covariance Extraction
 # Configuration for the ROS 2 bridge, EKF, and covariance extraction pipeline.
 
-# CARLA ROS bridge topics (Suite A: 2D LiDAR + IMU + wheel odometry + steering)
-# GNSS is excluded: unreliable in covered parking lots (building occlusion, multipath)
-# and not feasible at the Lemonworx deployment site.
+# CARLA ROS bridge topics (Suite A: 2D LiDAR + IMU only)
 # Override topic names via launch argument remappings if your bridge version differs.
 carla_topics:
-  odometry: "/carla/ego_vehicle/odometry"   # nav_msgs/Odometry from CARLA bridge
   imu: "/carla/ego_vehicle/imu"             # sensor_msgs/Imu from CARLA bridge
   lidar: "/carla/ego_vehicle/lidar"         # sensor_msgs/PointCloud2 (2D single-channel)
 
 # robot_localisation EKF settings
 # These configure the EKF node launched via carla_bridge.launch.py.
 # The launch file loads this section directly as EKF node parameters.
+# Sensor fusion:
+#   - IMU (prediction step): yaw rate + linear acceleration between LiDAR scans
+#   - Cartographer scan-matched odometry (correction step): x, y, yaw, vx, vy, vyaw
+# The scan-matching covariance from Cartographer drives EKF covariance variation,
+# which is the primary uncertainty signal for the RL policy.
 ekf:
   frequency: 20.0           # EKF update rate (Hz), matches CARLA timestep
   two_d_mode: true           # Constrain to 2D (no z, roll, pitch)
@@ -20,17 +22,19 @@ ekf:
   odom_frame: "odom"
   base_link_frame: "base_link"
   publish_tf: true
-  odom0: "/carla/ego_vehicle/odometry"
+  imu0: "/carla/ego_vehicle/imu"
   # 15-element boolean list: [x, y, z, roll, pitch, yaw,
   #                           vx, vy, vz, vroll, vpitch, vyaw,
   #                           ax, ay, az]
-  odom0_config: [true, true, false, false, false, true,
-                 true, true, false, false, false, true,
-                 false, false, false]
-  imu0: "/carla/ego_vehicle/imu"
   imu0_config: [false, false, false, false, false, true,
                 false, false, false, false, false, true,
                 true, true, false]
+  # Cartographer scan-matched odometry: x, y, yaw, vx, vy, vyaw.
+  # Covariance from scan-matching quality drives EKF uncertainty variation.
+  odom0: "/scan_matched_odometry"
+  odom0_config: [true, true, false, false, false, true,
+                 true, true, false, false, false, true,
+                 false, false, false]
 
 # Covariance extraction node topics
 odom_topic: "/odometry/filtered"  # Input: EKF-filtered odometry
@@ -54,3 +58,15 @@ covariance:
   min_variance: 0.0001  # Minimum variance threshold (m^2)
   max_variance: 100.0  # Maximum variance threshold (m^2)
   outlier_rejection: true  # Reject outlier covariance values
+
+# 270 deg LiDAR FOV filter (Suite A only)
+# CARLA sensor.lidar.ray_cast scans 360 deg. The real SICK TiM 5xx scans 270 deg
+# (mounted at front bumper, rear 90 deg obstructed by vehicle body).
+# These angles clip the rear 90 deg: [-135 deg, +135 deg] centred forward.
+# Pipeline: /carla/ego_vehicle/lidar (PointCloud2, 360 deg)
+#        -> pointcloud_to_laserscan -> /lidar/scan_raw (LaserScan, 360 deg)
+#        -> laser_filter_node       -> /lidar/scan     (LaserScan, 270 deg)
+#        -> Cartographer            -> /scan_matched_odometry (Odometry + covariance)
+lidar_filter:
+  angle_min: -2.356   # -135 deg in radians (left limit of 270 deg FOV)
+  angle_max:  2.356   #  135 deg in radians (right limit)

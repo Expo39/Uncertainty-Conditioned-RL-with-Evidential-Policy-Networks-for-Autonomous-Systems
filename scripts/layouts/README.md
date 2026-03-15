@@ -1,7 +1,7 @@
 # scripts/layouts/
 
 Parking lot floor plan modules. Each module defines one lot geometry in **local frame**
-(origin at lot corner (0,0)). The orchestrator `scripts/generate_layouts.py` applies a
+(origin at lot corner (0,0)). The orchestrator `generate_layouts.py` (this folder) applies a
 world-frame transform and writes `configs/layouts/<name>.yaml` + `outputs/layouts/<name>.png`.
 
 Never write world-frame coordinates in a layout module - always work in local frame.
@@ -131,23 +131,6 @@ Geometry helpers and constants shared by all layout modules.
 | `to_world_frame()` | function | Applies rotation + translation from local frame to CARLA world frame. |
 | `write_layout_yaml()` | function | Serialises the layout dict to a YAML file consumed by `CARLAParkingEnv`. |
 | `plot_layout()` | function | Renders a bird's-eye PNG of the layout using Matplotlib. |
-
-### `colours.py`
-
-Single source of truth for all visualisation colours (hex strings). Used by
-`common.py` (PNG plots), `scripts/inspect_layout.py` (CARLA debug overlay), and
-`scripts/visualise_training.py` (live training view).
-
-| Constant | Colour | Used for |
-|----------|--------|----------|
-| `HEX_PERP_BAY` | Blue | Perpendicular bay outlines |
-| `HEX_ANGLED_BAY` | Yellow | Angled bay outlines |
-| `HEX_PARALLEL_BAY` | Violet | Parallel bay outlines |
-| `HEX_TARGET_BAY` | Bright green | Currently selected target bay |
-| `HEX_PEDESTRIAN_ZONE` | Dark turquoise | Pedestrian zone fill |
-| `HEX_PEDESTRIAN_ZONE_EDGE` | Dark cyan | Pedestrian zone border |
-| `HEX_PATROL_PATH` | Red | Patrol waypoint path |
-| `HEX_LOT` | Light grey | Lot boundary fill |
 
 ---
 
