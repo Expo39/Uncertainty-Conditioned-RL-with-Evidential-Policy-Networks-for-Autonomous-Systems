@@ -19,12 +19,14 @@ Usage (via Make targets):
   make docker-inspect-sensors INSPECT_SUITE=suite_b INSPECT_LAYOUT=trapezoid
   make docker-inspect-live INSPECT_SUITE=suite_a        # Live LiDAR feed
   make docker-inspect-live INSPECT_SUITE=suite_c        # Live camera view (default)
-  make docker-inspect-live INSPECT_SUITE=suite_c INSPECT_SENSOR=lidar  # Override to LiDAR
+  make docker-inspect-live INSPECT_SUITE=suite_c INSPECT_SENSOR=lidar  # LiDAR override
 
 Or directly:
-  python -m scripts.inspect.lot_inspector --mode layout   --layout trapezoid
-  python -m scripts.inspect.lot_inspector --mode sensors  --suite suite_a --layout rectangle
-  python -m scripts.inspect.lot_inspector --mode sensors  --suite suite_c --layout irregular_a
+  python -m scripts.inspect.lot_inspector --mode layout --layout trapezoid
+  python -m scripts.inspect.lot_inspector --mode sensors --suite suite_a \
+      --layout rectangle
+  python -m scripts.inspect.lot_inspector --mode sensors --suite suite_c \
+      --layout irregular_a
   python -m scripts.inspect.lot_inspector --mode live     --suite suite_a
   python -m scripts.inspect.lot_inspector --mode live     --suite suite_c
   python -m scripts.inspect.lot_inspector --mode live     --suite suite_c --sensor lidar
@@ -57,13 +59,12 @@ except ImportError:
     sys.exit(1)
 
 from scripts.inspect._inspectors import (
-    _Inspector,
     LayoutInspector,
     LiveInspector,
     SensorInspector,
+    _Inspector,
 )
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
-
 
 # ===========================================================================
 # Entry point
@@ -247,7 +248,10 @@ def main() -> None:
         sensors_cfg["sensor_suite"] = args.suite
 
         env = _build_env(
-            args.host, args.port, args.layout, train_cfg,
+            args.host,
+            args.port,
+            args.layout,
+            train_cfg,
             sensors_cfg=sensors_cfg,
             suite=args.suite,
             # Side/front views: ego only. Birds-eye: full lot for context.
@@ -278,7 +282,10 @@ def main() -> None:
         live_sensor = _resolve_live_sensor(args.suite, args.sensor)
 
         env = _build_env(
-            args.host, args.port, args.layout, train_cfg,
+            args.host,
+            args.port,
+            args.layout,
+            train_cfg,
             sensors_cfg=sensors_cfg,
             suite=args.suite,
             full_lot=True,  # Spawn lot so LiDAR / camera has scene context

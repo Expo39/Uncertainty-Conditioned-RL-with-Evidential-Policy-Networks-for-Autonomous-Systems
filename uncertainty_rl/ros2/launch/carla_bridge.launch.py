@@ -201,12 +201,8 @@ def generate_launch_description() -> LaunchDescription:
                         "name": "angular_bounds_filter",
                         "type": "laser_filters/LaserScanAngularBoundsFilter",
                         "params": {
-                            "lower_angle": lidar_filter_config.get(
-                                "angle_min", -2.356
-                            ),
-                            "upper_angle": lidar_filter_config.get(
-                                "angle_max", 2.356
-                            ),
+                            "lower_angle": lidar_filter_config.get("angle_min", -2.356),
+                            "upper_angle": lidar_filter_config.get("angle_max", 2.356),
                         },
                     }
                 ],
