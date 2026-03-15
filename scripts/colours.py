@@ -4,8 +4,7 @@
 
 Single source of truth for all visualisation colours, used by:
   - scripts/layouts/common.py       (generate_layouts PNG output)
-  - scripts/inspect/inspect_layout.py   (CARLA lot debug overlay)
-  - scripts/inspect/inspect_sensors.py  (CARLA sensor mount overlay)
+  - scripts/inspect/lot_inspector.py    (CARLA lot + sensor debug overlay)
   - scripts/visualise_training.py   (live training bird's-eye view)
 
 Bay and lot colours are defined as hex strings (#RRGGBB). CARLA consumers convert
@@ -49,12 +48,12 @@ BAY_HEX: dict = {
 # Sensor overlay colours (hex, used by inspect_sensors.py via hex_to_carla_color)
 # ---------------------------------------------------------------------------
 
-HEX_SENSOR_IMU = "#FFDC00"      # Yellow
-HEX_SENSOR_LIDAR_2D = "#00B4FF"  # Cyan
-HEX_SENSOR_LIDAR_3D = "#00FF50"  # Green
-HEX_SENSOR_CAMERA = "#FF5000"    # Orange
-HEX_SENSOR_FOV = "#64B4FF"       # Light blue (LiDAR FOV arc)
-HEX_SENSOR_FOV_BLIND = "#505050"  # Dark grey (LiDAR blind sector)
+HEX_SENSOR_IMU = "#FFDC00"        # Yellow
+HEX_SENSOR_LIDAR_2D = "#00B4FF"   # Cyan (sensor mount dot)
+HEX_SENSOR_LIDAR_3D = "#00FF50"   # Green (sensor mount dot)
+HEX_SENSOR_CAMERA = "#FF0080"     # Hot pink/orange (g=0 avoids CARLA yellow shift)
+HEX_SENSOR_FOV_LIDAR = "#FF0000"  # Pure red (LiDAR FOV arc, 2D and 3D)
+HEX_SENSOR_FOV_BLIND = "#505050"  # Dark grey (LiDAR blind sector arc)
 
 
 # ---------------------------------------------------------------------------
