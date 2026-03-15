@@ -14,8 +14,8 @@ The 18-dimensional observation comprises:
                    cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw)
   - indices 15-17: target bay in ego body frame (dx, dy, dyaw)
 
-CARLA ground truth is used only for reward computation and clearance checks,
-not in the observation. This ensures sim-to-real transfer without retraining.
+CARLA ground truth is used only for reward computation (position error, collision
+detection) not in the observation. This ensures sim-to-real transfer without retraining.
 """
 
 import collections
@@ -49,7 +49,6 @@ except ImportError:
 
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 from uncertainty_rl.utils.constants import (
-    CLEARANCE_THRESHOLD,
     COVARIANCE_FEATURES_DIM,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
@@ -261,6 +260,16 @@ class CARLAParkingEnv(gym.Env):
         # The spawn transform chosen for this episode (set in _spawn_vehicle()).
         # Used by _spawn_perimeter_cones() to cut the correct entrance gap.
         self._chosen_spawn: Dict[str, float] = {}
+
+        # Collision detection -- set by the collision sensor callback each step.
+        # Cleared at the start of each episode in _cleanup_actors().
+        self._collision_detected: bool = False
+        # Impulse magnitude (N*s) from the last collision event.  Used to gate
+        # pedestrian/patrol collisions: only penalise if ego was at fault.
+        self._collision_impulse: float = 0.0
+        # Set of patrol NPC actor IDs -- used to distinguish patrol vehicles
+        # (vehicle.* type) from static parked cars in the collision callback.
+        self._patrol_npc_ids: set = set()
 
         # Performance-optimisation caches - cleared in _cleanup_actors()
         # Static obstacle (x, y) positions: cones + static vehicles.  No
@@ -574,7 +583,7 @@ class CARLAParkingEnv(gym.Env):
             if cone is not None:
                 cone.set_simulate_physics(False)
                 self._spawned_cones.append(cone)
-                # Cache static position so _check_clearance() needs no get_location()
+                # Cache static position for obstacle feature extraction in _get_state()
                 self._static_obstacle_positions.append((cx, cy))
 
         logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
@@ -713,7 +722,7 @@ class CARLAParkingEnv(gym.Env):
                     )
                 )
                 self._spawned_static_vehicles.append(actor)
-                # Cache static position so _check_clearance() needs no get_location()
+                # Cache static position for obstacle feature extraction in _get_state()
                 self._static_obstacle_positions.append((bay_x, bay_y))
 
         # Easter egg: always spawn the Kawasaki Ninja and Yamaha YZF in their
@@ -799,6 +808,7 @@ class CARLAParkingEnv(gym.Env):
             if actor is not None:
                 actor.set_simulate_physics(True)
                 self._patrol_npcs.append(actor)
+                self._patrol_npc_ids.add(actor.id)
                 # Store first_target_idx as the current waypoint so _update_patrol_npcs
                 # immediately drives toward it, consistent with the spawn orientation.
                 self._patrol_waypoint_indices.append(first_target_idx)
@@ -1118,42 +1128,6 @@ class CARLAParkingEnv(gym.Env):
     # Clearance and reward
     # ------------------------------------------------------------------
 
-    def _check_clearance(self) -> bool:
-        """
-        @brief Check whether the ego vehicle is within clearance threshold of any
-               obstacle actor.
-
-        Static obstacles (cones and parked vehicles) use pre-cached 2D positions
-        from self._static_obstacle_positions, avoiding a get_location() RPC per
-        actor per step.  Dynamic actors (patrol NPCs and pedestrians) still
-        require a live get_location() call because they move each step.
-
-        @return True if a clearance violation is detected (< CLEARANCE_THRESHOLD).
-        """
-        if self.vehicle is None:
-            return False
-
-        ego_loc = self.vehicle.get_location()
-        ego_x = ego_loc.x
-        ego_y = ego_loc.y
-
-        # Static obstacles: use cached (x, y) -- no get_location() needed
-        for ox, oy in self._static_obstacle_positions:
-            dx = ego_x - ox
-            dy = ego_y - oy
-            if math.sqrt(dx * dx + dy * dy) < CLEARANCE_THRESHOLD:
-                return True
-
-        # Dynamic actors: patrol NPCs and pedestrians require live position
-        for actor in self._patrol_npcs + self._pedestrian_actors:
-            if actor is None or not actor.is_alive:
-                continue
-            other_loc = actor.get_location()
-            if ego_loc.distance(other_loc) < CLEARANCE_THRESHOLD:
-                return True
-
-        return False
-
     def _compute_reward(self) -> Tuple[float, bool, bool]:
         """
         @brief Compute reward and termination flags for the current step.
@@ -1164,7 +1138,7 @@ class CARLAParkingEnv(gym.Env):
         Reward shaping will be improved in a future pass.
 
         Termination conditions (priority order):
-          1. Clearance violation: < CLEARANCE_THRESHOLD to any obstacle
+          1. Collision: physical contact detected by collision sensor
           2. Success: position < SUCCESS_THRESHOLD_POSITION,
              yaw < SUCCESS_THRESHOLD_ORIENTATION,
              velocity < SUCCESS_THRESHOLD_VELOCITY
@@ -1195,8 +1169,11 @@ class CARLAParkingEnv(gym.Env):
             math.atan2(math.sin(yaw_error_raw), math.cos(yaw_error_raw))
         )
 
-        # Check clearance violation (collision penalty + termination)
-        if self._check_clearance():
+        # Check collision (penalty + termination).  Flag set by _on_collision callback;
+        # consume and reset so each step only counts one collision event.
+        if self._collision_detected:
+            self._collision_detected = False
+            self._collision_impulse = 0.0
             return -10.0, True, False
 
         # Success condition
@@ -1622,6 +1599,9 @@ class CARLAParkingEnv(gym.Env):
             )
             self._spawn_lidar_2d()
 
+        # Collision sensor always spawned regardless of suite
+        self._spawn_collision_sensor()
+
     def _spawn_imu(self) -> None:
         """
         @brief Spawn IMU sensor at centre-of-mass height.
@@ -1787,6 +1767,64 @@ class CARLAParkingEnv(gym.Env):
         cam_sensor.listen(lambda _: None)
         self._spawned_sensors.append(cam_sensor)
 
+    def _spawn_collision_sensor(self) -> None:
+        """
+        @brief Spawn a CARLA collision sensor attached to the ego vehicle.
+
+        The sensor fires ``_on_collision`` on any physical contact.  The callback
+        sets ``self._collision_detected`` and records the impulse magnitude so
+        ``_compute_reward`` can decide whether to penalise.
+
+        The sensor is appended to ``self._spawned_sensors`` and destroyed with
+        the rest of the episode actors on cleanup.
+        """
+        if self.vehicle is None or self.world is None:
+            return
+        bp = self.world.get_blueprint_library().find("sensor.other.collision")
+        sensor = self.world.spawn_actor(
+            bp,
+            carla.Transform(),
+            attach_to=self.vehicle,
+        )
+        sensor.listen(self._on_collision)
+        self._spawned_sensors.append(sensor)
+
+    def _on_collision(self, event: Any) -> None:
+        """
+        @brief Collision sensor callback.
+
+        Fires when the ego vehicle makes physical contact with any actor.
+        Records the collision so ``_compute_reward`` can apply the penalty.
+
+        Dynamic actors (pedestrians, patrol NPCs) only set the flag when the
+        ego vehicle was moving at the time (impulse > threshold), preventing
+        a parked/slow ego from being penalised when a pedestrian walks into it.
+
+        @param event: carla.CollisionEvent with ``other_actor`` and
+                      ``normal_impulse`` fields.
+        """
+        other = event.other_actor
+        impulse = event.normal_impulse
+        impulse_magnitude = math.sqrt(
+            impulse.x ** 2 + impulse.y ** 2 + impulse.z ** 2
+        )
+
+        is_pedestrian = other.type_id.startswith("walker.pedestrian")
+        is_patrol = other.id in self._patrol_npc_ids
+        is_dynamic = is_pedestrian or is_patrol
+
+        if is_dynamic:
+            # Only penalise dynamic actor collisions when ego was at fault
+            # (impulse above threshold indicates ego was moving into them).
+            # A pedestrian walking into a stationary ego produces near-zero impulse.
+            if impulse_magnitude > 500.0:
+                self._collision_detected = True
+                self._collision_impulse = impulse_magnitude
+        else:
+            # Static objects (cones, parked cars, walls, perimeter): always penalise
+            self._collision_detected = True
+            self._collision_impulse = impulse_magnitude
+
     def _lidar_callback(self, lidar_data: Any) -> None:
         """
         @brief CARLA LiDAR sensor callback - caches point cloud for obstacle features.
@@ -1876,6 +1914,11 @@ class CARLAParkingEnv(gym.Env):
         # Clear per-episode performance caches
         self._static_obstacle_positions.clear()
         self._all_vehicle_actors.clear()
+        self._patrol_npc_ids.clear()
+
+        # Reset collision state so previous episode events do not carry over
+        self._collision_detected = False
+        self._collision_impulse = 0.0
 
         # Reset LiDAR scan cache so stale points from the previous episode are
         # not used to compute obstacle features at the start of the next episode.
