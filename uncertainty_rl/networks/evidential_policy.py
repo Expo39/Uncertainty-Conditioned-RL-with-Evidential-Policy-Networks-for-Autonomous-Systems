@@ -38,6 +38,22 @@ class EvidentialLayer(nn.Module):
         # Output 4 parameters per action: gamma, nu, alpha, beta
         self.linear = nn.Linear(input_dim, output_dim * 4)
 
+        # NIG hyperprior initialisation: start near a stable prior rather than
+        # random Kaiming init, which can give near-zero nu (undefined precision)
+        # or alpha near 1 (infinite variance) at step 0.
+        # Bias layout (contiguous blocks of output_dim): [gamma | nu | alpha | beta]
+        # softplus(0.9) + 1e-6 ~ 0.97  => nu ~ 0.97 (reasonable initial precision)
+        # softplus(0.9) + 1.0  ~ 1.97  => alpha ~ 1.97 (well-defined finite variance)
+        # softplus(0.0) + 1e-6 ~ 0.69  => beta ~ 0.69 (moderate scale)
+        # Weights scaled by 0.01 so outputs are dominated by biases at init.
+        with torch.no_grad():
+            self.linear.weight.mul_(0.01)
+            n = self.output_dim
+            self.linear.bias[0 * n : 1 * n].fill_(0.0)  # gamma: zero mean
+            self.linear.bias[1 * n : 2 * n].fill_(0.9)  # nu
+            self.linear.bias[2 * n : 3 * n].fill_(0.9)  # alpha
+            self.linear.bias[3 * n : 4 * n].fill_(0.0)  # beta
+
     def forward(
         self, x: torch.Tensor
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
