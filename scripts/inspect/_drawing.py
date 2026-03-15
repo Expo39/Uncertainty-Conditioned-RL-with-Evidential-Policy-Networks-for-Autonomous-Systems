@@ -47,8 +47,8 @@ from uncertainty_rl.utils.geometry import zone_bbox
 # Dot-drawing constants
 # ---------------------------------------------------------------------------
 
-_DOT_SPACING: float = 0.4   # metres between adjacent dot centres (layout lines)
-_ARC_SPACING: float = 0.3   # metres between dot centres on FOV arcs
+_DOT_SPACING: float = 0.4  # metres between adjacent dot centres (layout lines)
+_ARC_SPACING: float = 0.3  # metres between dot centres on FOV arcs
 
 # ---------------------------------------------------------------------------
 # Derived colour constants
@@ -208,7 +208,10 @@ def _draw_layout_overlays(
     for zone_idx, zone_raw in enumerate(layout.get("pedestrian_zones", [])):
         x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
         zc = [
-            (x_min, y_min), (x_max, y_min), (x_max, y_max), (x_min, y_max),
+            (x_min, y_min),
+            (x_max, y_min),
+            (x_max, y_max),
+            (x_min, y_max),
         ]
         for j in range(4):
             ax, ay = zc[j]
@@ -340,7 +343,10 @@ def _draw_fov_arc(
             py_end = origin_y + radius * math.sin(angle)
             _draw_dotted_segment(
                 debug,
-                origin_x, origin_y, px_end, py_end,
+                origin_x,
+                origin_y,
+                px_end,
+                py_end,
                 origin_z,
                 colour,
                 dot_size * 0.7,
@@ -401,8 +407,13 @@ def _draw_sensor_overlays(
         float(imu_m.get("z", 0.3)),
     )
     _draw_sensor_dot(
-        debug, imu_loc, "IMU", _COL_IMU, life_time,
-        drop_line=side_view, ground_z=ground_z,
+        debug,
+        imu_loc,
+        "IMU",
+        _COL_IMU,
+        life_time,
+        drop_line=side_view,
+        ground_z=ground_z,
     )
 
     # ---- Suite A: 2D LiDAR -----------------------------------------------
@@ -413,8 +424,13 @@ def _draw_sensor_overlays(
         lz = float(lid_m.get("z", 0.3))
         lidar_loc = _to_world(lx, ly, lz)
         _draw_sensor_dot(
-            debug, lidar_loc, "2D LiDAR", _COL_LIDAR_2D, life_time,
-            drop_line=side_view, ground_z=ground_z,
+            debug,
+            lidar_loc,
+            "2D LiDAR",
+            _COL_LIDAR_2D,
+            life_time,
+            drop_line=side_view,
+            ground_z=ground_z,
         )
 
         if not side_view:
@@ -422,7 +438,9 @@ def _draw_sensor_overlays(
             fov_half = math.radians(135.0)
             _draw_fov_arc(
                 debug,
-                lidar_loc.x, lidar_loc.y, lidar_loc.z + 0.05,
+                lidar_loc.x,
+                lidar_loc.y,
+                lidar_loc.z + 0.05,
                 radius=lidar_range,
                 angle_min_rad=yaw_rad - fov_half,
                 angle_max_rad=yaw_rad + fov_half,
@@ -433,7 +451,9 @@ def _draw_sensor_overlays(
             )
             _draw_fov_arc(
                 debug,
-                lidar_loc.x, lidar_loc.y, lidar_loc.z + 0.05,
+                lidar_loc.x,
+                lidar_loc.y,
+                lidar_loc.z + 0.05,
                 radius=lidar_range,
                 angle_min_rad=yaw_rad + fov_half,
                 angle_max_rad=yaw_rad + math.radians(360.0) - fov_half,
@@ -451,15 +471,22 @@ def _draw_sensor_overlays(
         lz = float(lid3_m.get("z", 1.5))
         lidar3d_loc = _to_world(lx, ly, lz)
         _draw_sensor_dot(
-            debug, lidar3d_loc, "3D LiDAR", _COL_LIDAR_3D, life_time,
-            drop_line=side_view, ground_z=ground_z,
+            debug,
+            lidar3d_loc,
+            "3D LiDAR",
+            _COL_LIDAR_3D,
+            life_time,
+            drop_line=side_view,
+            ground_z=ground_z,
         )
 
         if not side_view:
             lidar3d_range = float(sensors_cfg.get("lidar_3d", {}).get("range", 100.0))
             _draw_fov_arc(
                 debug,
-                lidar3d_loc.x, lidar3d_loc.y, lidar3d_loc.z,
+                lidar3d_loc.x,
+                lidar3d_loc.y,
+                lidar3d_loc.z,
                 radius=lidar3d_range,
                 angle_min_rad=0.0,
                 angle_max_rad=2.0 * math.pi,
@@ -477,8 +504,13 @@ def _draw_sensor_overlays(
         cz = float(cam_m.get("z", 1.2))
         cam_loc = _to_world(cx, cy_l, cz)
         _draw_sensor_dot(
-            debug, cam_loc, "RGB CAM", _COL_CAMERA, life_time,
-            drop_line=side_view, ground_z=ground_z,
+            debug,
+            cam_loc,
+            "RGB CAM",
+            _COL_CAMERA,
+            life_time,
+            drop_line=side_view,
+            ground_z=ground_z,
         )
 
         cam_fov_deg = float(sensors_cfg.get("camera_rgb", {}).get("fov", 90.0))
@@ -486,7 +518,9 @@ def _draw_sensor_overlays(
             cam_fov_half = math.radians(cam_fov_deg / 2.0)
             _draw_fov_arc(
                 debug,
-                cam_loc.x, cam_loc.y, cam_loc.z,
+                cam_loc.x,
+                cam_loc.y,
+                cam_loc.z,
                 radius=30.0,
                 angle_min_rad=yaw_rad - cam_fov_half,
                 angle_max_rad=yaw_rad + cam_fov_half,

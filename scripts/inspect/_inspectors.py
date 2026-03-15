@@ -33,7 +33,6 @@ from scripts.inspect._drawing import (
 )
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
-
 # ===========================================================================
 # Base class: CARLA connection + tick loop
 # ===========================================================================
@@ -407,7 +406,7 @@ class LiveInspector(_Inspector):
     """
 
     _LIDAR_DOT_SIZE: float = 0.08
-    _LIDAR_LIFE: float = 0.5        # Long enough to persist until next scan at 10 Hz
+    _LIDAR_LIFE: float = 0.5  # Long enough to persist until next scan at 10 Hz
 
     def __init__(
         self,
