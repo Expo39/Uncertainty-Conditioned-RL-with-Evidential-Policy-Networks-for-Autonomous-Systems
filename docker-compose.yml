@@ -163,6 +163,7 @@ services:
       - demo
       - inspect
       - inspect-sensors
+      - inspect-live
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
@@ -316,6 +317,57 @@ services:
       --suite ${SUITE:-suite_a}
       --layout ${LAYOUT:-rectangle}
       --view ${VIEW:-birds_eye}
+      --zoom ${ZOOM:-close}
+      --host carla-server-demo
+      --port 2100
+      --duration 300
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Live sensor inspector -- spawns real CARLA sensors on the ego vehicle and shows
+  # their output live: LiDAR hit points as red debug dots in the CARLA world, and
+  # (suite_c only) an RGB camera feed in a pygame window titled "RGB Camera".
+  # Usage: make docker-inspect-live [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle] [INSPECT_VIEW=side]
+  training-inspect-live:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-live
+    runtime: nvidia
+    profiles:
+      - inspect-live
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - DISPLAY=${DISPLAY}
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect/lot_inspector.py
+      --mode live
+      --suite ${SUITE:-suite_a}
+      --layout ${LAYOUT:-rectangle}
+      --sensor ${SENSOR:-lidar}
       --host carla-server-demo
       --port 2100
       --duration 300

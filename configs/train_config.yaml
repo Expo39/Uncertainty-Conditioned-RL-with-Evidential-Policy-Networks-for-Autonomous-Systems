@@ -55,7 +55,7 @@ carla_sensors:
     mount:
       x: 2.4    # Front bumper centre (longitudinal)
       y: 0.0
-      z: 0.3    # Bumper height for horizontal 2D scan
+      z: 0.5    # Above bumper lip so scan plane clears ego mesh and hits car sides
 
   lidar_3d:     # Suite B/C: 3D LiDAR (Velodyne VLP-16 style)
     channels: 16
@@ -66,9 +66,9 @@ carla_sensors:
     lower_fov: -15.0            # -15 deg elevation
     sensor_tick: 0.05
     mount:
-      x: 0.0    # Roof centre (longitudinal)
+      x: -0.5   # Roof mast, slightly behind centre (longitudinal)
       y: 0.0
-      z: 1.5    # Roof height (metres)
+      z: 1.9    # ~30 cm above roofline so downward beams clear the car body
 
   camera_rgb:   # Suite C: forward-facing RGB camera
     image_size_x: 640
@@ -76,9 +76,9 @@ carla_sensors:
     fov: 90.0                   # Horizontal field of view (degrees)
     sensor_tick: 0.05
     mount:
-      x: 2.0    # Front windscreen (longitudinal)
+      x: 0.2    # Top of windshield (longitudinal)
       y: 0.0
-      z: 1.2    # Windscreen height (metres)
+      z: 1.4    # Top of windshield height (metres)
       pitch: -5.0               # Slight downward tilt for near-field coverage
 
 # CARLA environmental conditions

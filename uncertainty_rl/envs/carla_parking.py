@@ -764,8 +764,10 @@ class CARLAParkingEnv(gym.Env):
         if not waypoints_raw:
             return
 
-        # Spawn at least 1 patrol vehicle so the agent encounters a moving obstacle.
-        num_patrol = random.randint(1, max(1, self._num_patrol_max))
+        # num_patrol_vehicles_max=0 suppresses patrol entirely (e.g. inspector side view).
+        if self._num_patrol_max == 0:
+            return
+        num_patrol = random.randint(1, self._num_patrol_max)
 
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
@@ -1665,7 +1667,7 @@ class CARLAParkingEnv(gym.Env):
         ray_cast scans 360 deg; the ROS bridge laser_filter pipeline clips this
         to 270 deg before Cartographer (see carla_bridge.launch.py).
 
-        Config key: carla_sensors_config.lidar. Mount defaults: x=2.4, z=0.3.
+        Config key: carla_sensors_config.lidar. Mount defaults: x=2.4, z=0.5.
         """
         if self.vehicle is None or self.world is None:
             return
@@ -1689,7 +1691,7 @@ class CARLAParkingEnv(gym.Env):
             carla.Location(
                 x=float(mount.get("x", 2.4)),
                 y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 0.3)),
+                z=float(mount.get("z", 0.5)),
             )
         )
         lidar_sensor = self.world.spawn_actor(
