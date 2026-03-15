@@ -8,7 +8,7 @@ and render debug overlays:
   _Inspector        -- base class: CARLA connection, tick loop, spectator helpers
     LayoutInspector -- lot bay outlines, spawn/patrol/pedestrian overlays
       SensorInspector -- sensor mount dots + FOV arcs on top of layout
-    LiveInspector   -- real spawned sensors with live output (CARLA spectator)
+    LiveInspector   -- real spawned sensors: LiDAR debug dots or camera spectator view
 
 Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 
@@ -19,7 +19,7 @@ Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 import math
 import sys
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 try:
     import carla
@@ -377,7 +377,7 @@ class SensorInspector(LayoutInspector):
 
 
 # ===========================================================================
-# Live inspector (real spawned sensors, pygame window + debug dots)
+# Live inspector (real spawned sensors, LiDAR debug dots or camera spectator view)
 # ===========================================================================
 
 
@@ -437,9 +437,6 @@ class LiveInspector(_Inspector):
 
         # Spawned sensor actors -- destroyed on exit
         self._sensors: List[Any] = []
-
-        # Latest camera frame stored but not used (no pygame window)
-        self._cam_frame: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Sensor spawning
