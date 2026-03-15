@@ -109,7 +109,7 @@ class TestROS2CovariancePipeline:
 
     def test_obs_pose_uses_ekf_not_carla_ground_truth(self) -> None:
         """
-        @brief Verify obs indices 0-5 come from the EKF estimate, not CARLA ground truth.
+        @brief Verify obs indices 0-5 come from EKF estimate, not CARLA ground truth.
 
         After a few steps with a running EKF, the filtered pose should differ from
         CARLA ground truth due to sensor noise and filter lag. The difference should

@@ -771,7 +771,7 @@ class CARLAParkingEnv(gym.Env):
         if not waypoints_raw:
             return
 
-        # num_patrol_vehicles_max=0 suppresses patrol entirely (e.g. inspector side view).
+        # num_patrol_vehicles_max=0 suppresses patrol entirely (e.g. inspector).
         if self._num_patrol_max == 0:
             return
         num_patrol = random.randint(1, self._num_patrol_max)
@@ -786,7 +786,9 @@ class CARLAParkingEnv(gym.Env):
         # direction-dependent and cannot prevent a patrol that spawns on top of the
         # ego or approaches it from behind before the first tick.
         ego_loc = self.vehicle.get_location() if self.vehicle is not None else None
-        min_spawn_dist = self._patrol_obstacle_distance + 4.5  # vehicle half-lengths + buffer
+        min_spawn_dist = (
+            self._patrol_obstacle_distance + 4.5
+        )  # vehicle half-lengths + buffer
         safe_indices = list(range(len(waypoints)))
         if ego_loc is not None:
             safe_indices = [
@@ -1290,8 +1292,8 @@ class CARLAParkingEnv(gym.Env):
         else:
             uncertainty = uncertainty.astype(np.float32)
 
-        # With covariance, without obstacle obs: [pose(6), cov(9), target(3)] = 18-dim
-        # With covariance, with obstacle obs:    [pose(6), cov(9), target(3), obs(3)] = 21-dim
+        # No obstacle obs:  [pose(6), cov(9), target(3)] = 18-dim
+        # With obstacle obs: [pose(6), cov(9), target(3), obs(3)] = 21-dim
         self._obs_buffer[0] = x
         self._obs_buffer[1] = y
         self._obs_buffer[2] = yaw
@@ -1446,7 +1448,9 @@ class CARLAParkingEnv(gym.Env):
             current_map_name = self.world.get_map().name.split("/")[-1]
             if self.town == "FlatPlane":
                 if current_map_name != "FlatPlane":
-                    xodr = Path("configs/layouts/flat_plane.xodr").read_text(encoding="utf-8")
+                    xodr = Path("configs/layouts/flat_plane.xodr").read_text(
+                        encoding="utf-8"
+                    )
                     logger.info("Loading configs/layouts/flat_plane.xodr ...")
                     self.world = self.client.generate_opendrive_world(
                         xodr,
@@ -1811,9 +1815,7 @@ class CARLAParkingEnv(gym.Env):
         """
         other = event.other_actor
         impulse = event.normal_impulse
-        impulse_magnitude = math.sqrt(
-            impulse.x ** 2 + impulse.y ** 2 + impulse.z ** 2
-        )
+        impulse_magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
 
         is_pedestrian = other.type_id.startswith("walker.pedestrian")
         is_patrol = other.id in self._patrol_npc_ids

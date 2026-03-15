@@ -63,7 +63,9 @@ class CovarianceExtractorNode(Node):
 
         # Store latest covariance
         self.latest_covariance: Optional[np.ndarray] = None
-        self.latest_pose: Optional[Tuple[float, float, float, float, float, float]] = None
+        self.latest_pose: Optional[Tuple[float, float, float, float, float, float]] = (
+            None
+        )
         self._log_counter: int = 0
 
         # Create timer for publishing

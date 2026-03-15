@@ -172,7 +172,7 @@ def validate_bays_in_polygon(
         for corner in bay_corners_pts:
             if not _point_in_polygon(corner[0], corner[1], expanded):
                 raise ValueError(
-                    f"[{shape_name}] Bay '{bay.get('bay_type','?')}' at "
+                    f"[{shape_name}] Bay '{bay.get('bay_type', '?')}' at "
                     f"({bay['local_x']:.2f}, {bay['local_y']:.2f}) has a corner "
                     f"at ({corner[0]:.2f}, {corner[1]:.2f}) outside the lot boundary."
                 )
@@ -211,10 +211,10 @@ def warn_narrow_corridors(
             if gap < min_width:
                 print(
                     f"  WARNING [{shape_name}]: corridor between "
-                    f"'{a.get('bay_type','?')}'"
-                    f" ({a['local_x']:.1f},{a['local_y']:.1f}) "
-                    f"and '{b.get('bay_type','?')}'"
-                    f" ({b['local_x']:.1f},{b['local_y']:.1f}) "
+                    f"'{a.get('bay_type', '?')}'"
+                    f" ({a['local_x']:.1f}, {a['local_y']:.1f}) "
+                    f"and '{b.get('bay_type', '?')}'"
+                    f" ({b['local_x']:.1f}, {b['local_y']:.1f}) "
                     f"is {gap:.2f} m (min {min_width:.1f} m)."
                 )
 

@@ -40,7 +40,7 @@ COVARIANCE_FEATURES_DIM = 9
 TARGET_POSE_DIM = 3
 
 # Obstacle awareness features: [nearest_dist_m, nearest_bearing_rad, obstacle_type]
-# obstacle_type: 0.0 = static (parked car, cone, wall), 1.0 = dynamic (pedestrian, patrol)
+# obstacle_type: 0.0 = static (parked car/cone/wall), 1.0 = dynamic (pedestrian/patrol)
 # Appended to the observation when include_obstacle_obs=True. Easily removable:
 # set include_obstacle_obs: false in train_config.yaml to restore 18-dim obs.
 OBSTACLE_FEATURES_DIM = 3
