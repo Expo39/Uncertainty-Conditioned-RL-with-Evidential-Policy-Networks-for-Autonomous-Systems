@@ -226,10 +226,6 @@ class CARLAParkingEnv(gym.Env):
         )
         self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
         self._patrol_heading_gain: float = scenarios.get("patrol_heading_gain", 0.8)
-        self._patrol_stuck_speed_threshold: float = scenarios.get(
-            "patrol_stuck_speed_threshold", 0.3
-        )
-        self._patrol_stuck_steps_max: int = scenarios.get("patrol_stuck_steps_max", 30)
         self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
@@ -309,9 +305,6 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_waypoint_indices: List[int] = []
         # +1 = CCW (forward), -1 = CW (reverse). Randomised per episode.
         self._patrol_waypoint_directions: List[int] = []
-        # Steps each NPC has been below stuck speed threshold while receiving throttle.
-        self._patrol_stuck_counters: List[int] = []
-
         # Pedestrian step counters for heading re-randomisation and zone confinement
         self._pedestrian_heading_steps: List[int] = []
         self._pedestrian_headings: List[Tuple[float, float, float]] = []
@@ -783,10 +776,32 @@ class CARLAParkingEnv(gym.Env):
         ]
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
 
+        # Build a list of candidate start indices that are safely away from the ego
+        # spawn position.  The forward-cone check in _update_patrol_npcs() is
+        # direction-dependent and cannot prevent a patrol that spawns on top of the
+        # ego or approaches it from behind before the first tick.
+        ego_loc = self.vehicle.get_location() if self.vehicle is not None else None
+        min_spawn_dist = self._patrol_obstacle_distance + 4.5  # vehicle half-lengths + buffer
+        safe_indices = list(range(len(waypoints)))
+        if ego_loc is not None:
+            safe_indices = [
+                idx
+                for idx in safe_indices
+                if math.sqrt(
+                    (waypoints[idx][0] - ego_loc.x) ** 2
+                    + (waypoints[idx][1] - ego_loc.y) ** 2
+                )
+                >= min_spawn_dist
+            ]
+        # Fall back to full list if every waypoint is within the exclusion zone
+        # (very small lots where patrol path passes through the spawn area).
+        if not safe_indices:
+            safe_indices = list(range(len(waypoints)))
+
         for i in range(num_patrol):
             bp = random.choice(self._car_blueprints)
-            # Randomise start waypoint so NPCs don't always begin at the same position.
-            start_idx = random.randrange(len(waypoints))
+            # Randomise start waypoint from ego-safe candidates only.
+            start_idx = random.choice(safe_indices)
             # Randomly choose patrol direction before spawn so the initial yaw matches.
             direction = random.choice([-1, 1])
             # The NPC's first target is the waypoint it will immediately drive toward.
@@ -813,7 +828,6 @@ class CARLAParkingEnv(gym.Env):
                 # immediately drives toward it, consistent with the spawn orientation.
                 self._patrol_waypoint_indices.append(first_target_idx)
                 self._patrol_waypoint_directions.append(direction)
-                self._patrol_stuck_counters.append(0)
 
         logger.debug(f"Spawned {len(self._patrol_npcs)} patrol NPC vehicles.")
 
@@ -934,13 +948,31 @@ class CARLAParkingEnv(gym.Env):
 
             steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
 
-            # Obstacle proximity check - brake if any vehicle or pedestrian is ahead
+            # Obstacle proximity check - brake if any vehicle or pedestrian is near
             npc_yaw = math.radians(t.rotation.yaw)
             fwd_x = math.cos(npc_yaw)
             fwd_y = math.sin(npc_yaw)
             blocked = False
+
+            # Ego vehicle: omnidirectional stop -- patrol must never approach the ego
+            # from any direction, since the ego may be stationary and the forward-cone
+            # check would miss a rear or side approach.
+            if self.vehicle is not None and self.vehicle.is_alive:
+                ego_to_x = self.vehicle.get_location().x - t.location.x
+                ego_to_y = self.vehicle.get_location().y - t.location.y
+                ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
+                # Add ~2.5 m for vehicle half-lengths so the stop distance is a
+                # bumper-to-bumper gap, not a centre-to-centre distance.
+                if ego_dist < self._patrol_obstacle_distance + 2.5:
+                    blocked = True
+
             for other in all_vehicles:
+                if blocked:
+                    break
                 if other.id == npc.id:
+                    continue
+                # Skip the ego vehicle -- already handled omnidirectionally above.
+                if self.vehicle is not None and other.id == self.vehicle.id:
                     continue
                 to_x = other.get_location().x - t.location.x
                 to_y = other.get_location().y - t.location.y
@@ -970,37 +1002,6 @@ class CARLAParkingEnv(gym.Env):
             v = npc.get_velocity()
             speed = math.sqrt(v.x * v.x + v.y * v.y)
             over_limit = speed > self._patrol_max_speed
-
-            # Stuck detection: count steps below speed threshold while throttle applied.
-            # If stuck too long, teleport to the next waypoint to recover.
-            applying_throttle = not blocked and not over_limit
-            if applying_throttle and speed < self._patrol_stuck_speed_threshold:
-                self._patrol_stuck_counters[i] += 1
-            else:
-                self._patrol_stuck_counters[i] = 0
-
-            if self._patrol_stuck_counters[i] >= self._patrol_stuck_steps_max:
-                # Advance two waypoints ahead to clear whatever is blocking the NPC.
-                direction = self._patrol_waypoint_directions[i]
-                wp_idx = (wp_idx + 2 * direction) % len(waypoints)
-                self._patrol_waypoint_indices[i] = wp_idx
-                self._patrol_stuck_counters[i] = 0
-                recover_x, recover_y = waypoints[wp_idx]
-                next_recover_idx = (wp_idx + direction) % len(waypoints)
-                next_recover_x, next_recover_y = waypoints[next_recover_idx]
-                recover_yaw = math.degrees(
-                    math.atan2(next_recover_y - recover_y, next_recover_x - recover_x)
-                )
-                npc.set_transform(
-                    carla.Transform(
-                        carla.Location(x=recover_x, y=recover_y, z=t.location.z),
-                        carla.Rotation(yaw=recover_yaw),
-                    )
-                )
-                logger.debug(
-                    f"Patrol NPC {i} was stuck; teleported to waypoint {wp_idx}."
-                )
-                continue
 
             control = carla.VehicleControl()
             control.steer = steer
@@ -1905,7 +1906,6 @@ class CARLAParkingEnv(gym.Env):
 
         self._patrol_waypoint_indices.clear()
         self._patrol_waypoint_directions.clear()
-        self._patrol_stuck_counters.clear()
         self._pedestrian_heading_steps.clear()
         self._pedestrian_headings.clear()
         self._pedestrian_lifetime_steps.clear()
