@@ -9,7 +9,7 @@ Class hierarchy (defined in ``_inspectors.py``):
   _Inspector          -- CARLA connection, world tick loop, spectator placement
     LayoutInspector   -- lot bay outlines, spawn/patrol/pedestrian overlays
       SensorInspector -- sensor mount dots + LiDAR/camera FOV arcs on top of layout
-    LiveInspector     -- real spawned sensors with live output (pygame + debug dots)
+    LiveInspector     -- real spawned sensors: LiDAR debug dots or camera spectator view
 
 Drawing helpers (free functions) are in :mod:`scripts.inspect._drawing`.
 
@@ -119,6 +119,22 @@ def _build_env(
     return env
 
 
+def _resolve_live_sensor(suite: str, sensor_arg: str) -> str:
+    """
+    @brief Resolve which sensor to display in live mode.
+
+    suite_a / suite_b always use lidar (no camera available).
+    suite_c defaults to camera unless the user explicitly passes --sensor lidar.
+
+    @param suite: Sensor suite name ('suite_a', 'suite_b', 'suite_c').
+    @param sensor_arg: Value of the --sensor CLI argument.
+    @return 'camera' or 'lidar'.
+    """
+    if suite == "suite_c" and sensor_arg != "lidar":
+        return "camera"
+    return "lidar"
+
+
 def main() -> None:
     """@brief Parse arguments and run the selected inspector mode."""
     parser = argparse.ArgumentParser(
@@ -135,7 +151,7 @@ def main() -> None:
             "Inspector mode: 'layout' = lot geometry only; "
             "'sensors' = sensors on lot; "
             "'live' = real spawned sensors with live output "
-            "(LiDAR debug dots + pygame camera window for suite_c).  "
+            "(LiDAR debug dots, or camera spectator view for suite_c).  "
             "Default: sensors."
         ),
     )
@@ -156,11 +172,11 @@ def main() -> None:
         default="birds_eye",
         choices=["birds_eye", "side", "front"],
         help=(
-            "Spectator view (sensors mode only): "
-            "'birds_eye' shows FOV arcs against the lot; "
-            "'side' shows sensor mount heights from the left; "
-            "'front' shows sensor mount positions from the front.  "
-            "Default: birds_eye."
+            "Spectator view for sensors mode only: "
+            "'birds_eye' = top-down showing FOV arcs against the lot (default); "
+            "'side' = left-profile showing sensor mount heights; "
+            "'front' = front-profile showing sensor lateral positions.  "
+            "Not used in live mode."
         ),
     )
     parser.add_argument(
@@ -168,11 +184,11 @@ def main() -> None:
         default="lidar",
         choices=["lidar", "camera"],
         help=(
-            "Active sensor for live mode (suite_c only): "
-            "'lidar' = birds-eye view + red LiDAR debug dots; "
+            "Active sensor for live mode, suite_c only: "
+            "'lidar' = birds-eye + red LiDAR debug dots; "
             "'camera' = CARLA spectator locked to camera mount (no dots).  "
-            "Ignored for suite_a/b (always lidar).  "
-            "Default: lidar (suite_c defaults to camera implicitly via lot_inspector)."
+            "suite_c defaults to camera; suite_a/b always use lidar.  "
+            "Default: lidar."
         ),
     )
     parser.add_argument(
@@ -205,12 +221,7 @@ def main() -> None:
     if args.mode == "sensors":
         print(f"  |  Suite: {args.suite}  |  View: {args.view}", end="")
     elif args.mode == "live":
-        # suite_c defaults to camera mode unless --sensor lidar is passed
-        active_sensor = args.sensor if args.suite == "suite_c" else "lidar"
-        if args.suite == "suite_c" and args.sensor == "lidar":
-            active_sensor = "lidar"
-        elif args.suite == "suite_c":
-            active_sensor = "camera"
+        active_sensor = _resolve_live_sensor(args.suite, args.sensor)
         print(f"  |  Suite: {args.suite}  |  Sensor: {active_sensor}", end="")
     print()
 
@@ -264,8 +275,7 @@ def main() -> None:
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
         sensors_cfg["sensor_suite"] = args.suite
 
-        # suite_c defaults to camera mode; any other suite is always lidar
-        live_sensor = "camera" if args.suite == "suite_c" and args.sensor != "lidar" else "lidar"
+        live_sensor = _resolve_live_sensor(args.suite, args.sensor)
 
         env = _build_env(
             args.host, args.port, args.layout, train_cfg,

@@ -237,7 +237,7 @@ services:
               capabilities: [gpu]
 
   # Inspect container - spawns a layout in windowed CARLA for visual inspection (no training).
-  # Uses the unified inspect.py script in layout mode.
+  # Uses lot_inspector.py in layout mode.
   # Usage: make docker-inspect INSPECT_LAYOUT=trapezoid
   training-inspect:
     build:
@@ -282,8 +282,8 @@ services:
               capabilities: [gpu]
 
   # Sensor inspector container - draws sensor mount + FOV overlays on the actual parking lot.
-  # Uses the unified inspect.py script in sensors mode.
-  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle] [INSPECT_VIEW=birds_eye|side]
+  # Uses lot_inspector.py in sensors mode.
+  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
   training-inspect-sensors:
     build:
       context: .
@@ -330,9 +330,9 @@ services:
               capabilities: [gpu]
 
   # Live sensor inspector -- spawns real CARLA sensors on the ego vehicle and shows
-  # their output live: LiDAR hit points as red debug dots in the CARLA world, and
-  # (suite_c only) an RGB camera feed in a pygame window titled "RGB Camera".
-  # Usage: make docker-inspect-live [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle] [INSPECT_VIEW=side]
+  # their output live: LiDAR hit points as red debug dots (suite_a/b), or CARLA
+  # spectator locked to the camera mount position (suite_c default).
+  # Usage: make docker-inspect-live [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle] [INSPECT_SENSOR=lidar|camera]
   training-inspect-live:
     build:
       context: .
