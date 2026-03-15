@@ -20,11 +20,12 @@ from uncertainty_rl.networks.sb3_integration import (
     EvidentialDistribution,
     EvidentialPPO,
 )
+from uncertainty_rl.utils.constants import TOTAL_OBS_DIM
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-STATE_DIM = 15
+STATE_DIM = TOTAL_OBS_DIM
 ACTION_DIM = 3
 BATCH_SIZE = 8
 

@@ -8,14 +8,19 @@ from pre-computed layout YAMLs (configs/layouts/). Localisation uncertainty come
 from the robot_localisation EKF node (via ROS 2 DDS), driven by noisy CARLA
 sensors, weather conditions, and dynamic traffic - not from a simulated noise model.
 
-The 18-dimensional observation comprises:
+The observation comprises up to 21 dimensions (default, include_obstacle_obs=true):
   - indices  0-5:  EKF filtered pose (x, y, yaw, vx, vy, vyaw)
   - indices  6-14: EKF covariance features (std_x, std_y, std_yaw,
                    cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw)
   - indices 15-17: target bay in ego body frame (dx, dy, dyaw)
+  - indices 18-20: nearest obstacle (distance_m, bearing_rad, type 0=static/1=dynamic)
+                   only present when include_obstacle_obs=true (default)
 
-CARLA ground truth is used only for reward computation and clearance checks,
-not in the observation. This ensures sim-to-real transfer without retraining.
+Actual obs dim depends on include_covariance and include_obstacle_obs flags;
+use _compute_obs_dim() rather than TOTAL_OBS_DIM directly inside the env.
+
+CARLA ground truth is used only for reward computation (position error, collision
+detection) not in the observation. This ensures sim-to-real transfer without retraining.
 """
 
 import collections
@@ -49,8 +54,8 @@ except ImportError:
 
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 from uncertainty_rl.utils.constants import (
-    CLEARANCE_THRESHOLD,
     COVARIANCE_FEATURES_DIM,
+    OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
@@ -127,10 +132,19 @@ class CARLAParkingEnv(gym.Env):
     manoeuvre the ego vehicle into the target bay. Uncertainty is produced
     naturally by the robot_localisation EKF processing noisy CARLA sensors.
 
-    Observation space (18-dim when include_covariance=True, 9-dim when False):
-      [0-5]  EKF pose: x, y, yaw, vx, vy, vyaw
-      [6-14] EKF covariance features (omitted when include_covariance=False)
-      [15-17] (or [6-8] when no covariance): target bay in ego body frame
+    Observation space when include_covariance=True, include_obstacle_obs=True (21-dim):
+      [0-5]   EKF pose: x, y, yaw, vx, vy, vyaw
+      [6-14]  EKF covariance features
+      [15-17] target bay in ego body frame
+      [18-20] obstacle awareness: nearest_dist_m, nearest_bearing_rad, obstacle_type
+
+    When include_covariance=False (9-dim or 12-dim depending on include_obstacle_obs):
+      [0-5]   EKF pose
+      [6-8]   target bay in ego body frame
+      [9-11]  obstacle awareness (only when include_obstacle_obs=True)
+
+    Setting include_obstacle_obs=False removes obs indices 18-20 (reverts 21->18 dim,
+    or 12->9 dim). Set in train_config.yaml: include_obstacle_obs: false.
 
     @note Docker + ROS 2 required for training. No standalone fallback.
     """
@@ -153,6 +167,8 @@ class CARLAParkingEnv(gym.Env):
         carla_conditions_config: Optional[Dict[str, Any]] = None,
         parking_scenarios_config: Optional[Dict[str, Any]] = None,
         include_covariance: bool = True,
+        include_obstacle_obs: bool = True,
+        sensor_suite: str = "suite_a",
         vis_output_path: Optional[str] = None,
         eval_mode: bool = False,
     ) -> None:
@@ -164,12 +180,18 @@ class CARLAParkingEnv(gym.Env):
         @param max_steps: Maximum episode length.
         @param render_mode: Rendering mode ('human', 'rgb_array', or None).
         @param ros2_config: ROS 2 settings (covariance_topic, covariance_timeout).
-        @param carla_sensors_config: Sensor noise parameters (imu, gnss subsections).
+        @param carla_sensors_config: Sensor noise parameters (imu, lidar subsections).
         @param carla_conditions_config: Weather and environmental settings.
         @param parking_scenarios_config: Parking lot configuration (floor_plans,
                cone spacing, bay occupancy, NPC counts).
-        @param include_covariance: If True, 18-dim obs (pose + covariance + target).
-               If False, 9-dim obs (pose + target, no covariance subscription).
+        @param include_covariance: If True, obs includes EKF covariance features
+               (indices 6-14). If False, covariance omitted and no ROS 2 subscription.
+        @param include_obstacle_obs: If True, obs includes 3 obstacle awareness dims
+               (nearest_dist_m, nearest_bearing_rad, obstacle_type). Set False to
+               revert to 18-dim obs without changing any other code.
+        @param sensor_suite: Sensor suite to spawn ('suite_a', 'suite_b', 'suite_c').
+               suite_a = 2D LiDAR + IMU. suite_b = 3D LiDAR + IMU.
+               suite_c = 3D LiDAR + camera + IMU.
         @param vis_output_path: Path for atomic vis_state.json writes. If None,
                visualisation writes are skipped.
         @param eval_mode: If True, OOD floor plans are included in sampling.
@@ -183,6 +205,8 @@ class CARLAParkingEnv(gym.Env):
         self.max_steps = max_steps
         self.render_mode = render_mode
         self._include_covariance = include_covariance
+        self._include_obstacle_obs = include_obstacle_obs
+        self._sensor_suite = sensor_suite
         self._eval_mode = eval_mode
 
         ros2_config = ros2_config or {}
@@ -207,10 +231,6 @@ class CARLAParkingEnv(gym.Env):
         )
         self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
         self._patrol_heading_gain: float = scenarios.get("patrol_heading_gain", 0.8)
-        self._patrol_stuck_speed_threshold: float = scenarios.get(
-            "patrol_stuck_speed_threshold", 0.3
-        )
-        self._patrol_stuck_steps_max: int = scenarios.get("patrol_stuck_steps_max", 30)
         self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
@@ -232,9 +252,25 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_npcs: List[Any] = []
         self._pedestrian_actors: List[Any] = []
 
+        # Latest LiDAR point cloud in vehicle frame ([N, 3] float32 array).
+        # Populated by the LiDAR sensor callback in _spawn_sensors().
+        # Used by _get_obstacle_features() to compute obstacle awareness dims.
+        self._latest_lidar_scan: Optional[np.ndarray] = None
+        self._lidar_scan_lock = threading.Lock()
+
         # The spawn transform chosen for this episode (set in _spawn_vehicle()).
         # Used by _spawn_perimeter_cones() to cut the correct entrance gap.
         self._chosen_spawn: Dict[str, float] = {}
+
+        # Collision detection -- set by the collision sensor callback each step.
+        # Cleared at the start of each episode in _cleanup_actors().
+        self._collision_detected: bool = False
+        # Impulse magnitude (N*s) from the last collision event.  Used to gate
+        # pedestrian/patrol collisions: only penalise if ego was at fault.
+        self._collision_impulse: float = 0.0
+        # Set of patrol NPC actor IDs -- used to distinguish patrol vehicles
+        # (vehicle.* type) from static parked cars in the collision callback.
+        self._patrol_npc_ids: set = set()
 
         # Performance-optimisation caches - cleared in _cleanup_actors()
         # Static obstacle (x, y) positions: cones + static vehicles.  No
@@ -254,10 +290,7 @@ class CARLAParkingEnv(gym.Env):
 
         # Pre-allocated observation buffer - reused every step to avoid
         # repeated small heap allocations.
-        if self._include_covariance:
-            _obs_dim = TOTAL_OBS_DIM
-        else:
-            _obs_dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
+        _obs_dim = self._compute_obs_dim()
         self._obs_buffer: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
 
         # Target bay (world frame, set in reset)
@@ -277,9 +310,6 @@ class CARLAParkingEnv(gym.Env):
         self._patrol_waypoint_indices: List[int] = []
         # +1 = CCW (forward), -1 = CW (reverse). Randomised per episode.
         self._patrol_waypoint_directions: List[int] = []
-        # Steps each NPC has been below stuck speed threshold while receiving throttle.
-        self._patrol_stuck_counters: List[int] = []
-
         # Pedestrian step counters for heading re-randomisation and zone confinement
         self._pedestrian_heading_steps: List[int] = []
         self._pedestrian_headings: List[Tuple[float, float, float]] = []
@@ -300,10 +330,7 @@ class CARLAParkingEnv(gym.Env):
         self.steps = 0
 
         # Observation and action spaces
-        if self._include_covariance:
-            obs_dim = TOTAL_OBS_DIM  # 18: pose(6) + cov(9) + target(3)
-        else:
-            obs_dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 9: pose(6) + target(3)
+        obs_dim = self._compute_obs_dim()
 
         self.observation_space = spaces.Box(
             low=-np.inf,
@@ -322,6 +349,26 @@ class CARLAParkingEnv(gym.Env):
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
         if self._include_covariance:
             self._init_ros2()
+
+    # ------------------------------------------------------------------
+    # Observation dimension helper
+    # ------------------------------------------------------------------
+
+    def _compute_obs_dim(self) -> int:
+        """
+        @brief Compute the observation dimension based on active feature flags.
+        @return Integer observation dimension.
+
+        Base: VEHICLE_STATE_DIM (6) + TARGET_POSE_DIM (3) = 9
+        With include_covariance: +COVARIANCE_FEATURES_DIM (9) = 18
+        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (3) = 21 (or 12 without cov)
+        """
+        dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
+        if self._include_covariance:
+            dim += COVARIANCE_FEATURES_DIM
+        if self._include_obstacle_obs:
+            dim += OBSTACLE_FEATURES_DIM
+        return dim
 
     # ------------------------------------------------------------------
     # ROS 2 initialisation
@@ -534,7 +581,7 @@ class CARLAParkingEnv(gym.Env):
             if cone is not None:
                 cone.set_simulate_physics(False)
                 self._spawned_cones.append(cone)
-                # Cache static position so _check_clearance() needs no get_location()
+                # Cache static position for obstacle feature extraction in _get_state()
                 self._static_obstacle_positions.append((cx, cy))
 
         logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
@@ -673,7 +720,7 @@ class CARLAParkingEnv(gym.Env):
                     )
                 )
                 self._spawned_static_vehicles.append(actor)
-                # Cache static position so _check_clearance() needs no get_location()
+                # Cache static position for obstacle feature extraction in _get_state()
                 self._static_obstacle_positions.append((bay_x, bay_y))
 
         # Easter egg: always spawn the Kawasaki Ninja and Yamaha YZF in their
@@ -724,18 +771,44 @@ class CARLAParkingEnv(gym.Env):
         if not waypoints_raw:
             return
 
-        # Spawn at least 1 patrol vehicle so the agent encounters a moving obstacle.
-        num_patrol = random.randint(1, max(1, self._num_patrol_max))
+        # num_patrol_vehicles_max=0 suppresses patrol entirely (e.g. inspector).
+        if self._num_patrol_max == 0:
+            return
+        num_patrol = random.randint(1, self._num_patrol_max)
 
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
 
+        # Build a list of candidate start indices that are safely away from the ego
+        # spawn position.  The forward-cone check in _update_patrol_npcs() is
+        # direction-dependent and cannot prevent a patrol that spawns on top of the
+        # ego or approaches it from behind before the first tick.
+        ego_loc = self.vehicle.get_location() if self.vehicle is not None else None
+        min_spawn_dist = (
+            self._patrol_obstacle_distance + 4.5
+        )  # vehicle half-lengths + buffer
+        safe_indices = list(range(len(waypoints)))
+        if ego_loc is not None:
+            safe_indices = [
+                idx
+                for idx in safe_indices
+                if math.sqrt(
+                    (waypoints[idx][0] - ego_loc.x) ** 2
+                    + (waypoints[idx][1] - ego_loc.y) ** 2
+                )
+                >= min_spawn_dist
+            ]
+        # Fall back to full list if every waypoint is within the exclusion zone
+        # (very small lots where patrol path passes through the spawn area).
+        if not safe_indices:
+            safe_indices = list(range(len(waypoints)))
+
         for i in range(num_patrol):
             bp = random.choice(self._car_blueprints)
-            # Randomise start waypoint so NPCs don't always begin at the same position.
-            start_idx = random.randrange(len(waypoints))
+            # Randomise start waypoint from ego-safe candidates only.
+            start_idx = random.choice(safe_indices)
             # Randomly choose patrol direction before spawn so the initial yaw matches.
             direction = random.choice([-1, 1])
             # The NPC's first target is the waypoint it will immediately drive toward.
@@ -757,11 +830,11 @@ class CARLAParkingEnv(gym.Env):
             if actor is not None:
                 actor.set_simulate_physics(True)
                 self._patrol_npcs.append(actor)
+                self._patrol_npc_ids.add(actor.id)
                 # Store first_target_idx as the current waypoint so _update_patrol_npcs
                 # immediately drives toward it, consistent with the spawn orientation.
                 self._patrol_waypoint_indices.append(first_target_idx)
                 self._patrol_waypoint_directions.append(direction)
-                self._patrol_stuck_counters.append(0)
 
         logger.debug(f"Spawned {len(self._patrol_npcs)} patrol NPC vehicles.")
 
@@ -882,13 +955,31 @@ class CARLAParkingEnv(gym.Env):
 
             steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
 
-            # Obstacle proximity check - brake if any vehicle or pedestrian is ahead
+            # Obstacle proximity check - brake if any vehicle or pedestrian is near
             npc_yaw = math.radians(t.rotation.yaw)
             fwd_x = math.cos(npc_yaw)
             fwd_y = math.sin(npc_yaw)
             blocked = False
+
+            # Ego vehicle: omnidirectional stop -- patrol must never approach the ego
+            # from any direction, since the ego may be stationary and the forward-cone
+            # check would miss a rear or side approach.
+            if self.vehicle is not None and self.vehicle.is_alive:
+                ego_to_x = self.vehicle.get_location().x - t.location.x
+                ego_to_y = self.vehicle.get_location().y - t.location.y
+                ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
+                # Add ~2.5 m for vehicle half-lengths so the stop distance is a
+                # bumper-to-bumper gap, not a centre-to-centre distance.
+                if ego_dist < self._patrol_obstacle_distance + 2.5:
+                    blocked = True
+
             for other in all_vehicles:
+                if blocked:
+                    break
                 if other.id == npc.id:
+                    continue
+                # Skip the ego vehicle -- already handled omnidirectionally above.
+                if self.vehicle is not None and other.id == self.vehicle.id:
                     continue
                 to_x = other.get_location().x - t.location.x
                 to_y = other.get_location().y - t.location.y
@@ -918,37 +1009,6 @@ class CARLAParkingEnv(gym.Env):
             v = npc.get_velocity()
             speed = math.sqrt(v.x * v.x + v.y * v.y)
             over_limit = speed > self._patrol_max_speed
-
-            # Stuck detection: count steps below speed threshold while throttle applied.
-            # If stuck too long, teleport to the next waypoint to recover.
-            applying_throttle = not blocked and not over_limit
-            if applying_throttle and speed < self._patrol_stuck_speed_threshold:
-                self._patrol_stuck_counters[i] += 1
-            else:
-                self._patrol_stuck_counters[i] = 0
-
-            if self._patrol_stuck_counters[i] >= self._patrol_stuck_steps_max:
-                # Advance two waypoints ahead to clear whatever is blocking the NPC.
-                direction = self._patrol_waypoint_directions[i]
-                wp_idx = (wp_idx + 2 * direction) % len(waypoints)
-                self._patrol_waypoint_indices[i] = wp_idx
-                self._patrol_stuck_counters[i] = 0
-                recover_x, recover_y = waypoints[wp_idx]
-                next_recover_idx = (wp_idx + direction) % len(waypoints)
-                next_recover_x, next_recover_y = waypoints[next_recover_idx]
-                recover_yaw = math.degrees(
-                    math.atan2(next_recover_y - recover_y, next_recover_x - recover_x)
-                )
-                npc.set_transform(
-                    carla.Transform(
-                        carla.Location(x=recover_x, y=recover_y, z=t.location.z),
-                        carla.Rotation(yaw=recover_yaw),
-                    )
-                )
-                logger.debug(
-                    f"Patrol NPC {i} was stuck; teleported to waypoint {wp_idx}."
-                )
-                continue
 
             control = carla.VehicleControl()
             control.steer = steer
@@ -1076,42 +1136,6 @@ class CARLAParkingEnv(gym.Env):
     # Clearance and reward
     # ------------------------------------------------------------------
 
-    def _check_clearance(self) -> bool:
-        """
-        @brief Check whether the ego vehicle is within clearance threshold of any
-               obstacle actor.
-
-        Static obstacles (cones and parked vehicles) use pre-cached 2D positions
-        from self._static_obstacle_positions, avoiding a get_location() RPC per
-        actor per step.  Dynamic actors (patrol NPCs and pedestrians) still
-        require a live get_location() call because they move each step.
-
-        @return True if a clearance violation is detected (< CLEARANCE_THRESHOLD).
-        """
-        if self.vehicle is None:
-            return False
-
-        ego_loc = self.vehicle.get_location()
-        ego_x = ego_loc.x
-        ego_y = ego_loc.y
-
-        # Static obstacles: use cached (x, y) -- no get_location() needed
-        for ox, oy in self._static_obstacle_positions:
-            dx = ego_x - ox
-            dy = ego_y - oy
-            if math.sqrt(dx * dx + dy * dy) < CLEARANCE_THRESHOLD:
-                return True
-
-        # Dynamic actors: patrol NPCs and pedestrians require live position
-        for actor in self._patrol_npcs + self._pedestrian_actors:
-            if actor is None or not actor.is_alive:
-                continue
-            other_loc = actor.get_location()
-            if ego_loc.distance(other_loc) < CLEARANCE_THRESHOLD:
-                return True
-
-        return False
-
     def _compute_reward(self) -> Tuple[float, bool, bool]:
         """
         @brief Compute reward and termination flags for the current step.
@@ -1119,10 +1143,10 @@ class CARLAParkingEnv(gym.Env):
 
         Uses CARLA ground truth transform (not EKF pose) for position and
         orientation errors. Reward formula kept from original implementation;
-        Task 9 rewrites it with potential-based shaping.
+        Reward shaping will be improved in a future pass.
 
         Termination conditions (priority order):
-          1. Clearance violation: < CLEARANCE_THRESHOLD to any obstacle
+          1. Collision: physical contact detected by collision sensor
           2. Success: position < SUCCESS_THRESHOLD_POSITION,
              yaw < SUCCESS_THRESHOLD_ORIENTATION,
              velocity < SUCCESS_THRESHOLD_VELOCITY
@@ -1153,8 +1177,11 @@ class CARLAParkingEnv(gym.Env):
             math.atan2(math.sin(yaw_error_raw), math.cos(yaw_error_raw))
         )
 
-        # Check clearance violation (collision penalty + termination)
-        if self._check_clearance():
+        # Check collision (penalty + termination).  Flag set by _on_collision callback;
+        # consume and reset so each step only counts one collision event.
+        if self._collision_detected:
+            self._collision_detected = False
+            self._collision_impulse = 0.0
             return -10.0, True, False
 
         # Success condition
@@ -1181,34 +1208,46 @@ class CARLAParkingEnv(gym.Env):
 
     def _get_state(self) -> np.ndarray:
         """
-        @brief Build the 18-dim (or 9-dim) observation vector.
-        @return Float32 array of shape (TOTAL_OBS_DIM,) or (VEHICLE_STATE_DIM
-                + TARGET_POSE_DIM,).
+        @brief Build the observation vector.
+        @return Float32 array of shape (_compute_obs_dim(),).
 
-        Indices 0-5: EKF pose (x, y, yaw, vx, vy, vyaw).
-                     Currently sourced from CARLA ground truth as a placeholder
-                     until the EKF ROS 2 bridge is integrated in Task 7.
+        Indices 0-5: EKF filtered pose (x, y, yaw, vx, vy, vyaw).
+                     Read from _CovarianceSubscriber.get_latest_pose() when the
+                     EKF subscriber is available. Falls back to CARLA ground truth
+                     when rclpy is unavailable (CI / unit tests).
         Indices 6-14: EKF covariance features (only when include_covariance=True).
-        Indices 15-17 (or 6-8): relative target bay pose (dx, dy, dyaw).
+        Indices 15-17 (or 6-8 without covariance): relative target bay pose.
+        Indices 18-20 (or 9-11 without covariance): obstacle awareness dims
+                     (only when include_obstacle_obs=True).
         """
         if self.vehicle is None or self.world is None:
-            obs_dim = (
-                TOTAL_OBS_DIM
-                if self._include_covariance
-                else VEHICLE_STATE_DIM + TARGET_POSE_DIM
-            )
-            return np.zeros(obs_dim, dtype=np.float32)
+            return np.zeros(self._compute_obs_dim(), dtype=np.float32)
 
-        transform = self.vehicle.get_transform()
-        velocity = self.vehicle.get_velocity()
-        angular_vel = self.vehicle.get_angular_velocity()
+        # -- Pose (indices 0-5) -------------------------------------------
+        # Prefer EKF filtered estimate for sim-to-real transfer; fall back to
+        # CARLA ground truth when rclpy is unavailable (CI / unit tests).
+        ekf_pose: Optional[np.ndarray] = None
+        if self._cov_subscriber is not None:
+            ekf_pose = self._cov_subscriber.get_latest_pose()
 
-        x = transform.location.x
-        y = transform.location.y
-        yaw = math.radians(transform.rotation.yaw)
-        vx = velocity.x
-        vy = velocity.y
-        vyaw = math.radians(angular_vel.z)
+        if ekf_pose is not None:
+            x = float(ekf_pose[0])
+            y = float(ekf_pose[1])
+            yaw = float(ekf_pose[2])
+            vx = float(ekf_pose[3])
+            vy = float(ekf_pose[4])
+            vyaw = float(ekf_pose[5])
+        else:
+            # Fallback: EKF not yet initialised or ROS 2 unavailable (CI / unit tests)
+            transform = self.vehicle.get_transform()
+            velocity = self.vehicle.get_velocity()
+            angular_vel = self.vehicle.get_angular_velocity()
+            x = transform.location.x
+            y = transform.location.y
+            yaw = math.radians(transform.rotation.yaw)
+            vx = velocity.x
+            vy = velocity.y
+            vyaw = math.radians(angular_vel.z)
 
         # Relative target pose in ego body frame
         dx, dy, dyaw = _compute_relative_target_pose(
@@ -1220,8 +1259,15 @@ class CARLAParkingEnv(gym.Env):
             self._target_bay["yaw"],
         )
 
+        # -- Obstacle features (computed once, used in both branches) ------
+        if self._include_obstacle_obs:
+            obstacle_features = self._get_obstacle_features()
+        else:
+            obstacle_features = np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
+
         if not self._include_covariance:
-            # Fill pre-allocated 9-dim buffer in-place: [pose(6), target(3)]
+            # Without covariance: [pose(6), target(3)] = 9-dim
+            # With obstacle obs:  [pose(6), target(3), obstacle(3)] = 12-dim
             self._obs_buffer[0] = x
             self._obs_buffer[1] = y
             self._obs_buffer[2] = yaw
@@ -1231,9 +1277,11 @@ class CARLAParkingEnv(gym.Env):
             self._obs_buffer[6] = dx
             self._obs_buffer[7] = dy
             self._obs_buffer[8] = dyaw
+            if self._include_obstacle_obs:
+                self._obs_buffer[9:12] = obstacle_features
             return self._obs_buffer.copy()
 
-        # EKF covariance features
+        # -- EKF covariance features (indices 6-14) -----------------------
         if self._cov_subscriber is not None:
             uncertainty = self._cov_subscriber.get_latest_uncertainty()
         else:
@@ -1244,7 +1292,8 @@ class CARLAParkingEnv(gym.Env):
         else:
             uncertainty = uncertainty.astype(np.float32)
 
-        # Fill pre-allocated 18-dim buffer in-place: [pose(6), covariance(9), target(3)]
+        # No obstacle obs:  [pose(6), cov(9), target(3)] = 18-dim
+        # With obstacle obs: [pose(6), cov(9), target(3), obs(3)] = 21-dim
         self._obs_buffer[0] = x
         self._obs_buffer[1] = y
         self._obs_buffer[2] = yaw
@@ -1255,7 +1304,65 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[15] = dx
         self._obs_buffer[16] = dy
         self._obs_buffer[17] = dyaw
+        if self._include_obstacle_obs:
+            self._obs_buffer[18:21] = obstacle_features
         return self._obs_buffer.copy()
+
+    def _get_obstacle_features(self) -> np.ndarray:
+        """
+        @brief Extract nearest obstacle features from the cached LiDAR scan.
+        @return Float32 array [nearest_dist_m, bearing_rad, obstacle_type].
+
+        nearest_dist_m: distance to nearest LiDAR return (metres, clamped to
+                        sensor range). Zero if no scan available.
+        bearing_rad:    bearing to nearest return in ego body frame (radians,
+                        0 = forward, positive = left per ROS convention).
+        obstacle_type:  0.0 = static (parked car, cone, perimeter wall),
+                        1.0 = dynamic (pedestrian or patrol vehicle).
+
+        Dynamic classification: the nearest return point (x, y in vehicle frame)
+        is transformed to world frame and checked against known dynamic actor
+        positions. If within 2 m of any dynamic actor, classified as dynamic.
+
+        Returns zeros when no LiDAR scan is available (sensor not yet ticked).
+        """
+        with self._lidar_scan_lock:
+            scan = self._latest_lidar_scan
+
+        if scan is None or len(scan) == 0:
+            return np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
+
+        # Distances from vehicle origin in the horizontal plane (ignore z)
+        dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
+        nearest_idx = int(np.argmin(dists))
+        nearest_dist = float(dists[nearest_idx])
+
+        # Bearing: atan2(y, x) in vehicle frame (y-left, x-forward convention)
+        nearest_bearing = float(np.arctan2(scan[nearest_idx, 1], scan[nearest_idx, 0]))
+
+        # Dynamic classification: transform nearest point to world frame and
+        # check proximity to known dynamic actors.
+        obstacle_type = 0.0
+        if self.vehicle is not None:
+            t = self.vehicle.get_transform()
+            cos_yaw = math.cos(math.radians(t.rotation.yaw))
+            sin_yaw = math.sin(math.radians(t.rotation.yaw))
+            px_v = float(scan[nearest_idx, 0])
+            py_v = float(scan[nearest_idx, 1])
+            wx = t.location.x + cos_yaw * px_v - sin_yaw * py_v
+            wy = t.location.y + sin_yaw * px_v + cos_yaw * py_v
+
+            dynamic_actors = self._patrol_npcs + self._pedestrian_actors
+            for actor in dynamic_actors:
+                if actor is not None and actor.is_alive:
+                    al = actor.get_location()
+                    if math.hypot(wx - al.x, wy - al.y) < 2.0:
+                        obstacle_type = 1.0
+                        break
+
+        return np.array(
+            [nearest_dist, nearest_bearing, obstacle_type], dtype=np.float32
+        )
 
     # ------------------------------------------------------------------
     # Visualisation
@@ -1329,7 +1436,7 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Connect to CARLA and load the world.
 
-        @note When town is "FlatPlane", loads configs/flat_plane.xodr via
+        @note When town is "FlatPlane", loads configs/layouts/flat_plane.xodr via
               generate_opendrive_world() - a clean flat plane with no roads or
               buildings. Otherwise uses load_world() for named CARLA towns.
         """
@@ -1341,8 +1448,10 @@ class CARLAParkingEnv(gym.Env):
             current_map_name = self.world.get_map().name.split("/")[-1]
             if self.town == "FlatPlane":
                 if current_map_name != "FlatPlane":
-                    xodr = Path("configs/flat_plane.xodr").read_text(encoding="utf-8")
-                    logger.info("Loading flat_plane.xodr ...")
+                    xodr = Path("configs/layouts/flat_plane.xodr").read_text(
+                        encoding="utf-8"
+                    )
+                    logger.info("Loading configs/layouts/flat_plane.xodr ...")
                     self.world = self.client.generate_opendrive_world(
                         xodr,
                         carla.OpendriveGenerationParameters(
@@ -1467,20 +1576,56 @@ class CARLAParkingEnv(gym.Env):
 
     def _spawn_sensors(self) -> None:
         """
-        @brief Spawn noisy IMU sensor attached to ego vehicle.
+        @brief Spawn sensors for the configured suite attached to the ego vehicle.
 
-        Sensor noise parameters come from carla_sensors_config. Sensor data
-        flows through the CARLA ROS bridge into the robot_localisation EKF.
+        Dispatches to per-suite helpers based on self._sensor_suite. All suites
+        include an IMU. Sensor data flows through the CARLA ROS bridge into the
+        robot_localisation EKF.
 
-        @note GNSS is excluded from Suite A (unreliable indoors / at Lemonworx).
+        Suite A: 2D LiDAR (front bumper) + IMU.
+        Suite B: 3D LiDAR (roof) + IMU.
+        Suite C: 3D LiDAR (roof) + RGB camera (windscreen) + IMU.
+
         """
         if self.vehicle is None or self.world is None:
             return
 
-        bp_lib = self.world.get_blueprint_library()
-        imu_config = self._sensors_config.get("imu", {})
+        # IMU is present in all suites
+        self._spawn_imu()
 
-        imu_bp = bp_lib.find("sensor.other.imu")
+        if self._sensor_suite == "suite_a":
+            self._spawn_lidar_2d()
+        elif self._sensor_suite == "suite_b":
+            self._spawn_lidar_3d()
+        elif self._sensor_suite == "suite_c":
+            # @todo(AG) Camera is currently passive. Pending supervisor decision
+            # on Suite C utility (visual odometry vs removal).
+            self._spawn_lidar_3d()
+            self._spawn_camera_rgb()
+        else:
+            logger.warning(
+                f"Unknown sensor_suite '{self._sensor_suite}'. "
+                "Defaulting to suite_a (2D LiDAR + IMU)."
+            )
+            self._spawn_lidar_2d()
+
+        # Collision sensor always spawned regardless of suite
+        self._spawn_collision_sensor()
+
+    def _spawn_imu(self) -> None:
+        """
+        @brief Spawn IMU sensor at centre-of-mass height.
+
+        Noise parameters and mount position come from carla_sensors_config.imu.
+        Mount defaults: x=0.0, y=0.0, z=0.3 (centre-of-mass height).
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        imu_config = self._sensors_config.get("imu", {})
+        mount = imu_config.get("mount", {})
+
+        imu_bp = self.world.get_blueprint_library().find("sensor.other.imu")
         for attr, default in [
             ("noise_accel_stddev_x", 0.1),
             ("noise_accel_stddev_y", 0.1),
@@ -1492,12 +1637,229 @@ class CARLAParkingEnv(gym.Env):
         ]:
             imu_bp.set_attribute(attr, str(imu_config.get(attr, default)))
 
+        imu_transform = carla.Transform(
+            carla.Location(
+                x=float(mount.get("x", 0.0)),
+                y=float(mount.get("y", 0.0)),
+                z=float(mount.get("z", 0.3)),
+            )
+        )
         imu_sensor = self.world.spawn_actor(
-            imu_bp,
-            carla.Transform(carla.Location(x=0.0, z=0.0)),
-            attach_to=self.vehicle,
+            imu_bp, imu_transform, attach_to=self.vehicle
         )
         self._spawned_sensors.append(imu_sensor)
+
+    def _spawn_lidar_2d(self) -> None:
+        """
+        @brief Spawn 2D LiDAR sensor at front bumper height (Suite A).
+
+        Single-channel horizontal scan (SICK TiM 5xx / Hokuyo style). CARLA
+        ray_cast scans 360 deg; the ROS bridge laser_filter pipeline clips this
+        to 270 deg before Cartographer (see carla_bridge.launch.py).
+
+        Config key: carla_sensors_config.lidar. Mount defaults: x=2.4, z=0.5.
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        lidar_config = self._sensors_config.get("lidar", {})
+        mount = lidar_config.get("mount", {})
+
+        lidar_bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
+        for attr, default in [
+            ("channels", 1),
+            ("range", 30.0),
+            ("points_per_second", 56000),
+            ("rotation_frequency", 10.0),
+            ("upper_fov", 0.0),
+            ("lower_fov", 0.0),
+            ("sensor_tick", 0.05),
+        ]:
+            lidar_bp.set_attribute(attr, str(lidar_config.get(attr, default)))
+
+        lidar_transform = carla.Transform(
+            carla.Location(
+                x=float(mount.get("x", 2.4)),
+                y=float(mount.get("y", 0.0)),
+                z=float(mount.get("z", 0.5)),
+            )
+        )
+        lidar_sensor = self.world.spawn_actor(
+            lidar_bp, lidar_transform, attach_to=self.vehicle
+        )
+
+        # Register callback to update the LiDAR scan cache for obstacle features
+        lidar_sensor.listen(self._lidar_callback)
+        self._spawned_sensors.append(lidar_sensor)
+
+    def _spawn_lidar_3d(self) -> None:
+        """
+        @brief Spawn 3D LiDAR sensor at roof centre (Suite B and C).
+
+        Multi-channel scan (Velodyne VLP-16 style). Provides richer point clouds
+        for Cartographer and denser obstacle proximity information.
+
+        Config key: carla_sensors_config.lidar_3d. Mount defaults: x=0.0, z=1.5.
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        lidar3d_config = self._sensors_config.get("lidar_3d", {})
+        mount = lidar3d_config.get("mount", {})
+
+        lidar_bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
+        for attr, default in [
+            ("channels", 16),
+            ("range", 100.0),
+            ("points_per_second", 300000),
+            ("rotation_frequency", 10.0),
+            ("upper_fov", 15.0),
+            ("lower_fov", -15.0),
+            ("sensor_tick", 0.05),
+        ]:
+            lidar_bp.set_attribute(attr, str(lidar3d_config.get(attr, default)))
+
+        lidar_transform = carla.Transform(
+            carla.Location(
+                x=float(mount.get("x", 0.0)),
+                y=float(mount.get("y", 0.0)),
+                z=float(mount.get("z", 1.5)),
+            )
+        )
+        lidar_sensor = self.world.spawn_actor(
+            lidar_bp, lidar_transform, attach_to=self.vehicle
+        )
+
+        lidar_sensor.listen(self._lidar_callback)
+        self._spawned_sensors.append(lidar_sensor)
+
+    def _spawn_camera_rgb(self) -> None:
+        """
+        @brief Spawn forward-facing RGB camera at windscreen height (Suite C).
+
+        @note The camera is currently passive: spawned and registered so it
+              appears in CARLA diagnostics, but data is not consumed by the
+              RL observation or EKF pipeline. The listener is a no-op.
+
+        @todo(AG) Pending supervisor decision on Suite C utility.
+
+        Config key: carla_sensors_config.camera_rgb.
+        Mount defaults: x=2.0, z=1.2, pitch=-5 deg.
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        cam_config = self._sensors_config.get("camera_rgb", {})
+        mount = cam_config.get("mount", {})
+
+        cam_bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
+        for attr, default in [
+            ("image_size_x", 640),
+            ("image_size_y", 480),
+            ("fov", 90.0),
+            ("sensor_tick", 0.05),
+        ]:
+            cam_bp.set_attribute(attr, str(cam_config.get(attr, default)))
+
+        cam_transform = carla.Transform(
+            carla.Location(
+                x=float(mount.get("x", 2.0)),
+                y=float(mount.get("y", 0.0)),
+                z=float(mount.get("z", 1.2)),
+            ),
+            carla.Rotation(pitch=float(mount.get("pitch", -5.0))),
+        )
+        cam_sensor = self.world.spawn_actor(
+            cam_bp, cam_transform, attach_to=self.vehicle
+        )
+        # Camera data is not consumed by the observation; listener is a no-op
+        # placeholder so the sensor is registered and visible in CARLA diagnostics.
+        cam_sensor.listen(lambda _: None)
+        self._spawned_sensors.append(cam_sensor)
+
+    def _spawn_collision_sensor(self) -> None:
+        """
+        @brief Spawn a CARLA collision sensor attached to the ego vehicle.
+
+        The sensor fires ``_on_collision`` on any physical contact.  The callback
+        sets ``self._collision_detected`` and records the impulse magnitude so
+        ``_compute_reward`` can decide whether to penalise.
+
+        The sensor is appended to ``self._spawned_sensors`` and destroyed with
+        the rest of the episode actors on cleanup.
+        """
+        if self.vehicle is None or self.world is None:
+            return
+        bp = self.world.get_blueprint_library().find("sensor.other.collision")
+        sensor = self.world.spawn_actor(
+            bp,
+            carla.Transform(),
+            attach_to=self.vehicle,
+        )
+        sensor.listen(self._on_collision)
+        self._spawned_sensors.append(sensor)
+
+    def _on_collision(self, event: Any) -> None:
+        """
+        @brief Collision sensor callback.
+
+        Fires when the ego vehicle makes physical contact with any actor.
+        Records the collision so ``_compute_reward`` can apply the penalty.
+
+        Dynamic actors (pedestrians, patrol NPCs) only set the flag when the
+        ego vehicle was moving at the time (impulse > threshold), preventing
+        a parked/slow ego from being penalised when a pedestrian walks into it.
+
+        @param event: carla.CollisionEvent with ``other_actor`` and
+                      ``normal_impulse`` fields.
+        """
+        other = event.other_actor
+        impulse = event.normal_impulse
+        impulse_magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
+
+        is_pedestrian = other.type_id.startswith("walker.pedestrian")
+        is_patrol = other.id in self._patrol_npc_ids
+        is_dynamic = is_pedestrian or is_patrol
+
+        if is_dynamic:
+            # Only penalise dynamic actor collisions when ego was at fault
+            # (impulse above threshold indicates ego was moving into them).
+            # A pedestrian walking into a stationary ego produces near-zero impulse.
+            if impulse_magnitude > 500.0:
+                self._collision_detected = True
+                self._collision_impulse = impulse_magnitude
+        else:
+            # Static objects (cones, parked cars, walls, perimeter): always penalise
+            self._collision_detected = True
+            self._collision_impulse = impulse_magnitude
+
+    def _lidar_callback(self, lidar_data: Any) -> None:
+        """
+        @brief CARLA LiDAR sensor callback - caches point cloud for obstacle features.
+        @param lidar_data: carla.LidarMeasurement from ray_cast sensor.
+
+        Converts the raw measurement to a (N, 3) float32 numpy array in vehicle
+        frame (x-forward, y-left, z-up). Thread-safe via _lidar_scan_lock.
+
+        @note CARLA ray_cast encodes each point as 4 float32 values (x, y, z,
+              intensity) in a flat byte buffer. CARLA uses a left-handed coordinate
+              system; y is negated to convert to the ROS right-handed convention
+              (positive y = left).
+        """
+        raw = lidar_data.raw_data
+        n_bytes = len(raw)
+        # Each point is 4 float32 values: x, y, z, intensity (16 bytes total)
+        n_points = n_bytes // 16
+        if n_points == 0:
+            return
+
+        arr = np.frombuffer(raw, dtype=np.float32).reshape(n_points, 4)
+        # Negate y: CARLA left-handed -> ROS right-handed (positive y = left)
+        points_xyz = arr[:, :3].copy()
+        points_xyz[:, 1] *= -1.0
+
+        with self._lidar_scan_lock:
+            self._latest_lidar_scan = points_xyz
 
     def _wait_for_covariance(self) -> None:
         """
@@ -1551,7 +1913,6 @@ class CARLAParkingEnv(gym.Env):
 
         self._patrol_waypoint_indices.clear()
         self._patrol_waypoint_directions.clear()
-        self._patrol_stuck_counters.clear()
         self._pedestrian_heading_steps.clear()
         self._pedestrian_headings.clear()
         self._pedestrian_lifetime_steps.clear()
@@ -1560,6 +1921,16 @@ class CARLAParkingEnv(gym.Env):
         # Clear per-episode performance caches
         self._static_obstacle_positions.clear()
         self._all_vehicle_actors.clear()
+        self._patrol_npc_ids.clear()
+
+        # Reset collision state so previous episode events do not carry over
+        self._collision_detected = False
+        self._collision_impulse = 0.0
+
+        # Reset LiDAR scan cache so stale points from the previous episode are
+        # not used to compute obstacle features at the start of the next episode.
+        with self._lidar_scan_lock:
+            self._latest_lidar_scan = None
 
         if self.vehicle is not None:
             if self.vehicle.is_alive:

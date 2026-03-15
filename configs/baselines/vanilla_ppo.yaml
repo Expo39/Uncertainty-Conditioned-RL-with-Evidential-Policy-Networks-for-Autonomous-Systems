@@ -1,18 +1,19 @@
 # Baseline: Vanilla PPO
-# 9-dim state [x, y, yaw, vx, vy, vyaw, dx, dy, dyaw], standard MlpPolicy.
+# 12-dim obs: EKF pose (6) + relative target (3) + obstacle features (3).
 # No EKF covariance, no evidential actor. Pure PPO baseline.
-# (6-dim EKF pose + 3-dim relative target pose = 9-dim total)
 #
 # Ablation dimensions:
-#   include_covariance: false  (9-dim observation: EKF pose + relative target)
+#   include_covariance: false  (no covariance dims)
+#   include_obstacle_obs: true (obstacle dims present -- not the experimental variable)
 #   policy_type: standard      (SB3 MlpPolicy + PPO)
 #
 # All other parameters inherited from configs/train_config.yaml.
 
 baseline_name: "vanilla_ppo"
-baseline_description: "Vanilla PPO with 9-dim state (pose + target), standard actor"
+baseline_description: "Vanilla PPO with 12-dim obs (pose + target + obstacles), standard actor"
 
 include_covariance: false
+include_obstacle_obs: true
 policy_type: "standard"
 
 log_dir: "./logs/vanilla_ppo"

@@ -68,7 +68,7 @@ R = -distance - 0.5 * orientation_error - 0.1 * velocity + 100 * success
 
 Success: position error < 0.5 m, orientation error < 10 deg, velocity < 0.1 m/s.
 
-See `@todo(AG)` comments in `train_config.yaml` for the planned switch to potential-based shaping (Task 9).
+See `@todo(AG)` comments in `train_config.yaml` for the planned switch to potential-based shaping.
 
 ### Termination Conditions
 

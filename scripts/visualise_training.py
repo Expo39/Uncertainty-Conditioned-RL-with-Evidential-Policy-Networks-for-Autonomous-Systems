@@ -35,7 +35,7 @@ import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
 import numpy as np
 
-from scripts.layouts.colours import (
+from scripts.colours import (
     BAY_HEX,
     HEX_CONE,
     HEX_EGO,
@@ -49,7 +49,7 @@ from scripts.layouts.colours import (
 # Default path to the shared state file written by VisStateWriter
 _DEFAULT_STATE_FILE = Path("outputs/vis_state.json")
 
-# Colours -- all sourced from scripts/layouts/colours.py
+# Colours -- all sourced from scripts/colours.py
 _COLOUR_LOT = HEX_LOT
 _COLOUR_TARGET_BAY = HEX_TARGET_BAY
 _COLOUR_PERP_BAY = BAY_HEX["perpendicular"]
