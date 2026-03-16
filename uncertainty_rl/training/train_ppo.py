@@ -44,14 +44,12 @@ def make_env(
     config: Dict[str, Any],
     rank: int = 0,
     carla_sensors_override: Optional[Dict[str, Any]] = None,
-    carla_conditions_override: Optional[Dict[str, Any]] = None,
 ) -> Callable:
     """
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
-    @param carla_conditions_override: Override conditions config (for evaluation).
     @return Callable that creates environment.
     """
 
@@ -66,11 +64,6 @@ def make_env(
                 carla_sensors_override
                 if carla_sensors_override is not None
                 else config.get("carla_sensors", {})
-            ),
-            carla_conditions_config=(
-                carla_conditions_override
-                if carla_conditions_override is not None
-                else config.get("carla_conditions", {})
             ),
             parking_scenarios_config=config.get("parking_scenarios", {}),
             include_covariance=config.get("include_covariance", True),
@@ -181,7 +174,17 @@ def train(config: Dict[str, Any]) -> None:
     if policy_type == "evidential":
         evidential_config = config.get("evidential", {})
         lambda_reg = evidential_config.get("lambda_reg", 0.01)
-        lambda_reg_warmup_steps = evidential_config.get("lambda_reg_warmup_steps", 50000)
+        lambda_reg_warmup_steps = evidential_config.get(
+            "lambda_reg_warmup_steps", 50000
+        )
+        use_uncertainty_conditioning = evidential_config.get(
+            "use_uncertainty_conditioning", False
+        )
+        # Forward conditioning flag into policy_kwargs so the policy can wire the
+        # dual-encoder actor (UncertaintyConditionedActor) when requested.
+        ppo_kwargs["policy_kwargs"][
+            "use_uncertainty_conditioning"
+        ] = use_uncertainty_conditioning
         model = EvidentialPPO(
             policy=EvidentialActorCriticPolicy,
             lambda_reg=lambda_reg,

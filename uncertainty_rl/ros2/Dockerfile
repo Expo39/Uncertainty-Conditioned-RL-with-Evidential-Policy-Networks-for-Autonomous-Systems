@@ -93,6 +93,10 @@ COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
 # Copy Cartographer configs (Suite A: 2D LiDAR; Suite B/C: 3D LiDAR)
 COPY configs/cartographer /workspace/configs/cartographer
 
+# Create the maps directory so the configs/maps:rw volume mount has an anchor point.
+# .pbstream files are generated at runtime via make docker-save-map; never baked in.
+RUN mkdir -p /workspace/configs/maps
+
 # Build custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     source /workspace/install/setup.bash && \

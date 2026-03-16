@@ -15,6 +15,7 @@ import pytest
 import torch
 from gymnasium import spaces
 
+from uncertainty_rl.networks.evidential_policy import UncertaintyConditionedActor
 from uncertainty_rl.networks.sb3_integration import (
     EvidentialActorCriticPolicy,
     EvidentialDistribution,
@@ -518,7 +519,10 @@ class TestEvidentialPPO:
             batch_size=32,
         )
         # Before any learning, num_timesteps == 0
-        ramp = min(1.0, float(model.num_timesteps) / float(model.lambda_reg_warmup_steps))
+        ramp = min(
+            1.0,
+            float(model.num_timesteps) / float(model.lambda_reg_warmup_steps),
+        )
         effective_lambda = model.lambda_reg * ramp
         assert effective_lambda == 0.0
 
@@ -539,7 +543,10 @@ class TestEvidentialPPO:
         )
         # Simulate being past warmup
         model.num_timesteps = warmup + 1
-        ramp = min(1.0, float(model.num_timesteps) / float(model.lambda_reg_warmup_steps))
+        ramp = min(
+            1.0,
+            float(model.num_timesteps) / float(model.lambda_reg_warmup_steps),
+        )
         effective_lambda = model.lambda_reg * ramp
         assert effective_lambda == model.lambda_reg
 
@@ -580,8 +587,8 @@ class TestNIGInit:
         n = act_space.shape[0]  # 3
         with torch.no_grad():
             # Pass zero input so output ≈ bias (weight scaled by 0.01 -> ~0)
-            zeros = torch.zeros(1, 64)  # dummy latent input size doesn't matter for bias
-            raw = policy.action_net.linear(torch.zeros(1, policy.action_net.linear.in_features))
+            latent_dim = policy.action_net.linear.in_features
+            raw = policy.action_net.linear(torch.zeros(1, latent_dim))
             # raw shape: (1, 4*n) = (1, 12)
             nu_raw = raw[0, 1 * n : 2 * n]
             alpha_raw = raw[0, 2 * n : 3 * n]
@@ -626,3 +633,218 @@ class TestNIGInit:
         )
         assert policy_ln_count > 0, "No LayerNorm found in policy_net"
         assert value_ln_count > 0, "No LayerNorm found in value_net"
+
+
+# ===========================================================================
+# TestUncertaintyConditionedActorWiring
+# ===========================================================================
+
+
+class TestUncertaintyConditionedActorWiring:
+    """
+    @class TestUncertaintyConditionedActorWiring
+    @brief Tests for the dual-encoder vs flat MLP pathway in
+           EvidentialActorCriticPolicy.
+
+    Verifies that use_uncertainty_conditioning=True wires UncertaintyConditionedActor
+    as the action_net and routes observations correctly, while False keeps the
+    flat EvidentialLayer pathway unchanged.
+    """
+
+    @pytest.fixture
+    def obs_space(self) -> spaces.Box:
+        """
+        @brief 21-dim observation space (full obs with covariance + obstacle dims).
+        """
+        return spaces.Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=(TOTAL_OBS_DIM,),
+            dtype=np.float32,
+        )
+
+    @pytest.fixture
+    def act_space(self) -> spaces.Box:
+        """
+        @brief 3-dim action space.
+        """
+        return spaces.Box(
+            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            dtype=np.float32,
+        )
+
+    def test_flat_mlp_path_uses_evidential_layer(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief use_uncertainty_conditioning=False -> action_net is EvidentialLayer.
+        """
+        from uncertainty_rl.networks.evidential_policy import EvidentialLayer
+
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=False,
+        )
+        assert isinstance(policy.action_net, EvidentialLayer)
+
+    def test_dual_encoder_path_uses_uncertainty_conditioned_actor(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief use_uncertainty_conditioning=True wires UncertaintyConditionedActor.
+        @note This is the dual-encoder pathway.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        assert isinstance(policy.action_net, UncertaintyConditionedActor)
+
+    def test_dual_encoder_forward_returns_correct_shapes(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief Dual-encoder forward pass returns (actions, values, log_prob)
+               with correct shapes.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        obs = torch.randn(BATCH_SIZE, TOTAL_OBS_DIM)
+        actions, values, log_prob = policy.forward(obs)
+        assert actions.shape == (BATCH_SIZE, ACTION_DIM)
+        assert values.shape == (BATCH_SIZE, 1)
+        assert log_prob.shape == (BATCH_SIZE,)
+
+    def test_dual_encoder_evaluate_actions_caches_nig_params(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief evaluate_actions caches NIG params when using dual-encoder.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        obs = torch.randn(BATCH_SIZE, TOTAL_OBS_DIM)
+        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        policy.evaluate_actions(obs, actions)
+        assert policy._cached_nig_params is not None
+        gamma, nu, alpha, beta = policy._cached_nig_params
+        assert gamma.shape == (BATCH_SIZE, ACTION_DIM)
+
+    def test_dual_encoder_nig_constraints_hold(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief NIG constraints (nu > 0, alpha > 1, beta > 0) hold in dual-encoder mode.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        obs = torch.randn(BATCH_SIZE, TOTAL_OBS_DIM)
+        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        policy.evaluate_actions(obs, actions)
+        assert policy._cached_nig_params is not None
+        _, nu, alpha, beta = policy._cached_nig_params
+        assert torch.all(nu > 0)
+        assert torch.all(alpha > 1.0)
+        assert torch.all(beta > 0)
+
+    def test_dual_encoder_get_action_with_uncertainty(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief get_action_with_uncertainty returns correct keys in dual-encoder mode.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        obs = torch.randn(1, TOTAL_OBS_DIM)
+        action, uncertainty_dict = policy.get_action_with_uncertainty(obs)
+        assert action.shape == (1, ACTION_DIM)
+        required_keys = {
+            "epistemic",
+            "aleatoric",
+            "total",
+            "gamma",
+            "nu",
+            "alpha",
+            "beta",
+        }
+        assert required_keys == set(uncertainty_dict.keys())
+
+    def test_dual_encoder_save_load_preserves_flag(
+        self,
+        obs_space: spaces.Box,
+        act_space: spaces.Box,
+    ) -> None:
+        """
+        @brief Save and load roundtrip preserves use_uncertainty_conditioning flag.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/test_dual_policy"
+            policy.save(path)
+            loaded = EvidentialActorCriticPolicy.load(path)
+            assert loaded.use_uncertainty_conditioning is True
+
+    def test_gradient_flows_through_dual_encoder(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief Gradients reach UncertaintyConditionedActor parameters in
+               dual-encoder mode.
+        """
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            lambda_reg=0.01,
+            use_uncertainty_conditioning=True,
+        )
+        obs = torch.randn(BATCH_SIZE, TOTAL_OBS_DIM)
+        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        values, log_prob, _ = policy.evaluate_actions(obs, actions)
+        loss = log_prob.mean() + values.mean()
+        loss.backward()
+
+        # Gradients must reach the dual-encoder action_net parameters
+        for param in policy.action_net.parameters():
+            assert param.grad is not None, "No gradient in dual-encoder action_net"

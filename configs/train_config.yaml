@@ -18,6 +18,9 @@ carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 ros2:
   covariance_topic: "/ekf_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
   covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
+  publish_initial_pose: true     # Publish /initialpose at episode reset for Cartographer pure
+                                 # localisation convergence. Safe in SLAM mode (Cartographer ignores it).
+  initial_pose_topic: "/initialpose"
 
 # CARLA sensor noise configuration
 # Sensor suites (selected by sensor_suite key below):
@@ -81,26 +84,22 @@ carla_sensors:
       z: 1.4    # Top of windshield height (metres)
       pitch: -5.0               # Slight downward tilt for near-field coverage
 
-# CARLA environmental conditions
-# Randomised per episode during training to expose the agent to varied uncertainty
-carla_conditions:
-  weather_presets:               # Randomly sampled each episode
-    - "ClearNoon"                # Baseline: full LiDAR returns
-    - "HardRainNoon"             # Rain particles attenuate LiDAR returns -> higher EKF covariance
-
 # ---------------------------------------------------------------------------
 # Parking lot scenario configuration
 # Floor plan geometry is pre-computed offline (make generate-layouts) and
 # stored in configs/layouts/. The env reads from these YAML files directly.
 # ---------------------------------------------------------------------------
 parking_scenarios:
-  perimeter_cone_spacing: 2.0          # Metres between perimeter cones
+  spawn_perimeter_cones: true          # Cones define the static perimeter map for Cartographer pure
+                                       # localisation. Must be true for both the one-time SLAM mapping
+                                       # run (make docker-mapping-drive) and all training runs.
+  perimeter_cone_spacing: 2.0          # Metres between perimeter cones (only used if spawn_perimeter_cones: true)
   entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
   bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
   bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
   num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
-  patrol_obstacle_stop_distance: 5.2  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego)
-  patrol_pedestrian_stop_distance: 1.5  # Metres ahead - patrol brakes if any pedestrian within range
+  patrol_obstacle_stop_distance: 3.0  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego, + 1.0 m bumper buffer in code)
+  patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Max patrol speed in m/s (~11 km/h, typical car park speed)
   patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
   patrol_stuck_speed_threshold: 0.3   # m/s below which NPC is considered stuck (while throttle applied)
@@ -135,7 +134,7 @@ include_obstacle_obs: true  # Adds nearest_dist_m, nearest_bearing_rad, obstacle
 # ---------------------------------------------------------------------------
 # PPO hyperparameters
 # Calibrated for single-CARLA-env parking (sequential data collection,
-# 18-dim state, 3-dim action, 500-step episodes, weather randomisation).
+# 18-dim state, 3-dim action, 500-step episodes, sparse bay + traffic randomisation).
 # ---------------------------------------------------------------------------
 
 # Learning rate: 3e-4, linear decay to 0 applied in train_ppo.py.
@@ -167,9 +166,9 @@ vf_coef: 0.5        # Standard default
 max_grad_norm: 0.5   # Standard default
 
 # target_kl: Early-stop epochs when KL divergence exceeds threshold.
-# Set slightly higher than the typical 0.015 because weather randomisation
-# creates noisy reward landscapes. Acts as a safety valve against policy
-# collapse during aggressive gradient steps.
+# Set slightly higher than the typical 0.015 because sparse bay and traffic
+# randomisation creates noisy reward landscapes. Acts as a safety valve against
+# policy collapse during aggressive gradient steps.
 target_kl: 0.02
 
 # Network architecture
@@ -181,7 +180,7 @@ activation: "relu"  # Validated for evidential architectures
 
 # LayerNorm is inserted after each hidden Linear in EvidentialActorCriticPolicy
 # via _build_mlp_extractor() override. Preserves plasticity under non-stationary
-# training (weather randomisation). Implemented in sb3_integration.py.
+# training (bay occupancy + traffic randomisation). Implemented in sb3_integration.py.
 
 # ---------------------------------------------------------------------------
 # Observation normalisation

@@ -18,10 +18,10 @@ Bay zones:
   - Right-wall parallel group: 3 bays against the right wall (x=44),
     nose facing +Y (yaw=90).
 
-Two spawn transforms:
-  - Primary   (S1): left wall centre (x=0, y=24), facing +X into the lot.
-  - Secondary (S2): diagonal bottom wall near x=38, facing inward
-    perpendicular to the wall slope.
+Two spawn transforms (3 m inside the perimeter along each heading):
+  - Primary   (S1): left wall entry (x=3, y=24), facing +X into the lot.
+  - Secondary (S2): diagonal bottom wall near x=38, 3 m inward perpendicular
+    to the wall slope.
 
 Used as a training layout (OOD=False).
 """
@@ -39,7 +39,7 @@ from scripts.layouts.common import (
     warn_narrow_corridors,
 )
 
-# World-frame origin used in multi-layout generation (FlatPlane generated OpenDRIVE world).
+# World-frame origin in multi-layout generation (FlatPlane generated OpenDRIVE world).
 ORIGIN_X = 0.0
 ORIGIN_Y = -90.0
 ORIGIN_Z = 0.3
@@ -63,10 +63,10 @@ def generate() -> Dict[str, Any]:
     y_offset = (width_front - width_rear) / 2.0  # 9.0
 
     corners = [
-        {"x": 0.0, "y": 0.0},  # P0 bottom-left (front)
+        {"x": -5.0, "y": 0.0},  # P0 bottom-left (front)
         {"x": depth, "y": y_offset},  # P1 bottom-right (rear)
         {"x": depth, "y": width_front - y_offset},  # P2 top-right (rear)
-        {"x": 0.0, "y": width_front},  # P3 top-left (front)
+        {"x": -5.0, "y": width_front},  # P3 top-left (front)
     ]
 
     dims_perp = BAY_DIMS["perpendicular"]  # width=2.5, depth=5.0
@@ -122,16 +122,21 @@ def generate() -> Dict[str, Any]:
     # ang_start: skip 6 m from the P0 corner so the first bay clears the
     # entrance gate and the diagonal wall cones.
     # ------------------------------------------------------------------
-    wall_len = math.hypot(depth, y_offset)
-    wdx = depth / wall_len
-    wdy = y_offset / wall_len
+    # Bottom wall now runs from P0(-5, 0) to P1(depth, y_offset).
+    # wall_len and direction recomputed from the extended P0.
+    _p0_x = -5.0
+    _p0_y = 0.0
+    wall_len = math.hypot(depth - _p0_x, y_offset - _p0_y)
+    wdx = (depth - _p0_x) / wall_len
+    wdy = (y_offset - _p0_y) / wall_len
     ang_yaw = (math.degrees(math.atan2(wdx, -wdy)) + 45.0) % 360.0
     ang_offset = ang_offset_from_wall(dims_ang["depth"], dims_ang["width"]) + _WALL_GAP
-    ang_start = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 6.0
+    # Start 3 m from the new P0 (was 6 m from old P0=0) to fill the extra 5 m.
+    ang_start = ang_x_margin(dims_ang["depth"], dims_ang["width"]) + 3.0
     ang_bays = angled_bays_along_wall(
-        7,
-        wall_x0=0.0,
-        wall_y0=0.0,
+        9,
+        wall_x0=_p0_x,
+        wall_y0=_p0_y,
         wall_dx=wdx,
         wall_dy=wdy,
         wall_len=wall_len,
@@ -202,17 +207,21 @@ def generate() -> Dict[str, Any]:
     warn_narrow_corridors(all_bays, "trapezoid")
 
     # ------------------------------------------------------------------
-    # Spawn transforms.
-    # S1: left wall centre (x=0, y=24), facing +X into the lot.
-    # S2: diagonal bottom wall near x=38, facing inward perpendicular to slope.
+    # Spawn transforms (3 m inside the perimeter along each heading).
+    # S1: left wall entry, 3 m inward along +X from x=0.
+    # S2: diagonal bottom wall near x=38, 3 m inward along the inward normal.
     #     y interpolated along P0(0,0)->P1(depth, y_offset).
     #     Inward normal yaw = atan2(wdx, -wdy) (CCW 90 from wall direction).
     # ------------------------------------------------------------------
     _spawn2_yaw = math.degrees(math.atan2(wdx, -wdy))
-    spawn = {"x": 0.0, "y": width_front / 2.0, "yaw_deg": 0.0}
+    _s2_x = round(38.0 + math.cos(math.radians(_spawn2_yaw)) * 3.0, 1)
+    _s2_y = round(
+        y_offset * (38.0 / depth) + math.sin(math.radians(_spawn2_yaw)) * 3.0, 1
+    )
+    spawn = {"x": -2.0, "y": width_front / 2.0, "yaw_deg": 0.0}
     spawn2 = {
-        "x": 38.0,
-        "y": y_offset * (38.0 / depth),
+        "x": _s2_x,
+        "y": _s2_y,
         "yaw_deg": round(_spawn2_yaw, 1),
     }
 

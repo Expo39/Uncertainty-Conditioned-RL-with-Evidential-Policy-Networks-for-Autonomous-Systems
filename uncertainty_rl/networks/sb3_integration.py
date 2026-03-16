@@ -24,7 +24,11 @@ from torch import nn
 from torch.distributions import Normal
 from torch.nn import functional as F
 
-from uncertainty_rl.networks.evidential_policy import EvidentialLayer
+from uncertainty_rl.networks.evidential_policy import (
+    EvidentialLayer,
+    UncertaintyConditionedActor,
+)
+from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM, VEHICLE_STATE_DIM
 
 SelfEvidentialPPO = TypeVar("SelfEvidentialPPO", bound="EvidentialPPO")
 
@@ -210,6 +214,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         action_space: spaces.Space,
         lr_schedule: Schedule,
         lambda_reg: float = 0.01,
+        use_uncertainty_conditioning: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -218,8 +223,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param action_space: Action space.
         @param lr_schedule: Learning rate schedule.
         @param lambda_reg: Evidential regularisation weight.
+        @param use_uncertainty_conditioning: If True, replace the flat MLP actor
+               with UncertaintyConditionedActor (dual-encoder). The observation
+               is split into vehicle state (indices 0-5) and covariance features
+               (indices 6-14) and processed through separate encoder branches
+               before fusion. Requires include_covariance=True in the env config.
         """
         self.lambda_reg = lambda_reg
+        self.use_uncertainty_conditioning = use_uncertainty_conditioning
         # Evidential distribution is incompatible with SDE
         kwargs["use_sde"] = False
         # Cache for NIG params set during evaluate_actions()
@@ -242,27 +253,42 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         used in EvidentialPolicyNetwork for RL training stability (Dohare et al. 2024).
         """
         super()._build_mlp_extractor()
-        self.mlp_extractor.policy_net = _insert_layernorm(
-            self.mlp_extractor.policy_net
-        )
-        self.mlp_extractor.value_net = _insert_layernorm(
-            self.mlp_extractor.value_net
-        )
+        self.mlp_extractor.policy_net = _insert_layernorm(self.mlp_extractor.policy_net)
+        self.mlp_extractor.value_net = _insert_layernorm(self.mlp_extractor.value_net)
 
     def _build(self, lr_schedule: Schedule) -> None:
         """
         @brief Build networks with evidential actor head and standard critic.
+
+        When use_uncertainty_conditioning=True, wires UncertaintyConditionedActor
+        as the action network. The MLP extractor's policy_net is bypassed; the
+        dual-encoder receives the raw observation split into vehicle state and
+        covariance features. When False, uses the standard flat MLP + EvidentialLayer.
+
         @param lr_schedule: Learning rate schedule.
         """
         self._build_mlp_extractor()
 
-        latent_dim_pi = self.mlp_extractor.latent_dim_pi
+        action_dim = get_action_dim(self.action_space)
+        self.action_dist = EvidentialDistribution(action_dim)
 
-        # Evidential distribution and action network
-        self.action_dist = EvidentialDistribution(get_action_dim(self.action_space))
-        self.action_net = self.action_dist.proba_distribution_net(
-            latent_dim=latent_dim_pi
-        )
+        if self.use_uncertainty_conditioning:
+            # Dual-encoder actor: separate pathways for state and covariance.
+            # net_arch hidden dims are taken from the MLP extractor latent dim as
+            # a proxy for the configured hidden size.
+            hidden_dim = self.mlp_extractor.latent_dim_pi
+            self.action_net: nn.Module = UncertaintyConditionedActor(
+                state_dim=VEHICLE_STATE_DIM,
+                uncertainty_dim=COVARIANCE_FEATURES_DIM,
+                action_dim=action_dim,
+                hidden_dims=[hidden_dim, hidden_dim],
+            )
+        else:
+            # Flat MLP actor: EvidentialLayer on top of MLP extractor latent.
+            latent_dim_pi = self.mlp_extractor.latent_dim_pi
+            self.action_net = self.action_dist.proba_distribution_net(
+                latent_dim=latent_dim_pi
+            )
 
         # Standard value head (critic unchanged)
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
@@ -286,26 +312,63 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             # Re-apply NIG hyperprior biases: ortho_init zeroes all biases,
             # overwriting the values set in EvidentialLayer.__init__.
             # Must come AFTER the init_weights loop above.
+            # For dual-encoder, the EvidentialLayer lives inside action_net.
             with th.no_grad():
-                n = get_action_dim(self.action_space)
-                self.action_net.linear.bias[0 * n : 1 * n].fill_(0.0)
-                self.action_net.linear.bias[1 * n : 2 * n].fill_(0.9)
-                self.action_net.linear.bias[2 * n : 3 * n].fill_(0.9)
-                self.action_net.linear.bias[3 * n : 4 * n].fill_(0.0)
+                n = action_dim
+                if self.use_uncertainty_conditioning:
+                    evid = cast(UncertaintyConditionedActor, self.action_net)
+                    evid.evidential_layer.linear.bias[0 * n : 1 * n].fill_(0.0)
+                    evid.evidential_layer.linear.bias[1 * n : 2 * n].fill_(0.9)
+                    evid.evidential_layer.linear.bias[2 * n : 3 * n].fill_(0.9)
+                    evid.evidential_layer.linear.bias[3 * n : 4 * n].fill_(0.0)
+                else:
+                    flat = cast(EvidentialLayer, self.action_net)
+                    flat.linear.bias[0 * n : 1 * n].fill_(0.0)
+                    flat.linear.bias[1 * n : 2 * n].fill_(0.9)
+                    flat.linear.bias[2 * n : 3 * n].fill_(0.9)
+                    flat.linear.bias[3 * n : 4 * n].fill_(0.0)
 
         # Set up optimiser
         optimizer_kwargs = dict(lr=cast(float, lr_schedule(1)), **self.optimizer_kwargs)
         self.optimizer = self.optimizer_class(self.parameters(), **optimizer_kwargs)
 
+    def _get_nig_from_obs(
+        self, obs: th.Tensor
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+        """
+        @brief Run the dual-encoder actor on raw observations.
+
+        Splits the observation into vehicle state (indices 0 to VEHICLE_STATE_DIM-1)
+        and covariance features (indices VEHICLE_STATE_DIM to
+        VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM-1) and passes them through
+        the UncertaintyConditionedActor.
+
+        @param obs: Observation tensor of shape (batch, obs_dim).
+        @return Tuple (gamma, nu, alpha, beta) of NIG parameters.
+        @warning Only valid when use_uncertainty_conditioning=True.
+        """
+        state = obs[:, :VEHICLE_STATE_DIM]
+        uncertainty = obs[
+            :, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM
+        ]
+        dual = cast(UncertaintyConditionedActor, self.action_net)
+        result = dual(state, uncertainty)
+        return cast(Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor], result)
+
     def _get_action_dist_from_latent(
         self, latent_pi: th.Tensor
     ) -> EvidentialDistribution:
         """
-        @brief Get evidential distribution from latent actor features.
+        @brief Get evidential distribution from latent actor features (flat MLP path).
+
+        Only called when use_uncertainty_conditioning=False. For the dual-encoder
+        path, _get_nig_from_obs() is used directly.
+
         @param latent_pi: Latent features from the actor MLP.
         @return Evidential distribution with NIG parameters set.
         """
-        gamma, nu, alpha, beta = self.action_net(latent_pi)
+        flat = cast(EvidentialLayer, self.action_net)
+        gamma, nu, alpha, beta = flat(latent_pi)
         return cast(
             EvidentialDistribution,
             self.action_dist.proba_distribution(gamma, nu, alpha, beta),
@@ -316,6 +379,12 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     ) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
         """
         @brief Evaluate actions and cache NIG params for evidential loss.
+
+        For the dual-encoder path (use_uncertainty_conditioning=True), the
+        UncertaintyConditionedActor receives the raw observation split into
+        vehicle state and covariance features, bypassing the MLP extractor's
+        policy_net. The critic path is unchanged regardless of mode.
+
         @param obs: Observations.
         @param actions: Actions to evaluate.
         @return Tuple of (values, log_prob, entropy).
@@ -328,7 +397,18 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
 
-        distribution = self._get_action_dist_from_latent(latent_pi)
+        if self.use_uncertainty_conditioning:
+            # Dual-encoder: raw obs -> split -> UncertaintyConditionedActor.
+            # latent_pi is not used for the actor in this mode.
+            raw_obs = cast(th.Tensor, obs)
+            gamma, nu, alpha, beta = self._get_nig_from_obs(raw_obs)
+            distribution = cast(
+                EvidentialDistribution,
+                self.action_dist.proba_distribution(gamma, nu, alpha, beta),
+            )
+        else:
+            distribution = self._get_action_dist_from_latent(latent_pi)
+
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
@@ -356,14 +436,17 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         """
         self.set_training_mode(False)
         with th.no_grad():
-            features = self.extract_features(obs)
-            if self.share_features_extractor:
-                latent_pi, _ = self.mlp_extractor(features)
+            if self.use_uncertainty_conditioning:
+                gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
             else:
-                pi_features, _ = features
-                latent_pi = self.mlp_extractor.forward_actor(pi_features)
-
-            gamma, nu, alpha, beta = self.action_net(latent_pi)
+                features = self.extract_features(obs)
+                if self.share_features_extractor:
+                    latent_pi, _ = self.mlp_extractor(features)
+                else:
+                    pi_features, _ = features
+                    latent_pi = self.mlp_extractor.forward_actor(pi_features)
+                flat = cast(EvidentialLayer, self.action_net)
+                gamma, nu, alpha, beta = flat(latent_pi)
 
             epistemic = beta / (alpha - 1)
             aleatoric = beta / (nu * (alpha - 1))
@@ -388,11 +471,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         """
-        @brief Include lambda_reg in saved constructor parameters.
+        @brief Include lambda_reg and use_uncertainty_conditioning in saved parameters.
         @return Dictionary of constructor parameters for save/load.
         """
-        data = super()._get_constructor_parameters()
+        data: Dict[str, Any] = cast(
+            Dict[str, Any], super()._get_constructor_parameters()
+        )
         data["lambda_reg"] = self.lambda_reg
+        data["use_uncertainty_conditioning"] = self.use_uncertainty_conditioning
         return data
 
 
@@ -423,8 +509,8 @@ class EvidentialPPO(PPO):
         @param policy: Policy class or string.
         @param env: Environment.
         @param lambda_reg: Evidential regularisation weight (target value after warmup).
-        @param lambda_reg_warmup_steps: Number of environment steps over which lambda_reg
-               is linearly annealed from 0 to lambda_reg. Allows the NLL loss to
+        @param lambda_reg_warmup_steps: Number of environment steps over which
+               lambda_reg is linearly annealed from 0 to lambda_reg. Allows the NLL to
                establish good predictions before the regularisation term fires.
         """
         self.lambda_reg = lambda_reg

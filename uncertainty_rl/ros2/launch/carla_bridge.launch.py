@@ -7,12 +7,33 @@ Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (publishes noisy sensor data from CARLA to ROS 2 topics)
 2. pointcloud_to_laserscan (converts 360 deg PointCloud2 to LaserScan)
 3. laser_filter_node (clips rear 90 deg to simulate 270 deg SICK TiM 5xx FOV)
-4. Cartographer (2D SLAM scan-matching; publishes /scan_matched_odometry)
+4. Cartographer (scan-matching; publishes /scan_matched_odometry)
 5. robot_localisation EKF node (fuses IMU + scan-matched odometry,
    outputs /odometry/filtered with covariance driven by scan quality)
 6. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity,
    publishes CovarianceEstimate to /ekf_uncertainty/covariance for the training
    container to consume)
+
+Cartographer is controlled by two environment variables:
+
+  CARTOGRAPHER_MODE (default: slam)
+    - slam: builds map in real time (standard training default)
+    - loc:  pure localisation against a frozen .pbstream file (training mode
+            after one-time SLAM mapping sessions via make docker-mapping-drive)
+
+  CARTOGRAPHER_MAP (default: empty, required when CARTOGRAPHER_MODE=loc)
+    - Path to the .pbstream file inside the container, e.g.
+      /workspace/configs/maps/rectangle/rectangle.pbstream
+
+Workflow:
+  # One-time per floor plan:
+  make docker-up
+  make docker-mapping-drive LAYOUT=rectangle  (drive patrol loop in SLAM mode)
+  make docker-save-map LAYOUT=rectangle       (serialise .pbstream)
+  make docker-down
+
+  # All training runs:
+  make docker-train-loc LAYOUT=rectangle      (sets CARTOGRAPHER_MODE=loc automatically)
 
 LiDAR pipeline (Suite A -- default):
   /carla/ego_vehicle/lidar (PointCloud2, 360 deg, 1 channel)
@@ -33,9 +54,10 @@ Suite C RGB camera:
   The camera listener is a no-op; this launch file does not subscribe to it.
   @todo(AG) Pending supervisor decision on Suite C utility.
 
-Cartographer config: configs/cartographer/cartographer_config.lua (Suite A) or
-configs/cartographer/cartographer_config_3d.lua (Suite B/C). Selected automatically
-from the SENSOR_SUITE environment variable (default: suite_a).
+Cartographer config selected by SENSOR_SUITE and CARTOGRAPHER_MODE:
+  slam + suite_a   -> cartographer_config.lua
+  slam + suite_b/c -> cartographer_config_3d.lua
+  loc  (any suite) -> cartographer_config_loc.lua
 
 EKF and covariance extractor parameters are loaded from configs/ros2_config.yaml
 (path configurable via ROS2_CONFIG_PATH environment variable) per Henki ROS 2
@@ -232,29 +254,55 @@ def generate_launch_description() -> LaunchDescription:
     # CARTOGRAPHER_CONFIG_PATH env var (full path to the .lua file).
 
     sensor_suite = os.environ.get("SENSOR_SUITE", "suite_a")
+    cartographer_mode = os.environ.get("CARTOGRAPHER_MODE", "slam")
+    cartographer_map = os.environ.get("CARTOGRAPHER_MAP", "")
     configs_dir = "/workspace/configs/cartographer"
 
-    if sensor_suite in ("suite_b", "suite_c"):
+    # Select Cartographer config based on mode and sensor suite
+    if cartographer_mode == "loc":
+        # Pure localisation: uses a frozen .pbstream regardless of sensor suite
+        cartographer_basename = "cartographer_config_loc.lua"
+    elif sensor_suite in ("suite_b", "suite_c"):
         cartographer_basename = "cartographer_config_3d.lua"
+    else:
+        # Suite A default: filtered 270 deg LaserScan
+        cartographer_basename = "cartographer_config.lua"
+
+    # Scan topic remapping is always suite-dependent
+    if sensor_suite in ("suite_b", "suite_c"):
         # Suite B/C: 3D LiDAR publishes PointCloud2 directly (no LaserScan filter)
         cartographer_scan_topic = "/carla/ego_vehicle/lidar_3d"
         cartographer_scan_remap = ("points2", cartographer_scan_topic)
     else:
-        # Suite A default: filtered 270 deg LaserScan
-        cartographer_basename = "cartographer_config.lua"
         cartographer_scan_topic = "/lidar/scan"
         cartographer_scan_remap = ("scan", cartographer_scan_topic)
+
+    # Build Cartographer arguments; add --load_state_filename in loc mode
+    carto_args = [
+        "-configuration_directory",
+        configs_dir,
+        "-configuration_basename",
+        cartographer_basename,
+    ]
+    if cartographer_mode == "loc":
+        if not cartographer_map:
+            raise RuntimeError(
+                "CARTOGRAPHER_MODE=loc requires CARTOGRAPHER_MAP env var "
+                "pointing to a .pbstream file. "
+                "Run `make docker-mapping-drive` + `make docker-save-map` first."
+            )
+        carto_args += [
+            "-load_state_filename",
+            cartographer_map,
+            "-load_frozen_state",
+            "true",
+        ]
 
     cartographer_node = Node(
         package="cartographer_ros",
         executable="cartographer_node",
         name="cartographer_node",
-        arguments=[
-            "-configuration_directory",
-            configs_dir,
-            "-configuration_basename",
-            cartographer_basename,
-        ],
+        arguments=carto_args,
         remappings=[
             cartographer_scan_remap,
             # Publish the scan-matched pose as odometry for the EKF odom0 input
@@ -262,6 +310,8 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
+    # The occupancy grid node is only useful in SLAM mode (live map visualisation).
+    # In pure localisation mode it conflicts with the frozen pose graph (issue #1582).
     cartographer_occupancy_grid = Node(
         package="cartographer_ros",
         executable="cartographer_occupancy_grid_node",
@@ -300,9 +350,13 @@ def generate_launch_description() -> LaunchDescription:
         pc2_to_scan,
         lidar_filter,
         cartographer_node,
-        cartographer_occupancy_grid,
         covariance_extractor,
     ]
+
+    # Occupancy grid node is only launched in SLAM mode; in pure localisation mode it
+    # conflicts with the frozen pose graph (Cartographer issue #1582).
+    if cartographer_mode == "slam":
+        launch_actions.append(cartographer_occupancy_grid)
 
     # Only include CARLA bridge if the package was found
     if carla_bridge is not None:
