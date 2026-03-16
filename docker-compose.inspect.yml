@@ -1,0 +1,262 @@
+
+# @file docker-compose.inspect.yml
+# @brief Docker Compose overlay for visual inspection and demo services.
+#
+# Extends the core stack (docker-compose.yml) with windowed CARLA services for
+# layout inspection, sensor FOV visualisation, live sensor feeds, and checkpoint
+# demos. All services in this file require X11 forwarding on the host.
+#
+# The core network and volumes are declared as external so this file can be
+# brought up independently alongside the core stack.
+#
+# Usage (via Make targets - do not invoke docker compose directly):
+#   make docker-inspect          # layout inspection
+#   make docker-inspect-sensors  # sensor FOV overlay
+#   make docker-inspect-live     # live sensor feed
+#   make docker-demo             # checkpoint evaluation demo
+#
+# @author Antonio Galdes
+
+services:
+  # CARLA demo server - windowed (no -RenderOffScreen), separate port range.
+  # Requires X11 forwarding on host (DISPLAY env var must be set).
+  carla-server-demo:
+    image: carlasim/carla:0.9.16
+    container_name: uncertainty-rl-carla-demo
+    runtime: nvidia
+    profiles:
+      - demo
+      - inspect
+      - inspect-sensors
+      - inspect-live
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - DISPLAY=${DISPLAY}
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+    # Windowed mode: -RenderOffScreen is intentionally omitted so CARLA renders
+    # to the host X11 display.
+    command: >
+      /bin/bash -c "mkdir -p /tmp/runtime-root && chmod 700 /tmp/runtime-root
+      && /bin/bash CarlaUE4.sh -windowed -world-port=2100 -resx=800 -resy=600 -quality-level=Low"
+    ports:
+      - "2100-2102:2100-2102"
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/2100' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Demo evaluation container - loads checkpoint and runs evaluation against
+  # the windowed CARLA server.
+  # Start with: make docker-demo MODEL=checkpoints/final_model
+  training-demo:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-demo
+    runtime: nvidia
+    profiles:
+      - demo
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - PYTHONUNBUFFERED=1
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./logs:/workspace/logs:rw
+      - ./checkpoints:/workspace/checkpoints:rw
+      - ./tests:/workspace/tests:ro
+    working_dir: /workspace
+    command: >
+      python uncertainty_rl/evaluation/evaluate.py
+      --model-path ${MODEL:-checkpoints/final_model}
+      --eval-config configs/eval_config.yaml
+      --train-config configs/train_config.yaml
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Layout inspector - spawns a parking lot layout in windowed CARLA for visual
+  # inspection (no training or sensors). Uses lot_inspector.py in layout mode.
+  # Usage: make docker-inspect INSPECT_LAYOUT=trapezoid
+  training-inspect:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect
+    runtime: nvidia
+    profiles:
+      - inspect
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect/lot_inspector.py
+      --mode layout
+      --layout ${LAYOUT:-trapezoid}
+      --host carla-server-demo
+      --port 2100
+      --duration 300
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Sensor inspector - draws sensor mount and FOV overlays on the parking lot.
+  # Uses lot_inspector.py in sensors mode.
+  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle]
+  #        [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
+  training-inspect-sensors:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-sensors
+    runtime: nvidia
+    profiles:
+      - inspect-sensors
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect/lot_inspector.py
+      --mode sensors
+      --suite ${SUITE:-suite_a}
+      --layout ${LAYOUT:-rectangle}
+      --view ${VIEW:-birds_eye}
+      --zoom ${ZOOM:-close}
+      --host carla-server-demo
+      --port 2100
+      --duration 300
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Live sensor inspector - spawns real CARLA sensors on the ego vehicle and
+  # streams their output live: LiDAR hit points as red debug dots (suite_a/b),
+  # or CARLA spectator locked to the camera mount (suite_c default).
+  # Usage: make docker-inspect-live [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle]
+  #        [INSPECT_SENSOR=lidar|camera]
+  training-inspect-live:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-live
+    runtime: nvidia
+    profiles:
+      - inspect-live
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - DISPLAY=${DISPLAY}
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect/lot_inspector.py
+      --mode live
+      --suite ${SUITE:-suite_a}
+      --layout ${LAYOUT:-rectangle}
+      --sensor ${SENSOR:-lidar}
+      --host carla-server-demo
+      --port 2100
+      --duration 300
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+networks:
+  # Declared with the same driver and name as docker-compose.yml so Compose
+  # attaches to the existing network when the core stack is running, or creates
+  # it fresh when the inspect stack is used standalone.
+  uncertainty-rl-network:
+    driver: bridge
+    name: uncertainty-rl-network
+
+volumes:
+  logs:
+  checkpoints:

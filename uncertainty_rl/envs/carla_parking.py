@@ -163,7 +163,6 @@ class CARLAParkingEnv(gym.Env):
         render_mode: Optional[str] = None,
         ros2_config: Optional[Dict[str, Any]] = None,
         carla_sensors_config: Optional[Dict[str, Any]] = None,
-        carla_conditions_config: Optional[Dict[str, Any]] = None,
         parking_scenarios_config: Optional[Dict[str, Any]] = None,
         include_covariance: bool = True,
         include_obstacle_obs: bool = True,
@@ -180,7 +179,6 @@ class CARLAParkingEnv(gym.Env):
         @param render_mode: Rendering mode ('human', 'rgb_array', or None).
         @param ros2_config: ROS 2 settings (covariance_topic, covariance_timeout).
         @param carla_sensors_config: Sensor noise parameters (imu, lidar subsections).
-        @param carla_conditions_config: Weather and environmental settings.
         @param parking_scenarios_config: Parking lot configuration (floor_plans,
                cone spacing, bay occupancy, NPC counts).
         @param include_covariance: If True, obs includes EKF covariance features
@@ -209,17 +207,22 @@ class CARLAParkingEnv(gym.Env):
         self._eval_mode = eval_mode
 
         ros2_config = ros2_config or {}
+        self._ros2_config: Dict[str, Any] = ros2_config
         self._covariance_topic = ros2_config.get(
             "covariance_topic", "/ekf_uncertainty/covariance"
         )
         self._covariance_timeout = ros2_config.get("covariance_timeout", 10.0)
 
         self._sensors_config = carla_sensors_config or {}
-        self._conditions_config = carla_conditions_config or {}
 
         scenarios = parking_scenarios_config or {}
+        # Cones define the static perimeter map for Cartographer pure localisation.
+        # Must be true for the one-time SLAM mapping run (make docker-mapping-drive)
+        # and all training runs. Only false for SLAM-on-the-fly mode (no cones).
+        self._spawn_perimeter_cones_flag: bool = scenarios.get(
+            "spawn_perimeter_cones", False
+        )
         self._cone_spacing: float = scenarios.get("perimeter_cone_spacing", 2.0)
-        self._entrance_half_width: float = scenarios.get("entrance_half_width", 4.0)
         # Bay occupancy is re-sampled uniformly each episode between min and max.
         # For evaluation, set both to the same value to fix occupancy.
         self._bay_occupancy_min: float = scenarios.get("bay_occupancy_min", 0.3)
@@ -231,7 +234,7 @@ class CARLAParkingEnv(gym.Env):
             "patrol_obstacle_stop_distance", 5.0
         )
         self._patrol_pedestrian_distance: float = scenarios.get(
-            "patrol_pedestrian_stop_distance", 1.5
+            "patrol_pedestrian_stop_distance", 4.0
         )
         self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
         self._patrol_heading_gain: float = scenarios.get("patrol_heading_gain", 0.8)
@@ -267,7 +270,7 @@ class CARLAParkingEnv(gym.Env):
         self._lidar_scan_lock = threading.Lock()
 
         # The spawn transform chosen for this episode (set in _spawn_vehicle()).
-        # Used by _spawn_perimeter_cones() to cut the correct entrance gap.
+        # Used for /initialpose publishing to seed the EKF on reset.
         self._chosen_spawn: Dict[str, float] = {}
 
         # Collision detection -- set by the collision sensor callback each step.
@@ -407,6 +410,7 @@ class CARLAParkingEnv(gym.Env):
         self._cov_subscriber = _CovarianceSubscriber(
             covariance_topic=self._covariance_topic,
             node_name=node_name,
+            ros2_config=self._ros2_config,
         )
 
         threading.Thread(
@@ -559,23 +563,9 @@ class CARLAParkingEnv(gym.Env):
         corners: List[Tuple[float, float]] = [
             (float(c["x"]), float(c["y"])) for c in corners_raw
         ]
-        spawn_raw = self._current_layout.get("spawn_transform", {})
-        # Only open a gap at the spawn chosen this episode - other entry points
-        # stay walled off so the lot looks realistic from inside.
-        chosen = self._chosen_spawn if self._chosen_spawn else spawn_raw
-        entrance: Optional[Tuple[float, float]] = (
-            (
-                float(chosen["x"]),
-                float(chosen["y"]),
-            )
-            if chosen
-            else None
-        )
         cone_positions = _interpolate_cone_positions(
             corners,
             self._cone_spacing,
-            entrance_point=entrance,
-            entrance_half_width=self._entrance_half_width,
         )
 
         bp_lib = self.world.get_blueprint_library()
@@ -798,6 +788,11 @@ class CARLAParkingEnv(gym.Env):
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
+        # Drop a closing duplicate (e.g. rectangle layout repeats waypoint 0 at the end)
+        # so the cyclic modulo wrap works correctly and first_target_idx is never the
+        # same location as start_idx.
+        if len(waypoints) > 1 and waypoints[-1] == waypoints[0]:
+            waypoints = waypoints[:-1]
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
 
         # Build a list of candidate start indices that are safely away from the ego
@@ -934,6 +929,9 @@ class CARLAParkingEnv(gym.Env):
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
+        # Mirror the deduplication in _spawn_npc_patrol so indices stay consistent.
+        if len(waypoints) > 1 and waypoints[-1] == waypoints[0]:
+            waypoints = waypoints[:-1]
         k_p = self._patrol_heading_gain
 
         # Use cached actor list; rebuilt once after spawn, avoids per-step world query
@@ -985,7 +983,7 @@ class CARLAParkingEnv(gym.Env):
                 ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
                 # Add ~2.5 m for vehicle half-lengths so the stop distance is a
                 # bumper-to-bumper gap, not a centre-to-centre distance.
-                if ego_dist < self._patrol_obstacle_distance + 2.5:
+                if ego_dist < self._patrol_obstacle_distance + 1.0:
                     blocked = True
 
             for other in all_vehicles:
@@ -1010,14 +1008,21 @@ class CARLAParkingEnv(gym.Env):
                     break
 
             if not blocked:
-                # Brake if any pedestrian is within the stop radius (all directions)
+                # Brake if a pedestrian is in the forward cone (same lateral
+                # width check as the vehicle obstacle logic above).
                 for walker in self._pedestrian_actors:
                     if walker is None or not walker.is_alive:
                         continue
                     to_x = walker.get_location().x - t.location.x
                     to_y = walker.get_location().y - t.location.y
+                    fwd_proj = to_x * fwd_x + to_y * fwd_y
+                    lat = abs(to_x * fwd_y - to_y * fwd_x)
                     walker_dist = math.sqrt(to_x * to_x + to_y * to_y)
-                    if walker_dist < self._patrol_pedestrian_distance:
+                    if (
+                        fwd_proj > 0.0
+                        and walker_dist < self._patrol_pedestrian_distance
+                        and lat < 2.0
+                    ):
                         blocked = True
                         break
 
@@ -1027,7 +1032,7 @@ class CARLAParkingEnv(gym.Env):
 
             control = carla.VehicleControl()
             control.steer = steer
-            control.throttle = 0.0 if (blocked or over_limit) else 0.3
+            control.throttle = 0.0 if (blocked or over_limit) else 0.6
             control.brake = 1.0 if blocked else (0.3 if over_limit else 0.0)
             npc.apply_control(control)
 
@@ -1083,11 +1088,11 @@ class CARLAParkingEnv(gym.Env):
                and handle zone boundaries, lifetime expiry, and ego avoidance.
 
         Priority order for heading selection each step:
-          1. Ego proximity: if the ego vehicle is within _EGO_AVOID_RADIUS metres,
-             steer directly away from it and stop walking (speed=0). This prevents
-             the pedestrian walking into a stationary or slow ego and producing a
-             spurious collision event. If the ego drives into the pedestrian at speed
-             the impulse threshold in _on_collision() still catches it correctly.
+          1. Ego/patrol avoidance: accumulate repulsion vectors from the ego
+             (within _EGO_AVOID_RADIUS) and any patrol NPC (within
+             _PATROL_AVOID_RADIUS). Walk away at normal speed in the combined
+             direction. When both are close the vectors are summed so the
+             pedestrian flees both simultaneously.
           2. Zone boundary: steer toward zone centre when within _BOUNDARY_MARGIN
              of any edge, to avoid the oscillation produced by velocity reflection.
           3. Periodic re-randomisation: new random direction every
@@ -1123,24 +1128,44 @@ class CARLAParkingEnv(gym.Env):
             loc = walker.get_location()
             zone = self._pedestrian_zones[i]
 
-            # --- Priority 1: ego avoidance -----------------------------------
-            # If ego is close, stop and face away so the pedestrian never walks
-            # into the ego. Collision sensor impulse threshold still catches any
-            # genuine ego-at-fault impact.
+            # --- Priority 1: ego + patrol avoidance --------------------------
+            # Accumulate repulsion vectors from ego and any close patrol NPC.
+            # The pedestrian walks away from all threats at normal speed.
+            # If the ego drives into the pedestrian at speed the impulse
+            # threshold in _on_collision() still catches it correctly.
+            _PATROL_AVOID_RADIUS = 4.0
+            repulse_x = 0.0
+            repulse_y = 0.0
+
             if ego_loc is not None:
                 to_ego_x = ego_loc.x - loc.x
                 to_ego_y = ego_loc.y - loc.y
                 ego_dist = math.sqrt(to_ego_x * to_ego_x + to_ego_y * to_ego_y)
                 if ego_dist < _EGO_AVOID_RADIUS:
-                    # Face away from ego (negate direction vector)
                     away_mag = ego_dist if ego_dist > 1e-6 else 1.0
-                    away_x = -to_ego_x / away_mag
-                    away_y = -to_ego_y / away_mag
-                    control = carla.WalkerControl()
-                    control.direction = carla.Vector3D(x=away_x, y=away_y, z=0.0)
-                    control.speed = 0.0  # stand still -- do not walk into the space
-                    walker.apply_control(control)
+                    repulse_x += -to_ego_x / away_mag
+                    repulse_y += -to_ego_y / away_mag
+
+            for patrol_npc in self._patrol_npcs:
+                if not (patrol_npc is not None and patrol_npc.is_alive):
                     continue
+                to_px = patrol_npc.get_location().x - loc.x
+                to_py = patrol_npc.get_location().y - loc.y
+                patrol_dist = math.sqrt(to_px * to_px + to_py * to_py)
+                if patrol_dist < _PATROL_AVOID_RADIUS:
+                    away_mag = patrol_dist if patrol_dist > 1e-6 else 1.0
+                    repulse_x += -to_px / away_mag
+                    repulse_y += -to_py / away_mag
+
+            if repulse_x != 0.0 or repulse_y != 0.0:
+                mag = math.sqrt(repulse_x * repulse_x + repulse_y * repulse_y)
+                control = carla.WalkerControl()
+                control.direction = carla.Vector3D(
+                    x=repulse_x / mag, y=repulse_y / mag, z=0.0
+                )
+                control.speed = 1.0
+                walker.apply_control(control)
+                continue
 
             # --- Priority 2: zone boundary -----------------------------------
             near_boundary = (
@@ -1274,7 +1299,8 @@ class CARLAParkingEnv(gym.Env):
                      Read from _CovarianceSubscriber.get_latest_pose() when the
                      EKF subscriber is available. Falls back to CARLA ground truth
                      when rclpy is unavailable (CI / unit tests).
-        Indices 6-14: EKF covariance features log1p-transformed (only when include_covariance=True).
+        Indices 6-14: EKF covariance features log1p-transformed
+                     (only when include_covariance=True).
         Indices 15-17 (or 6-8 without covariance): relative target bay pose.
         Indices 18-20 (or 9-11 without covariance): obstacle awareness dims
                      (only when include_obstacle_obs=True).
@@ -1359,8 +1385,8 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[3] = vx
         self._obs_buffer[4] = vy
         self._obs_buffer[5] = vyaw
-        # log1p compresses heavy tails from high-uncertainty conditions (rain, sensor noise)
-        # that would otherwise distort VecNormalize running statistics.
+        # log1p compresses heavy tails from high-uncertainty conditions (rain, sensor
+        # noise) that would otherwise distort VecNormalize running statistics.
         self._obs_buffer[6:15] = np.log1p(uncertainty)
         self._obs_buffer[15] = dx
         self._obs_buffer[16] = dy
@@ -1558,45 +1584,13 @@ class CARLAParkingEnv(gym.Env):
             except Exception:
                 pass  # Layer may not exist for all maps
 
-    def _configure_weather(self) -> None:
-        """
-        @brief Randomise weather for the current episode.
-        """
-        if self.world is None:
-            return
-
-        presets = self._conditions_config.get("weather_presets", ["ClearNoon"])
-        preset_name = random.choice(presets)
-
-        preset = getattr(carla.WeatherParameters, preset_name, None)
-        if preset is None:
-            logger.warning(f"Unknown weather preset '{preset_name}', using ClearNoon.")
-            preset = carla.WeatherParameters.ClearNoon
-
-        # CARLA 0.9.16 built-in Noon presets have a sun_altitude_angle that
-        # renders as pre-dawn on the FlatPlane map.  Override to 45 deg so the
-        # scene looks like daytime.  LiDAR and IMU are unaffected by sun angle.
-        _SUN_ALTITUDE_OVERRIDE = {
-            "ClearNoon": 45.0,
-            "HardRainNoon": 45.0,
-        }
-        sun_altitude = _SUN_ALTITUDE_OVERRIDE.get(
-            preset_name, preset.sun_altitude_angle
-        )
-        weather = carla.WeatherParameters(
-            cloudiness=preset.cloudiness,
-            precipitation=preset.precipitation,
-            precipitation_deposits=preset.precipitation_deposits,
-            wind_intensity=preset.wind_intensity,
-            sun_azimuth_angle=preset.sun_azimuth_angle,
-            sun_altitude_angle=sun_altitude,
-            fog_density=preset.fog_density,
-            fog_distance=preset.fog_distance,
-            wetness=preset.wetness,
-        )
-
+        # Pin sun directly overhead so the scene is well-lit on the FlatPlane
+        # procedural world (which has no sky sphere and ignores preset sun angles).
+        weather = self.world.get_weather()
+        weather.sun_altitude_angle = 90.0
+        weather.sun_azimuth_angle = 0.0
+        weather.cloudiness = 0.0
         self.world.set_weather(weather)
-        logger.info(f"Weather: {preset_name}")
 
     def _spawn_vehicle(self) -> None:
         """
@@ -2022,7 +2016,7 @@ class CARLAParkingEnv(gym.Env):
         @return Tuple of (initial_observation, info_dict).
 
         Each reset: cleans up previous episode, selects floor plan, samples target
-        bay, spawns cones/static vehicles/patrol NPCs/pedestrians, randomises weather.
+        bay, spawns cones/static vehicles/patrol NPCs/pedestrians.
         """
         super().reset(seed=seed)
 
@@ -2043,7 +2037,6 @@ class CARLAParkingEnv(gym.Env):
             self._load_floor_plan()
             self._sample_target_bay()
 
-        self._configure_weather()
         self._unload_unnecessary_layers()
 
         # Cache blueprint lists once before any spawning to avoid repeated
@@ -2052,7 +2045,21 @@ class CARLAParkingEnv(gym.Env):
 
         self._spawn_vehicle()
         self._spawn_sensors()
-        self._spawn_perimeter_cones()
+
+        # Publish spawn pose to /initialpose so Cartographer pure localisation
+        # can converge quickly at the start of each episode. Safe no-op in SLAM mode.
+        if (
+            self._include_covariance
+            and self._cov_subscriber is not None
+            and self._ros2_config.get("publish_initial_pose", False)
+        ):
+            sx = float(self._chosen_spawn.get("x", 0.0))
+            sy = float(self._chosen_spawn.get("y", 0.0))
+            syaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
+            self._cov_subscriber.publish_initial_pose(sx, sy, syaw)
+
+        if self._spawn_perimeter_cones_flag:
+            self._spawn_perimeter_cones()
         self._spawn_obstacle_cones()
         # Resample bay occupancy uniformly each episode so the agent experiences
         # varying LiDAR anchor density across training.

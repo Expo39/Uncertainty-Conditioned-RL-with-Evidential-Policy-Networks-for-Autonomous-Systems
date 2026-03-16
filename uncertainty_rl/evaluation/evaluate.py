@@ -3,7 +3,7 @@
 @brief Evaluation script for trained agents across physical conditions.
 
 This module provides comprehensive evaluation of trained agents under varying
-physical conditions (weather, sensor noise, traffic) that produce different
+physical conditions (sensor noise, traffic density) that produce different
 EKF uncertainty levels. Replaces the previous noise-level sweep with a
 condition-based sweep driven by eval_config.yaml.
 """
@@ -120,7 +120,7 @@ def make_eval_env(
 ) -> DummyVecEnv:
     """
     @brief Create evaluation environment for a specific physical condition.
-    @param condition: Condition dict with weather, noise multipliers, traffic.
+    @param condition: Condition dict with noise multipliers and traffic counts.
     @param config: Evaluation configuration dictionary.
     @param base_sensors: Base sensor noise config from training.
     @param train_config: Full training config for parking_scenarios and obs flags.
@@ -132,20 +132,26 @@ def make_eval_env(
         imu_multiplier=condition.get("imu_noise_multiplier", 1.0),
     )
 
-    # Build fixed weather conditions config (not randomised, unlike training)
-    conditions_config = {
-        "weather_presets": [condition.get("weather_preset", "ClearNoon")],
-    }
-
     # Build parking_scenarios_config: NPC counts and lot layout from condition
     # overrides + training defaults. eval_config.yaml uses num_patrol_vehicles
     # (not num_vehicles) to match CARLAParkingEnv's parking_scenarios_config keys.
     base_scenarios: Dict[str, Any] = {}
     if train_config is not None:
         base_scenarios = dict(train_config.get("parking_scenarios", {}))
+    # Perimeter cone flag: per-condition > eval_config global > train_config default.
+    spawn_cones_eval_global: bool = bool(config.get("spawn_perimeter_cones", False))
+    spawn_cones: bool = bool(
+        condition.get(
+            "spawn_perimeter_cones",
+            base_scenarios.get("spawn_perimeter_cones", spawn_cones_eval_global),
+        )
+    )
     parking_config: Dict[str, Any] = {
+        "spawn_perimeter_cones": spawn_cones,
         "num_patrol_vehicles_max": condition.get("num_patrol_vehicles", 0),
-        "pedestrian_spawn_probability": condition.get("pedestrian_spawn_probability", 1.0),
+        "pedestrian_spawn_probability": condition.get(
+            "pedestrian_spawn_probability", 1.0
+        ),
         # In evaluation, occupancy is fixed per condition (min == max).
         # eval_config.yaml uses bay_occupancy_rate (a single value); training uses
         # bay_occupancy_min/max for the per-episode uniform resample range.
@@ -168,7 +174,7 @@ def make_eval_env(
                 floor_plan_name: floor_plans[floor_plan_name]
             }
 
-    # Observation flags from training config (so baseline-specific obs dims are respected)
+    # Observation flags from training config (baseline-specific obs dims respected)
     include_covariance: bool = True
     include_obstacle_obs: bool = True
     sensor_suite: str = "suite_a"
@@ -185,7 +191,6 @@ def make_eval_env(
             max_steps=config.get("max_steps", 500),
             ros2_config=config.get("ros2", {}),
             carla_sensors_config=scaled_sensors,
-            carla_conditions_config=conditions_config,
             parking_scenarios_config=parking_config,
             include_covariance=include_covariance,
             include_obstacle_obs=include_obstacle_obs,
@@ -237,12 +242,13 @@ def evaluate_agent(
 
         while not done_arr[0]:
             if is_evidential:
-                # Use evidential interface to collect uncertainty per step
+                # Evidential interface: collect uncertainty per step
                 obs_tensor = th.as_tensor(obs)
-                action_tensor, uncertainty_dict = (
-                    model.policy.get_action_with_uncertainty(  # type: ignore[union-attr]
-                        obs_tensor, deterministic=deterministic
-                    )
+                get_action = (
+                    model.policy.get_action_with_uncertainty  # type: ignore[union-attr]
+                )
+                action_tensor, uncertainty_dict = get_action(
+                    obs_tensor, deterministic=deterministic
                 )
                 action = action_tensor.cpu().numpy()
                 metrics.epistemic_uncertainties.append(
@@ -357,7 +363,6 @@ def evaluate_across_conditions(
         result = metrics.to_dict()
         result["condition"] = name
         result["description"] = description
-        result["weather_preset"] = condition.get("weather_preset", "")
         result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
         result["num_patrol_vehicles"] = condition.get("num_patrol_vehicles", 0)
         result["pedestrian_spawn_probability"] = condition.get(
