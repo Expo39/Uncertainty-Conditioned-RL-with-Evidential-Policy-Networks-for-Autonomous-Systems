@@ -225,39 +225,40 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
 
-INSPECT_LAYOUT ?= trapezoid
-docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
+INSPECT_LAYOUT  ?= trapezoid
+INSPECT_WEATHER ?= ClearNoon
+docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid] [INSPECT_WEATHER=ClearNoon|CloudyNoon|HardRainNoon|ClearSunset|CloudySunset]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) WEATHER=$(INSPECT_WEATHER) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
 	xhost -local:docker 2>/dev/null || true
 
 INSPECT_SUITE   ?= suite_a
 INSPECT_VIEW    ?= birds_eye
 INSPECT_ZOOM    ?= close
 INSPECT_SENSOR  ?= lidar
-docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
+docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide] [INSPECT_WEATHER=ClearNoon|HardRainNoon|...]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-sensors 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) $(DOCKER_COMPOSE) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
+	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) WEATHER=$(INSPECT_WEATHER) $(DOCKER_COMPOSE) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
 	xhost -local:docker 2>/dev/null || true
 
-docker-inspect-live: ## Live sensor mode in windowed CARLA. suite_c defaults to camera view. Usage: make docker-inspect-live [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_SENSOR=lidar|camera]
+docker-inspect-live: ## Live sensor mode in windowed CARLA. suite_c defaults to camera view. Usage: make docker-inspect-live [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_SENSOR=lidar|camera] [INSPECT_WEATHER=ClearNoon|HardRainNoon|...]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-live 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) SENSOR=$(INSPECT_SENSOR) $(DOCKER_COMPOSE) --profile inspect-live up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-live
+	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) SENSOR=$(INSPECT_SENSOR) WEATHER=$(INSPECT_WEATHER) $(DOCKER_COMPOSE) --profile inspect-live up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-live
 	xhost -local:docker 2>/dev/null || true
 
 

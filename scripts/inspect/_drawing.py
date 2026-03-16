@@ -421,7 +421,7 @@ def _draw_sensor_overlays(
         lid_m = sensors_cfg.get("lidar", {}).get("mount", {})
         lx = float(lid_m.get("x", 2.4))
         ly = float(lid_m.get("y", 0.0))
-        lz = float(lid_m.get("z", 0.3))
+        lz = float(lid_m.get("z", 0.5))
         lidar_loc = _to_world(lx, ly, lz)
         _draw_sensor_dot(
             debug,
@@ -501,7 +501,7 @@ def _draw_sensor_overlays(
         cam_m = sensors_cfg.get("camera_rgb", {}).get("mount", {})
         cx = float(cam_m.get("x", 2.0))
         cy_l = float(cam_m.get("y", 0.0))
-        cz = float(cam_m.get("z", 1.2))
+        cz = float(cam_m.get("z", 1.4))
         cam_loc = _to_world(cx, cy_l, cz)
         _draw_sensor_dot(
             debug,

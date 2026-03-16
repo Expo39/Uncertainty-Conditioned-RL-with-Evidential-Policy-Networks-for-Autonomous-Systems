@@ -85,15 +85,8 @@ carla_sensors:
 # Randomised per episode during training to expose the agent to varied uncertainty
 carla_conditions:
   weather_presets:               # Randomly sampled each episode
-    - "ClearNoon"
-    - "CloudyNoon"
-    - "WetNoon"
-    - "SoftRainNoon"
-    - "HardRainNoon"
-    - "ClearSunset"
-    - "CloudySunset"
-  fog_density_range: [0.0, 50.0]     # Uniform random range per episode (0-100 scale)
-  fog_distance_range: [20.0, 100.0]  # Minimum fog distance (metres)
+    - "ClearNoon"                # Baseline: full LiDAR returns
+    - "HardRainNoon"             # Rain particles attenuate LiDAR returns -> higher EKF covariance
 
 # ---------------------------------------------------------------------------
 # Parking lot scenario configuration
@@ -104,7 +97,7 @@ parking_scenarios:
   perimeter_cone_spacing: 2.0          # Metres between perimeter cones
   entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
   bay_occupancy_rate: 0.60             # Fraction of non-target bays filled
-  num_patrol_vehicles_max: 1           # Max NPC patrol vehicles per episode (min 1 always spawned)
+  num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
   patrol_obstacle_stop_distance: 5.2  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego)
   patrol_pedestrian_stop_distance: 1.5  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Max patrol speed in m/s (~11 km/h, typical car park speed)
@@ -197,7 +190,7 @@ activation: "relu"  # Validated for evidential architectures
 #
 # Covariance features (indices 6-14) are log1p-transformed in _get_state()
 # before VecNormalize sees them. Compresses heavy tails from high-uncertainty
-# conditions (fog, rain). Implemented in carla_parking.py.
+# conditions (rain, sensor noise). Implemented in carla_parking.py.
 #
 # norm_reward=False: potential-based reward components are already on similar
 # scales; auto-normalisation can obscure the success signal.

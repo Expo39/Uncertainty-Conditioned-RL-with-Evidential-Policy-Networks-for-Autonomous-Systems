@@ -59,7 +59,7 @@ def make_env(
         env = CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
             carla_port=config.get("carla_port", 2000) + rank,
-            town=config.get("town", "Town05_Opt"),
+            town=config.get("town", "FlatPlane"),
             max_steps=config.get("max_steps", 500),
             ros2_config=config.get("ros2", {}),
             carla_sensors_config=(

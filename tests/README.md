@@ -6,7 +6,7 @@ pytest test suite mirroring the `uncertainty_rl/` package structure. Two tiers: 
 
 | File | Tests |
 |------|-------|
-| `conftest.py` | Shared fixtures: 18-dim state tensors, 9-dim state tensors, config dicts, uncertainty states |
+| `conftest.py` | Shared fixtures: 21-dim state tensors, 12-dim state tensors, config dicts, uncertainty states |
 | `test_evidential_policy.py` | EvidentialLayer, EvidentialPolicyNetwork, UncertaintyConditionedActor, NIG constraints, loss computation |
 | `test_carla_parking.py` | Env API (reset/step), geometry helpers, bay sampling, VisStateWriter, obs space shapes (24 tests) |
 | `test_covariance_utils.py` | Covariance feature extraction, matrix validation, dimension helper (18 tests) |
@@ -39,8 +39,8 @@ make docker-test               # Full suite (unit + integration)
 
 ## Key Fixture Constants
 
-- `STATE_DIM_FULL = 18` (pose 6 + covariance 9 + target 3)
-- `STATE_DIM_NO_COV = 9` (pose 6 + target 3, when `include_covariance=False`)
+- `STATE_DIM_FULL = 21` (pose 6 + covariance 9 + target 3 + obstacle 3)
+- `STATE_DIM_NO_COV = 12` (pose 6 + target 3 + obstacle 3, when `include_covariance=False`)
 - `ACTION_DIM = 3`
 - `BATCH_SIZE = 8`
 - `HIDDEN_DIMS = [64, 64]`
