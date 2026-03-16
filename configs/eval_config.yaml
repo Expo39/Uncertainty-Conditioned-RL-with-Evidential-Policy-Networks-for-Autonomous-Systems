@@ -1,6 +1,10 @@
 # Evaluation Configuration
 # Configuration for evaluating trained agents across physical conditions
 # that produce varying EKF uncertainty levels.
+#
+# Only ClearNoon and HardRainNoon are used: fog does not render on the
+# generated OpenDRIVE FlatPlane world, so LiDAR-relevant differentiation
+# comes from weather (rain scatter), IMU noise multipliers, and traffic density.
 
 # Model settings
 model_path: "checkpoints/final_model"  # Path to trained model
@@ -22,94 +26,82 @@ deterministic: true  # Use deterministic actions
 render: false  # Render episodes (requires display)
 
 # Evaluation conditions sweep
-# Each condition specifies weather, IMU noise multiplier, fog, and traffic.
+# Each condition specifies weather, IMU noise multiplier, and traffic density.
 # Base IMU noise comes from train_config.yaml carla_sensors.imu.*; multiplier scales it.
 # No GNSS: excluded from Suite A (unreliable in covered parking lots).
-# EKF uncertainty variation comes from LiDAR scan-matching quality + IMU drift.
+# EKF uncertainty variation comes from LiDAR scan-matching quality + IMU drift:
+#   - Fewer parked cars -> sparser LiDAR features -> higher covariance
+#   - Rain (HardRainNoon) -> LiDAR scatter -> degraded scan-match -> higher covariance
+#   - Dynamic actors (patrol, pedestrians) -> occlusions -> transient covariance spikes
+#   - Higher IMU noise multiplier -> noisier prediction step -> higher covariance
 # Ordered from easiest (low uncertainty) to hardest (extreme uncertainty).
 eval_conditions:
   - name: "clear_low_noise"
-    description: "Clear weather, low IMU noise, no traffic -- best-case LiDAR conditions"
+    description: "Clear weather, 0.5x IMU noise, no traffic -- best-case LiDAR conditions"
     weather_preset: "ClearNoon"
-    fog_density: 0.0
     imu_noise_multiplier: 0.5
     num_patrol_vehicles: 0
     num_pedestrians: 0
 
   - name: "clear_nominal"
-    description: "Clear weather, nominal IMU noise, light traffic"
+    description: "Clear weather, 1.0x IMU noise, light traffic -- training distribution"
     weather_preset: "ClearNoon"
-    fog_density: 0.0
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     num_pedestrians: 2
 
-  - name: "cloudy_moderate"
-    description: "Cloudy, moderate IMU noise, moderate traffic -- partial LiDAR occlusion"
-    weather_preset: "CloudyNoon"
-    fog_density: 10.0
+  - name: "clear_sparse_lot"
+    description: "Clear weather, 1.0x IMU noise, empty lot -- fewer LiDAR anchors"
+    weather_preset: "ClearNoon"
+    imu_noise_multiplier: 1.0
+    num_patrol_vehicles: 0
+    num_pedestrians: 0
+    bay_occupancy_rate: 0.2  # Very sparse: fewer parked cars = fewer scan-match features
+
+  - name: "clear_busy"
+    description: "Clear weather, 1.5x IMU noise, busy lot -- dynamic occlusions raise covariance"
+    weather_preset: "ClearNoon"
     imu_noise_multiplier: 1.5
-    num_patrol_vehicles: 2
-    num_pedestrians: 3
+    num_patrol_vehicles: 3
+    num_pedestrians: 4
+
+  - name: "rain_nominal"
+    description: "Heavy rain, 1.0x IMU noise, light traffic -- rain scatter degrades LiDAR"
+    weather_preset: "HardRainNoon"
+    imu_noise_multiplier: 1.0
+    num_patrol_vehicles: 1
+    num_pedestrians: 2
 
   - name: "rain_degraded"
-    description: "Rain, degraded IMU, moderate traffic -- rain scatter reduces LiDAR range"
-    weather_preset: "SoftRainNoon"
-    fog_density: 20.0
+    description: "Heavy rain, 2.0x IMU noise, moderate traffic -- compound degradation"
+    weather_preset: "HardRainNoon"
     imu_noise_multiplier: 2.0
     num_patrol_vehicles: 2
     num_pedestrians: 3
 
-  - name: "heavy_rain_noisy"
-    description: "Heavy rain, high IMU noise, dense traffic -- heavy scan-match degradation"
+  - name: "rain_busy"
+    description: "Heavy rain, 3.0x IMU noise, busy lot -- maximum training-distribution stress"
     weather_preset: "HardRainNoon"
-    fog_density: 30.0
     imu_noise_multiplier: 3.0
     num_patrol_vehicles: 3
     num_pedestrians: 4
 
-  - name: "fog_moderate"
-    description: "Moderate fog, moderate IMU noise -- LiDAR returns attenuated at range"
-    weather_preset: "CloudyNoon"
-    fog_density: 50.0
-    imu_noise_multiplier: 2.0
-    num_patrol_vehicles: 2
-    num_pedestrians: 3
-
-  - name: "fog_heavy"
-    description: "Dense fog, high IMU noise -- severe LiDAR attenuation, covariance rises sharply"
-    weather_preset: "CloudySunset"
-    fog_density: 75.0
-    imu_noise_multiplier: 4.0
-    num_patrol_vehicles: 3
-    num_pedestrians: 4
-
-  - name: "fog_extreme"
-    description: "Extreme fog, very high IMU noise -- near-total LiDAR loss, maximum covariance"
-    weather_preset: "CloudySunset"
-    fog_density: 95.0
-    imu_noise_multiplier: 8.0
-    num_patrol_vehicles: 3
-    num_pedestrians: 4
-
   # OOD floor plan evaluation (calibration experiment)
-  # Uses irregular_a (five-sided polygon, held out entirely from training).
+  # Uses irregular_a (nine-sided polygon, held out entirely from training).
   # Tests whether epistemic uncertainty rises on novel lot geometry
   # without any reward signal indicating novelty -- a calibration check on the
   # evidential policy's NIG prior.
   - name: "ood_nominal"
     description: "OOD floor plan (irregular_a), nominal conditions -- calibration check"
     weather_preset: "ClearNoon"
-    fog_density: 0.0
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     num_pedestrians: 2
-    floor_plan: "irregular_a"   # Override: use OOD floor plan
+    floor_plan: "irregular_a"  # Override: use OOD floor plan
 
   - name: "ood_degraded"
-    description: "OOD floor plan (irregular_a) + degraded sensors -- compound novelty"
-    weather_preset: "SoftRainNoon"
-    fog_density: 30.0
+    description: "OOD floor plan (irregular_a) + heavy rain -- compound novelty"
+    weather_preset: "HardRainNoon"
     imu_noise_multiplier: 2.0
     num_patrol_vehicles: 2
     num_pedestrians: 3
@@ -117,14 +109,13 @@ eval_conditions:
 
   # Worst-case / safety handoff demonstration
   # Familiar training geometry under conditions far beyond the training distribution.
-  # Expected: fog attenuates LiDAR, empty lot removes scan-match anchors,
+  # Expected: empty lot removes scan-match anchors, rain degrades remaining returns,
   # EKF covariance spikes, evidential epistemic uncertainty crosses the safety
   # handoff threshold -- demonstrating the core safety capability.
   - name: "worst_case"
-    description: "Safety handoff demo: dense fog + empty lot + max pedestrians"
-    weather_preset: "CloudySunset"
-    fog_density: 90.0          # Beyond training range (training: 0-50)
-    imu_noise_multiplier: 6.0
+    description: "Safety handoff demo: heavy rain + empty lot + max IMU noise + max pedestrians"
+    weather_preset: "HardRainNoon"
+    imu_noise_multiplier: 6.0  # Well beyond training range (training: 0.5x-3.0x)
     num_patrol_vehicles: 0     # Empty lot -- no parked-car LiDAR anchors
     num_pedestrians: 4         # Maximum -- moving occlusions add scan noise
     bay_occupancy_rate: 0.0    # Override: zero parked vehicles in bays

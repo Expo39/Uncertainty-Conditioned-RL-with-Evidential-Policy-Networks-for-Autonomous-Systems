@@ -7,7 +7,7 @@ YAML configuration files for all experiment parameters. **No hyperparameters are
 | File | Purpose |
 |------|---------|
 | `train_config.yaml` | Shared base config: PPO hyperparameters, environment settings (town, max\_steps), ROS 2 covariance subscription, sensor suite selection (`suite_a`), parking lot scenario settings (floor plans, bay occupancy, cone spacing, NPC counts), network architecture, evidential settings, training schedule |
-| `eval_config.yaml` | Evaluation condition sweep: 8 performance conditions (clear through fog\_extreme), 2 OOD conditions (`irregular_a` floor plan), and 1 worst-case safety handoff condition. Episode counts, success criteria thresholds, output settings. |
+| `eval_config.yaml` | Evaluation condition sweep: 7 performance conditions (ClearNoon / HardRainNoon only - fog not rendered on FlatPlane), 2 OOD conditions (`irregular_a` floor plan), and 1 worst-case safety handoff condition. Episode counts, success criteria thresholds, output settings. |
 | `ros2_config.yaml` | ROS 2 node parameters: CARLA bridge topic names, robot\_localisation EKF settings (frequency, 2D mode, odom/imu fusion configs), covariance extraction node topics, QoS settings |
 
 ## Subdirectories
@@ -18,10 +18,10 @@ Override-only configs for the 2x2 ablation study. Each file contains only the ke
 
 | File | Observation | Policy | Notes |
 |------|-------------|--------|-------|
-| `vanilla_ppo.yaml` | 9-dim (pose + target) | Standard | `include_covariance: false`, `policy_type: "standard"` |
-| `input_uncertainty.yaml` | 18-dim (full) | Standard | `include_covariance: true`, `policy_type: "standard"` |
-| `output_uncertainty.yaml` | 9-dim (pose + target) | Evidential | `include_covariance: false`, `policy_type: "evidential"` |
-| `full_method.yaml` | 18-dim (full) | Evidential | `include_covariance: true`, `policy_type: "evidential"` -main contribution |
+| `vanilla_ppo.yaml` | 12-dim (pose + target + obstacle) | Standard | `include_covariance: false`, `policy_type: "standard"` |
+| `input_uncertainty.yaml` | 21-dim (full) | Standard | `include_covariance: true`, `policy_type: "standard"` |
+| `output_uncertainty.yaml` | 12-dim (pose + target + obstacle) | Evidential | `include_covariance: false`, `policy_type: "evidential"` |
+| `full_method.yaml` | 21-dim (full) | Evidential | `include_covariance: true`, `policy_type: "evidential"` - main contribution |
 
 ### `layouts/`
 
