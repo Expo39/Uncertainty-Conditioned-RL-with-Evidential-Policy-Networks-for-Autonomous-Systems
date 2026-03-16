@@ -119,6 +119,12 @@ def train_config() -> Dict[str, Any]:
         "carla_conditions": {
             "weather_presets": ["ClearNoon", "HardRainNoon"],
         },
+        "parking_scenarios": {
+            "bay_occupancy_min": 0.3,
+            "bay_occupancy_max": 0.8,
+            "num_patrol_vehicles_max": 1,
+            "pedestrian_spawn_probability": 0.8,
+        },
     }
 
 
@@ -144,15 +150,17 @@ def eval_config() -> Dict[str, Any]:
                 "weather_preset": "ClearNoon",
                 "imu_noise_multiplier": 0.5,
                 "num_patrol_vehicles": 0,
-                "num_pedestrians": 0,
+                "pedestrian_spawn_probability": 0.0,
+                "bay_occupancy_rate": 0.6,
             },
             {
                 "name": "rain_degraded",
-                "description": "Heavy rain, 2x IMU noise, moderate traffic",
+                "description": "Heavy rain, 2x IMU noise, 1 patrol, all zones",
                 "weather_preset": "HardRainNoon",
                 "imu_noise_multiplier": 2.0,
-                "num_patrol_vehicles": 2,
-                "num_pedestrians": 3,
+                "num_patrol_vehicles": 1,
+                "pedestrian_spawn_probability": 1.0,
+                "bay_occupancy_rate": 0.6,
             },
         ],
     }
