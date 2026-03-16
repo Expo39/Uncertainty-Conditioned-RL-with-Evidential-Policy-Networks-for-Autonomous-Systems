@@ -91,14 +91,15 @@ class EvaluationMetrics:
 def _scale_sensor_noise(
     base_sensors: Dict[str, Any],
     imu_multiplier: float,
-    gnss_multiplier: float,
 ) -> Dict[str, Any]:
     """
-    @brief Scale base sensor noise parameters by condition-specific multipliers.
+    @brief Scale base sensor noise parameters by the condition-specific IMU multiplier.
     @param base_sensors: Base sensor config from train_config.yaml.
     @param imu_multiplier: Multiplier for all IMU noise stddev values.
-    @param gnss_multiplier: Multiplier for all GNSS noise stddev values.
     @return New sensor config dict with scaled noise values.
+
+    @note Only IMU noise is scaled. Suite A uses 2D LiDAR + IMU only; GNSS is
+          excluded (unreliable in covered parking lots).
     """
     scaled = copy.deepcopy(base_sensors)
 
@@ -107,12 +108,6 @@ def _scale_sensor_noise(
         if "stddev" in key:
             imu[key] = imu[key] * imu_multiplier
     scaled["imu"] = imu
-
-    gnss = scaled.get("gnss", {})
-    for key in gnss:
-        if "stddev" in key:
-            gnss[key] = gnss[key] * gnss_multiplier
-    scaled["gnss"] = gnss
 
     return scaled
 
@@ -135,17 +130,11 @@ def make_eval_env(
     scaled_sensors = _scale_sensor_noise(
         base_sensors,
         imu_multiplier=condition.get("imu_noise_multiplier", 1.0),
-        gnss_multiplier=condition.get("gnss_noise_multiplier", 1.0),
     )
 
-    # Build fixed weather/fog conditions config (not randomised, unlike training)
+    # Build fixed weather conditions config (not randomised, unlike training)
     conditions_config = {
         "weather_presets": [condition.get("weather_preset", "ClearNoon")],
-        "fog_density_range": [
-            condition.get("fog_density", 0.0),
-            condition.get("fog_density", 0.0),
-        ],
-        "fog_distance_range": [25.0, 25.0],
     }
 
     # Build parking_scenarios_config: NPC counts and lot layout from condition
@@ -362,9 +351,7 @@ def evaluate_across_conditions(
         result["condition"] = name
         result["description"] = description
         result["weather_preset"] = condition.get("weather_preset", "")
-        result["fog_density"] = condition.get("fog_density", 0.0)
         result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
-        result["gnss_noise_multiplier"] = condition.get("gnss_noise_multiplier", 1.0)
         result["num_patrol_vehicles"] = condition.get("num_patrol_vehicles", 0)
         result["num_pedestrians"] = condition.get("num_pedestrians", 0)
         results.append(result)

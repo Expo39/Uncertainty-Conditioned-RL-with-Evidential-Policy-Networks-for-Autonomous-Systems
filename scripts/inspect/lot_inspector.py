@@ -37,6 +37,7 @@ Arguments:
   --suite      suite_a | suite_b | suite_c (default: suite_a, sensors/live modes only)
   --view       birds_eye | side | front (default: birds_eye, sensors mode only)
   --sensor     lidar | camera (live mode, suite_c only; suite_c defaults to camera)
+  --weather    ClearNoon | HardRainNoon (default: ClearNoon)
   --host       CARLA server hostname (default: carla-server-demo)
   --port       CARLA server port (default: 2100)
   --duration   Seconds to hold the scene (default: 300)
@@ -79,6 +80,7 @@ def _build_env(
     sensors_cfg: Optional[Dict[str, Any]] = None,
     suite: Optional[str] = None,
     full_lot: bool = True,
+    weather: Optional[str] = None,
 ) -> CARLAParkingEnv:
     """
     @brief Build and reset a CARLAParkingEnv configured for the inspector.
@@ -91,6 +93,8 @@ def _build_env(
     @param suite: Sensor suite name (for sensor mode).
     @param full_lot: If True spawn full lot (bays, NPCs, cones).  If False,
                      suppress NPCs/cones to keep scene clean for sensor mode.
+    @param weather: CARLA WeatherParameters preset name (e.g. 'HardRainNoon').
+                    If None, uses train_config defaults (randomised from presets).
     @return Pre-reset CARLAParkingEnv instance.
     """
     scenarios = dict(train_cfg.get("parking_scenarios", {}))
@@ -107,12 +111,20 @@ def _build_env(
         scenarios["num_pedestrians_max"] = 0
         scenarios["perimeter_cone_spacing"] = 9999.0
 
+    # Pin weather preset when requested; conditions otherwise come from train_config.
+    conditions_cfg: Optional[Dict[str, Any]] = None
+    if weather is not None:
+        conditions_cfg = {
+            "weather_presets": [weather],
+        }
+
     env = CARLAParkingEnv(
         carla_host=host,
         carla_port=port,
-        town="FlatPlane",
+        town=train_cfg.get("town", "FlatPlane"),
         parking_scenarios_config=scenarios,
         carla_sensors_config=sensors_cfg,
+        carla_conditions_config=conditions_cfg,
         sensor_suite=suite,
         include_covariance=False,
         include_obstacle_obs=False,
@@ -202,6 +214,19 @@ def main() -> None:
             "'wide' = high enough to see the full FOV arc boundary."
         ),
     )
+    _WEATHER_PRESETS = [
+        "ClearNoon",
+        "HardRainNoon",
+    ]
+    parser.add_argument(
+        "--weather",
+        default="ClearNoon",
+        choices=_WEATHER_PRESETS,
+        help=(
+            "CARLA weather preset to apply (default: ClearNoon). "
+            "Choices: " + ", ".join(_WEATHER_PRESETS) + "."
+        ),
+    )
     parser.add_argument(
         "--host", default="carla-server-demo", help="CARLA server hostname."
     )
@@ -218,7 +243,10 @@ def main() -> None:
         train_cfg = yaml.safe_load(_f)
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
-    print(f"Mode: {args.mode}  |  Layout: {args.layout}", end="")
+    print(
+        f"Mode: {args.mode}  |  Layout: {args.layout}  |  Weather: {args.weather}",
+        end="",
+    )
     if args.mode == "sensors":
         print(f"  |  Suite: {args.suite}  |  View: {args.view}", end="")
     elif args.mode == "live":
@@ -227,7 +255,10 @@ def main() -> None:
     print()
 
     if args.mode == "layout":
-        env = _build_env(args.host, args.port, args.layout, train_cfg, full_lot=True)
+        env = _build_env(
+            args.host, args.port, args.layout, train_cfg,
+            full_lot=True, weather=args.weather,
+        )
         env.reset()
         if env.world is None:
             print("ERROR: Could not connect to CARLA.")
@@ -256,6 +287,7 @@ def main() -> None:
             suite=args.suite,
             # Side/front views: ego only. Birds-eye: full lot for context.
             full_lot=(args.view == "birds_eye"),
+            weather=args.weather,
         )
         env.reset()
         if env.world is None or env.vehicle is None:
@@ -289,6 +321,7 @@ def main() -> None:
             sensors_cfg=sensors_cfg,
             suite=args.suite,
             full_lot=True,  # Spawn lot so LiDAR / camera has scene context
+            weather=args.weather,
         )
         env.reset()
         if env.world is None or env.vehicle is None:

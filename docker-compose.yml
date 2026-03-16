@@ -270,6 +270,7 @@ services:
       python scripts/inspect/lot_inspector.py
       --mode layout
       --layout ${LAYOUT:-trapezoid}
+      --weather ${WEATHER:-ClearNoon}
       --host carla-server-demo
       --port 2100
       --duration 300
@@ -318,6 +319,7 @@ services:
       --layout ${LAYOUT:-rectangle}
       --view ${VIEW:-birds_eye}
       --zoom ${ZOOM:-close}
+      --weather ${WEATHER:-ClearNoon}
       --host carla-server-demo
       --port 2100
       --duration 300
@@ -368,6 +370,7 @@ services:
       --suite ${SUITE:-suite_a}
       --layout ${LAYOUT:-rectangle}
       --sensor ${SENSOR:-lidar}
+      --weather ${WEATHER:-ClearNoon}
       --host carla-server-demo
       --port 2100
       --duration 300

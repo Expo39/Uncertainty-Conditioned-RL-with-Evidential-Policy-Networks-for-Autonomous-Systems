@@ -17,7 +17,7 @@ The observation comprises up to 21 dimensions (default, include_obstacle_obs=tru
                    only present when include_obstacle_obs=true (default)
 
 Actual obs dim depends on include_covariance and include_obstacle_obs flags;
-use _compute_obs_dim() rather than TOTAL_OBS_DIM directly inside the env.
+use _compute_obs_dim() rather than hardcoding dimensions directly inside the env.
 
 CARLA ground truth is used only for reward computation (position error, collision
 detection) not in the observation. This ensures sim-to-real transfer without retraining.
@@ -61,7 +61,6 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_THRESHOLD_POSITION,
     SUCCESS_THRESHOLD_VELOCITY,
     TARGET_POSE_DIM,
-    TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
@@ -682,11 +681,16 @@ class CARLAParkingEnv(gym.Env):
         # Exclude the target bay and its immediate neighbours
         excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
 
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
+        # Use the same z as the ego vehicle (origin z, typically 0.3 m).
+        # physics=False means no settling occurs, so the centre-of-mass is placed
+        # exactly at z -- matching origin_z keeps static cars flush with the ground.
+        z = float(self._current_layout.get("origin", {}).get("z", 0.3))
         # Spawn 2 m above the floor so the vehicle bounding box clears perimeter
         # cones whose tops reach ~1 m.  Physics is immediately disabled and the
         # actor is teleported back to the correct z.
         z_spawn = z + 2.0
+        # Actors pending ground-level teleport after the post-spawn world tick.
+        _pending_ground: List[Tuple[Any, float, float, float]] = []
 
         for bay in bays:
             if bay.get("id", bay.get("bay_id", "")) in excluded_ids:
@@ -715,15 +719,10 @@ class CARLAParkingEnv(gym.Env):
             actor = self.world.try_spawn_actor(bp, transform)
             if actor is not None:
                 actor.set_simulate_physics(False)
-                actor.set_transform(
-                    carla.Transform(
-                        carla.Location(x=bay_x, y=bay_y, z=z),
-                        carla.Rotation(yaw=yaw),
-                    )
-                )
                 self._spawned_static_vehicles.append(actor)
                 # Cache static position for obstacle feature extraction in _get_state()
                 self._static_obstacle_positions.append((bay_x, bay_y))
+                _pending_ground.append((actor, bay_x, bay_y, yaw))
 
         # Easter egg: always spawn the Kawasaki Ninja and Yamaha YZF in their
         # dedicated motorcycle bays (bay_type="motorcycle", occupant field set).
@@ -748,14 +747,21 @@ class CARLAParkingEnv(gym.Env):
             actor = self.world.try_spawn_actor(bp, transform)
             if actor is not None:
                 actor.set_simulate_physics(False)
-                actor.set_transform(
-                    carla.Transform(
-                        carla.Location(x=bay_x, y=bay_y, z=z),
-                        carla.Rotation(yaw=yaw),
-                    )
-                )
                 self._spawned_static_vehicles.append(actor)
                 self._static_obstacle_positions.append((bay_x, bay_y))
+                _pending_ground.append((actor, bay_x, bay_y, yaw))
+
+        # Tick once so CARLA commits the physics-disabled state, then teleport
+        # every static vehicle to ground level.  Without the tick, set_transform
+        # is ignored in synchronous mode and cars remain at z_spawn (floating).
+        self.world.tick()
+        for actor, ax, ay, actor_yaw in _pending_ground:
+            actor.set_transform(
+                carla.Transform(
+                    carla.Location(x=ax, y=ay, z=z),
+                    carla.Rotation(yaw=actor_yaw),
+                )
+            )
 
         logger.debug(f"Spawned {len(self._spawned_static_vehicles)} static vehicles.")
 
@@ -774,9 +780,11 @@ class CARLAParkingEnv(gym.Env):
             return
 
         # num_patrol_vehicles_max=0 suppresses patrol entirely (e.g. inspector).
+        # Fixed count (not randomised): always spawn exactly num_patrol_vehicles_max
+        # patrol vehicles so behaviour is deterministic across episodes.
         if self._num_patrol_max == 0:
             return
-        num_patrol = random.randint(1, self._num_patrol_max)
+        num_patrol = self._num_patrol_max
 
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
@@ -1067,23 +1075,33 @@ class CARLAParkingEnv(gym.Env):
     def _update_pedestrians(self) -> None:
         """
         @brief Advance pedestrians one step, re-randomise headings periodically,
-               and handle zone boundaries and lifetime expiry.
+               and handle zone boundaries, lifetime expiry, and ego avoidance.
 
-        Boundary behaviour: when a pedestrian is within _BOUNDARY_MARGIN metres
-        of any zone edge, its heading is replaced with a direction toward the
-        zone centre. This avoids the oscillation produced by velocity reflection,
-        where the walker overshoots the boundary by one physics step, the heading
-        is negated, and on the next step the walker is still outside and is
-        negated again -- producing a standing vibration on the wall. The inward-
-        steering approach matches CARLA Scenario Runner, which assigns a new
-        interior waypoint when an actor approaches a trigger-region boundary.
+        Priority order for heading selection each step:
+          1. Ego proximity: if the ego vehicle is within _EGO_AVOID_RADIUS metres,
+             steer directly away from it and stop walking (speed=0). This prevents
+             the pedestrian walking into a stationary or slow ego and producing a
+             spurious collision event. If the ego drives into the pedestrian at speed
+             the impulse threshold in _on_collision() still catches it correctly.
+          2. Zone boundary: steer toward zone centre when within _BOUNDARY_MARGIN
+             of any edge, to avoid the oscillation produced by velocity reflection.
+          3. Periodic re-randomisation: new random direction every
+             pedestrian_heading_resample_steps steps.
 
         Lifetime expiry: after pedestrian_max_lifetime_steps steps the walker
         is destroyed and respawned at a new random position within its zone.
-        This provides episode variety without relying on boundary despawning.
         """
+        # Stop walking when the ego is within this distance (metres, centre-to-centre).
+        # ~2.5 m covers the ego vehicle half-length plus a pedestrian body radius.
+        _EGO_AVOID_RADIUS = 2.5
         # Activate inward correction when this close to any zone edge (metres)
         _BOUNDARY_MARGIN = 0.5
+
+        ego_loc = (
+            self.vehicle.get_location()
+            if self.vehicle is not None and self.vehicle.is_alive
+            else None
+        )
 
         for i, walker in enumerate(self._pedestrian_actors):
             if not (walker is not None and walker.is_alive):
@@ -1100,6 +1118,26 @@ class CARLAParkingEnv(gym.Env):
             loc = walker.get_location()
             zone = self._pedestrian_zones[i]
 
+            # --- Priority 1: ego avoidance -----------------------------------
+            # If ego is close, stop and face away so the pedestrian never walks
+            # into the ego. Collision sensor impulse threshold still catches any
+            # genuine ego-at-fault impact.
+            if ego_loc is not None:
+                to_ego_x = ego_loc.x - loc.x
+                to_ego_y = ego_loc.y - loc.y
+                ego_dist = math.sqrt(to_ego_x * to_ego_x + to_ego_y * to_ego_y)
+                if ego_dist < _EGO_AVOID_RADIUS:
+                    # Face away from ego (negate direction vector)
+                    away_mag = ego_dist if ego_dist > 1e-6 else 1.0
+                    away_x = -to_ego_x / away_mag
+                    away_y = -to_ego_y / away_mag
+                    control = carla.WalkerControl()
+                    control.direction = carla.Vector3D(x=away_x, y=away_y, z=0.0)
+                    control.speed = 0.0  # stand still -- do not walk into the space
+                    walker.apply_control(control)
+                    continue
+
+            # --- Priority 2: zone boundary -----------------------------------
             near_boundary = (
                 loc.x < zone["x_min"] + _BOUNDARY_MARGIN
                 or loc.x > zone["x_max"] - _BOUNDARY_MARGIN
@@ -1119,7 +1157,7 @@ class CARLAParkingEnv(gym.Env):
                 self._pedestrian_headings[i] = (to_cx, to_cy, 0.0)
                 self._pedestrian_heading_steps[i] = 0
             elif self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
-                # Periodic random direction change while comfortably inside zone
+                # --- Priority 3: periodic random direction -------------------
                 heading_rad = random.uniform(0.0, 2.0 * math.pi)
                 self._pedestrian_headings[i] = (
                     math.cos(heading_rad),
@@ -1316,7 +1354,7 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[3] = vx
         self._obs_buffer[4] = vy
         self._obs_buffer[5] = vyaw
-        # log1p compresses heavy tails from high-uncertainty conditions (fog, rain)
+        # log1p compresses heavy tails from high-uncertainty conditions (rain, sensor noise)
         # that would otherwise distort VecNormalize running statistics.
         self._obs_buffer[6:15] = np.log1p(uncertainty)
         self._obs_buffer[15] = dx
@@ -1525,27 +1563,35 @@ class CARLAParkingEnv(gym.Env):
         presets = self._conditions_config.get("weather_presets", ["ClearNoon"])
         preset_name = random.choice(presets)
 
-        weather = getattr(carla.WeatherParameters, preset_name, None)
-        if weather is None:
+        preset = getattr(carla.WeatherParameters, preset_name, None)
+        if preset is None:
             logger.warning(f"Unknown weather preset '{preset_name}', using ClearNoon.")
-            weather = carla.WeatherParameters.ClearNoon
+            preset = carla.WeatherParameters.ClearNoon
 
-        fog_range = self._conditions_config.get("fog_density_range", [0.0, 0.0])
-        fog_density = random.uniform(fog_range[0], fog_range[1])
-
-        fog_dist_range = self._conditions_config.get(
-            "fog_distance_range", [20.0, 100.0]
+        # CARLA 0.9.16 built-in Noon presets have a sun_altitude_angle that
+        # renders as pre-dawn on the FlatPlane map.  Override to 45 deg so the
+        # scene looks like daytime.  LiDAR and IMU are unaffected by sun angle.
+        _SUN_ALTITUDE_OVERRIDE = {
+            "ClearNoon": 45.0,
+            "HardRainNoon": 45.0,
+        }
+        sun_altitude = _SUN_ALTITUDE_OVERRIDE.get(
+            preset_name, preset.sun_altitude_angle
         )
-        fog_distance = random.uniform(fog_dist_range[0], fog_dist_range[1])
-
-        weather.fog_density = fog_density
-        weather.fog_distance = fog_distance
+        weather = carla.WeatherParameters(
+            cloudiness=preset.cloudiness,
+            precipitation=preset.precipitation,
+            precipitation_deposits=preset.precipitation_deposits,
+            wind_intensity=preset.wind_intensity,
+            sun_azimuth_angle=preset.sun_azimuth_angle,
+            sun_altitude_angle=sun_altitude,
+            fog_density=preset.fog_density,
+            fog_distance=preset.fog_distance,
+            wetness=preset.wetness,
+        )
 
         self.world.set_weather(weather)
-        logger.info(
-            f"Weather: {preset_name}, fog={fog_density:.1f}, "
-            f"fog_dist={fog_distance:.1f}m"
-        )
+        logger.info(f"Weather: {preset_name}")
 
     def _spawn_vehicle(self) -> None:
         """
@@ -1985,12 +2031,7 @@ class CARLAParkingEnv(gym.Env):
             self._connect_to_carla()
 
         if self.world is None:
-            obs_dim = (
-                TOTAL_OBS_DIM
-                if self._include_covariance
-                else VEHICLE_STATE_DIM + TARGET_POSE_DIM
-            )
-            return np.zeros(obs_dim, dtype=np.float32), {}
+            return np.zeros(self._compute_obs_dim(), dtype=np.float32), {}
 
         # Load floor plan and sample target bay
         if self._floor_plans_config:

@@ -39,7 +39,7 @@ from scripts.layouts.common import (
     warn_narrow_corridors,
 )
 
-# World-frame origin used in multi-layout generation (Town05_Opt flat area).
+# World-frame origin used in multi-layout generation (FlatPlane generated OpenDRIVE world).
 ORIGIN_X = 0.0
 ORIGIN_Y = -90.0
 ORIGIN_Z = 0.3

@@ -35,7 +35,7 @@ all three bay types in a single floor plan.
 
 **Patrol:** 7-waypoint CCW loop tracing lower aisle -> parallel column aisle -> top aisle -> diagonal -> upper aisle.
 
-**World origin (Town05_Opt):** x=-200, y=0, z=0.3, heading=0 deg
+**World origin (FlatPlane):** x=-200, y=0, z=0.3, heading=0 deg
 
 ---
 
@@ -61,7 +61,7 @@ compared to the rectangle, encouraging generalisation to non-rectangular geometr
 
 **Patrol:** 4-waypoint loop through lower and upper aisles of the centre cluster.
 
-**World origin (Town05_Opt):** x=0, y=-90, z=0.3, heading=0 deg
+**World origin (FlatPlane):** x=0, y=-90, z=0.3, heading=0 deg
 
 ---
 
@@ -109,7 +109,7 @@ of an interior obstacle rectangle.
 
 **Patrol:** 5-waypoint loop threading between the obstacle cluster and the top-left cluster.
 
-**World origin (Town05_Opt):** x=100, y=0, z=0.3, heading=0 deg
+**World origin (FlatPlane):** x=100, y=0, z=0.3, heading=0 deg
 
 ---
 
