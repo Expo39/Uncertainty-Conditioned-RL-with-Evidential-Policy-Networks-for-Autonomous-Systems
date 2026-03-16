@@ -220,8 +220,13 @@ class CARLAParkingEnv(gym.Env):
         scenarios = parking_scenarios_config or {}
         self._cone_spacing: float = scenarios.get("perimeter_cone_spacing", 2.0)
         self._entrance_half_width: float = scenarios.get("entrance_half_width", 4.0)
-        self._bay_occupancy_rate: float = scenarios.get("bay_occupancy_rate", 0.70)
-        self._num_patrol_max: int = scenarios.get("num_patrol_vehicles_max", 3)
+        # Bay occupancy is re-sampled uniformly each episode between min and max.
+        # For evaluation, set both to the same value to fix occupancy.
+        self._bay_occupancy_min: float = scenarios.get("bay_occupancy_min", 0.3)
+        self._bay_occupancy_max: float = scenarios.get("bay_occupancy_max", 0.8)
+        # Episode-level occupancy rate; set in reset() before _spawn_static_vehicles().
+        self._bay_occupancy_rate: float = self._bay_occupancy_max
+        self._num_patrol_max: int = scenarios.get("num_patrol_vehicles_max", 1)
         self._patrol_obstacle_distance: float = scenarios.get(
             "patrol_obstacle_stop_distance", 5.0
         )
@@ -230,7 +235,11 @@ class CARLAParkingEnv(gym.Env):
         )
         self._patrol_max_speed: float = scenarios.get("patrol_max_speed_ms", 3.0)
         self._patrol_heading_gain: float = scenarios.get("patrol_heading_gain", 0.8)
-        self._num_pedestrians_max: int = scenarios.get("num_pedestrians_max", 4)
+        # Probability that each pedestrian zone spawns a walker each episode.
+        # 1.0 = always spawn; 0.0 = never spawn. Evaluated independently per zone.
+        self._pedestrian_spawn_prob: float = scenarios.get(
+            "pedestrian_spawn_probability", 1.0
+        )
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
         )
@@ -871,14 +880,10 @@ class CARLAParkingEnv(gym.Env):
 
         zones: List[Dict[str, float]] = [_to_zone_dict(zr) for zr in zones_raw]
 
-        # Always fill every zone (one pedestrian each), up to the configured maximum.
-        num_peds = min(self._num_pedestrians_max, len(zones))
-        if num_peds == 0:
-            return
-
-        for ped_i in range(num_peds):
-            # Assign zones round-robin so all zones are populated evenly
-            zone = zones[ped_i % len(zones)]
+        # One pedestrian per zone; each zone independently rolls spawn probability.
+        for ped_i, zone in enumerate(zones):
+            if random.random() > self._pedestrian_spawn_prob:
+                continue
 
             bp = random.choice(self._walker_blueprints)
             if bp.has_attribute("is_invincible"):
@@ -2049,6 +2054,11 @@ class CARLAParkingEnv(gym.Env):
         self._spawn_sensors()
         self._spawn_perimeter_cones()
         self._spawn_obstacle_cones()
+        # Resample bay occupancy uniformly each episode so the agent experiences
+        # varying LiDAR anchor density across training.
+        self._bay_occupancy_rate = random.uniform(
+            self._bay_occupancy_min, self._bay_occupancy_max
+        )
         self._spawn_static_vehicles()
         self._spawn_npc_patrol()
         self._spawn_pedestrians()

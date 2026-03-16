@@ -96,7 +96,8 @@ carla_conditions:
 parking_scenarios:
   perimeter_cone_spacing: 2.0          # Metres between perimeter cones
   entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
-  bay_occupancy_rate: 0.60             # Fraction of non-target bays filled
+  bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
+  bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
   num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
   patrol_obstacle_stop_distance: 5.2  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego)
   patrol_pedestrian_stop_distance: 1.5  # Metres ahead - patrol brakes if any pedestrian within range
@@ -104,7 +105,7 @@ parking_scenarios:
   patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
   patrol_stuck_speed_threshold: 0.3   # m/s below which NPC is considered stuck (while throttle applied)
   patrol_stuck_steps_max: 30          # Steps below threshold before teleporting NPC to next waypoint
-  num_pedestrians_max: 5               # Max random-walk pedestrians per episode (one per zone)
+  pedestrian_spawn_probability: 0.8    # Per-zone independent spawn probability each episode (0.0-1.0)
   pedestrian_heading_resample_steps: 30  # Steps between pedestrian direction changes
   pedestrian_max_lifetime_steps: 200  # Steps before a pedestrian despawns and respawns in its zone
   floor_plans:

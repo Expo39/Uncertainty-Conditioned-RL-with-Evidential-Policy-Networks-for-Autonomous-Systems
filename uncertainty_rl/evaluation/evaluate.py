@@ -145,10 +145,17 @@ def make_eval_env(
         base_scenarios = dict(train_config.get("parking_scenarios", {}))
     parking_config: Dict[str, Any] = {
         "num_patrol_vehicles_max": condition.get("num_patrol_vehicles", 0),
-        "num_pedestrians_max": condition.get("num_pedestrians", 0),
-        "bay_occupancy_rate": condition.get(
+        "pedestrian_spawn_probability": condition.get("pedestrian_spawn_probability", 1.0),
+        # In evaluation, occupancy is fixed per condition (min == max).
+        # eval_config.yaml uses bay_occupancy_rate (a single value); training uses
+        # bay_occupancy_min/max for the per-episode uniform resample range.
+        "bay_occupancy_min": condition.get(
             "bay_occupancy_rate",
-            base_scenarios.get("bay_occupancy_rate", 0.7),
+            base_scenarios.get("bay_occupancy_max", 0.6),
+        ),
+        "bay_occupancy_max": condition.get(
+            "bay_occupancy_rate",
+            base_scenarios.get("bay_occupancy_max", 0.6),
         ),
         "floor_plans": base_scenarios.get("floor_plans", {}),
     }
@@ -353,7 +360,10 @@ def evaluate_across_conditions(
         result["weather_preset"] = condition.get("weather_preset", "")
         result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
         result["num_patrol_vehicles"] = condition.get("num_patrol_vehicles", 0)
-        result["num_pedestrians"] = condition.get("num_pedestrians", 0)
+        result["pedestrian_spawn_probability"] = condition.get(
+            "pedestrian_spawn_probability", 1.0
+        )
+        result["bay_occupancy_rate"] = condition.get("bay_occupancy_rate", 0.6)
         results.append(result)
 
         print(f"  Success rate: {metrics.success_rate:.1f}%")
