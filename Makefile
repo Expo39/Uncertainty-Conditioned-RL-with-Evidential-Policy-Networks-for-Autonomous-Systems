@@ -11,7 +11,7 @@
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
 .PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live
-.PHONY: docker-generate-layouts
+.PHONY: docker-generate-layouts docker-mapping-drive docker-save-map docker-train-loc
 
 PYTHON := python3
 PYTHON_VIS := .venv-vis/bin/python3
@@ -20,7 +20,8 @@ CONFIG_DIR := configs
 SRC_DIR := uncertainty_rl
 TESTS_DIR := tests
 SCRIPTS_DIR := scripts
-DOCKER_COMPOSE := docker compose
+DOCKER_COMPOSE         := docker compose
+DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose.inspect.yml
 
 # ----------------------------------------------------------------------
 # Help
@@ -56,6 +57,46 @@ docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside t
 		   --output-dir configs/layouts \
 		   --plot-dir outputs/layouts \
 		   $(if $(LAYOUT),--layout $(LAYOUT),)"
+
+# ----------------------------------------------------------------------
+# Cartographer SLAM mapping workflow (one-time per floor plan)
+# ----------------------------------------------------------------------
+# Three-step process:
+#   1. make docker-up                        (start stack in SLAM mode, default)
+#   2. make docker-mapping-drive LAYOUT=...  (drive patrol loop; saves trajectory PNG)
+#   3. make docker-save-map LAYOUT=...       (serialise Cartographer state to .pbstream)
+# Then for training use make docker-train-loc LAYOUT=...
+# ----------------------------------------------------------------------
+
+LAYOUT ?= rectangle
+
+docker-mapping-drive: ## Drive patrol-waypoint loop in SLAM mode to build Cartographer map. Saves trajectory PNG to outputs/maps/<layout>/. Usage: make docker-mapping-drive [LAYOUT=rectangle]
+	mkdir -p outputs/maps/$(LAYOUT)
+	$(DOCKER_COMPOSE) exec training python scripts/mapping_drive.py \
+		--layout $(LAYOUT) \
+		--carla-host carla-server \
+		--carla-port 2000 \
+		--output-dir outputs/maps/$(LAYOUT)
+
+docker-save-map: ## Serialise current Cartographer SLAM state to .pbstream. Run after docker-mapping-drive. Usage: make docker-save-map [LAYOUT=rectangle]
+	mkdir -p configs/maps/$(LAYOUT)
+	$(DOCKER_COMPOSE) exec ros2-bridge bash -c \
+		"source /opt/ros/jazzy/setup.bash && \
+		 source /workspace/install/setup.bash && \
+		 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
+		 '{filename: \"/workspace/configs/maps/$(LAYOUT)/$(LAYOUT).pbstream\", include_unfinished_submaps: true}'"
+	@echo "Saved configs/maps/$(LAYOUT)/$(LAYOUT).pbstream"
+
+docker-train-loc: ## Run training in pure localisation mode against a pre-built .pbstream map. Usage: make docker-train-loc [LAYOUT=rectangle]
+	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=/workspace/configs/maps/$(LAYOUT)/$(LAYOUT).pbstream \
+	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
+	@echo "Waiting for services to be healthy..."
+	sleep 30
+	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
+		--config $(CONFIG_DIR)/train_config.yaml \
+		--log-dir logs \
+		--checkpoint-dir checkpoints
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side, detachable from training)
@@ -222,44 +263,45 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE) --profile demo up --abort-on-container-exit
+	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE_INSPECT) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
 
 INSPECT_LAYOUT  ?= trapezoid
-INSPECT_WEATHER ?= ClearNoon
-docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection. Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid] [INSPECT_WEATHER=ClearNoon|CloudyNoon|HardRainNoon|ClearSunset|CloudySunset]
+docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) WEATHER=$(INSPECT_WEATHER) $(DOCKER_COMPOSE) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE_INSPECT) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
 	xhost -local:docker 2>/dev/null || true
 
 INSPECT_SUITE   ?= suite_a
 INSPECT_VIEW    ?= birds_eye
 INSPECT_ZOOM    ?= close
-INSPECT_SENSOR  ?= lidar
-docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide] [INSPECT_WEATHER=ClearNoon|HardRainNoon|...]
+docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-sensors 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) WEATHER=$(INSPECT_WEATHER) $(DOCKER_COMPOSE) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
+	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) $(DOCKER_COMPOSE_INSPECT) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
 	xhost -local:docker 2>/dev/null || true
 
-docker-inspect-live: ## Live sensor mode in windowed CARLA. suite_c defaults to camera view. Usage: make docker-inspect-live [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_SENSOR=lidar|camera] [INSPECT_WEATHER=ClearNoon|HardRainNoon|...]
+INSPECT_SENSOR  ?= lidar
+docker-inspect-live: ## Live sensor mode in windowed CARLA. INSPECT_SENSOR=camera forces suite_c automatically. Usage: make docker-inspect-live [INSPECT_SENSOR=lidar|camera] [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
-	@echo "Using DISPLAY=$(_DISPLAY)"
+	$(eval _SUITE := $(if $(filter camera,$(INSPECT_SENSOR)),suite_c,$(INSPECT_SUITE)))
+	@echo "Using DISPLAY=$(_DISPLAY)  SUITE=$(_SUITE)  SENSOR=$(INSPECT_SENSOR)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-live 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) SENSOR=$(INSPECT_SENSOR) WEATHER=$(INSPECT_WEATHER) $(DOCKER_COMPOSE) --profile inspect-live up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-live
+	DISPLAY=$(_DISPLAY) SUITE=$(_SUITE) LAYOUT=$(INSPECT_LAYOUT) SENSOR=$(INSPECT_SENSOR) $(DOCKER_COMPOSE_INSPECT) --profile inspect-live up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-live
 	xhost -local:docker 2>/dev/null || true
+
 
 
 

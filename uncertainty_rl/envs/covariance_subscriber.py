@@ -6,13 +6,15 @@ Runs via rclpy.spin() in a daemon thread so it does not block Gymnasium step().
 Consumed by CARLAParkingEnv when include_covariance=True.
 """
 
+import math
 import threading
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 import numpy as np
 
 try:
     import rclpy  # noqa: F401
+    from geometry_msgs.msg import PoseWithCovarianceStamped
     from rclpy.node import Node
     from rclpy.qos import QoSProfile, ReliabilityPolicy
     from uncertainty_rl_msgs.msg import CovarianceEstimate
@@ -49,11 +51,14 @@ class _CovarianceSubscriber(_NodeBase):
         self,
         covariance_topic: str = "/ekf_uncertainty/covariance",
         node_name: str = "covariance_subscriber",
+        ros2_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
         @brief Initialise the covariance subscriber node.
         @param covariance_topic: ROS 2 topic to subscribe to.
         @param node_name: Unique node name (important when multiple envs exist).
+        @param ros2_config: Optional ROS 2 config dict from train_config.yaml.
+                            Used to read publish_initial_pose and initial_pose_topic.
         """
         if not _ROS2_AVAILABLE:
             return
@@ -77,6 +82,14 @@ class _CovarianceSubscriber(_NodeBase):
             qos,
         )
         self.get_logger().info(f"Subscribed to covariance topic: {covariance_topic}")
+
+        config = ros2_config or {}
+        initial_pose_topic = config.get("initial_pose_topic", "/initialpose")
+        self._initial_pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped,
+            initial_pose_topic,
+            10,
+        )
 
     def _covariance_callback(self, msg: "CovarianceEstimate") -> None:
         """
@@ -114,6 +127,40 @@ class _CovarianceSubscriber(_NodeBase):
             if self._latest_pose is not None:
                 return cast(np.ndarray, self._latest_pose.copy())
             return None
+
+    def publish_initial_pose(self, x: float, y: float, yaw: float) -> None:
+        """
+        @brief Publish the vehicle spawn pose to /initialpose for Cartographer
+               pure localisation mode.
+
+        In pure localisation mode Cartographer needs a seed pose to begin
+        global localisation. Publishing the known spawn transform from the
+        layout YAML gives it an exact starting point, cutting convergence
+        time per episode from several seconds to one scan cycle.
+
+        Safe no-op in SLAM mode: Cartographer does not subscribe to /initialpose
+        when running in SLAM mode, so the message is harmlessly discarded.
+
+        @param x: Spawn X in world frame (metres).
+        @param y: Spawn Y in world frame (metres).
+        @param yaw: Spawn heading in radians.
+        """
+        if not _ROS2_AVAILABLE:
+            return
+
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = y
+        # Quaternion from yaw only (2D: roll=pitch=0)
+        msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        # Tight covariance: spawn position is known exactly from layout YAML
+        msg.pose.covariance[0] = 0.1  # xx
+        msg.pose.covariance[7] = 0.1  # yy
+        msg.pose.covariance[35] = 0.05  # yaw-yaw
+        self._initial_pose_pub.publish(msg)
 
     @property
     def has_data(self) -> bool:

@@ -567,8 +567,10 @@ class TestLog1pCovarianceTransform:
 
         expected_cov = np.log1p(raw)
         np.testing.assert_allclose(
-            obs[6:15], expected_cov, rtol=1e-5,
-            err_msg="Covariance features must be log1p-transformed"
+            obs[6:15],
+            expected_cov,
+            rtol=1e-5,
+            err_msg="Covariance features must be log1p-transformed",
         )
 
     def test_log1p_zero_uncertainty_stays_zero(self) -> None:
