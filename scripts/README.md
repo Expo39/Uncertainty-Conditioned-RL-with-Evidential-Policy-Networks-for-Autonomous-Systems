@@ -15,7 +15,7 @@ pipeline -- they are invoked exclusively via `make` targets.
 
 ### `run_experiment.py`
 
-Ablation study orchestrator. Enumerates all 4 baseline configs × N seeds, runs them
+Ablation study orchestrator. Enumerates all 4 baseline configs x N seeds, runs them
 sequentially or in parallel (each on a separate CARLA port), and writes results to
 per-baseline output directories.
 

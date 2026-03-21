@@ -4,14 +4,14 @@
 .PHONY: help install test test-unit test-integration verify
 .PHONY: lint format typecheck clean syntax-check
 .PHONY: backup-configs restore-configs
-.PHONY: train train-short evaluate ros2 experiment-dry
+.PHONY: train-loc train-loc-short evaluate
 .PHONY: generate-layouts visualise visualise-record
-.PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-top
-.PHONY: docker-train docker-train-short docker-eval docker-experiment docker-experiment-dry
+.PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
+.PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
 .PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live
-.PHONY: docker-generate-layouts docker-mapping-drive docker-save-map docker-train-loc
+.PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short
 
 PYTHON := python3
 PYTHON_VIS := .venv-vis/bin/python3
@@ -39,77 +39,6 @@ install: ## Install package and dev dependencies
 	pip install -e ".[dev]"
 	pre-commit install
 
-# ----------------------------------------------------------------------
-# Layout Generation (no CARLA needed)
-# ----------------------------------------------------------------------
-
-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
-	mkdir -p configs/layouts outputs/layouts
-	$(PYTHON_VIS) scripts/layouts/generate_layouts.py \
-		--output-dir configs/layouts \
-		--plot-dir outputs/layouts \
-		$(if $(LAYOUT),--layout $(LAYOUT),)
-
-docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container. Usage: make docker-generate-layouts [LAYOUT=trapezoid]
-	$(DOCKER_COMPOSE) exec training bash -c \
-		"mkdir -p configs/layouts outputs/layouts && \
-		 python scripts/layouts/generate_layouts.py \
-		   --output-dir configs/layouts \
-		   --plot-dir outputs/layouts \
-		   $(if $(LAYOUT),--layout $(LAYOUT),)"
-
-# ----------------------------------------------------------------------
-# Cartographer SLAM mapping workflow (one-time per floor plan)
-# ----------------------------------------------------------------------
-# Three-step process:
-#   1. make docker-up                        (start stack in SLAM mode, default)
-#   2. make docker-mapping-drive LAYOUT=...  (drive patrol loop; saves trajectory PNG)
-#   3. make docker-save-map LAYOUT=...       (serialise Cartographer state to .pbstream)
-# Then for training use make docker-train-loc LAYOUT=...
-# ----------------------------------------------------------------------
-
-LAYOUT ?= rectangle
-
-docker-mapping-drive: ## Drive patrol-waypoint loop in SLAM mode to build Cartographer map. Saves trajectory PNG to outputs/maps/<layout>/. Usage: make docker-mapping-drive [LAYOUT=rectangle]
-	mkdir -p outputs/maps/$(LAYOUT)
-	$(DOCKER_COMPOSE) exec training python scripts/mapping_drive.py \
-		--layout $(LAYOUT) \
-		--carla-host carla-server \
-		--carla-port 2000 \
-		--output-dir outputs/maps/$(LAYOUT)
-
-docker-save-map: ## Serialise current Cartographer SLAM state to .pbstream. Run after docker-mapping-drive. Usage: make docker-save-map [LAYOUT=rectangle]
-	mkdir -p configs/maps/$(LAYOUT)
-	$(DOCKER_COMPOSE) exec ros2-bridge bash -c \
-		"source /opt/ros/jazzy/setup.bash && \
-		 source /workspace/install/setup.bash && \
-		 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
-		 '{filename: \"/workspace/configs/maps/$(LAYOUT)/$(LAYOUT).pbstream\", include_unfinished_submaps: true}'"
-	@echo "Saved configs/maps/$(LAYOUT)/$(LAYOUT).pbstream"
-
-docker-train-loc: ## Run training in pure localisation mode against a pre-built .pbstream map. Usage: make docker-train-loc [LAYOUT=rectangle]
-	CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=/workspace/configs/maps/$(LAYOUT)/$(LAYOUT).pbstream \
-	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
-	@echo "Waiting for services to be healthy..."
-	sleep 30
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
-		--config $(CONFIG_DIR)/train_config.yaml \
-		--log-dir logs \
-		--checkpoint-dir checkpoints
-
-# ----------------------------------------------------------------------
-# Visualisation (host-side, detachable from training)
-# ----------------------------------------------------------------------
-
-visualise: ## Open 2D bird's-eye visualiser (polls outputs/vis_state.json, detachable)
-	$(PYTHON_VIS) scripts/visualise_training.py
-
-visualise-record: ## Open 2D visualiser + save MP4 on window close
-	$(PYTHON_VIS) scripts/visualise_training.py --record
-
-
-
 
 # ======================================================================
 # DOCKER - commands that run inside containers
@@ -118,9 +47,9 @@ visualise-record: ## Open 2D visualiser + save MP4 on window close
 # ----------------------------------------------------------------------
 # Docker: Lifecycle
 # ----------------------------------------------------------------------
-
-docker-build: ## Build all Docker images
-	$(DOCKER_COMPOSE) build
+SERVICE ?=
+docker-build: ## Build Docker images. Usage: make docker-build
+	$(DOCKER_COMPOSE) build $(SERVICE)
 
 docker-build-prod: ## Build training image without dev dependencies (lighter)
 	$(DOCKER_COMPOSE) build --build-arg DEV_INSTALL=false training
@@ -140,48 +69,115 @@ docker-restart: ## Restart all containers
 docker-ps: ## Show running containers
 	$(DOCKER_COMPOSE) ps
 
+docker-watch: ## Watch container health status (refreshes every 5s, Ctrl+C to exit)
+	watch -n 5 docker compose ps
+
 docker-top: ## Show running processes in containers
 	$(DOCKER_COMPOSE) top
+
+# ----------------------------------------------------------------------
+# Cartographer SLAM mapping workflow (one-time per floor plan)
+# ----------------------------------------------------------------------
+# Two-step process:
+#   1. make docker-up              (start stack in SLAM mode, default)
+#   2. make docker-map LAYOUT=...  (drive patrol loop + serialise .pbstream in one step)
+# Then for training use make docker-train-loc LAYOUT=...
+# ----------------------------------------------------------------------
+
+LAYOUT ?= rectangle
+
+# Read sensor_suite from train_config.yaml (single source of truth).
+# suite_a -> 2d maps, suite_b/suite_c -> 3d maps.
+SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/train_config.yaml | awk '{print $$2}')
+MAP_DIM := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
+
+docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle]
+	mkdir -p outputs/maps/$(MAP_DIM) configs/maps/2d configs/maps/3d
+	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	@# Restart the full stack so CARLA has a clean world (no stale actors from
+	@# previous runs) and the bridge starts fresh with Cartographer in SLAM mode.
+	@# --wait blocks until all healthchecks pass (CARLA ~60s, bridge ~30s).
+	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) down
+	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) up -d --wait
+	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) exec training python -m scripts.mapping_drive \
+		--layout $(LAYOUT) \
+		--carla-host carla-server \
+		--carla-port 2000
+	@echo "Serialising Cartographer state to .pbstream..."
+	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) exec ros2-bridge bash -c \
+		"source /opt/ros/jazzy/setup.bash && \
+		 source /workspace/install/setup.bash && \
+		 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
+		 '{filename: \"/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream\", include_unfinished_submaps: true}'"
+	@echo "Saved configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream"
+	@# Occupancy grid PNG is optional (Cairo can fail on small maps).
+	@# The PGM is written to configs/maps/ (rw mount in ros2-bridge), then
+	@# converted to PNG via the training container (which has PIL + outputs mount).
+	-$(DOCKER_COMPOSE) exec ros2-bridge bash -c \
+		"source /opt/ros/jazzy/setup.bash && \
+		 source /workspace/install/setup.bash && \
+		 ros2 run cartographer_ros cartographer_pbstream_to_ros_map \
+		   --pbstream_filename /workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
+		   --map_filestem /workspace/configs/maps/$(MAP_DIM)/$(LAYOUT)_grid \
+		   --resolution 0.05"
+	@if [ -f configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm ]; then \
+		$(DOCKER_COMPOSE) exec training python -c \
+			"from PIL import Image; Image.open('/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm').convert('RGB').save('/workspace/outputs/maps/$(MAP_DIM)/$(LAYOUT)_occupancy_grid.png')"; \
+		rm -f configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.yaml; \
+		echo "Saved outputs/maps/$(MAP_DIM)/$(LAYOUT)_occupancy_grid.png"; \
+	fi
 
 # ----------------------------------------------------------------------
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train: ## Run training inside container
+docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
+	SENSOR_SUITE=$(SENSOR_SUITE) \
+	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
+	@echo "Waiting for services to be healthy..."
+	sleep 30
 	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
-docker-train-short: ## Quick training (10k steps) inside container
+docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
+	SENSOR_SUITE=$(SENSOR_SUITE) \
+	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
+	@echo "Waiting for services to be healthy..."
+	sleep 30
 	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--total-timesteps 10000 \
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
-docker-eval: ## Run evaluation inside container
+docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
+	SENSOR_SUITE=$(SENSOR_SUITE) \
+	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
+	@echo "Waiting for services to be healthy..."
+	sleep 30
 	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
 		--config $(CONFIG_DIR)/eval_config.yaml \
 		--output-dir evaluation_results
 
-docker-experiment: ## Run full ablation study inside container (4 baselines x 10 seeds)
-	$(DOCKER_COMPOSE) exec training python scripts/run_experiment.py \
-		--base-config $(CONFIG_DIR)/train_config.yaml \
-		--configs $(CONFIG_DIR)/baselines/vanilla_ppo.yaml \
-		          $(CONFIG_DIR)/baselines/input_uncertainty.yaml \
-		          $(CONFIG_DIR)/baselines/output_uncertainty.yaml \
-		          $(CONFIG_DIR)/baselines/full_method.yaml
 
-docker-experiment-dry: ## Dry-run ablation study inside container (plan without training)
-	$(DOCKER_COMPOSE) exec training python scripts/run_experiment.py \
-		--base-config $(CONFIG_DIR)/train_config.yaml \
-		--configs $(CONFIG_DIR)/baselines/vanilla_ppo.yaml \
-		          $(CONFIG_DIR)/baselines/input_uncertainty.yaml \
-		          $(CONFIG_DIR)/baselines/output_uncertainty.yaml \
-		          $(CONFIG_DIR)/baselines/full_method.yaml \
-		--dry-run
+# ----------------------------------------------------------------------
+# Docker: Layout Generation (no CARLA needed)
+# ----------------------------------------------------------------------
+
+docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container. Usage: make docker-generate-layouts [LAYOUT=trapezoid]
+	$(DOCKER_COMPOSE) exec training bash -c \
+		"mkdir -p configs/layouts outputs/layouts && \
+		 python scripts/layouts/generate_layouts.py \
+		   --output-dir configs/layouts \
+		   --plot-dir outputs/layouts \
+		   $(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)"
+
 
 # ----------------------------------------------------------------------
 # Docker: Testing & Linting
@@ -243,20 +239,8 @@ docker-clean-all: ## Remove all containers, images, and volumes
 	docker system prune -af
 
 # ----------------------------------------------------------------------
-# Docker: Combined Workflows
+# Docker: Demo to evaluate model in windowed mode
 # ----------------------------------------------------------------------
-
-docker-full-build: ## Build and start full stack
-	$(DOCKER_COMPOSE) build && $(DOCKER_COMPOSE) up -d
-	@echo "Waiting for services to be healthy..."
-	sleep 30
-	$(DOCKER_COMPOSE) ps
-
-docker-dev: ## Start stack + open training shell (development mode)
-	$(DOCKER_COMPOSE) up -d
-	@echo "Waiting for services to be healthy..."
-	sleep 15
-	$(DOCKER_COMPOSE) exec training /bin/bash
 
 MODEL ?= checkpoints/final_model
 docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make docker-demo MODEL=<path>
@@ -265,6 +249,10 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE_INSPECT) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
+
+# ----------------------------------------------------------------------
+# Docker: Inspection Tools to confirm all is good in the simulator
+# ----------------------------------------------------------------------
 
 INSPECT_LAYOUT  ?= trapezoid
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
@@ -304,48 +292,61 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. INSPECT_SENSOR=camer
 
 
 
-
-
-
-
 # ======================================================================
 # LOCAL - commands that run on the host machine
 # ======================================================================
 
 # ----------------------------------------------------------------------
+# Layout Generation (no CARLA needed)
+# ----------------------------------------------------------------------
+
+generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
+	mkdir -p configs/layouts outputs/layouts
+	$(PYTHON_VIS) scripts/layouts/generate_layouts.py \
+		--output-dir configs/layouts \
+		--plot-dir outputs/layouts \
+		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
+
+
+# ----------------------------------------------------------------------
 # Training & Evaluation
 # ----------------------------------------------------------------------
 
-train: ## Train PPO agent (requires CARLA running)
+train-loc: ## Train PPO agent in pure localisation mode against a pre-built .pbstream map. Usage: make train-loc [LAYOUT=rectangle]
+	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 	$(PYTHON) $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--log-dir ./logs \
 		--checkpoint-dir ./checkpoints
 
-train-short: ## Quick training run (10k steps) for smoke testing
+train-loc-short: ## Quick training run (10k steps) in pure localisation mode. Usage: make train-loc-short [LAYOUT=rectangle]
+	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 	$(PYTHON) $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--total-timesteps 10000 \
 		--log-dir ./logs \
 		--checkpoint-dir ./checkpoints
 
-evaluate: ## Evaluate trained agent across uncertainty levels
+evaluate: ## Evaluate trained agent in pure localisation mode. Usage: make evaluate [LAYOUT=rectangle]
+	CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 	$(PYTHON) $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
 		--config $(CONFIG_DIR)/eval_config.yaml \
 		--output-dir ./evaluation_results
 
-experiment-dry: ## Dry-run ablation study locally (plan without training, no Docker needed)
-	$(PYTHON) scripts/run_experiment.py \
-		--base-config $(CONFIG_DIR)/train_config.yaml \
-		--configs $(CONFIG_DIR)/baselines/vanilla_ppo.yaml \
-		          $(CONFIG_DIR)/baselines/input_uncertainty.yaml \
-		          $(CONFIG_DIR)/baselines/output_uncertainty.yaml \
-		          $(CONFIG_DIR)/baselines/full_method.yaml \
-		--dry-run
+# ----------------------------------------------------------------------
+# Visualisation (host-side, detachable from training) 
+# IMPORTANT: Containers MUST be running to see live data !
+# ----------------------------------------------------------------------
 
-ros2: ## Launch covariance extractor node
-	$(PYTHON) $(SRC_DIR)/ros2/covariance_extractor.py
+visualise: ## Open 2D bird's-eye visualiser (polls outputs/vis_state.json, detachable)
+	$(PYTHON_VIS) scripts/visualise_training.py
+
+visualise-record: ## Open 2D visualiser + save MP4 on window close
+	$(PYTHON_VIS) scripts/visualise_training.py --record
 
 # ----------------------------------------------------------------------
 # Testing
@@ -398,9 +399,12 @@ syntax-check: ## Check Python syntax with py_compile (no execution)
 # Cleanup
 # ----------------------------------------------------------------------
 
-clean: ## Remove build artefacts, caches, and generated outputs
+clean: ## Remove build artefacts, caches, generated outputs, maps, and layouts (preserves .xodr)
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
-	rm -rf logs/ checkpoints/ evaluation_results/ experiments/ results/
+	sudo rm -rf logs/ checkpoints/ evaluation_results/ experiments/ results/
+	sudo rm -rf outputs/
+	sudo rm -rf configs/maps/
+	find configs/layouts/ -type f ! -name "*.xodr" -delete 2>/dev/null || true
 	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 

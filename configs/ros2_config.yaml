@@ -20,7 +20,11 @@ ekf:
   two_d_mode: true           # Constrain to 2D (no z, roll, pitch)
   world_frame: "odom"        # Frame of reference for EKF output
   odom_frame: "odom"
-  base_link_frame: "base_link"
+  # The CARLA bridge in passive mode publishes sensor TF frames directly under
+  # "map" with no "ego_vehicle" body frame. Static TF publishers in the launch
+  # file create: ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu, so the
+  # EKF can use "ego_vehicle" as the central body frame for all sensors.
+  base_link_frame: "ego_vehicle"
   publish_tf: true
   imu0: "/carla/ego_vehicle/imu"
   # 15-element boolean list: [x, y, z, roll, pitch, yaw,
@@ -58,15 +62,3 @@ covariance:
   min_variance: 0.0001  # Minimum variance threshold (m^2)
   max_variance: 100.0  # Maximum variance threshold (m^2)
   outlier_rejection: true  # Reject outlier covariance values
-
-# 270 deg LiDAR FOV filter (Suite A only)
-# CARLA sensor.lidar.ray_cast scans 360 deg. The real SICK TiM 5xx scans 270 deg
-# (mounted at front bumper, rear 90 deg obstructed by vehicle body).
-# These angles clip the rear 90 deg: [-135 deg, +135 deg] centred forward.
-# Pipeline: /carla/ego_vehicle/lidar (PointCloud2, 360 deg)
-#        -> pointcloud_to_laserscan -> /lidar/scan_raw (LaserScan, 360 deg)
-#        -> laser_filter_node       -> /lidar/scan     (LaserScan, 270 deg)
-#        -> Cartographer            -> /scan_matched_odometry (Odometry + covariance)
-lidar_filter:
-  angle_min: -2.356   # -135 deg in radians (left limit of 270 deg FOV)
-  angle_max:  2.356   #  135 deg in radians (right limit)

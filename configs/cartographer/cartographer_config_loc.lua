@@ -4,7 +4,7 @@
 --
 -- This config is used during training after the parking lot map has been
 -- pre-built and serialised to a .pbstream file via the one-time SLAM mapping
--- workflow (make docker-mapping-drive + make docker-save-map).
+-- workflow (make docker-map LAYOUT=<name>).
 --
 -- Cartographer runs in pure localisation mode: TRAJECTORY_BUILDER.pure_localization
 -- freezes the pose graph completely. New scans are matched against the loaded
@@ -20,13 +20,6 @@
 --   - The .pbstream is loaded via --load_state_filename in carla_bridge.launch.py,
 --     controlled by the CARTOGRAPHER_MAP env var.
 --
--- Usage:
---   1. Run `make docker-mapping-drive LAYOUT=<name>` then `make docker-save-map
---      LAYOUT=<name>` once per floor plan to generate .pbstream files.
---   2. Run `make docker-train-loc LAYOUT=<name>` -- sets CARTOGRAPHER_MODE=loc
---      and CARTOGRAPHER_MAP automatically.
---   3. Training uses this config automatically when CARTOGRAPHER_MODE=loc.
---
 -- @note cartographer_ros reads this file at startup via --configuration_basename.
 --       The .pbstream is loaded via --load_state_filename (separate argument).
 -- ==========================================================================
@@ -38,26 +31,26 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- Frame names must match carla_bridge.launch.py TF tree
+  -- TF frame names: the CARLA ROS bridge in passive mode publishes sensor
+  -- frames directly under "map" (map -> ego_vehicle/lidar). There is no
+  -- intermediate "ego_vehicle" frame, so we track the LiDAR frame directly.
   map_frame = "map",
-  tracking_frame = "base_link",
-  published_frame = "base_link",
+  tracking_frame = "ego_vehicle/lidar",
+  published_frame = "ego_vehicle/lidar",
   odom_frame = "odom",
 
-  -- Provide an odom frame between scans (same as SLAM config)
   provide_odom_frame = true,
   publish_frame_projected_to_2d = true,
 
-  -- No odometry input to Cartographer; EKF feeds from scan_matched_odometry
   use_odometry = false,
   use_nav_sat = false,
   use_landmarks = false,
 
-  -- 2D LiDAR (Suite A: CARLA sensor.lidar.ray_cast, 1 channel, horizontal)
-  num_laser_scans = 1,
+  -- PointCloud2 input (same as SLAM config)
+  num_laser_scans = 0,
   num_multi_echo_laser_scans = 0,
   num_subdivisions_per_laser_scan = 1,
-  num_point_clouds = 0,
+  num_point_clouds = 1,
 
   lookup_transform_timeout_sec = 0.2,
   submap_publish_period_sec = 0.3,
@@ -75,13 +68,12 @@ options = {
 -- The loaded .pbstream contains the frozen submap; no new submaps are created.
 MAP_BUILDER.use_trajectory_builder_2d = true
 
--- Pure localisation: freeze the pose graph entirely. This is the primary
--- mechanism that prevents Cartographer from building new submaps. The loaded
--- .pbstream is the only reference for scan matching.
+-- Pure localisation: freeze the pose graph entirely. The loaded .pbstream
+-- is the only reference for scan matching.
 TRAJECTORY_BUILDER.pure_localization = true
 
 -- ---------------------------------------------------------------------------
--- 2D trajectory builder settings (identical to SLAM config)
+-- 2D trajectory builder settings (same as SLAM except num_range_data)
 -- ---------------------------------------------------------------------------
 
 TRAJECTORY_BUILDER_2D.min_range = 0.1
@@ -97,13 +89,11 @@ TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.1
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(20.0)
 
--- Scan matcher weights: same as SLAM to preserve covariance variation
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 40.0
 
 -- Small submap window: in pure localisation, submaps are never finalised.
 -- 10 scans (~0.5 s at 20 Hz) gives fast per-episode convergence.
--- The SLAM config uses 90 here; that is too slow for episode resets in loc mode.
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 10
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 
@@ -112,7 +102,6 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 -- ---------------------------------------------------------------------------
 
 POSE_GRAPH.optimize_every_n_nodes = 0
-
 POSE_GRAPH.constraint_builder.min_score = 0.55
 POSE_GRAPH.constraint_builder.global_localization_min_score = 0.60
 POSE_GRAPH.optimization_problem.huber_scale = 1e1

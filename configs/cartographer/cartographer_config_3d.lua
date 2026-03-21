@@ -38,9 +38,12 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
+  -- TF frame names: the CARLA ROS bridge in passive mode publishes sensor
+  -- frames directly under "map" (map -> ego_vehicle/lidar_3d). There is no
+  -- intermediate "ego_vehicle" frame, so we track the 3D LiDAR frame directly.
   map_frame = "map",
-  tracking_frame = "base_link",
-  published_frame = "base_link",
+  tracking_frame = "ego_vehicle/lidar_3d",
+  published_frame = "ego_vehicle/lidar_3d",
   odom_frame = "odom",
 
   provide_odom_frame = true,

@@ -52,9 +52,15 @@ RUN mkdir -p /workspace/src
 
 # Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
 # Patch CARLA_VERSION to 0.9.16: the bridge hardcodes 0.9.13 but is compatible with 0.9.16
+# Patch generate_opendrive_world to disable nav mesh (crashes on headless GPU) and
+# use custom OpendriveGenerationParameters matching our FlatPlane setup.
 RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
-    echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION
+    echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION && \
+    sed -i 's|carla_world = carla_client.generate_opendrive_world(str(data))|carla_world = carla_client.generate_opendrive_world(str(data), carla.OpendriveGenerationParameters(vertex_distance=2.0, max_road_length=600.0, wall_height=0.0, additional_width=300.0, smooth_junctions=False, enable_mesh_visibility=True, enable_pedestrian_navigation=False))|' \
+    /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
+    sed -i 's|if self.on_tick_id:|if getattr(self, "on_tick_id", None):|' \
+    /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py
 
 # Install Python dependencies for CARLA
 # --break-system-packages needed on Ubuntu 24.04 (PEP 668); safe in a container
@@ -87,8 +93,10 @@ COPY uncertainty_rl/ros2/setup.cfg /workspace/src/uncertainty_rl_ros2/setup.cfg
 COPY uncertainty_rl/ros2/resource /workspace/src/uncertainty_rl_ros2/resource
 COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
-# Copy ROS 2 config (loaded at launch time)
+# Copy configs (loaded at launch time)
 COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
+COPY configs/train_config.yaml /workspace/configs/train_config.yaml
+COPY configs/2d_lidar /workspace/configs/2d_lidar
 
 # Copy Cartographer configs (Suite A: 2D LiDAR; Suite B/C: 3D LiDAR)
 COPY configs/cartographer /workspace/configs/cartographer
