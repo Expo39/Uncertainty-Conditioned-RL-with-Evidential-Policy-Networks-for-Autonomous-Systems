@@ -57,6 +57,8 @@ tmp/
 temp/
 *.tmp
 
+documentation/
+
 # AI assistant instructions (local only)
 CLAUDE.md
 **/CLAUDE.md
@@ -84,7 +86,4 @@ project_configs.tar.gz
 configs/layouts/*.yaml
 
 # Generated layout artefacts and visualiser state
-outputs/layouts/
-outputs/vis_state.json
-outputs/vis_state.tmp
-outputs/recordings/
+outputs/
