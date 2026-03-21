@@ -57,8 +57,6 @@ tmp/
 temp/
 *.tmp
 
-documentation/
-
 # AI assistant instructions (local only)
 CLAUDE.md
 **/CLAUDE.md
