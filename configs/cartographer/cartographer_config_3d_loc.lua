@@ -1,24 +1,21 @@
 -- ==========================================================================
--- cartographer_config_loc.lua
--- @brief Google Cartographer 2D pure-localisation config for Suite A (2D LiDAR).
+-- cartographer_config_3d_loc.lua
+-- @brief Google Cartographer 2D pure-localisation config for Suite B and C
+--        (16-channel 3D LiDAR, Velodyne VLP-16 style, roof-mounted).
 --
--- This config is used during training after the parking lot map has been
--- pre-built and serialised to a .pbstream file via the one-time SLAM mapping
--- workflow (make docker-map LAYOUT=<name>).
+-- Pure localisation variant of cartographer_config_3d.lua. Matches against a
+-- frozen .pbstream built during the one-time SLAM mapping run.
 --
--- Cartographer runs in pure localisation mode: TRAJECTORY_BUILDER.pure_localization
--- freezes the pose graph completely. New scans are matched against the loaded
--- submap only -- no new nodes or submaps are ever created. This produces a
--- covariance signal that correctly correlates with driving difficulty:
--- empty lot (all cones visible) -> strong match -> low covariance (easy).
--- Crowded lot (cones occluded by NPCs) -> weak match -> high covariance (hard).
+-- Compared to cartographer_config_3d.lua (SLAM mode):
+--   - TRAJECTORY_BUILDER.pure_localization = true
+--   - optimize_every_n_nodes = 0
+--   - num_range_data = 10 (fast per-episode convergence)
 --
--- Compared to cartographer_config.lua (SLAM mode):
---   - TRAJECTORY_BUILDER.pure_localization = true  (primary mechanism)
---   - optimize_every_n_nodes = 0  (belt-and-braces: also disables optimisation)
---   - num_range_data = 10  (fast convergence per episode; 90 not needed in loc mode)
---   - The .pbstream is loaded via --load_state_filename in carla_bridge.launch.py,
---     controlled by the CARTOGRAPHER_MAP env var.
+-- Pipeline (Suite B/C, loc mode):
+--   /carla/ego_vehicle/lidar_3d (PointCloud2, 16-channel, 360 deg)
+--       -> Cartographer (match against frozen .pbstream)
+--       -> /scan_matched_odometry (Odometry + covariance)
+--       -> EKF odom0 correction -> /odometry/filtered
 --
 -- @note cartographer_ros reads this file at startup via --configuration_basename.
 --       The .pbstream is loaded via --load_state_filename (separate argument).
@@ -32,11 +29,11 @@ options = {
   trajectory_builder = TRAJECTORY_BUILDER,
 
   -- TF frame names: the CARLA ROS bridge in passive mode publishes sensor
-  -- frames directly under "map" (map -> ego_vehicle/lidar). There is no
-  -- intermediate "ego_vehicle" frame, so we track the LiDAR frame directly.
+  -- frames directly under "map" (map -> ego_vehicle/lidar_3d). There is no
+  -- intermediate "ego_vehicle" frame, so we track the 3D LiDAR frame directly.
   map_frame = "map",
-  tracking_frame = "ego_vehicle/lidar",
-  published_frame = "ego_vehicle/lidar",
+  tracking_frame = "ego_vehicle/lidar_3d",
+  published_frame = "ego_vehicle/lidar_3d",
   odom_frame = "odom",
 
   provide_odom_frame = true,
@@ -46,7 +43,7 @@ options = {
   use_nav_sat = false,
   use_landmarks = false,
 
-  -- PointCloud2 input (same as SLAM config)
+  -- 3D LiDAR as PointCloud2 (16-channel VLP-16 style)
   num_laser_scans = 0,
   num_multi_echo_laser_scans = 0,
   num_subdivisions_per_laser_scan = 1,
@@ -64,8 +61,6 @@ options = {
   landmarks_sampling_ratio = 1.0,
 }
 
--- 2D map builder in pure localisation mode.
--- The loaded .pbstream contains the frozen submap; no new submaps are created.
 MAP_BUILDER.use_trajectory_builder_2d = true
 
 -- Pure localisation: freeze the pose graph entirely. The loaded .pbstream
@@ -77,12 +72,13 @@ TRAJECTORY_BUILDER.pure_localization = true
 -- ---------------------------------------------------------------------------
 
 TRAJECTORY_BUILDER_2D.min_range = 0.1
-TRAJECTORY_BUILDER_2D.max_range = 30.0
+TRAJECTORY_BUILDER_2D.max_range = 100.0
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
 TRAJECTORY_BUILDER_2D.use_imu_data = false
 
+-- Denser point cloud from 16-layer fan: target 400 points after downsampling
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 200
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 400
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 50.0
 
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
@@ -92,8 +88,7 @@ TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window =
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 40.0
 
--- Small submap window: in pure localisation, submaps are never finalised.
--- 10 scans (~0.5 s at 20 Hz) gives fast per-episode convergence.
+-- Small submap window for fast per-episode convergence in loc mode
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 10
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 

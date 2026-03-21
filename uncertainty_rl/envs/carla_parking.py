@@ -1548,6 +1548,7 @@ class CARLAParkingEnv(gym.Env):
                             additional_width=300.0,
                             smooth_junctions=False,
                             enable_mesh_visibility=True,
+                            enable_pedestrian_navigation=False,
                         ),
                     )
                     time.sleep(5.0)
@@ -1618,6 +1619,9 @@ class CARLAParkingEnv(gym.Env):
 
         bp_lib = self.world.get_blueprint_library()
         vehicle_bp = bp_lib.filter("vehicle.bmw.grandtourer")[0]
+        # The ROS bridge identifies the ego vehicle by role_name and publishes
+        # sensor data under /carla/ego_vehicle/* for Cartographer and the EKF.
+        vehicle_bp.set_attribute("role_name", "ego_vehicle")
 
         spawn_transform = carla.Transform(
             carla.Location(x=sx, y=sy, z=sz),
@@ -1689,6 +1693,10 @@ class CARLAParkingEnv(gym.Env):
         mount = imu_config.get("mount", {})
 
         imu_bp = self.world.get_blueprint_library().find("sensor.other.imu")
+        # role_name determines the ROS topic: /carla/ego_vehicle/<role_name>.
+        # CARLA defaults all sensors to "front", causing topic collisions in the
+        # bridge when multiple sensors are attached. Each sensor needs a unique name.
+        imu_bp.set_attribute("role_name", "imu")
         for attr, default in [
             ("noise_accel_stddev_x", 0.1),
             ("noise_accel_stddev_y", 0.1),
@@ -1729,6 +1737,7 @@ class CARLAParkingEnv(gym.Env):
         mount = lidar_config.get("mount", {})
 
         lidar_bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
+        lidar_bp.set_attribute("role_name", "lidar")
         for attr, default in [
             ("channels", 1),
             ("range", 30.0),
@@ -1771,6 +1780,7 @@ class CARLAParkingEnv(gym.Env):
         mount = lidar3d_config.get("mount", {})
 
         lidar_bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
+        lidar_bp.set_attribute("role_name", "lidar_3d")
         for attr, default in [
             ("channels", 16),
             ("range", 100.0),
@@ -1816,6 +1826,7 @@ class CARLAParkingEnv(gym.Env):
         mount = cam_config.get("mount", {})
 
         cam_bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
+        cam_bp.set_attribute("role_name", "rgb_front")
         for attr, default in [
             ("image_size_x", 640),
             ("image_size_y", 480),
@@ -1854,6 +1865,11 @@ class CARLAParkingEnv(gym.Env):
         if self.vehicle is None or self.world is None:
             return
         bp = self.world.get_blueprint_library().find("sensor.other.collision")
+        # Set role_name so the CARLA ROS bridge (register_all_sensors=True) can
+        # namespace this sensor's topic distinctly from other ego_vehicle topics.
+        # Without this, the bridge reuses "carla/ego_vehicle/front" and crashes
+        # with a type-incompatible publisher error.
+        bp.set_attribute("role_name", "collision")
         sensor = self.world.spawn_actor(
             bp,
             carla.Transform(),

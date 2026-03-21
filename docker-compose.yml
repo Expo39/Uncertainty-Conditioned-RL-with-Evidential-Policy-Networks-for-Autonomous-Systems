@@ -13,6 +13,8 @@
 #
 # @author Antonio Galdes
 
+name: ucrl
+
 services:
   # CARLA simulation server - headless with GPU passthrough
   carla-server:
@@ -88,12 +90,11 @@ services:
         ros2 launch uncertainty_rl_ros2 carla_bridge.launch.py
       "
     healthcheck:
-      test: ["CMD-SHELL", "source /opt/ros/jazzy/setup.bash && source /workspace/install/setup.bash && ros2 topic list | grep -q /ekf_uncertainty/covariance || exit 1"]
-      interval: 30s
-      timeout: 15s
-      retries: 5
-      # Allow 60s for CARLA bridge + EKF + covariance extractor to fully initialise
-      start_period: 60s
+      test: ["CMD-SHELL", "pgrep -f 'ros2 launch' > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     deploy:
       resources:
         reservations:

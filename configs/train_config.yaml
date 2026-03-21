@@ -55,6 +55,9 @@ carla_sensors:
     # @note CARLA sensor.lidar.ray_cast always scans 360 deg (no FOV restriction).
     # Real SICK TiM 5xx scans 270 deg. The ROS bridge laser_filter pipeline clips
     # the rear 90 deg before Cartographer (see carla_bridge.launch.py).
+    # Angular bounds for the 270 deg FOV clip (radians, centred forward).
+    filter_angle_min: -2.356  # -135 deg (left limit)
+    filter_angle_max:  2.356  #  135 deg (right limit)
     mount:
       x: 2.4    # Front bumper centre (longitudinal)
       y: 0.0
