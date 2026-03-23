@@ -32,17 +32,13 @@ RUN apt-get update && apt-get install -y \
 # Install ROS 2 packages:
 # - robot-localization: EKF node (fuses IMU + odometry, outputs /odometry/filtered)
 # - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
-# - pointcloud-to-laserscan: converts LiDAR PointCloud2 to LaserScan for the filter pipeline
-# - laser-filters: clips the 360 deg CARLA scan to 270 deg (rear 90 deg blocked by vehicle)
-# - cartographer-ros: 2D SLAM / scan-matching; publishes /scan_matched_odometry for EKF correction
+# - cartographer-ros: 2D SLAM / scan-matching on raw PointCloud2; publishes TF for EKF
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-cv-bridge \
     ros-${ROS_DISTRO}-derived-object-msgs \
-    ros-${ROS_DISTRO}-pointcloud-to-laserscan \
-    ros-${ROS_DISTRO}-laser-filters \
     ros-${ROS_DISTRO}-cartographer-ros \
     && rm -rf /var/lib/apt/lists/*
 
@@ -95,14 +91,10 @@ COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
 # Copy configs (loaded at launch time)
 COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
-COPY configs/train_config.yaml /workspace/configs/train_config.yaml
-COPY configs/2d_lidar /workspace/configs/2d_lidar
-
-# Copy Cartographer configs (Suite A: 2D LiDAR; Suite B/C: 3D LiDAR)
-COPY configs/cartographer /workspace/configs/cartographer
-
 # Create the maps directory so the configs/maps:rw volume mount has an anchor point.
-# .pbstream files are generated at runtime via make docker-save-map; never baked in.
+# .pbstream files are generated at runtime via make docker-map; never baked in.
+# All configs (train_config.yaml, cartographer/) are provided at runtime
+# via the ./configs:/workspace/configs:ro volume mount in docker-compose.yml.
 RUN mkdir -p /workspace/configs/maps
 
 # Build custom messages and nodes

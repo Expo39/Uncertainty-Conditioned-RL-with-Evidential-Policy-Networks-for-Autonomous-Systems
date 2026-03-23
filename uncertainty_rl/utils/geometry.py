@@ -58,7 +58,7 @@ def _interpolate_cone_positions(
     entrance_point: Optional[Tuple[float, float]] = None,
     entrance_half_width: float = 4.0,
     extra_entrance_points: Optional[List[Tuple[float, float]]] = None,
-) -> List[Tuple[float, float]]:
+) -> List[Tuple[float, float, float]]:
     """
     @brief Interpolate evenly spaced positions along a closed polygon perimeter.
     @param corners: List of (x, y) polygon vertices in order (last edge closes
@@ -70,7 +70,8 @@ def _interpolate_cone_positions(
     @param extra_entrance_points: Optional list of additional (x, y) entrance centres
                                   (e.g. extra spawn transforms). Each receives the same
                                   entrance_half_width gap as the primary entrance.
-    @return List of (x, y) positions for cone placement.
+    @return List of (x, y, yaw_deg) tuples. yaw_deg is the edge direction in degrees
+            so markers align with the perimeter wall.
 
     @note Uses adaptive spacing so the last cone on each edge aligns exactly
           with the corner rather than leaving a gap.
@@ -82,7 +83,7 @@ def _interpolate_cone_positions(
     if extra_entrance_points:
         all_entrances.extend(extra_entrance_points)
 
-    positions: List[Tuple[float, float]] = []
+    positions: List[Tuple[float, float, float]] = []
     n = len(corners)
 
     for i in range(n):
@@ -92,6 +93,9 @@ def _interpolate_cone_positions(
         edge_len = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
         if edge_len < 1e-6:
             continue
+
+        # Edge direction in degrees for marker alignment
+        edge_yaw_deg = math.degrees(math.atan2(y1 - y0, x1 - x0))
 
         num_intervals = max(1, int(round(edge_len / spacing)))
         dx = (x1 - x0) / num_intervals
@@ -105,7 +109,7 @@ def _interpolate_cone_positions(
                 for ex, ey in all_entrances
             )
             if not in_gap:
-                positions.append((cx, cy))
+                positions.append((cx, cy, edge_yaw_deg))
 
     return positions
 

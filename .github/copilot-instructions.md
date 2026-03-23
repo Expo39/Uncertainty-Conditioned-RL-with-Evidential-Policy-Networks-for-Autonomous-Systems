@@ -4,7 +4,7 @@
 
 An autonomous parking system that knows when it doesn't know where it is and drives more carefully in response. It feeds EKF localisation uncertainty directly into an RL policy, and the policy uses evidential deep learning to quantify its own action uncertainty. Two layers of uncertainty awareness: "how sure am I about where I am?" (EKF covariance) and "how sure am I about what to do?" (evidential policy output).
 
-MSc dissertation codebase - trains in CARLA simulation, evaluates across uncertainty levels, designed to transfer to a real instrumented parking lot at Lemonworx LTD.
+MSc dissertation codebase - trains in CARLA simulation, evaluates across uncertainty levels, designed to transfer to a real instrumented parking lot.
 
 ### Three-Container Architecture
 

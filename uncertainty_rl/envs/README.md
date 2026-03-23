@@ -31,7 +31,7 @@ CARLAParkingEnv(
 
 ### State Space (21-dimensional default)
 
-**All 21 dimensions are available at the Lemonworx deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
+**All 21 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
 
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|

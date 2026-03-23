@@ -44,30 +44,49 @@ carla_sensors:
       y: 0.0
       z: 0.3    # Centre-of-mass height (metres)
 
-  lidar:        # Suite A: 2D LiDAR (SICK TiM 5xx / Hokuyo style)
-    channels: 1                 # Single-channel horizontal scan
-    range: 30.0                 # Maximum range (metres)
-    points_per_second: 56000    # Horizontal resolution proxy for scan density
-    rotation_frequency: 10.0   # Scans per second
-    upper_fov: 0.0              # Horizontal plane scan (both FOV limits at 0 = 2D)
-    lower_fov: 0.0
+  lidar:        # Suite A: 2D LiDAR (SICK TiM571)
+    # Real spec: 1 channel, 270 deg, 25 m, 15 Hz, 0.33 deg angular resolution (~810 pts/scan).
+    # Single channel at 0 deg vertical FOV = true horizontal scan plane.
+    # Mount z=0.3 (vehicle frame) puts the scan plane at front bumper height,
+    # intersecting the body of perimeter traffic cones (~0.7m tall).
+    #
+    # CARLA sim-to-real caveats (revert on real robot):
+    #   - points_per_second: 2M (real TiM571: ~12,150 pts/sec). TiM571 beam
+    #     divergence is ~1.26 deg; CARLA's zero-width rays need ~166x more
+    #     density to compensate.
+    #   - rotation_frequency: 20 Hz (real TiM571: 15 Hz). Matched to
+    #     carla_timestep to avoid empty scan messages on tick boundaries.
+    # On the real robot, revert to native specs.
+    channels: 1                 # True 2D LiDAR: single horizontal scan plane
+    range: 25.0                 # TiM571 max range (metres)
+    points_per_second: 2000000  # CARLA workaround: compensates for zero beam divergence.
+                                # 2M / 20 Hz = ~100k rays per scan -> ~0.004 deg angular step.
+    rotation_frequency: 20.0    # Matched to carla_timestep (0.05s = 20 Hz) so each tick
+                                # produces exactly one complete scan with no empty messages.
+    upper_fov: 0.0              # Flat horizontal plane (2D LiDAR)
+    lower_fov: 0.0              # Flat horizontal plane (2D LiDAR)
     sensor_tick: 0.05           # Matches carla_timestep (20 Hz)
-    # @note CARLA sensor.lidar.ray_cast always scans 360 deg (no FOV restriction).
-    # Real SICK TiM 5xx scans 270 deg. The ROS bridge laser_filter pipeline clips
-    # the rear 90 deg before Cartographer (see carla_bridge.launch.py).
-    # Angular bounds for the 270 deg FOV clip (radians, centred forward).
-    filter_angle_min: -2.356  # -135 deg (left limit)
-    filter_angle_max:  2.356  #  135 deg (right limit)
+    # @note CARLA sensor.lidar.ray_cast always scans 360 deg and does not collide
+    # with the parent actor. Real TiM571 scans 270 deg (rear blocked by car body).
+    # In CARLA, 360 deg is used consistently for both mapping and localisation.
+    # On the real robot, the physical 270 deg FOV applies to both phases.
     mount:
       x: 2.4    # Front bumper centre (longitudinal)
       y: 0.0
-      z: 0.5    # Above bumper lip so scan plane clears ego mesh and hits car sides
+      z: 0.3    # Front bumper mount height
 
-  lidar_3d:     # Suite B/C: 3D LiDAR (Velodyne VLP-16 style)
+  lidar_3d:     # Suite B/C: 3D LiDAR (Velodyne VLP-16 Puck)
+    # Real spec: 16 channels, 360 deg, 100 m, 5-20 Hz (typ 10), 300k pts/sec,
+    # 0.2 deg horizontal resolution at 10 Hz, 2.0 deg vertical resolution.
+    #
+    # CARLA sim-to-real caveat: VLP-16 beam divergence is 0.17 deg horizontal.
+    # CARLA's zero-width rays need ~7x more density to match. 300k * 7 = ~2M.
+    # On the real robot, revert to native 300k pts/sec.
     channels: 16
-    range: 100.0                # Maximum range (metres)
-    points_per_second: 300000
-    rotation_frequency: 10.0
+    range: 100.0                # VLP-16 max range (metres)
+    points_per_second: 2000000  # CARLA workaround: compensates for zero beam divergence.
+                                # 2M / 10 Hz / 16 ch = ~12.5k rays per channel per revolution.
+    rotation_frequency: 10.0    # VLP-16 typical rotation rate (Hz)
     upper_fov: 15.0             # +15 deg elevation (VLP-16 half-FOV)
     lower_fov: -15.0            # -15 deg elevation
     sensor_tick: 0.05
@@ -93,11 +112,18 @@ carla_sensors:
 # stored in configs/layouts/. The env reads from these YAML files directly.
 # ---------------------------------------------------------------------------
 parking_scenarios:
-  spawn_perimeter_cones: true          # Cones define the static perimeter map for Cartographer pure
+  spawn_perimeter_cones: true          # Markers define the static perimeter map for Cartographer pure
                                        # localisation. Must be true for both the one-time SLAM mapping
                                        # run (make docker-mapping-drive) and all training runs.
-  perimeter_cone_spacing: 2.0          # Metres between perimeter cones (only used if spawn_perimeter_cones: true)
-  entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
+  perimeter_marker_blueprint: "static.prop.constructioncone"
+                                       # CARLA blueprint for perimeter/obstacle markers. Options:
+                                       #   static.prop.constructioncone  - traffic cone (~0.7m, good LiDAR return)
+                                       #   static.prop.trafficcone01     - smaller cone variant
+                                       #   static.prop.streetbarrier     - jersey barrier (~1.0m, excellent return)
+                                       #   static.prop.ironplank         - metal plank/rail
+                                       # Run world.get_blueprint_library().filter('static.prop.*') in
+                                       # CARLA to enumerate all available props for your map.
+  perimeter_cone_spacing: 2.0          # Metres between perimeter markers (only used if spawn_perimeter_cones: true)
   bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
   bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
   num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
