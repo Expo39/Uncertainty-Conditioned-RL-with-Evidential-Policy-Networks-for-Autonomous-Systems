@@ -122,16 +122,17 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 		   --resolution 0.05"
 	@if [ -f configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm ]; then \
 		$(DOCKER_COMPOSE) exec training python -c \
-			"from PIL import Image; Image.open('/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm').convert('RGB').save('/workspace/outputs/maps/$(MAP_DIM)/$(LAYOUT)_occupancy_grid.png')"; \
+			"from PIL import Image; Image.open('/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm').convert('RGB').save('/workspace/outputs/maps/$(MAP_DIM)/$(LAYOUT).png')"; \
 		rm -f configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.yaml; \
-		echo "Saved outputs/maps/$(MAP_DIM)/$(LAYOUT)_occupancy_grid.png"; \
+		echo "Saved outputs/maps/$(MAP_DIM)/$(LAYOUT).png"; \
 	fi
 
 # ----------------------------------------------------------------------
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]	CARTOGRAPHER_MODE=loc \
+docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
+	CARTOGRAPHER_MODE=loc \
 	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 	SENSOR_SUITE=$(SENSOR_SUITE) \
 	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
@@ -142,7 +143,8 @@ docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
-docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]	CARTOGRAPHER_MODE=loc \
+docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]
+	CARTOGRAPHER_MODE=loc \
 	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 	SENSOR_SUITE=$(SENSOR_SUITE) \
 	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge

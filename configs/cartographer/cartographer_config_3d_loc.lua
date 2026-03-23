@@ -13,9 +13,10 @@
 --
 -- Pipeline (Suite B/C, loc mode):
 --   /carla/ego_vehicle/lidar_3d (PointCloud2, 16-channel, 360 deg)
---       -> Cartographer (match against frozen .pbstream)
---       -> /scan_matched_odometry (Odometry + covariance)
---       -> EKF odom0 correction -> /odometry/filtered
+--       -> Cartographer 2D (match against frozen .pbstream, all channels projected)
+--       -> TF: odom -> ego_vehicle/imu
+--       -> tf_to_odom node -> /scan_matched_odometry (Odometry)
+--       -> robot_localisation EKF (odom0 correction step)
 --
 -- @note cartographer_ros reads this file at startup via --configuration_basename.
 --       The .pbstream is loaded via --load_state_filename (separate argument).
@@ -28,12 +29,11 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- TF frame names: the CARLA ROS bridge in passive mode publishes sensor
-  -- frames directly under "map" (map -> ego_vehicle/lidar_3d). There is no
-  -- intermediate "ego_vehicle" frame, so we track the 3D LiDAR frame directly.
+  -- TF frame names: tracking ego_vehicle/imu satisfies Cartographer's IMU
+  -- colocation requirement.
   map_frame = "map",
-  tracking_frame = "ego_vehicle/lidar_3d",
-  published_frame = "ego_vehicle/lidar_3d",
+  tracking_frame = "ego_vehicle/imu",
+  published_frame = "ego_vehicle/imu",
   odom_frame = "odom",
 
   provide_odom_frame = true,
@@ -72,9 +72,14 @@ TRAJECTORY_BUILDER.pure_localization = true
 -- ---------------------------------------------------------------------------
 
 TRAJECTORY_BUILDER_2D.min_range = 0.1
-TRAJECTORY_BUILDER_2D.max_range = 100.0
+TRAJECTORY_BUILDER_2D.max_range = 50.0
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = false
+TRAJECTORY_BUILDER_2D.use_imu_data = true       -- IMU motion prior for sparse environment alignment
+
+-- Z-range for horizontal slice extraction from 3D point cloud (sensor frame).
+-- Widen min_z to capture cone returns from roof-mounted LiDAR.
+TRAJECTORY_BUILDER_2D.min_z = -2.5
+TRAJECTORY_BUILDER_2D.max_z = 0.5
 
 -- Denser point cloud from 16-layer fan: target 400 points after downsampling
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
@@ -82,7 +87,7 @@ TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 400
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 50.0
 
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.1
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.2
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(20.0)
 
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
@@ -97,8 +102,8 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 -- ---------------------------------------------------------------------------
 
 POSE_GRAPH.optimize_every_n_nodes = 0
-POSE_GRAPH.constraint_builder.min_score = 0.55
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.60
+POSE_GRAPH.constraint_builder.min_score = 0.50
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.55
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 
 return options

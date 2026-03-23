@@ -11,9 +11,10 @@ simulation. The bridge auto-discovers sensors spawned by the training container
 Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (passive; publishes sensor data from CARLA to ROS 2 topics)
 2. Static TF publishers (connect ego_vehicle body frame to all sensor frames)
-3. Cartographer (scan-matching on PointCloud2; publishes /scan_matched_odometry)
-4. robot_localisation EKF (fuses IMU + scan-matched odometry -> /odometry/filtered)
-5. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
+3. Cartographer (scan-matching on raw PointCloud2; publishes TF odom -> tracking_frame)
+4. TfToOdomNode (converts Cartographer TF to nav_msgs/Odometry on /scan_matched_odometry)
+5. robot_localisation EKF (fuses IMU + scan-matched odometry -> /odometry/filtered)
+6. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
    /ekf_uncertainty/covariance for the training container)
 
 @note The CARLA ROS bridge in passive mode publishes sensor TF frames directly
@@ -89,6 +90,7 @@ def _static_tf(
         package="tf2_ros",
         executable="static_transform_publisher",
         name=name,
+        parameters=[{"use_sim_time": True}],
         arguments=[
             "--x",
             str(x),
@@ -243,11 +245,14 @@ def generate_launch_description() -> LaunchDescription:
 
     # -- EKF node ----------------------------------------------------------
 
+    ekf_params = ros2_config.get("ekf", {})
+    ekf_params["use_sim_time"] = True
+
     ekf_node = Node(
         package="robot_localization",
         executable="ekf_node",
         name="ekf_filter_node",
-        parameters=[ros2_config.get("ekf", {})],
+        parameters=[ekf_params],
         remappings=[("odometry/filtered", "/odometry/filtered")],
     )
 
@@ -256,10 +261,14 @@ def generate_launch_description() -> LaunchDescription:
     sensors_config = train_config.get("carla_sensors", {})
     static_tf_nodes = _build_sensor_tf_nodes(sensors_config, is_3d)
 
+    # All suites feed raw PointCloud2 directly to Cartographer (num_point_clouds=1).
+    # CARLA's ray_cast does not collide with the parent actor, so 360 deg is used
+    # for both mapping and localisation, ensuring consistency. On the real robot,
+    # rebuild the pbstream with the physical sensor's native FOV.
+
     # -- Cartographer node -------------------------------------------------
 
     cartographer_basename = _select_cartographer_config(cartographer_mode, is_3d)
-    lidar_topic = "/carla/ego_vehicle/lidar_3d" if is_3d else "/carla/ego_vehicle/lidar"
 
     carto_args = [
         "-configuration_directory",
@@ -280,14 +289,52 @@ def generate_launch_description() -> LaunchDescription:
             "true",
         ]
 
+    # All suites use raw PointCloud2 input directly to Cartographer.
+    # Suite A: /carla/ego_vehicle/lidar (single-channel 2D, 360 deg).
+    # Suite B/C: /carla/ego_vehicle/lidar_3d (16-channel 3D, 360 deg).
+    if is_3d:
+        carto_remappings = [
+            ("points2", "/carla/ego_vehicle/lidar_3d"),
+            ("imu", "/carla/ego_vehicle/imu"),
+            ("odom", "/scan_matched_odometry"),
+        ]
+    else:
+        carto_remappings = [
+            ("points2", "/carla/ego_vehicle/lidar"),
+            ("imu", "/carla/ego_vehicle/imu"),
+            ("odom", "/scan_matched_odometry"),
+        ]
+
     cartographer_node = Node(
         package="cartographer_ros",
         executable="cartographer_node",
         name="cartographer_node",
+        parameters=[{"use_sim_time": True}],
         arguments=carto_args,
-        remappings=[
-            ("points2", lidar_topic),
-            ("odom", "/scan_matched_odometry"),
+        remappings=carto_remappings,
+    )
+
+    # -- TF-to-Odometry bridge (Cartographer -> EKF) -------------------------
+    #
+    # Cartographer publishes its pose estimate via TF (odom -> tracking_frame)
+    # but not as an Odometry topic. The EKF needs nav_msgs/Odometry on odom0.
+    # This node bridges the gap by looking up the TF and publishing Odometry
+    # on /scan_matched_odometry at 20 Hz with fixed covariance.
+
+    tf_to_odom_node = Node(
+        package="uncertainty_rl_ros2",
+        executable="tf_to_odom",
+        name="tf_to_odom",
+        parameters=[
+            {
+                "use_sim_time": True,
+                "odom_frame": "odom",
+                "tracking_frame": "ego_vehicle/imu",
+                "publish_topic": "/scan_matched_odometry",
+                "publish_rate": 20.0,
+                "pose_covariance_diagonal": [0.05, 0.05, 1e6, 1e6, 1e6, 0.1],
+                "twist_covariance_diagonal": [0.1, 0.1, 1e6, 1e6, 1e6, 0.2],
+            }
         ],
     )
 
@@ -299,6 +346,7 @@ def generate_launch_description() -> LaunchDescription:
         name="covariance_extractor",
         parameters=[
             {
+                "use_sim_time": True,
                 "odom_topic": ros2_config.get("odom_topic", "/odometry/filtered"),
                 "covariance_topic": ros2_config.get(
                     "covariance_topic", "/ekf_uncertainty/covariance"
@@ -315,6 +363,7 @@ def generate_launch_description() -> LaunchDescription:
         ekf_node,
         *static_tf_nodes,
         cartographer_node,
+        tf_to_odom_node,
         covariance_extractor,
     ]
 
@@ -324,7 +373,7 @@ def generate_launch_description() -> LaunchDescription:
                 package="cartographer_ros",
                 executable="cartographer_occupancy_grid_node",
                 name="cartographer_occupancy_grid_node",
-                parameters=[{"resolution": 0.05}],
+                parameters=[{"use_sim_time": True, "resolution": 0.05}],
             )
         )
 
