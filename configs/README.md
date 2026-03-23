@@ -23,10 +23,6 @@ Override-only configs for the 2x2 ablation study. Each file contains only the ke
 | `output_uncertainty.yaml` | 12-dim (pose + target + obstacle) | Evidential | `include_covariance: false`, `policy_type: "evidential"` |
 | `full_method.yaml` | 21-dim (full) | Evidential | `include_covariance: true`, `policy_type: "evidential"` - main contribution |
 
-### `2d_lidar/`
-
-LiDAR filter configuration for Suite A (2D LiDAR). Contains `laser_filter.yaml` with angular FOV clipping parameters.
-
 ### `carla_nav/`
 
 Pre-built CARLA pedestrian navigation mesh (`OpenDriveMap.bin`) for the FlatPlane OpenDRIVE world. Pre-built because CARLA segfaults during nav mesh generation on headless GPU setups. See `carla_nav/README.md` for regeneration instructions.

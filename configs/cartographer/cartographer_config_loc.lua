@@ -16,7 +16,7 @@
 -- Compared to cartographer_config.lua (SLAM mode):
 --   - TRAJECTORY_BUILDER.pure_localization = true  (primary mechanism)
 --   - optimize_every_n_nodes = 0  (belt-and-braces: also disables optimisation)
---   - num_range_data = 10  (fast convergence per episode; 90 not needed in loc mode)
+--   - num_range_data = 10  (fast convergence per episode; 30 not needed in loc mode)
 --   - The .pbstream is loaded via --load_state_filename in carla_bridge.launch.py,
 --     controlled by the CARTOGRAPHER_MAP env var.
 --
@@ -31,12 +31,12 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- TF frame names: the CARLA ROS bridge in passive mode publishes sensor
-  -- frames directly under "map" (map -> ego_vehicle/lidar). There is no
-  -- intermediate "ego_vehicle" frame, so we track the LiDAR frame directly.
+  -- TF frame names: tracking ego_vehicle/imu satisfies Cartographer's IMU
+  -- colocation requirement. LiDAR data is transformed to the tracking frame
+  -- via the static TF tree published by the launch file.
   map_frame = "map",
-  tracking_frame = "ego_vehicle/lidar",
-  published_frame = "ego_vehicle/lidar",
+  tracking_frame = "ego_vehicle/imu",
+  published_frame = "ego_vehicle/imu",
   odom_frame = "odom",
 
   provide_odom_frame = true,
@@ -46,7 +46,7 @@ options = {
   use_nav_sat = false,
   use_landmarks = false,
 
-  -- PointCloud2 input (same as SLAM config)
+  -- Raw PointCloud2 input (360 deg), consistent with the SLAM mapping run.
   num_laser_scans = 0,
   num_multi_echo_laser_scans = 0,
   num_subdivisions_per_laser_scan = 1,
@@ -77,16 +77,16 @@ TRAJECTORY_BUILDER.pure_localization = true
 -- ---------------------------------------------------------------------------
 
 TRAJECTORY_BUILDER_2D.min_range = 0.1
-TRAJECTORY_BUILDER_2D.max_range = 30.0
+TRAJECTORY_BUILDER_2D.max_range = 25.0
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = false
+TRAJECTORY_BUILDER_2D.use_imu_data = true      -- IMU motion prior for sparse environment alignment
 
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 200
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 50.0
 
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.1
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.2
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(20.0)
 
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
@@ -102,8 +102,8 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 -- ---------------------------------------------------------------------------
 
 POSE_GRAPH.optimize_every_n_nodes = 0
-POSE_GRAPH.constraint_builder.min_score = 0.55
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.60
+POSE_GRAPH.constraint_builder.min_score = 0.50
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.55
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 
 return options

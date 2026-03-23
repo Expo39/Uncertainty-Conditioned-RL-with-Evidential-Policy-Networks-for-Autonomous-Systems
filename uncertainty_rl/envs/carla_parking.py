@@ -223,6 +223,9 @@ class CARLAParkingEnv(gym.Env):
             "spawn_perimeter_cones", False
         )
         self._cone_spacing: float = scenarios.get("perimeter_cone_spacing", 2.0)
+        self._marker_blueprint: str = scenarios.get(
+            "perimeter_marker_blueprint", "static.prop.constructioncone"
+        )
         # Bay occupancy is re-sampled uniformly each episode between min and max.
         # For evaluation, set both to the same value to fix occupancy.
         self._bay_occupancy_min: float = scenarios.get("bay_occupancy_min", 0.3)
@@ -547,10 +550,12 @@ class CARLAParkingEnv(gym.Env):
 
     def _spawn_perimeter_cones(self) -> None:
         """
-        @brief Spawn static traffic cones along the lot perimeter polygon.
+        @brief Spawn static markers along the lot perimeter polygon.
 
-        Cones are placed using _interpolate_cone_positions() and physics is
-        disabled so they don't move. Cones are appended to self._spawned_cones.
+        Markers are placed using _interpolate_cone_positions() and physics is
+        disabled so they don't move. The blueprint is configurable via
+        parking_scenarios.perimeter_marker_blueprint in train_config.yaml.
+        Markers are appended to self._spawned_cones.
         """
         if self.world is None:
             return
@@ -569,13 +574,13 @@ class CARLAParkingEnv(gym.Env):
         )
 
         bp_lib = self.world.get_blueprint_library()
-        cone_bp = bp_lib.find("static.prop.constructioncone")
+        cone_bp = bp_lib.find(self._marker_blueprint)
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
-        for cx, cy in cone_positions:
+        for cx, cy, yaw_deg in cone_positions:
             transform = carla.Transform(
                 carla.Location(x=cx, y=cy, z=z),
-                carla.Rotation(yaw=0.0),
+                carla.Rotation(yaw=yaw_deg),
             )
             cone = self.world.try_spawn_actor(cone_bp, transform)
             if cone is not None:
@@ -584,16 +589,18 @@ class CARLAParkingEnv(gym.Env):
                 # Cache static position for obstacle feature extraction in _get_state()
                 self._static_obstacle_positions.append((cx, cy))
 
-        logger.debug(f"Spawned {len(self._spawned_cones)} perimeter cones.")
+        logger.debug(f"Spawned {len(self._spawned_cones)} perimeter markers.")
 
     def _spawn_obstacle_cones(self) -> None:
         """
-        @brief Spawn static traffic cones around interior obstacle rectangles.
+        @brief Spawn static markers around interior obstacle rectangles.
 
         Each obstacle in the layout YAML is a centre + half-extents rectangle.
-        Cones are placed along the four sides at the same spacing used for
-        perimeter cones. Physics is disabled so they act as static LiDAR targets.
-        Spawned cones are appended to self._spawned_cones so they are cleaned up
+        Markers are placed along the four sides at the same spacing used for
+        perimeter markers. The blueprint is configurable via
+        parking_scenarios.perimeter_marker_blueprint in train_config.yaml.
+        Physics is disabled so they act as static LiDAR targets. Spawned
+        markers are appended to self._spawned_cones so they are cleaned up
         with the rest of the episode actors.
         """
         if self.world is None:
@@ -604,7 +611,7 @@ class CARLAParkingEnv(gym.Env):
             return
 
         bp_lib = self.world.get_blueprint_library()
-        cone_bp = bp_lib.find("static.prop.constructioncone")
+        cone_bp = bp_lib.find(self._marker_blueprint)
         z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
         for obs in obstacles:
@@ -614,24 +621,25 @@ class CARLAParkingEnv(gym.Env):
             hh = float(obs["half_height"])
 
             # Build cone positions around all four sides of the rectangle.
-            cone_positions: List[Tuple[float, float]] = []
-            # Bottom and top horizontal edges (y constant).
+            # Each entry is (x, y, yaw_deg) so markers align with the edge.
+            cone_positions: List[Tuple[float, float, float]] = []
+            # Bottom and top horizontal edges (y constant, yaw=0).
             for edge_y in (cy - hh, cy + hh):
                 t = -hw
                 while t <= hw + 1e-6:
-                    cone_positions.append((cx + t, edge_y))
+                    cone_positions.append((cx + t, edge_y, 0.0))
                     t += self._cone_spacing
-            # Left and right vertical edges (x constant), excluding corners.
+            # Left and right vertical edges (x constant, yaw=90), excluding corners.
             for edge_x in (cx - hw, cx + hw):
                 t = -hh + self._cone_spacing
                 while t < hh - 1e-6:
-                    cone_positions.append((edge_x, cy + t))
+                    cone_positions.append((edge_x, cy + t, 90.0))
                     t += self._cone_spacing
 
-            for px, py in cone_positions:
+            for px, py, yaw_deg in cone_positions:
                 transform = carla.Transform(
                     carla.Location(x=px, y=py, z=z),
-                    carla.Rotation(yaw=0.0),
+                    carla.Rotation(yaw=yaw_deg),
                 )
                 cone = self.world.try_spawn_actor(cone_bp, transform)
                 if cone is not None:
@@ -1725,10 +1733,9 @@ class CARLAParkingEnv(gym.Env):
         @brief Spawn 2D LiDAR sensor at front bumper height (Suite A).
 
         Single-channel horizontal scan (SICK TiM 5xx / Hokuyo style). CARLA
-        ray_cast scans 360 deg; the ROS bridge laser_filter pipeline clips this
-        to 270 deg before Cartographer (see carla_bridge.launch.py).
+        ray_cast scans 360 deg; Cartographer receives raw PointCloud2 directly.
 
-        Config key: carla_sensors_config.lidar. Mount defaults: x=2.4, z=0.5.
+        Config key: carla_sensors_config.lidar. Mount defaults: x=2.4, z=0.3.
         """
         if self.vehicle is None or self.world is None:
             return

@@ -154,47 +154,6 @@ class CovarianceExtractorNode(Node):
 
         self.covariance_publisher.publish(msg)
 
-    def get_uncertainty_state(self) -> Optional[np.ndarray]:
-        """
-        @brief Get the current uncertainty state vector.
-        @return Uncertainty state vector: [std_x, std_y, std_yaw,
-                                          cov_xx, cov_yy, cov_yawyaw,
-                                          cov_xy, cov_xyaw, cov_yyaw]
-                or None if no covariance data is available.
-        """
-        if self.latest_covariance is None:
-            return None
-
-        # Extract standard deviations
-        std_x = np.sqrt(self.latest_covariance[0, 0])
-        std_y = np.sqrt(self.latest_covariance[1, 1])
-        std_yaw = np.sqrt(self.latest_covariance[2, 2])
-
-        # Extract covariance elements
-        cov_xx = self.latest_covariance[0, 0]
-        cov_yy = self.latest_covariance[1, 1]
-        cov_yawyaw = self.latest_covariance[2, 2]
-        cov_xy = self.latest_covariance[0, 1]
-        cov_xyaw = self.latest_covariance[0, 2]
-        cov_yyaw = self.latest_covariance[1, 2]
-
-        # Construct uncertainty state vector
-        uncertainty_state = np.array(
-            [
-                std_x,
-                std_y,
-                std_yaw,
-                cov_xx,
-                cov_yy,
-                cov_yawyaw,
-                cov_xy,
-                cov_xyaw,
-                cov_yyaw,
-            ]
-        )
-
-        return uncertainty_state
-
 
 class CovarianceMonitorNode(Node):
     """
