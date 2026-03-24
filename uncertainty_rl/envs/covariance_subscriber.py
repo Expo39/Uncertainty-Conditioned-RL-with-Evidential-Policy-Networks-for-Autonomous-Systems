@@ -1,29 +1,41 @@
 """
 @file covariance_subscriber.py
-@brief ROS 2 covariance subscriber node for EKF uncertainty features.
+@brief File-based covariance reader for EKF uncertainty features.
 
-Runs via rclpy.spin() in a daemon thread so it does not block Gymnasium step().
-Consumed by CARLAParkingEnv when include_covariance=True.
+Reads the latest EKF state from a shared JSON file written by the
+CovarianceExtractorNode in the ros2-bridge container. This avoids DDS
+cross-distro serialisation issues between ROS 2 Humble (training container)
+and Jazzy (ros2-bridge container).
+
+The file is written atomically (via rename) by the extractor node at the
+EKF publish rate (~20 Hz) to /workspace/outputs/ekf_state.json, which is
+on a Docker shared volume visible to both containers.
+
+Also publishes /initialpose via rclpy for Cartographer pure localisation
+convergence at episode reset.
 """
 
+import json
 import math
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, cast
 
 import numpy as np
 
 try:
-    import rclpy  # noqa: F401
+    import rclpy
     from geometry_msgs.msg import PoseWithCovarianceStamped
     from rclpy.node import Node
-    from rclpy.qos import QoSProfile, ReliabilityPolicy
-    from uncertainty_rl_msgs.msg import CovarianceEstimate
 
     _ROS2_AVAILABLE = True
 except ImportError:
     _ROS2_AVAILABLE = False
 
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
+
+# Shared file path (Docker volume mount: outputs/ is rw in both containers)
+_EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
 if TYPE_CHECKING:
     from rclpy.node import Node as _NodeBase
@@ -34,84 +46,79 @@ else:
 class _CovarianceSubscriber(_NodeBase):
     """
     @class _CovarianceSubscriber
-    @brief Lightweight rclpy Node that subscribes to EKF covariance.
+    @brief Reads EKF state from a shared JSON file + publishes /initialpose.
 
-    Caches the latest 9-element uncertainty feature vector and 6-element pose
-    + velocity vector in a thread-safe manner. Runs via rclpy.spin() in a
-    daemon thread so it does not block Gymnasium step().
+    The CovarianceExtractorNode (ros2-bridge, Jazzy) writes the latest EKF
+    pose, velocity, and 3x3 covariance to a shared file. This class reads
+    that file on demand -- no DDS subscription needed.
 
-    The CovarianceExtractorNode publishes a CovarianceEstimate message with
-    semantic fields (x, y, yaw, vx, vy, vyaw, covariance[9]). We reshape the
-    covariance field into a 3x3 matrix and call extract_2d_covariance_features().
-    The pose + velocity fields are cached separately so _get_state() can use
-    EKF estimates for obs indices 0-5 rather than CARLA ground truth.
+    Inherits from rclpy.Node only for the /initialpose publisher (needed
+    for Cartographer pure localisation convergence at episode reset).
     """
 
     def __init__(
         self,
-        covariance_topic: str = "/ekf_uncertainty/covariance",
+        covariance_topic: str = "/odometry/filtered",
         node_name: str = "covariance_subscriber",
         ros2_config: Optional[Dict[str, Any]] = None,
     ) -> None:
         """
-        @brief Initialise the covariance subscriber node.
-        @param covariance_topic: ROS 2 topic to subscribe to.
-        @param node_name: Unique node name (important when multiple envs exist).
+        @brief Initialise the covariance reader.
+        @param covariance_topic: Unused (kept for API compatibility).
+        @param node_name: Unique node name for the rclpy publisher node.
         @param ros2_config: Optional ROS 2 config dict from train_config.yaml.
-                            Used to read publish_initial_pose and initial_pose_topic.
         """
-        if not _ROS2_AVAILABLE:
-            return
-
-        super().__init__(node_name)
-
         self._lock = threading.Lock()
         self._latest_uncertainty: Optional[np.ndarray] = None
         self._latest_pose: Optional[np.ndarray] = None
-        self._message_count = 0
 
-        qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            depth=10,
-        )
-
-        self._subscription = self.create_subscription(
-            CovarianceEstimate,
-            covariance_topic,
-            self._covariance_callback,
-            qos,
-        )
-        self.get_logger().info(f"Subscribed to covariance topic: {covariance_topic}")
-
-        config = ros2_config or {}
-        initial_pose_topic = config.get("initial_pose_topic", "/initialpose")
-        self._initial_pose_pub = self.create_publisher(
-            PoseWithCovarianceStamped,
-            initial_pose_topic,
-            10,
-        )
-
-    def _covariance_callback(self, msg: "CovarianceEstimate") -> None:
-        """
-        @brief Callback for incoming covariance messages.
-        @param msg: CovarianceEstimate with semantic fields
-                    (x, y, yaw, vx, vy, vyaw, covariance[9]).
-        """
-        cov_matrix = np.array(msg.covariance).reshape(3, 3)
-        features = extract_2d_covariance_features(cov_matrix)
-
-        with self._lock:
-            self._latest_uncertainty = features
-            self._latest_pose = np.array(
-                [msg.x, msg.y, msg.yaw, msg.vx, msg.vy, msg.vyaw], dtype=np.float64
+        # Initialise rclpy Node for /initialpose publisher only
+        if _ROS2_AVAILABLE:
+            super().__init__(node_name)
+            config = ros2_config or {}
+            initial_pose_topic = config.get(
+                "initial_pose_topic", "/initialpose"
             )
-            self._message_count += 1
+            self._initial_pose_pub = self.create_publisher(
+                PoseWithCovarianceStamped,
+                initial_pose_topic,
+                10,
+            )
+            self.get_logger().info(
+                f"Covariance reader: file={_EKF_STATE_PATH}, "
+                f"initialpose={initial_pose_topic}"
+            )
+
+    def _read_file(self) -> bool:
+        """
+        @brief Read the latest EKF state from the shared JSON file.
+        @return True if new data was read successfully.
+        """
+        try:
+            if not _EKF_STATE_PATH.exists():
+                return False
+            data = json.loads(_EKF_STATE_PATH.read_text())
+            cov_3x3 = np.array(data["covariance"]).reshape(3, 3)
+            features = extract_2d_covariance_features(cov_3x3)
+            with self._lock:
+                self._latest_uncertainty = features
+                self._latest_pose = np.array(
+                    [
+                        data["x"], data["y"], data["yaw"],
+                        data["vx"], data["vy"], data["vyaw"],
+                    ],
+                    dtype=np.float64,
+                )
+            return True
+        except (json.JSONDecodeError, KeyError, ValueError):
+            return False
 
     def get_latest_uncertainty(self) -> Optional[np.ndarray]:
         """
         @brief Get the most recent 9-element uncertainty feature vector.
-        @return Array of shape (9,) or None if no message received yet.
+        @return Array of shape (9,) or None if no data available.
         """
+        self._read_file()
         with self._lock:
             if self._latest_uncertainty is not None:
                 return cast(np.ndarray, self._latest_uncertainty.copy())
@@ -120,9 +127,9 @@ class _CovarianceSubscriber(_NodeBase):
     def get_latest_pose(self) -> Optional[np.ndarray]:
         """
         @brief Get the most recent EKF pose and velocity estimate.
-        @return Array of shape (6,) = [x, y, yaw, vx, vy, vyaw] or None if no
-                message has been received yet.
+        @return Array of shape (6,) = [x, y, yaw, vx, vy, vyaw] or None.
         """
+        self._read_file()
         with self._lock:
             if self._latest_pose is not None:
                 return cast(np.ndarray, self._latest_pose.copy())
@@ -132,14 +139,6 @@ class _CovarianceSubscriber(_NodeBase):
         """
         @brief Publish the vehicle spawn pose to /initialpose for Cartographer
                pure localisation mode.
-
-        In pure localisation mode Cartographer needs a seed pose to begin
-        global localisation. Publishing the known spawn transform from the
-        layout YAML gives it an exact starting point, cutting convergence
-        time per episode from several seconds to one scan cycle.
-
-        Safe no-op in SLAM mode: Cartographer does not subscribe to /initialpose
-        when running in SLAM mode, so the message is harmlessly discarded.
 
         @param x: Spawn X in world frame (metres).
         @param y: Spawn Y in world frame (metres).
@@ -153,20 +152,19 @@ class _CovarianceSubscriber(_NodeBase):
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.pose.position.x = x
         msg.pose.pose.position.y = y
-        # Quaternion from yaw only (2D: roll=pitch=0)
         msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
         msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
-        # Tight covariance: spawn position is known exactly from layout YAML
-        msg.pose.covariance[0] = 0.1  # xx
-        msg.pose.covariance[7] = 0.1  # yy
+        msg.pose.covariance[0] = 0.1   # xx
+        msg.pose.covariance[7] = 0.1   # yy
         msg.pose.covariance[35] = 0.05  # yaw-yaw
         self._initial_pose_pub.publish(msg)
 
     @property
     def has_data(self) -> bool:
         """
-        @brief Check whether at least one covariance message has been received.
-        @return True if data is available.
+        @brief Check whether EKF state data is available.
+        @return True if data file exists and was read successfully.
         """
+        self._read_file()
         with self._lock:
             return self._latest_uncertainty is not None

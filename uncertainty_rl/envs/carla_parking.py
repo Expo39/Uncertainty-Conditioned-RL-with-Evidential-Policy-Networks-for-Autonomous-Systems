@@ -168,6 +168,7 @@ class CARLAParkingEnv(gym.Env):
         include_obstacle_obs: bool = True,
         sensor_suite: str = "suite_a",
         vis_output_path: Optional[str] = None,
+        carla_timestep: float = 0.05,
         eval_mode: bool = False,
     ) -> None:
         """
@@ -189,8 +190,13 @@ class CARLAParkingEnv(gym.Env):
         @param sensor_suite: Sensor suite to spawn ('suite_a', 'suite_b', 'suite_c').
                suite_a = 2D LiDAR + IMU. suite_b = 3D LiDAR + IMU.
                suite_c = 3D LiDAR + camera + IMU.
-        @param vis_output_path: Path for atomic vis_state.json writes. If None,
-               visualisation writes are skipped.
+        @param vis_output_path: Path for vis_history.jsonl writes. If None,
+               defaults to outputs/vis_history.jsonl. Writing only occurs when
+               the signal file outputs/.vis_active exists (created by the
+               visualiser process).
+        @param carla_timestep: Simulation timestep in seconds (default 0.05 = 20 Hz).
+               Written into vis frames so the visualiser can pace playback at
+               real-time speed.
         @param eval_mode: If True, OOD floor plans are included in sampling.
                If False (training), only non-OOD floor plans are used.
         """
@@ -209,7 +215,7 @@ class CARLAParkingEnv(gym.Env):
         ros2_config = ros2_config or {}
         self._ros2_config: Dict[str, Any] = ros2_config
         self._covariance_topic = ros2_config.get(
-            "covariance_topic", "/ekf_uncertainty/covariance"
+            "covariance_topic", "/odometry/filtered"
         )
         self._covariance_timeout = ros2_config.get("covariance_timeout", 10.0)
 
@@ -335,12 +341,18 @@ class CARLAParkingEnv(gym.Env):
             maxlen=_TRAJECTORY_MAXLEN
         )
 
-        # Visualisation state writer
-        self._vis_output_path: Optional[Path] = (
-            Path(vis_output_path) if vis_output_path else None
+        # Visualisation state writer (demand-driven via signal file)
+        self._vis_history_path: Path = (
+            Path(vis_output_path) if vis_output_path
+            else Path("outputs/vis_history.jsonl")
         )
+        self._vis_signal_path: Path = (
+            self._vis_history_path.parent / ".vis_active"
+        )
+        self._carla_timestep: float = carla_timestep
 
         # Episode state
+        self._episode_id: int = 0
         self.steps = 0
         # Previous distance to target for potential-based reward shaping
         self._prev_distance: float = 0.0
@@ -392,22 +404,18 @@ class CARLAParkingEnv(gym.Env):
 
     def _init_ros2(self) -> None:
         """
-        @brief Initialise rclpy and start covariance subscriber in a daemon thread.
+        @brief Initialise rclpy and create the covariance reader.
 
-        Guards against double-initialisation when multiple env instances exist.
-        When rclpy is unavailable (CI/tests), logs a warning and continues with
-        zero uncertainty in state.
+        The covariance reader uses a shared file (no DDS subscription) to avoid
+        cross-distro serialisation issues between Humble and Jazzy. rclpy is
+        still needed for /initialpose publishing at episode reset.
+
+        When rclpy is unavailable (CI/tests), the reader still works for file
+        reading but /initialpose publishing is disabled.
         """
-        if not _ROS2_AVAILABLE:
-            logger.warning(
-                "rclpy not available. Covariance subscriber disabled. "
-                "The environment will return zero uncertainty features. "
-                "This is only acceptable for CI/unit tests, not for training."
-            )
-            return
-
-        if not rclpy.ok():
-            rclpy.init()
+        if _ROS2_AVAILABLE:
+            if not rclpy.ok():
+                rclpy.init()
 
         node_name = f"covariance_subscriber_{id(self)}"
         self._cov_subscriber = _CovarianceSubscriber(
@@ -415,11 +423,7 @@ class CARLAParkingEnv(gym.Env):
             node_name=node_name,
             ros2_config=self._ros2_config,
         )
-
-        threading.Thread(
-            target=rclpy.spin, args=(self._cov_subscriber,), daemon=True
-        ).start()
-        logger.info("ROS 2 covariance subscriber started in daemon thread.")
+        logger.info("Covariance reader initialised (file-based, no DDS).")
 
     # ------------------------------------------------------------------
     # Floor plan loading and bay sampling
@@ -1258,9 +1262,14 @@ class CARLAParkingEnv(gym.Env):
         target_yaw = self._target_bay["yaw"]
 
         position_error = math.sqrt((x - target_x) ** 2 + (y - target_y) ** 2)
+        # Both nose-in and nose-out are valid -- use the smaller of the two errors.
         yaw_error_raw = yaw - target_yaw
-        orientation_error = abs(
-            math.atan2(math.sin(yaw_error_raw), math.cos(yaw_error_raw))
+        orientation_error = min(
+            abs(math.atan2(math.sin(yaw_error_raw), math.cos(yaw_error_raw))),
+            abs(math.atan2(
+                math.sin(yaw_error_raw + math.pi),
+                math.cos(yaw_error_raw + math.pi),
+            )),
         )
 
         # Check collision (penalty + termination).  Flag set by _on_collision callback;
@@ -1395,7 +1404,9 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[5] = vyaw
         # log1p compresses heavy tails from high-uncertainty conditions (rain, sensor
         # noise) that would otherwise distort VecNormalize running statistics.
-        self._obs_buffer[6:15] = np.log1p(uncertainty)
+        # np.sign preserves the sign of off-diagonal covariance terms (cov_xy,
+        # cov_xyaw, cov_yyaw) which can be negative.
+        self._obs_buffer[6:15] = np.sign(uncertainty) * np.log1p(np.abs(uncertainty))
         self._obs_buffer[15] = dx
         self._obs_buffer[16] = dy
         self._obs_buffer[17] = dyaw
@@ -1465,13 +1476,18 @@ class CARLAParkingEnv(gym.Env):
 
     def _write_vis_state(self) -> None:
         """
-        @brief Write the visualisation state JSON for the detachable 2D viewer.
+        @brief Append a visualisation frame to the JSONL history file.
 
-        Atomic write: tmp file then os.replace (POSIX atomic rename).
-        The visualiser process polls this file and redraws on change.
-        If vis_output_path is None, this method is a no-op.
+        Writing only occurs when the signal file (outputs/.vis_active) exists,
+        which is created by the visualiser process. This avoids unnecessary I/O
+        when nobody is watching. Each line is a complete JSON object with
+        sim_time so the visualiser can pace playback at real-time speed.
         """
-        if self._vis_output_path is None or self.vehicle is None:
+        if self.vehicle is None:
+            return
+
+        # Only write when the visualiser is actively watching
+        if not self._vis_signal_path.exists():
             return
 
         transform = self.vehicle.get_transform()
@@ -1499,6 +1515,10 @@ class CARLAParkingEnv(gym.Env):
                 pedestrian_transforms.append({"x": wt.location.x, "y": wt.location.y})
 
         state = {
+            "sim_time": self.steps * self._carla_timestep,
+            "episode_id": self._episode_id,
+            "episode_step": self.steps,
+            "carla_timestep": self._carla_timestep,
             "ego": {"x": x, "y": y, "yaw": yaw},
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -1507,18 +1527,14 @@ class CARLAParkingEnv(gym.Env):
             "floor_plan": self._current_floor_plan_name,
             "bays": self._current_layout.get("bays", []),
             "corners": self._current_layout.get("corners", []),
-            "episode_step": self.steps,
         }
 
         try:
             json_str = json.dumps(state)
-            output_path = self._vis_output_path
-            output_path.parent.mkdir(parents=True, exist_ok=True)
+            self._vis_history_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Write to .tmp then rename atomically
-            tmp_path = output_path.with_suffix(".tmp")
-            tmp_path.write_text(json_str)
-            os.replace(str(tmp_path), str(output_path))
+            with open(self._vis_history_path, "a") as f:
+                f.write(json_str + "\n")
         except Exception as exc:
             # Non-fatal -- visualisation is optional
             logger.debug(f"Could not write vis state: {exc}")
@@ -2043,6 +2059,7 @@ class CARLAParkingEnv(gym.Env):
         """
         super().reset(seed=seed)
 
+        self._episode_id += 1
         self.steps = 0
         self._trajectory_buffer.clear()
 

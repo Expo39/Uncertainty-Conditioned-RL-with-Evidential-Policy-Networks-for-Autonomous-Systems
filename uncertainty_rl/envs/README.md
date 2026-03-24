@@ -19,7 +19,7 @@ CARLAParkingEnv(
     town="FlatPlane",
     max_steps=500,
     render_mode=None,
-    ros2_config={"covariance_topic": "/ekf_uncertainty/covariance", "covariance_timeout": 10.0},
+    ros2_config={"covariance_topic": "/odometry/filtered", "covariance_timeout": 10.0},
     carla_sensors_config={"imu": {...}, "lidar": {...}},  # Suite A: 2D LiDAR + IMU
     carla_conditions_config={"weather_presets": ["ClearNoon", "HardRainNoon"]},
     parking_scenarios_config={...},  # parking_scenarios section from train_config.yaml

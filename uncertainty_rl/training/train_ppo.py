@@ -69,6 +69,7 @@ def make_env(
             include_covariance=config.get("include_covariance", True),
             include_obstacle_obs=config.get("include_obstacle_obs", True),
             sensor_suite=config.get("sensor_suite", "suite_a"),
+            carla_timestep=config.get("carla_timestep", 0.05),
         )
         return env
 

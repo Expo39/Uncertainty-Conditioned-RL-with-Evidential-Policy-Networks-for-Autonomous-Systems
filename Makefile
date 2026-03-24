@@ -5,7 +5,7 @@
 .PHONY: lint format typecheck clean syntax-check
 .PHONY: backup-configs restore-configs
 .PHONY: train-loc train-loc-short evaluate
-.PHONY: generate-layouts visualise visualise-record
+.PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
@@ -131,40 +131,36 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
-	CARTOGRAPHER_MODE=loc \
+# Shared env vars for localisation mode (used by train/eval targets below).
+# export ensures they persist across chained commands in a single shell recipe.
+LOC_ENV = export CARTOGRAPHER_MODE=loc \
 	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	SENSOR_SUITE=$(SENSOR_SUITE) \
-	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
-	@echo "Waiting for services to be healthy..."
-	sleep 30
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
+	SENSOR_SUITE=$(SENSOR_SUITE)
+
+docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
+	@echo "Training (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
 docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]
-	CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	SENSOR_SUITE=$(SENSOR_SUITE) \
-	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
-	@echo "Waiting for services to be healthy..."
-	sleep 30
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
+	@echo "Training (loc, 10k steps): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--total-timesteps 10000 \
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
-docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]	CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	SENSOR_SUITE=$(SENSOR_SUITE) \
-	$(DOCKER_COMPOSE) up -d carla-server ros2-bridge
-	@echo "Waiting for services to be healthy..."
-	sleep 30
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
+docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
+	@echo "Evaluation (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
-		--config $(CONFIG_DIR)/eval_config.yaml \
+		--eval-config $(CONFIG_DIR)/eval_config.yaml \
+		--train-config $(CONFIG_DIR)/train_config.yaml \
 		--output-dir evaluation_results
 
 
@@ -344,11 +340,21 @@ evaluate: ## Evaluate trained agent in pure localisation mode. Usage: make evalu
 # IMPORTANT: Containers MUST be running to see live data !
 # ----------------------------------------------------------------------
 
-visualise: ## Open 2D bird's-eye visualiser (polls outputs/vis_state.json, detachable)
-	$(PYTHON_VIS) scripts/visualise_training.py
+visualise: ## Open 2D bird's-eye live visualiser (tails outputs/vis_history.jsonl, detachable)
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON_VIS) -m scripts.visualise
 
-visualise-record: ## Open 2D visualiser + save MP4 on window close
-	$(PYTHON_VIS) scripts/visualise_training.py --record
+eval-visualise-2d: ## Load checkpoint + headless CARLA + 2D bird's-eye. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
+	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec -d training python $(SCRIPTS_DIR)/demo_drive.py \
+		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
+		--train-config $(CONFIG_DIR)/train_config.yaml
+	@echo "Model driving in background. Open the 2D visualiser with: make visualise"
+
+docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [CHECKPOINT=path]
+	@echo "Demo drive 3D: checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
+	DISPLAY=$(or $(DISPLAY),:0) CHECKPOINT=$(or $(CHECKPOINT),checkpoints/final_model) \
+		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
 
 # ----------------------------------------------------------------------
 # Testing

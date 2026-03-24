@@ -59,9 +59,9 @@ services:
       retries: 5
       start_period: 60s
 
-  # Demo evaluation container - loads checkpoint and runs evaluation against
-  # the windowed CARLA server.
-  # Start with: make docker-demo MODEL=checkpoints/final_model
+  # Demo drive container - loads checkpoint and drives in the windowed CARLA
+  # server for visual inspection. No metrics, just the model parking.
+  # Start with: make docker-eval-visualise-3d [CHECKPOINT=path]
   training-demo:
     build:
       context: .
@@ -89,13 +89,13 @@ services:
       - ./scripts:/workspace/scripts:ro
       - ./logs:/workspace/logs:rw
       - ./checkpoints:/workspace/checkpoints:rw
-      - ./tests:/workspace/tests:ro
+      - ./outputs:/workspace/outputs:rw
     working_dir: /workspace
     command: >
-      python uncertainty_rl/evaluation/evaluate.py
-      --model-path ${MODEL:-checkpoints/final_model}
-      --eval-config configs/eval_config.yaml
+      python scripts/demo_drive.py
+      --checkpoint ${CHECKPOINT:-checkpoints/final_model}
       --train-config configs/train_config.yaml
+      --render
     deploy:
       resources:
         reservations:

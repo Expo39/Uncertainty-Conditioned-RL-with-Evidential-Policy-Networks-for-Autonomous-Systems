@@ -60,10 +60,10 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CARLA_HOST=carla-server
       - CARLA_PORT=2000
       # Selects Cartographer config: suite_a (default), suite_b, or suite_c.
-      # suite_a: cartographer_config.lua (LaserScan, 270 deg filtered)
       # suite_b/c: cartographer_config_3d.lua (PointCloud2, 16-channel 3D LiDAR)
       - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
       # Cartographer operating mode: slam (default) or loc (pure localisation).
@@ -82,6 +82,7 @@ services:
       # The more-specific mount shadows the ro configs mount for this subdirectory only.
       - ./configs/maps:/workspace/configs/maps:rw
       - ./logs/ros2:/workspace/logs:rw
+      - ./outputs:/workspace/outputs:rw  # Shared with training for ekf_state.json
       - ./uncertainty_rl/ros2:/workspace/ros2_nodes:ro
     command: >
       bash -c "
@@ -115,6 +116,7 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
       - CARLA_HOST=carla-server
       - CARLA_PORT=2000

@@ -14,7 +14,7 @@
 -- Crowded lot (cones occluded by NPCs) -> weak match -> high covariance (hard).
 --
 -- Compared to cartographer_config.lua (SLAM mode):
---   - TRAJECTORY_BUILDER.pure_localization = true  (primary mechanism)
+--   - TRAJECTORY_BUILDER.pure_localization_trimmer (max_submaps_to_keep = 3)
 --   - optimize_every_n_nodes = 0  (belt-and-braces: also disables optimisation)
 --   - num_range_data = 10  (fast convergence per episode; 30 not needed in loc mode)
 --   - The .pbstream is loaded via --load_state_filename in carla_bridge.launch.py,
@@ -68,9 +68,12 @@ options = {
 -- The loaded .pbstream contains the frozen submap; no new submaps are created.
 MAP_BUILDER.use_trajectory_builder_2d = true
 
--- Pure localisation: freeze the pose graph entirely. The loaded .pbstream
--- is the only reference for scan matching.
-TRAJECTORY_BUILDER.pure_localization = true
+-- Pure localisation: trim old submaps to keep only the frozen reference.
+-- pure_localization_trimmer is required when using num_point_clouds=1
+-- (TRAJECTORY_BUILDER.pure_localization only works with num_laser_scans).
+TRAJECTORY_BUILDER.pure_localization_trimmer = {
+  max_submaps_to_keep = 3,
+}
 
 -- ---------------------------------------------------------------------------
 -- 2D trajectory builder settings (same as SLAM except num_range_data)

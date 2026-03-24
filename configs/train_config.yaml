@@ -7,7 +7,7 @@
 # actions. See the references below each parameter for justification.
 
 # Environment settings
-carla_host: "localhost"
+carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
@@ -16,7 +16,7 @@ carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 # ROS 2 covariance subscription settings
 # The training container subscribes to real EKF covariance via DDS
 ros2:
-  covariance_topic: "/ekf_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
+  covariance_topic: "/odometry/filtered"  # nav_msgs/Odometry from robot_localisation EKF
   covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
   publish_initial_pose: true     # Publish /initialpose at episode reset for Cartographer pure
                                  # localisation convergence. Safe in SLAM mode (Cartographer ignores it).
@@ -142,7 +142,7 @@ parking_scenarios:
       ood: false   # Used during training
     trapezoid:
       layout_file: configs/layouts/trapezoid.yaml
-      ood: false   # Used during training
+      ood: true    # Never sampled during training; held out for OOD evaluation
     irregular_a:
       layout_file: configs/layouts/irregular_a.yaml
       ood: true    # Never sampled during training; held out for OOD evaluation
@@ -229,6 +229,7 @@ activation: "relu"  # Validated for evidential architectures
 # ---------------------------------------------------------------------------
 checkpoint_freq: 50000  # Save checkpoint every N steps
 log_interval: 10        # Log every N episodes
+enable_visualiser: true  # Write vis_state.json for the 2D bird's-eye visualiser (make visualise)
 
 # Training settings
 total_timesteps: 1000000
