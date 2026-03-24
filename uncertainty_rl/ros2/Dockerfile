@@ -40,7 +40,11 @@ RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-cv-bridge \
     ros-${ROS_DISTRO}-derived-object-msgs \
     ros-${ROS_DISTRO}-cartographer-ros \
+    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
+
+# Use CycloneDDS for cross-distro compatibility (Humble <-> Jazzy)
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # Create workspace
 WORKDIR /workspace

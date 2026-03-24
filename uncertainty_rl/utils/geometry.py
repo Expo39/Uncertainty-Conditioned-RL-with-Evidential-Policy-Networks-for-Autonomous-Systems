@@ -144,7 +144,14 @@ def _compute_relative_target_pose(
     dx = cos_yaw * dx_world + sin_yaw * dy_world
     dy = -sin_yaw * dx_world + cos_yaw * dy_world
 
+    # Both nose-in and nose-out are valid parking orientations (180 deg symmetry).
+    # Pick whichever heading error is smaller in magnitude.
     raw_dyaw = yaw_target - yaw_ego
     dyaw = math.atan2(math.sin(raw_dyaw), math.cos(raw_dyaw))
+    dyaw_flipped = math.atan2(
+        math.sin(raw_dyaw + math.pi), math.cos(raw_dyaw + math.pi)
+    )
+    if abs(dyaw_flipped) < abs(dyaw):
+        dyaw = dyaw_flipped
 
     return dx, dy, dyaw

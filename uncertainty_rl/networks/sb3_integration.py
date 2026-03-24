@@ -355,6 +355,73 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         result = dual(state, uncertainty)
         return cast(Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor], result)
 
+    def forward(
+        self,
+        obs: th.Tensor,
+        deterministic: bool = False,
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        """
+        @brief Forward pass for rollout collection.
+
+        SB3's default forward() calls _get_action_dist_from_latent(latent_pi),
+        which only works for the flat MLP path. For the dual-encoder path,
+        we split the observation into state and covariance features and pass
+        them through UncertaintyConditionedActor directly.
+
+        @param obs: Observation tensor.
+        @param deterministic: Whether to use deterministic actions.
+        @return Tuple of (actions, values, log_prob).
+        """
+        features = self.extract_features(obs, self.pi_features_extractor)
+        if self.share_features_extractor:
+            latent_pi, latent_vf = self.mlp_extractor(features)
+        else:
+            pi_features = features
+            vf_features = self.extract_features(obs, self.vf_features_extractor)
+            latent_pi = self.mlp_extractor.forward_actor(pi_features)
+            latent_vf = self.mlp_extractor.forward_critic(vf_features)
+
+        values = self.value_net(latent_vf)
+
+        if self.use_uncertainty_conditioning:
+            raw_obs = cast(th.Tensor, obs)
+            gamma, nu, alpha, beta = self._get_nig_from_obs(raw_obs)
+            distribution = cast(
+                EvidentialDistribution,
+                self.action_dist.proba_distribution(gamma, nu, alpha, beta),
+            )
+        else:
+            distribution = self._get_action_dist_from_latent(latent_pi)
+
+        actions = distribution.get_actions(deterministic=deterministic)
+        log_prob = distribution.log_prob(actions)
+        actions = actions.reshape(-1, self.action_space.shape[0])
+        return actions, values, log_prob
+
+    def get_distribution(self, obs: th.Tensor) -> EvidentialDistribution:
+        """
+        @brief Get the action distribution for given observations.
+
+        Overrides SB3's default which calls _get_action_dist_from_latent().
+        For the dual-encoder path, splits observations and passes them
+        through UncertaintyConditionedActor directly.
+
+        @param obs: Observation tensor.
+        @return Evidential distribution.
+        """
+        if self.use_uncertainty_conditioning:
+            gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
+            return cast(
+                EvidentialDistribution,
+                self.action_dist.proba_distribution(gamma, nu, alpha, beta),
+            )
+        features = self.extract_features(obs, self.pi_features_extractor)
+        if self.share_features_extractor:
+            latent_pi, _ = self.mlp_extractor(features)
+        else:
+            latent_pi = self.mlp_extractor.forward_actor(features)
+        return self._get_action_dist_from_latent(latent_pi)
+
     def _get_action_dist_from_latent(
         self, latent_pi: th.Tensor
     ) -> EvidentialDistribution:
