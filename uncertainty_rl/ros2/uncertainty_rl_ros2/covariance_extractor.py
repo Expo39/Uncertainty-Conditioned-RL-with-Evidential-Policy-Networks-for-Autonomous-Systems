@@ -8,6 +8,8 @@ Publishes a custom CovarianceEstimate message with semantic fields per Henki
 ROS 2 best practices.
 """
 
+import json
+import os
 from typing import Optional, Tuple
 
 import numpy as np
@@ -117,6 +119,19 @@ class CovarianceExtractorNode(Node):
         covariance_3x3 = covariance_full[np.ix_(indices, indices)]
 
         self.latest_covariance = covariance_3x3
+
+        # Write to shared file for cross-distro training container access.
+        # Atomic write via rename to avoid partial reads.
+        data = {
+            "x": float(x), "y": float(y), "yaw": float(yaw),
+            "vx": float(vx), "vy": float(vy), "vyaw": float(vyaw),
+            "covariance": covariance_3x3.flatten().tolist(),
+        }
+        shared_path = "/workspace/outputs/ekf_state.json"
+        tmp_path = shared_path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp_path, shared_path)
 
         # Log uncertainty statistics periodically
         self._log_counter += 1

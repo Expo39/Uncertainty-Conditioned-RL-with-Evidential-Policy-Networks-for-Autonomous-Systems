@@ -46,6 +46,7 @@ RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
     ros-humble-rclpy \
     ros-humble-std-msgs \
     ros-humble-nav-msgs \
+    ros-humble-rmw-cyclonedds-cpp \
     python3-colcon-common-extensions \
     ros-humble-rosidl-default-generators \
     ros-humble-rosidl-default-runtime \
@@ -60,10 +61,11 @@ RUN /bin/bash -c "source /opt/ros/humble/setup.bash && \
     rm -rf /tmp/msgs_ws
 
 # Set ROS 2 environment variables so rclpy is importable without sourcing setup.bash
-ENV AMENT_PREFIX_PATH=/opt/ros/humble
-ENV PYTHONPATH=/opt/ros/humble/lib/python3.10/dist-packages:/opt/ros/humble/local/lib/python3.10/dist-packages
-ENV LD_LIBRARY_PATH=/opt/ros/humble/lib
+ENV AMENT_PREFIX_PATH=/opt/ros/humble:/opt/ros/humble/uncertainty_rl_msgs
+ENV PYTHONPATH=/opt/ros/humble/lib/python3.10/dist-packages:/opt/ros/humble/local/lib/python3.10/dist-packages:/opt/ros/humble/lib/python3.10/site-packages:/opt/ros/humble/uncertainty_rl_msgs/local/lib/python3.10/dist-packages
+ENV LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/x86_64-linux-gnu:/opt/ros/humble/uncertainty_rl_msgs/lib
 ENV ROS_DISTRO=humble
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # Upgrade pip and install build tools
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel

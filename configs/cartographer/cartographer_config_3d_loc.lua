@@ -7,7 +7,7 @@
 -- frozen .pbstream built during the one-time SLAM mapping run.
 --
 -- Compared to cartographer_config_3d.lua (SLAM mode):
---   - TRAJECTORY_BUILDER.pure_localization = true
+--   - TRAJECTORY_BUILDER.pure_localization_trimmer (max_submaps_to_keep = 3)
 --   - optimize_every_n_nodes = 0
 --   - num_range_data = 10 (fast per-episode convergence)
 --
@@ -63,9 +63,11 @@ options = {
 
 MAP_BUILDER.use_trajectory_builder_2d = true
 
--- Pure localisation: freeze the pose graph entirely. The loaded .pbstream
--- is the only reference for scan matching.
-TRAJECTORY_BUILDER.pure_localization = true
+-- Pure localisation: trim old submaps to keep only the frozen reference.
+-- pure_localization_trimmer is required when using num_point_clouds=1.
+TRAJECTORY_BUILDER.pure_localization_trimmer = {
+  max_submaps_to_keep = 3,
+}
 
 -- ---------------------------------------------------------------------------
 -- 2D trajectory builder settings (same as SLAM except num_range_data)

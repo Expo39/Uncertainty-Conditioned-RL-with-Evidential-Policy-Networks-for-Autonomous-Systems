@@ -17,7 +17,7 @@ max_steps: 500
 
 # ROS 2 covariance subscription (same topic as training)
 ros2:
-  covariance_topic: "/ekf_uncertainty/covariance"
+  covariance_topic: "/odometry/filtered"
   covariance_timeout: 10.0
 
 # Evaluation settings
