@@ -70,6 +70,7 @@ def make_env(
             include_obstacle_obs=config.get("include_obstacle_obs", True),
             sensor_suite=config.get("sensor_suite", "suite_a"),
             carla_timestep=config.get("carla_timestep", 0.05),
+            debug=config.get("debug", False),
         )
         return env
 
@@ -123,16 +124,11 @@ def train(config: Dict[str, Any]) -> None:
         clip_obs=10.0,
     )
 
-    # Create evaluation environment (same config as training)
-    print("Creating evaluation environment...")
-    eval_vec_env = DummyVecEnv([make_env(config)])
-    eval_env = VecNormalize(
-        eval_vec_env,
-        norm_obs=True,
-        norm_reward=False,
-        clip_obs=10.0,
-        training=False,  # Don't update running statistics during evaluation
-    )
+    # Evaluation environment is disabled when using a single CARLA instance
+    # in synchronous mode.  Two clients calling world.tick() on the same
+    # server causes double-advancing of the simulation clock and deadlocks.
+    # Evaluation is handled separately via make docker-eval after training.
+    eval_env: Optional[VecNormalize] = None
 
     # Shared policy kwargs for both standard and evidential policies
     policy_kwargs = dict(
@@ -215,17 +211,20 @@ def train(config: Dict[str, Any]) -> None:
         save_vecnormalize=True,
     )
 
-    eval_callback = EvalCallback(
-        eval_env,
-        best_model_save_path=checkpoint_dir,
-        log_path=log_dir,
-        eval_freq=eval_freq,
-        n_eval_episodes=n_eval_episodes,
-        deterministic=True,
-        render=False,
-    )
+    callbacks = [checkpoint_callback]
+    if eval_env is not None:
+        eval_callback = EvalCallback(
+            eval_env,
+            best_model_save_path=checkpoint_dir,
+            log_path=log_dir,
+            eval_freq=eval_freq,
+            n_eval_episodes=n_eval_episodes,
+            deterministic=True,
+            render=False,
+        )
+        callbacks.append(eval_callback)
 
-    callback_list = CallbackList([checkpoint_callback, eval_callback])
+    callback_list = CallbackList(callbacks)
 
     # Train the agent
     print(f"Starting training for {total_timesteps} timesteps...")
@@ -245,7 +244,8 @@ def train(config: Dict[str, Any]) -> None:
 
     # Clean up
     env.close()
-    eval_env.close()
+    if eval_env is not None:
+        eval_env.close()
 
 
 def main() -> None:

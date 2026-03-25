@@ -3,24 +3,23 @@
 @brief Live 2D bird's-eye visualiser for CARLA parking training and evaluation.
 
 Tails outputs/vis_history.jsonl in real-time, rendering each frame as a
-top-down diagram. Creates a signal file (outputs/.vis_active) so the
-environment knows to write frames. Closing the window removes the signal
-file and the env stops writing.
+top-down diagram using Pygame for zero-overhead rendering. Creates a signal
+file (outputs/.vis_active) so the environment knows to write frames. Closing
+the window removes the signal file and the env stops writing.
 
 Layers drawn (back to front):
   1. Lot boundary polygon (light grey fill)
   2. Bay outlines by type: perpendicular=blue, angled=yellow, parallel=violet
-  3. Target bay (bright green, thick outline + heading arrow)
-  4. Static parked vehicles (dark grey rectangles)
-  5. Patrol NPC vehicles (orange rectangles)
-  6. Pedestrians (magenta circles)
-  7. Ego vehicle (cyan rectangle + heading arrow + faded trail)
+  3. Target bay (bright green, thick outline + heading arrows)
+  4. Static parked vehicles (orange rectangles)
+  5. Patrol NPC vehicles (red rectangles)  -- dynamic
+  6. Pedestrians (teal circles)            -- dynamic
+  7. Ego trajectory trail (faded cyan)     -- dynamic
+  8. Ego vehicle (cyan rectangle + heading arrow) -- dynamic
+  9. HUD overlay (episode info, navigation hint)
 
 Usage:
     make visualise               # Live window during training
-    make eval-visualise-2d       # Live window during eval
-    make replay EPISODE=<id>     # Replay a specific past episode
-    make replay --list-episodes  # Print all episode IDs in history
 """
 
 import json
@@ -28,14 +27,11 @@ import math
 import signal
 import sys
 import time
-import tkinter as tk
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-import matplotlib
-import matplotlib.patches as mpatches
-import matplotlib.pyplot as plt
 import numpy as np
+import pygame
 
 from scripts.colours import (
     BAY_HEX,
@@ -46,341 +42,360 @@ from scripts.colours import (
     HEX_PEDESTRIAN_ZONE,
     HEX_STATIC_VEHICLE,
     HEX_TARGET_BAY,
+    hex_to_rgb,
 )
 
-# Colours -- all sourced from scripts/colours.py
-_COLOUR_LOT = HEX_LOT
-_COLOUR_TARGET_BAY = HEX_TARGET_BAY
-_COLOUR_PERP_BAY = BAY_HEX["perpendicular"]
-_COLOUR_ANGLED_BAY = BAY_HEX["angled"]
-_COLOUR_PARALLEL_BAY = BAY_HEX["parallel"]
-_COLOUR_STATIC_VEHICLE = HEX_STATIC_VEHICLE
-_COLOUR_PATROL_VEHICLE = HEX_PATROL_VEHICLE
-_COLOUR_PEDESTRIAN = HEX_PEDESTRIAN_ZONE
-_COLOUR_EGO = HEX_EGO
-_COLOUR_TRAIL = HEX_EGO
-_COLOUR_CONE = HEX_CONE
+# ---------------------------------------------------------------------------
+# Colours (convert hex palette to Pygame RGB tuples once at import time)
+# ---------------------------------------------------------------------------
 
-# Vehicle dimensions for rectangle drawing (metres).
-# Ego: BMW Grand Tourer (4.5m x 2.0m). NPC/static: generic saloon (4.7m x 2.1m).
-_EGO_HALF_LENGTH = 2.25
-_EGO_HALF_WIDTH = 1.0
-_NPC_HALF_LENGTH = 2.35
-_NPC_HALF_WIDTH = 1.05
+_C_LOT = hex_to_rgb(HEX_LOT)
+_C_LOT_EDGE = (153, 153, 153)
+_C_TARGET_BAY = hex_to_rgb(HEX_TARGET_BAY)
+_C_PERP_BAY = hex_to_rgb(BAY_HEX["perpendicular"])
+_C_ANGLED_BAY = hex_to_rgb(BAY_HEX["angled"])
+_C_PARALLEL_BAY = hex_to_rgb(BAY_HEX["parallel"])
+_C_STATIC_VEHICLE = hex_to_rgb(HEX_STATIC_VEHICLE)
+_C_PATROL_VEHICLE = hex_to_rgb(HEX_PATROL_VEHICLE)
+_C_PEDESTRIAN = hex_to_rgb(HEX_PEDESTRIAN_ZONE)
+_C_EGO = hex_to_rgb(HEX_EGO)
+_C_TRAIL = (*hex_to_rgb(HEX_EGO), 100)   # RGBA with alpha for trail
+_C_BG = (248, 248, 248)
+_C_HUD_BG = (30, 30, 30, 180)            # RGBA semi-transparent HUD
+_C_HUD_TEXT = (212, 212, 212)
+_C_CONE = hex_to_rgb(HEX_CONE)
 
-# Trail transparency
-_TRAIL_ALPHA = 0.4
+# ---------------------------------------------------------------------------
+# Window and rendering constants
+# ---------------------------------------------------------------------------
 
-# Default paths
+_LEGEND_W = 180         # Width of the right-hand legend panel (pixels)
+_MAP_W = 900            # Width of the map viewport (pixels)
+_WINDOW_W = _MAP_W + _LEGEND_W  # Total window width
+_WINDOW_H = 900
+_FPS_CAP = 120          # Pygame FPS cap -- well above CARLA sim rate
+_MARGIN_PX = 40         # Pixel margin inside the map viewport
+_HUD_FONT_SIZE = 14
+_LABEL_FONT_SIZE = 13
+
+# Vehicle dimensions in metres
+_EGO_HALF_L = 2.25
+_EGO_HALF_W = 1.0
+_NPC_HALF_L = 2.35
+_NPC_HALF_W = 1.05
+
+# Trail
+_TRAIL_MAX_POINTS = 500   # Cap to avoid slow poly-line draws
+
+# Episode buffering
+_MIN_EPISODE_FRAMES = 40
+
+# JSONL / signal paths
 _DEFAULT_HISTORY_FILE = Path("outputs/vis_history.jsonl")
 _SIGNAL_FILE = Path("outputs/.vis_active")
 
-# How often to check for new lines when waiting (seconds)
-_POLL_INTERVAL = 0.05
+# Poll sleep when no new data (seconds) -- keeps CPU usage low
+_POLL_SLEEP = 0.02
 
 
-def _rot_rect(
+# ---------------------------------------------------------------------------
+# Geometry helpers
+# ---------------------------------------------------------------------------
+
+
+def _rot_corners(
     cx: float, cy: float, half_l: float, half_w: float, yaw_deg: float
 ) -> np.ndarray:
     """
-    @brief Compute the four corners of a rotated rectangle.
+    @brief Compute the four corners of a rotated rectangle in world coords.
     @param cx: Centre x (metres).
     @param cy: Centre y (metres).
-    @param half_l: Half-length (forward direction).
-    @param half_w: Half-width (lateral direction).
-    @param yaw_deg: Yaw angle in degrees (CARLA convention).
-    @return Array of shape (4, 2) with corner coordinates.
+    @param half_l: Half-length.
+    @param half_w: Half-width.
+    @param yaw_deg: Yaw in degrees (CARLA convention, y-up).
+    @return Array of shape (4, 2).
     """
     yaw = math.radians(yaw_deg)
-    cos_y = math.cos(yaw)
-    sin_y = math.sin(yaw)
-
-    local = np.array(
-        [
-            [half_l, half_w],
-            [-half_l, half_w],
-            [-half_l, -half_w],
-            [half_l, -half_w],
-        ]
-    )
-
+    cos_y, sin_y = math.cos(yaw), math.sin(yaw)
+    local = np.array([
+        [ half_l,  half_w],
+        [-half_l,  half_w],
+        [-half_l, -half_w],
+        [ half_l, -half_w],
+    ])
     R = np.array([[cos_y, -sin_y], [sin_y, cos_y]])
-    world = (R @ local.T).T + np.array([cx, cy])
-    return world
+    return (R @ local.T).T + np.array([cx, cy])
 
 
-def _draw_bay(
-    ax: plt.Axes,
-    bay: Dict[str, Any],
-    is_target: bool,
-) -> None:
+def _world_to_screen(
+    pts: np.ndarray,
+    origin: np.ndarray,
+    scale: float,
+) -> List[Tuple[int, int]]:
     """
-    @brief Draw a single bay outline as a rotated rectangle.
-    @param ax: Matplotlib axes.
-    @param bay: Bay dict with x, y, yaw, width, depth, bay_type keys.
-    @param is_target: If True, draw with bright green thick outline.
+    @brief Convert world-space points to Pygame screen pixels.
+
+    World x -> screen right, world y -> screen up (flipped because Pygame
+    y=0 is at top).
+
+    @param pts: Array of shape (N, 2) in metres.
+    @param origin: World coordinate that maps to the top-left of the viewport
+                   after margin is applied.
+    @param scale: Pixels per metre.
+    @return List of (px, py) integer tuples.
     """
-    bay_type = bay.get("bay_type", "perpendicular")
-    if is_target:
-        colour = _COLOUR_TARGET_BAY
-        lw = 2.5
-    elif bay_type == "angled":
-        colour = _COLOUR_ANGLED_BAY
-        lw = 1.0
-    elif bay_type == "parallel":
-        colour = _COLOUR_PARALLEL_BAY
-        lw = 1.0
-    else:
-        colour = _COLOUR_PERP_BAY
-        lw = 1.0
+    shifted = pts - origin
+    px = (shifted[:, 0] * scale + _MARGIN_PX).astype(int)
+    # Flip y: world up = screen up means we negate y before scaling
+    py = (_WINDOW_H - _MARGIN_PX - shifted[:, 1] * scale).astype(int)
+    return list(zip(px.tolist(), py.tolist()))
 
-    half_d = float(bay.get("depth", 5.0)) / 2.0
-    half_w = float(bay.get("width", 2.5)) / 2.0
-    yaw_deg = float(bay.get("yaw_deg", bay.get("yaw", 0.0)))
 
-    corners = _rot_rect(
-        float(bay["x"]), float(bay["y"]), half_d, half_w, yaw_deg
-    )
-    poly = plt.Polygon(
-        corners, closed=True, fill=False, edgecolor=colour, linewidth=lw
-    )
-    ax.add_patch(poly)
+def _w2s_single(
+    x: float, y: float, origin: np.ndarray, scale: float
+) -> Tuple[int, int]:
+    """@brief Convert a single world point to screen pixel."""
+    pts = np.array([[x, y]])
+    return _world_to_screen(pts, origin, scale)[0]
 
-    # Both-direction arrows for target bay (nose-in and nose-out both valid).
-    if is_target:
-        arrow_len = half_d * 0.8
-        bx, by = float(bay["x"]), float(bay["y"])
-        for yaw_r in (math.radians(yaw_deg), math.radians(yaw_deg + 180.0)):
-            ax.annotate(
-                "",
-                xy=(bx + arrow_len * math.cos(yaw_r), by + arrow_len * math.sin(yaw_r)),
-                xytext=(bx, by),
-                arrowprops=dict(arrowstyle="->", color=_COLOUR_TARGET_BAY, lw=2.0),
+
+# ---------------------------------------------------------------------------
+# Static scene surface builder
+# ---------------------------------------------------------------------------
+
+
+def _build_static_surface(
+    state: Dict[str, Any],
+    origin: np.ndarray,
+    scale: float,
+) -> pygame.Surface:
+    """
+    @brief Render the parts of the scene that do not change within an episode
+           into a dedicated Surface. This surface is blitted each frame instead
+           of redrawing all geometry from scratch.
+
+    Includes: lot boundary, bay outlines, target bay arrows, static parked
+    vehicles, legend.
+
+    @param state: First frame of the episode (or any frame -- static data
+                  is identical across frames).
+    @param origin: World origin for the viewport.
+    @param scale: Pixels per metre.
+    @return Opaque Surface with the static scene painted on it.
+    """
+    # Only covers the map viewport -- legend panel is drawn separately.
+    surf = pygame.Surface((_MAP_W, _WINDOW_H))
+    surf.fill(_C_BG)
+
+    # -- Lot boundary ---------------------------------------------------------
+    corners_raw = state.get("corners", [])
+    if corners_raw:
+        lot_pts = np.array([[c["x"], c["y"]] for c in corners_raw])
+        screen_pts = _world_to_screen(lot_pts, origin, scale)
+        if len(screen_pts) >= 3:
+            pygame.draw.polygon(surf, _C_LOT, screen_pts)
+            pygame.draw.polygon(surf, _C_LOT_EDGE, screen_pts, 2)
+
+    # -- Bay outlines ---------------------------------------------------------
+    target_bay = state.get("target_bay", {})
+    target_id = target_bay.get("bay_id", "")
+    for bay in state.get("bays", []):
+        bay_id = bay.get("id", bay.get("bay_id", ""))
+        is_target = bay_id == target_id
+        bay_type = bay.get("bay_type", "perpendicular")
+        if is_target:
+            colour = _C_TARGET_BAY
+            lw = 3
+        elif bay_type == "angled":
+            colour = _C_ANGLED_BAY
+            lw = 1
+        elif bay_type == "parallel":
+            colour = _C_PARALLEL_BAY
+            lw = 1
+        else:
+            colour = _C_PERP_BAY
+            lw = 1
+
+        half_d = float(bay.get("depth", 5.0)) / 2.0
+        half_w = float(bay.get("width", 2.5)) / 2.0
+        yaw_deg = float(bay.get("yaw_deg", bay.get("yaw", 0.0)))
+        corners = _rot_corners(float(bay["x"]), float(bay["y"]), half_d, half_w, yaw_deg)
+        spts = _world_to_screen(corners, origin, scale)
+        if len(spts) >= 3:
+            pygame.draw.polygon(surf, colour, spts, lw)
+
+        # Heading arrows for target bay (both directions)
+        if is_target:
+            bx, by = float(bay["x"]), float(bay["y"])
+            arrow_len = half_d * 0.8
+            for yaw_r in (math.radians(yaw_deg), math.radians(yaw_deg + 180.0)):
+                tip = (bx + arrow_len * math.cos(yaw_r),
+                       by + arrow_len * math.sin(yaw_r))
+                s0 = _w2s_single(bx, by, origin, scale)
+                s1 = _w2s_single(tip[0], tip[1], origin, scale)
+                pygame.draw.line(surf, _C_TARGET_BAY, s0, s1, 2)
+                # Arrowhead
+                dx, dy = s1[0] - s0[0], s1[1] - s0[1]
+                length = math.hypot(dx, dy) or 1.0
+                ux, uy = dx / length, dy / length
+                left = (int(s1[0] - ux * 8 + uy * 5),
+                        int(s1[1] - uy * 8 - ux * 5))
+                right = (int(s1[0] - ux * 8 - uy * 5),
+                         int(s1[1] - uy * 8 + ux * 5))
+                pygame.draw.polygon(surf, _C_TARGET_BAY, [s1, left, right])
+
+    # -- Static parked vehicles -----------------------------------------------
+    for actor in state.get("actors", []):
+        if actor.get("type", "static") != "npc":
+            corners = _rot_corners(
+                actor["x"], actor["y"], _NPC_HALF_L, _NPC_HALF_W,
+                actor.get("yaw", 0.0)
             )
+            spts = _world_to_screen(corners, origin, scale)
+            if len(spts) >= 3:
+                pygame.draw.polygon(surf, _C_STATIC_VEHICLE, spts)
+
+    return surf
 
 
-def _draw_vehicle_rect(
-    ax: plt.Axes,
-    x: float,
-    y: float,
-    yaw_deg: float,
-    colour: str,
-    alpha: float = 1.0,
-) -> None:
+def _draw_legend(screen: pygame.Surface) -> None:
     """
-    @brief Draw a filled vehicle rectangle (2.0m x 4.5m).
-    @param ax: Matplotlib axes.
-    @param x: Centre x.
-    @param y: Centre y.
-    @param yaw_deg: Yaw in degrees.
-    @param colour: Fill and edge colour.
-    @param alpha: Transparency.
+    @brief Draw the colour legend in the dedicated right-hand panel.
+
+    The panel occupies x=[_MAP_W, _WINDOW_W] and is drawn directly onto the
+    main screen surface so it is never overwritten by map blits.
     """
-    corners = _rot_rect(x, y, _EGO_HALF_LENGTH, _EGO_HALF_WIDTH, yaw_deg)
-    poly = plt.Polygon(
-        corners,
-        closed=True,
-        facecolor=colour,
-        edgecolor=colour,
-        alpha=alpha,
-        linewidth=0.5,
-    )
-    ax.add_patch(poly)
+    font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE)
+    title_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE, bold=True)
+
+    # Panel background
+    panel_rect = pygame.Rect(_MAP_W, 0, _LEGEND_W, _WINDOW_H)
+    pygame.draw.rect(screen, (235, 235, 235), panel_rect)
+    # Divider line
+    pygame.draw.line(screen, (180, 180, 180), (_MAP_W, 0), (_MAP_W, _WINDOW_H), 2)
+
+    entries = [
+        (_C_TARGET_BAY,     "Target bay"),
+        (_C_PERP_BAY,       "Perpendicular"),
+        (_C_ANGLED_BAY,     "Angled"),
+        (_C_PARALLEL_BAY,   "Parallel"),
+        (_C_EGO,            "Ego"),
+        (_C_PATROL_VEHICLE, "Patrol NPC"),
+        (_C_STATIC_VEHICLE, "Parked"),
+        (_C_PEDESTRIAN,     "Pedestrian"),
+    ]
+
+    x0 = _MAP_W + 10
+    y0 = 16
+    title = title_font.render("Legend", True, (40, 40, 40))
+    screen.blit(title, (x0, y0))
+    y0 += title.get_height() + 8
+
+    for colour, label in entries:
+        pygame.draw.rect(screen, colour, (x0, y0 + 2, 14, 14))
+        txt = font.render(label, True, (50, 50, 50))
+        screen.blit(txt, (x0 + 20, y0))
+        y0 += 22
+
+
+# ---------------------------------------------------------------------------
+# Main visualiser class
+# ---------------------------------------------------------------------------
 
 
 class LiveVisualiser:
     """
     @class LiveVisualiser
-    @brief Live 2D bird's-eye visualiser for CARLA parking.
+    @brief Live 2D bird's-eye Pygame visualiser for CARLA parking.
 
-    Tails vis_history.jsonl and plays frames at real-time speed
-    (1 sim-second = 1 wall-second). Creates outputs/.vis_active on
-    start so the env writes frames; removes it on close.
+    Tails outputs/vis_history.jsonl written by the training env and renders
+    each frame with Pygame for real-time performance. The static scene (lot,
+    bays, parked vehicles) is pre-rendered to a surface once per episode;
+    only dynamic actors (ego, patrol NPCs, pedestrians, trail) are redrawn
+    each frame via blitting.
 
-    Key bindings (while the window is focused):
-      l          -- jump to the latest episode in the history
-      0-9        -- type an episode number then Enter to jump to it
-      Escape     -- cancel a partially-typed episode number
+    Controls:
+        right arrow  -- next episode in history
+        left arrow   -- previous episode in history
+        ESC / Q      -- exit
     """
 
-    def __init__(
-        self,
-        history_file: Optional[Path] = None,
-    ) -> None:
+    def __init__(self, history_file: Optional[Path] = None) -> None:
         """
-        @brief Initialise the live visualiser.
+        @brief Initialise Pygame window and internal state.
         @param history_file: Path to vis_history.jsonl. Defaults to
                outputs/vis_history.jsonl.
         """
         self._history_file = history_file or _DEFAULT_HISTORY_FILE
         self._signal_file = _SIGNAL_FILE
 
-        # Set up matplotlib figure. If interactive backend fails, fall back to Agg.
-        try:
-            self._fig, self._ax = plt.subplots(figsize=(10, 10))
-        except ImportError:
-            matplotlib.use("Agg")
-            self._fig, self._ax = plt.subplots(figsize=(10, 10))
-        self._fig.tight_layout()
-        self._ax.text(
-            0.5,
-            0.5,
-            "Waiting for data...",
-            transform=self._ax.transAxes,
-            ha="center",
-            va="center",
-            fontsize=14,
+        pygame.init()
+        pygame.font.init()
+        self._screen = pygame.display.set_mode((_WINDOW_W, _WINDOW_H))
+        pygame.display.set_caption(
+            "CARLA Parking Visualiser  |  <- -> navigate  |  F fullscreen  |  ESC quit"
         )
-        self._fig.canvas.mpl_connect("close_event", self._on_close)
-        self._fig.canvas.mpl_connect("key_press_event", self._on_key)
+        self._clock = pygame.time.Clock()
+        self._hud_font = pygame.font.SysFont("monospace", _HUD_FONT_SIZE)
 
-        # Small Tkinter help window listing key bindings (no matplotlib overhead).
-        try:
-            _root = self._fig.canvas.get_tk_widget().winfo_toplevel()
-            self._help_win: Optional[tk.Toplevel] = tk.Toplevel(_root)
-            self._help_win.title("Controls")
-            self._help_win.resizable(False, False)
-            self._help_win.configure(bg="#1E1E1E")
-            _help_lines = (
-                "  Visualiser controls\n"
-                "  --------------------------------\n"
-                "  l              latest episode\n"
-                "  0-9 + Enter    jump to episode\n"
-                "  Esc            cancel input\n"
-                "  Ctrl+C         exit + delete history"
-            )
-            tk.Label(
-                self._help_win,
-                text=_help_lines,
-                font=("Courier", 10),
-                bg="#1E1E1E",
-                fg="#D4D4D4",
-                justify="left",
-                padx=10,
-                pady=10,
-            ).pack()
-        except Exception:
-            # Non-Tk backend (e.g. Agg headless) -- skip help window silently.
-            self._help_win = None
+        # Static scene surface (rebuilt once per episode)
+        self._static_surf: Optional[pygame.Surface] = None
+        self._static_episode_id: Optional[int] = None
+        # Trail surface (alpha-blended, rebuilt each frame)
+        self._trail_surf = pygame.Surface((_WINDOW_W, _WINDOW_H), pygame.SRCALPHA)
 
-        # Jump-to-episode state: target episode ID to seek to, or None for live tail.
-        # _digit_buf accumulates typed digits before Enter is pressed.
-        self._jump_episode: Optional[int] = None
-        self._digit_buf: str = ""
-        # Set True by SIGINT handler to exit the run loop cleanly without
-        # printing a Tkinter traceback.
+        # Viewport transform (set when the first frame of an episode arrives)
+        self._origin = np.zeros(2)
+        self._scale = 1.0
+
+        # JSONL state
+        self._file_offset: int = 0
+        self._current_buf: List[Dict[str, Any]] = []
+        self._current_episode_id: Optional[int] = None
+
+        # Episode history
+        self._episode_history: List[List[Dict[str, Any]]] = []
+        self._play_index: int = -1
+        self._skip_requested: bool = False
+        self._user_navigated: bool = False
+
         self._exit_requested: bool = False
+        self._fullscreen: bool = False
 
-        # Truncate any stale history so we start fresh. If the file is owned
-        # by root (from Docker), skip truncation and just read existing data.
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
-        if self._history_file.exists():
-            try:
-                self._history_file.write_text("")
-            except PermissionError:
-                # File owned by root (Docker container); proceed with read-only
-                pass
-
-        # Create the signal file so the env starts writing
         self._signal_file.touch()
 
     # ------------------------------------------------------------------
-    # Signal file management
+    # Signal / cleanup
     # ------------------------------------------------------------------
 
     def _remove_signal(self) -> None:
-        """
-        @brief Remove the signal file so the env stops writing.
-        """
+        """@brief Remove the vis_active signal file."""
         try:
             self._signal_file.unlink(missing_ok=True)
         except OSError:
             pass
 
     def _delete_history(self) -> None:
-        """
-        @brief Delete the history file to free disk space on exit.
-        """
+        """@brief Delete vis_history.jsonl on exit."""
         try:
             self._history_file.unlink(missing_ok=True)
         except OSError:
             pass
 
-    def _on_close(self, event: Any) -> None:
-        """
-        @brief Handle window close: remove signal file, delete history, and exit.
-        @param event: Matplotlib close event (unused).
-        """
-        self._remove_signal()
-        self._delete_history()
-        sys.exit(0)
-
-    def _on_key(self, event: Any) -> None:
-        """
-        @brief Handle key press for episode navigation.
-
-        Bindings:
-          l      -- jump to the latest (highest) episode ID in history
-          0-9    -- accumulate digit into episode number buffer
-          enter  -- confirm buffered episode number and jump to it
-          escape -- cancel buffered episode number
-        @param event: Matplotlib key event.
-        """
-        key = event.key if event.key is not None else ""
-
-        if key == "l":
-            latest = self._latest_episode_id()
-            if latest is not None:
-                self._jump_episode = latest
-                self._digit_buf = ""
-                self._update_status(f"Jumping to latest episode {latest}...")
-            else:
-                self._update_status("No episodes in history yet.")
-
-        elif key in "0123456789":
-            self._digit_buf += key
-            self._update_status(
-                f"Episode: {self._digit_buf}_ (Enter to jump, Esc to cancel)"
-            )
-
-        elif key == "enter" and self._digit_buf:
-            self._jump_episode = int(self._digit_buf)
-            self._digit_buf = ""
-            self._update_status(f"Jumping to episode {self._jump_episode}...")
-
-        elif key == "escape":
-            self._digit_buf = ""
-            self._update_status("Cancelled.")
-
-    def _update_status(self, msg: str) -> None:
-        """
-        @brief Show a temporary status message in the figure title area.
-        @param msg: Message to display.
-        """
-        self._ax.set_title(msg, fontsize=10)
-        self._fig.canvas.draw_idle()
-        self._fig.canvas.flush_events()
-
     # ------------------------------------------------------------------
-    # Main loop
+    # Public entry point
     # ------------------------------------------------------------------
 
     def run(self) -> None:
-        """
-        @brief Show the matplotlib window and start tailing the JSONL.
-        """
-        # Install a SIGINT handler that sets a flag rather than raising
-        # KeyboardInterrupt inside Tkinter's C-level event loop, which
-        # would otherwise print a noisy traceback before Python can catch it.
+        """@brief Open the Pygame window and enter the main loop."""
         self._exit_requested = False
 
-        def _sigint_handler(signum: int, frame: Any) -> None:
+        def _sigint(_sig: int, _frame: Any) -> None:
             self._exit_requested = True
 
-        signal.signal(signal.SIGINT, _sigint_handler)
+        signal.signal(signal.SIGINT, _sigint)
 
-        plt.ion()
-        plt.show()
         try:
             self._run_loop()
         except KeyboardInterrupt:
@@ -388,285 +403,415 @@ class LiveVisualiser:
         finally:
             self._remove_signal()
             self._delete_history()
+            pygame.quit()
+
+    # ------------------------------------------------------------------
+    # Main loop
+    # ------------------------------------------------------------------
 
     def _run_loop(self) -> None:
         """
-        @brief Tail the JSONL file and play frames at real-time speed.
+        @brief Ingest JSONL frames and render them as fast as Pygame allows.
 
-        Tracks the relationship between sim_time (from the env) and wall
-        clock time. If training is faster than real-time, the visualiser
-        sleeps to maintain 1:1 pacing. If training is slower, frames are
-        displayed as soon as they arrive.
-
-        When _jump_episode is set (via key press), the loop seeks to the
-        first frame of that episode and resumes playback from there. After
-        the episode ends it returns to live-tail mode.
+        In live mode (no manual navigation) the visualiser always shows the
+        latest frame of the latest episode -- no replay delay. When the user
+        presses left to browse history, full frame-by-frame playback runs for
+        the selected episode.
         """
-        wall_start: Optional[float] = None
-        sim_start: Optional[float] = None
-        file_pos: int = 0
+        while not self._exit_requested:
+            self._handle_events()
+            self._ingest_new_frames()
 
-        while True:
-            if self._exit_requested:
-                break
-            try:
-                # Check if a jump was requested via key press
-                if self._jump_episode is not None:
-                    target = self._jump_episode
-                    self._jump_episode = None
-                    seek_pos = self._find_episode_start(target)
-                    if seek_pos is not None:
-                        file_pos = seek_pos
-                        wall_start = None
-                        sim_start = None
-                    else:
-                        self._update_status(
-                            f"Episode {target} not found in history."
-                        )
+            n_hist = len(self._episode_history)
 
-                frame = self._read_next_frame(file_pos)
-                if frame is None:
-                    plt.pause(_POLL_INTERVAL)
+            if n_hist == 0:
+                self._draw_waiting()
+                self._clock.tick(_FPS_CAP)
+                time.sleep(_POLL_SLEEP)
+                continue
+
+            # Determine which episode to show
+            if self._skip_requested:
+                self._skip_requested = False
+            else:
+                if self._play_index == -1:
+                    self._play_index = 0
+                elif self._user_navigated:
+                    self._draw_paused()
+                    self._clock.tick(_FPS_CAP)
+                    time.sleep(_POLL_SLEEP)
                     continue
+                else:
+                    self._play_index = n_hist - 1
 
-                file_pos = frame["_file_pos"]
-                state = frame["state"]
+            episode = self._episode_history[self._play_index]
+            n = len(episode)
+            dt = episode[0].get("carla_timestep", 0.05) if episode else 0.05
+            play_eid = episode[0].get("episode_id", "?") if episode else "?"
+            first_eid = self._episode_history[0][0].get("episode_id", "?")
+            last_eid = self._episode_history[-1][0].get("episode_id", "?")
 
-                sim_time = state.get("sim_time", 0.0)
-                episode_step = state.get("episode_step", 0)
+            # In auto-advance mode: show only the last frame instantly.
+            # In manual-browse mode: play every frame.
+            frames_to_show = (
+                [episode[-1]]
+                if not self._user_navigated and self._play_index == n_hist - 1
+                else episode
+            )
 
-                # Reset wall clock reference on episode boundary
-                if episode_step <= 1:
-                    wall_start = time.monotonic()
-                    sim_start = sim_time
-
-                # Pace at real-time: sleep if ahead of sim clock
-                if wall_start is not None and sim_start is not None:
-                    sim_elapsed = sim_time - sim_start
-                    wall_elapsed = time.monotonic() - wall_start
-                    sleep_time = sim_elapsed - wall_elapsed
-                    if sleep_time > 0.001:
-                        plt.pause(sleep_time)
-
-                # Draw and flush
-                self._draw_frame(state)
-                self._fig.canvas.draw_idle()
-                self._fig.canvas.flush_events()
-
-            except Exception:
-                plt.pause(_POLL_INTERVAL)
+            for frame in frames_to_show:
+                if self._exit_requested or self._skip_requested:
+                    break
+                self._handle_events()
+                self._ingest_new_frames()
+                t0 = time.monotonic()
+                self._draw_frame(frame)
+                self._clock.tick(_FPS_CAP)
+                # Real-time throttle during manual replay: sleep the remainder
+                # of the sim timestep so playback matches wall-clock speed.
+                # In auto-advance (live) mode we skip this so the latest frame
+                # appears immediately.
+                if self._user_navigated:
+                    elapsed = time.monotonic() - t0
+                    remaining = dt - elapsed
+                    if remaining > 0.002:
+                        time.sleep(remaining)
 
     # ------------------------------------------------------------------
-    # JSONL reader
+    # Event handling
     # ------------------------------------------------------------------
 
-    def _read_next_frame(
-        self, file_pos: int
-    ) -> Optional[Dict[str, Any]]:
+    def _handle_events(self) -> None:
+        """@brief Process Pygame event queue (key presses, window close)."""
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self._exit_requested = True
+            elif event.type == pygame.KEYDOWN:
+                self._handle_key(event.key)
+
+    def _handle_key(self, key: int) -> None:
+        """@brief Handle a single keydown event."""
+        n = len(self._episode_history)
+        if key in (pygame.K_ESCAPE, pygame.K_q):
+            self._exit_requested = True
+            return
+        if key == pygame.K_f:
+            self._fullscreen = not self._fullscreen
+            flags = pygame.FULLSCREEN if self._fullscreen else 0
+            self._screen = pygame.display.set_mode((_WINDOW_W, _WINDOW_H), flags)
+            # Force static scene rebuild for the new surface
+            self._static_episode_id = None
+            return
+        if n == 0:
+            return
+        if key == pygame.K_RIGHT:
+            new_idx = self._play_index + 1 if self._play_index + 1 < n else None
+        elif key == pygame.K_LEFT:
+            new_idx = self._play_index - 1 if self._play_index - 1 >= 0 else None
+        else:
+            return
+        if new_idx is not None and new_idx != self._play_index:
+            self._play_index = new_idx
+            self._skip_requested = True
+            # Re-enable auto-advance when the user reaches the latest episode.
+            self._user_navigated = new_idx < n - 1
+
+    # ------------------------------------------------------------------
+    # JSONL ingestion
+    # ------------------------------------------------------------------
+
+    def _ingest_new_frames(self) -> None:
+        """@brief Read new JSONL lines and sort into episode buffers."""
+        try:
+            for frame in self._read_new_frames():
+                eid = frame.get("episode_id")
+                if eid != self._current_episode_id:
+                    if self._current_buf:
+                        self._flush_episode_buf()
+                    if (
+                        self._current_episode_id is not None
+                        and eid is not None
+                        and eid < self._current_episode_id
+                    ):
+                        self._episode_history.clear()
+                        self._play_index = -1
+                        self._skip_requested = False
+                        self._user_navigated = False
+                        print(
+                            f"[visualiser] episode id reset "
+                            f"({self._current_episode_id} -> {eid}) "
+                            f"-- new env instance, session cleared"
+                        )
+                    self._current_buf = []
+                    self._current_episode_id = eid
+                self._current_buf.append(frame)
+
+                # Flush immediately when the episode ends so the visualiser
+                # can display it without waiting for the next episode to start.
+                if frame.get("end_reason"):
+                    self._flush_episode_buf()
+                    self._current_buf = []
+                    self._current_episode_id = None
+        except Exception:
+            pass
+
+    def _flush_episode_buf(self) -> None:
+        """@brief Commit the current buffer to history if it is long enough."""
+        buf = self._current_buf
+        n = len(buf)
+        eid = self._current_episode_id
+        last = buf[-1] if buf else {}
+        end_reason = last.get("end_reason", "unknown")
+        steps = last.get("episode_step", "?")
+        sim_t = last.get("sim_time", 0.0)
+
+        if n < _MIN_EPISODE_FRAMES:
+            print(
+                f"[visualiser] SKIP  ep {eid}  {n} frames  "
+                f"steps={steps}  t={sim_t:.1f}s  end={end_reason}  "
+                f"(need >={_MIN_EPISODE_FRAMES} frames)"
+            )
+            return
+
+        self._episode_history.append(buf)
+        print(
+            f"[visualiser] KEEP  ep {eid}  {n} frames  "
+            f"steps={steps}  t={sim_t:.1f}s  end={end_reason}"
+        )
+
+    def _read_new_frames(self) -> List[Dict[str, Any]]:
         """
-        @brief Read the next JSON line from the history file.
-        @param file_pos: Byte offset to read from.
-        @return Dict with 'state' and '_file_pos', or None if no new data.
+        @brief Read all complete JSONL lines written since the last call.
+        @return List of parsed frame dicts in arrival order.
         """
         if not self._history_file.exists():
-            return None
-
+            return []
+        frames: List[Dict[str, Any]] = []
         try:
-            with open(self._history_file, "r") as f:
-                f.seek(file_pos)
-                line = f.readline()
-                if not line or not line.endswith("\n"):
-                    return None
-                new_pos = f.tell()
-
-            state = json.loads(line)
-            return {"state": state, "_file_pos": new_pos}
-        except (json.JSONDecodeError, OSError):
-            return None
-
-    def _find_episode_start(self, episode_id: int) -> Optional[int]:
-        """
-        @brief Scan the JSONL from the beginning and return the byte offset
-               of the first frame belonging to episode_id.
-        @param episode_id: Target episode ID to seek to.
-        @return Byte offset of the first matching frame, or None if not found.
-        """
-        if not self._history_file.exists():
-            return None
-        try:
-            with open(self._history_file, "r") as f:
-                while True:
-                    pos = f.tell()
-                    line = f.readline()
-                    if not line:
-                        break
-                    try:
-                        state = json.loads(line)
-                    except json.JSONDecodeError:
+            with open(self._history_file, "rb") as f:
+                size = self._history_file.stat().st_size
+                if self._file_offset > size:
+                    self._file_offset = 0
+                f.seek(self._file_offset)
+                chunk = f.read()
+                if not chunk:
+                    return []
+                last_nl = chunk.rfind(b"\n")
+                if last_nl == -1:
+                    return []
+                complete = chunk[: last_nl + 1]
+                self._file_offset += last_nl + 1
+                for raw in complete.split(b"\n"):
+                    raw = raw.strip()
+                    if not raw:
                         continue
-                    if state.get("episode_id") == episode_id:
-                        return pos
+                    try:
+                        frames.append(json.loads(raw.decode("utf-8")))
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        continue
         except OSError:
             pass
-        return None
-
-    def _latest_episode_id(self) -> Optional[int]:
-        """
-        @brief Scan the JSONL and return the highest episode_id present.
-        @return Highest episode ID found, or None if the file is empty.
-        """
-        if not self._history_file.exists():
-            return None
-        latest: Optional[int] = None
-        try:
-            with open(self._history_file, "r") as f:
-                for line in f:
-                    try:
-                        state = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    eid = state.get("episode_id")
-                    if isinstance(eid, int):
-                        if latest is None or eid > latest:
-                            latest = eid
-        except OSError:
-            pass
-        return latest
+        return frames
 
     # ------------------------------------------------------------------
-    # Drawing
+    # Viewport calculation
     # ------------------------------------------------------------------
+
+    def _compute_viewport(self, state: Dict[str, Any]) -> None:
+        """
+        @brief Compute origin and scale so the lot fits inside the window.
+
+        Uses the lot corner polygon if available, falling back to the ego
+        position. Sets self._origin and self._scale.
+        @param state: Any frame from the episode.
+        """
+        corners_raw = state.get("corners", [])
+        if corners_raw:
+            pts = np.array([[c["x"], c["y"]] for c in corners_raw])
+        else:
+            ego = state.get("ego", {})
+            cx = float(ego.get("x", 0.0))
+            cy = float(ego.get("y", 0.0))
+            pts = np.array([[cx - 30, cy - 30], [cx + 30, cy + 30]])
+
+        mn, mx = pts.min(axis=0), pts.max(axis=0)
+        span = mx - mn
+        span = np.where(span < 1.0, 1.0, span)
+
+        usable_w = _MAP_W - 2 * _MARGIN_PX
+        usable_h = _WINDOW_H - 2 * _MARGIN_PX
+        self._scale = min(usable_w / span[0], usable_h / span[1])
+        self._origin = mn
+
+    # ------------------------------------------------------------------
+    # Drawing helpers
+    # ------------------------------------------------------------------
+
+    def _draw_waiting(self) -> None:
+        """@brief Render a 'waiting for data' splash screen."""
+        self._screen.fill(_C_BG)
+        _draw_legend(self._screen)
+        font = pygame.font.SysFont("monospace", 18)
+        txt = font.render(
+            f"Waiting for first valid episode "
+            f"(need >= {_MIN_EPISODE_FRAMES} frames)...",
+            True, (80, 80, 80),
+        )
+        self._screen.blit(
+            txt,
+            ((_MAP_W - txt.get_width()) // 2,
+             (_WINDOW_H - txt.get_height()) // 2),
+        )
+        pygame.display.flip()
+
+    def _draw_paused(self) -> None:
+        """@brief Render the last drawn frame with a 'paused' HUD overlay."""
+        n_hist = len(self._episode_history)
+        if self._static_surf is not None:
+            self._screen.blit(self._static_surf, (0, 0))
+        _draw_legend(self._screen)
+        last_eid = self._episode_history[-1][0].get("episode_id", "?")
+        cur_eid = (
+            self._episode_history[self._play_index][0].get("episode_id", "?")
+            if 0 <= self._play_index < n_hist else "?"
+        )
+        self._draw_hud(
+            f"Paused ep {cur_eid}  |  "
+            f"{n_hist} eps buffered (latest: ep {last_eid})  |  "
+            f"<- -> navigate",
+            y_offset=8,
+        )
+        pygame.display.flip()
 
     def _draw_frame(self, state: Dict[str, Any]) -> None:
         """
-        @brief Redraw the entire scene from a state dict.
+        @brief Render a single frame: rebuild static surface if episode changed,
+               then blit static + dynamic layers.
         @param state: Parsed frame dict from vis_history.jsonl.
         """
-        ax = self._ax
-        ax.cla()
-        ax.set_aspect("equal")
-        ax.set_facecolor("#F8F8F8")
+        episode_id = state.get("episode_id")
 
-        # Lot boundary polygon
-        corners_raw = state.get("corners", [])
-        if corners_raw:
-            lot_pts = np.array([[c["x"], c["y"]] for c in corners_raw])
-            lot_poly = plt.Polygon(
-                lot_pts,
-                closed=True,
-                facecolor=_COLOUR_LOT,
-                edgecolor="#999999",
-                linewidth=1.0,
-            )
-            ax.add_patch(lot_poly)
-
-        # Bay outlines
-        target_bay = state.get("target_bay", {})
-        target_id = target_bay.get("bay_id", "")
-        for bay in state.get("bays", []):
-            # Layout YAML uses "id"; target_bay dict uses "bay_id"
-            bay_id = bay.get("id", bay.get("bay_id", ""))
-            _draw_bay(ax, bay, is_target=(bay_id == target_id))
-
-        # Static and patrol vehicles
-        for actor in state.get("actors", []):
-            actor_type = actor.get("type", "static")
-            colour = (
-                _COLOUR_PATROL_VEHICLE
-                if actor_type == "npc"
-                else _COLOUR_STATIC_VEHICLE
-            )
-            _draw_vehicle_rect(
-                ax, actor["x"], actor["y"], actor.get("yaw", 0.0), colour
+        # Rebuild static surface once per episode
+        if episode_id != self._static_episode_id:
+            self._static_episode_id = episode_id
+            self._compute_viewport(state)
+            self._static_surf = _build_static_surface(
+                state, self._origin, self._scale
             )
 
-        # Pedestrians
-        for ped in state.get("pedestrians", []):
-            ax.add_patch(
-                plt.Circle(
-                    (ped["x"], ped["y"]),
-                    radius=0.4,
-                    facecolor=_COLOUR_PEDESTRIAN,
-                    edgecolor=_COLOUR_PEDESTRIAN,
-                )
-            )
+        assert self._static_surf is not None
+        # Blit the pre-rendered static scene (map area only)
+        self._screen.blit(self._static_surf, (0, 0))
+        # Legend panel -- drawn every frame so it is never overwritten
+        _draw_legend(self._screen)
 
-        # Ego trajectory trail
+        origin = self._origin
+        scale = self._scale
+
+        # -- Trail (alpha-blended, clipped to map area) ----------------------
         trail = state.get("trajectory", [])
         if len(trail) > 1:
-            trail_arr = np.array(trail)
-            ax.plot(
-                trail_arr[:, 0],
-                trail_arr[:, 1],
-                color=_COLOUR_TRAIL,
-                alpha=_TRAIL_ALPHA,
-                linewidth=1.5,
-            )
+            pts = trail[-_TRAIL_MAX_POINTS:]
+            world = np.array(pts)
+            spts = _world_to_screen(world, origin, scale)
+            if len(spts) >= 2:
+                trail_surf = pygame.Surface((_MAP_W, _WINDOW_H), pygame.SRCALPHA)
+                pygame.draw.lines(trail_surf, _C_TRAIL, False, spts, 2)
+                self._screen.blit(trail_surf, (0, 0))
 
-        # Ego vehicle
+        # -- Patrol NPC vehicles ---------------------------------------------
+        for actor in state.get("actors", []):
+            if actor.get("type", "static") == "npc":
+                corners = _rot_corners(
+                    actor["x"], actor["y"],
+                    _NPC_HALF_L, _NPC_HALF_W,
+                    actor.get("yaw", 0.0),
+                )
+                spts = _world_to_screen(corners, origin, scale)
+                if len(spts) >= 3:
+                    pygame.draw.polygon(self._screen, _C_PATROL_VEHICLE, spts)
+
+        # -- Pedestrians -----------------------------------------------------
+        for ped in state.get("pedestrians", []):
+            sx, sy = _w2s_single(ped["x"], ped["y"], origin, scale)
+            r = max(2, int(0.4 * scale))
+            pygame.draw.circle(self._screen, _C_PEDESTRIAN, (sx, sy), r)
+
+        # -- Ego vehicle -----------------------------------------------------
         ego = state.get("ego", {})
         if ego:
-            ex = float(ego["x"])
-            ey = float(ego["y"])
-            eyaw_deg = float(ego["yaw"])
-            _draw_vehicle_rect(ax, ex, ey, eyaw_deg, _COLOUR_EGO)
+            ex, ey = float(ego["x"]), float(ego["y"])
+            eyaw = float(ego["yaw"])
+            corners = _rot_corners(ex, ey, _EGO_HALF_L, _EGO_HALF_W, eyaw)
+            spts = _world_to_screen(corners, origin, scale)
+            if len(spts) >= 3:
+                pygame.draw.polygon(self._screen, _C_EGO, spts)
 
             # Heading arrow
-            arrow_len = 3.0
-            eyaw_r = math.radians(eyaw_deg)
-            ax.annotate(
-                "",
-                xy=(
-                    ex + arrow_len * math.cos(eyaw_r),
-                    ey + arrow_len * math.sin(eyaw_r),
-                ),
-                xytext=(ex, ey),
-                arrowprops=dict(
-                    arrowstyle="->", color=_COLOUR_EGO, lw=2.0
-                ),
+            arrow_len = 3.5
+            yaw_r = math.radians(eyaw)
+            tip = (ex + arrow_len * math.cos(yaw_r),
+                   ey + arrow_len * math.sin(yaw_r))
+            s0 = _w2s_single(ex, ey, origin, scale)
+            s1 = _w2s_single(tip[0], tip[1], origin, scale)
+            pygame.draw.line(self._screen, _C_EGO, s0, s1, 2)
+            dx, dy = s1[0] - s0[0], s1[1] - s0[1]
+            length = math.hypot(dx, dy) or 1.0
+            ux, uy = dx / length, dy / length
+            left = (int(s1[0] - ux * 8 + uy * 5),
+                    int(s1[1] - uy * 8 - ux * 5))
+            right = (int(s1[0] - ux * 8 - uy * 5),
+                     int(s1[1] - uy * 8 + ux * 5))
+            pygame.draw.polygon(self._screen, _C_EGO, [s1, left, right])
+
+        # -- HUD -------------------------------------------------------------
+        n_hist = len(self._episode_history)
+        first_eid = (
+            self._episode_history[0][0].get("episode_id", "?")
+            if n_hist > 0 else "?"
+        )
+        last_eid = (
+            self._episode_history[-1][0].get("episode_id", "?")
+            if n_hist > 0 else "?"
+        )
+        hud = (
+            f"Floor: {state.get('floor_plan', '?')}  "
+            f"Ep: {episode_id}  "
+            f"Step: {state.get('episode_step', '?')}  "
+            f"t={state.get('sim_time', 0.0):.2f}s  "
+            f"[{self._play_index + 1}/{n_hist} ep{first_eid}-{last_eid}  <- ->]"
+        )
+        self._draw_hud(hud, y_offset=8)
+
+        # Debug HUD line -- only rendered when the frame carries debug data
+        dbg = state.get("debug")
+        if dbg:
+            debug_hud = (
+                f"err={dbg.get('pos_err', 0.0):.2f}m "
+                f"yaw={dbg.get('yaw_err_deg', 0.0):.1f}deg "
+                f"spd={dbg.get('speed', 0.0):.2f}m/s "
+                f"rwd={dbg.get('reward', 0.0):.3f} | "
+                f"cov={dbg.get('cov_rms', 0.0):.3f} "
+                f"drift={dbg.get('ekf_drift', 0.0):.2f}m "
+                f"lidar={dbg.get('lidar_pts', 0)}pts | "
+                f"obs={dbg.get('obs_dist', 0.0):.1f}m({dbg.get('obs_type', 'sta')}) "
+                f"act=[{dbg.get('steer', 0.0):.2f} "
+                f"{dbg.get('throttle', 0.0):.2f} "
+                f"{dbg.get('brake', 0.0):.2f}]"
             )
+            self._draw_hud(debug_hud, y_offset=34)
 
-        # Episode info
-        episode_id = state.get("episode_id", "?")
-        step = state.get("episode_step", "?")
-        sim_time = state.get("sim_time", 0.0)
-        floor_plan = state.get("floor_plan", "?")
-        ax.set_title(
-            f"Floor plan: {floor_plan}  |  "
-            f"Episode: {episode_id}  |  "
-            f"Step: {step}  |  "
-            f"t = {sim_time:.2f}s",
-            fontsize=10,
-        )
+        pygame.display.flip()
 
-        # Legend
-        legend_handles = [
-            mpatches.Patch(
-                color=_COLOUR_TARGET_BAY, label="Target bay"
-            ),
-            mpatches.Patch(
-                color=_COLOUR_PERP_BAY, label="Perpendicular"
-            ),
-            mpatches.Patch(color=_COLOUR_ANGLED_BAY, label="Angled"),
-            mpatches.Patch(
-                color=_COLOUR_PARALLEL_BAY, label="Parallel"
-            ),
-            mpatches.Patch(color=_COLOUR_EGO, label="Ego"),
-            mpatches.Patch(
-                color=_COLOUR_PATROL_VEHICLE, label="Patrol NPC"
-            ),
-            mpatches.Patch(
-                color=_COLOUR_STATIC_VEHICLE, label="Parked"
-            ),
-            mpatches.Patch(
-                color=_COLOUR_PEDESTRIAN, label="Pedestrian"
-            ),
-        ]
-        ax.legend(
-            handles=legend_handles,
-            loc="upper right",
-            fontsize=7,
-            framealpha=0.7,
-        )
-
-        ax.autoscale_view()
+    def _draw_hud(self, text: str, y_offset: int = 8) -> None:
+        """
+        @brief Render a semi-transparent HUD bar at the top of the screen.
+        @param text: Text to display in the bar.
+        @param y_offset: Vertical position in pixels from the top of the window.
+        """
+        txt_surf = self._hud_font.render(text, True, _C_HUD_TEXT)
+        bar = pygame.Surface((txt_surf.get_width() + 16, txt_surf.get_height() + 8),
+                              pygame.SRCALPHA)
+        bar.fill(_C_HUD_BG)
+        bar.blit(txt_surf, (8, 4))
+        self._screen.blit(bar, (8, y_offset))

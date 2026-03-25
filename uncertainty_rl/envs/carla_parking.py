@@ -29,7 +29,6 @@ import logging
 import math
 import os
 import random
-import threading
 import time
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, Tuple, cast
@@ -52,7 +51,11 @@ try:
 except ImportError:
     _ROS2_AVAILABLE = False
 
+from uncertainty_rl.envs._lot_spawner import LotSpawner
+from uncertainty_rl.envs._npc_controller import NPCController
+from uncertainty_rl.envs._sensor_manager import SensorManager
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
+from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
     OBSTACLE_FEATURES_DIM,
@@ -63,56 +66,17 @@ from uncertainty_rl.utils.constants import (
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
 )
-from uncertainty_rl.utils.geometry import (
-    _compute_relative_target_pose,
-    _interpolate_cone_positions,
-    zone_bbox,
-)
+from uncertainty_rl.utils.geometry import _compute_relative_target_pose
 
 logger = logging.getLogger(__name__)
 
 # Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
 
-# Vehicle types that overhang a standard 2.5 m bay - excluded from parking spawns.
-_LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
-    "ambulance",
-    "firetruck",
-    "sprinter",
-    "t2",
-    "t2_2021",
-    "carlacola",
-    "cybertruck",
-    "fusorosa",
-    "bus",
-)
-
-# Micro/novelty vehicles excluded from parked car pool - unrealistically small
-# for a standard parking bay and visually confusing during inspection.
-_SMALL_VEHICLE_TYPES: Tuple[str, ...] = (
-    "microlino",
-    "isetta",
-    "micro",
-    "omafiets",
-    "crossbike",
-    "low_rider",
-    "ninja",
-    "yzf",
-    "century",
-    "harley",
-    "kawasaki",
-    "yamaha",
-    "vespa",
-    "zx125",
-    "bike",
-    "bicycle",
-)
-
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
     "CARLAParkingEnv",
     "_compute_relative_target_pose",
-    "_interpolate_cone_positions",
 ]
 
 
@@ -170,6 +134,7 @@ class CARLAParkingEnv(gym.Env):
         vis_output_path: Optional[str] = None,
         carla_timestep: float = 0.05,
         eval_mode: bool = False,
+        debug: bool = False,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -199,6 +164,8 @@ class CARLAParkingEnv(gym.Env):
                real-time speed.
         @param eval_mode: If True, OOD floor plans are included in sampling.
                If False (training), only non-OOD floor plans are used.
+        @param debug: If True, emit per-step diagnostics via DebugLogger and include
+               a debug dict in vis frames for the visualiser HUD. Off by default.
         """
         super().__init__()
 
@@ -209,7 +176,6 @@ class CARLAParkingEnv(gym.Env):
         self.render_mode = render_mode
         self._include_covariance = include_covariance
         self._include_obstacle_obs = include_obstacle_obs
-        self._sensor_suite = sensor_suite
         self._eval_mode = eval_mode
 
         ros2_config = ros2_config or {}
@@ -222,22 +188,6 @@ class CARLAParkingEnv(gym.Env):
         self._sensors_config = carla_sensors_config or {}
 
         scenarios = parking_scenarios_config or {}
-        # Cones define the static perimeter map for Cartographer pure localisation.
-        # Must be true for the one-time SLAM mapping run (make docker-mapping-drive)
-        # and all training runs. Only false for SLAM-on-the-fly mode (no cones).
-        self._spawn_perimeter_cones_flag: bool = scenarios.get(
-            "spawn_perimeter_cones", False
-        )
-        self._cone_spacing: float = scenarios.get("perimeter_cone_spacing", 2.0)
-        self._marker_blueprint: str = scenarios.get(
-            "perimeter_marker_blueprint", "static.prop.constructioncone"
-        )
-        # Bay occupancy is re-sampled uniformly each episode between min and max.
-        # For evaluation, set both to the same value to fix occupancy.
-        self._bay_occupancy_min: float = scenarios.get("bay_occupancy_min", 0.3)
-        self._bay_occupancy_max: float = scenarios.get("bay_occupancy_max", 0.8)
-        # Episode-level occupancy rate; set in reset() before _spawn_static_vehicles().
-        self._bay_occupancy_rate: float = self._bay_occupancy_max
         self._num_patrol_max: int = scenarios.get("num_patrol_vehicles_max", 1)
         self._patrol_obstacle_distance: float = scenarios.get(
             "patrol_obstacle_stop_distance", 5.0
@@ -252,6 +202,7 @@ class CARLAParkingEnv(gym.Env):
         self._pedestrian_spawn_prob: float = scenarios.get(
             "pedestrian_spawn_probability", 1.0
         )
+        self._pedestrian_speed: float = scenarios.get("pedestrian_speed_ms", 1.4)
         self._pedestrian_resample_steps: int = scenarios.get(
             "pedestrian_heading_resample_steps", 30
         )
@@ -265,53 +216,62 @@ class CARLAParkingEnv(gym.Env):
         self.world: Optional[Any] = None
         self.vehicle: Optional[Any] = None
 
-        # Per-episode actor lists
-        self._spawned_sensors: List[Any] = []
-        self._spawned_cones: List[Any] = []
-        self._spawned_static_vehicles: List[Any] = []
-        self._patrol_npcs: List[Any] = []
-        self._pedestrian_actors: List[Any] = []
-
-        # Latest LiDAR point cloud in vehicle frame ([N, 3] float32 array).
-        # Populated by the LiDAR sensor callback in _spawn_sensors().
-        # Used by _get_obstacle_features() to compute obstacle awareness dims.
-        self._latest_lidar_scan: Optional[np.ndarray] = None
-        self._lidar_scan_lock = threading.Lock()
-
         # The spawn transform chosen for this episode (set in _spawn_vehicle()).
         # Used for /initialpose publishing to seed the EKF on reset.
         self._chosen_spawn: Dict[str, float] = {}
 
-        # Collision detection -- set by the collision sensor callback each step.
-        # Cleared at the start of each episode in _cleanup_actors().
-        self._collision_detected: bool = False
-        # Impulse magnitude (N*s) from the last collision event.  Used to gate
-        # pedestrian/patrol collisions: only penalise if ego was at fault.
-        self._collision_impulse: float = 0.0
-        # Set of patrol NPC actor IDs -- used to distinguish patrol vehicles
-        # (vehicle.* type) from static parked cars in the collision callback.
-        self._patrol_npc_ids: set = set()
+        # Per-step debug diagnostics (emits structured logs + populates vis HUD).
+        # Instantiated here so NPCController / SensorManager can share the reference.
+        self._debug_logger: DebugLogger = DebugLogger(debug=debug)
 
-        # Performance-optimisation caches - cleared in _cleanup_actors()
-        # Static obstacle (x, y) positions: cones + static vehicles.  No
-        # get_location() call needed for these since they never move.
-        self._static_obstacle_positions: List[Tuple[float, float]] = []
+        # Lot spawner -- owns static cones and parked vehicles.
+        self._lot_spawner = LotSpawner(
+            cone_spacing=scenarios.get("perimeter_cone_spacing", 2.0),
+            marker_blueprint=scenarios.get(
+                "perimeter_marker_blueprint", "static.prop.constructioncone"
+            ),
+            bay_occupancy_min=scenarios.get("bay_occupancy_min", 0.3),
+            bay_occupancy_max=scenarios.get("bay_occupancy_max", 0.8),
+            spawn_perimeter_cones=scenarios.get("spawn_perimeter_cones", False),
+        )
+
+        # NPC controller -- owns patrol vehicles and pedestrians.
+        self._npc_controller = NPCController(
+            num_patrol_max=self._num_patrol_max,
+            patrol_obstacle_distance=self._patrol_obstacle_distance,
+            patrol_pedestrian_distance=self._patrol_pedestrian_distance,
+            patrol_max_speed=self._patrol_max_speed,
+            patrol_heading_gain=self._patrol_heading_gain,
+            pedestrian_spawn_prob=self._pedestrian_spawn_prob,
+            pedestrian_speed=self._pedestrian_speed,
+            pedestrian_resample_steps=self._pedestrian_resample_steps,
+            pedestrian_max_lifetime=self._pedestrian_max_lifetime,
+            debug_logger=self._debug_logger,
+        )
+
+        # Sensor manager -- owns IMU, LiDAR, collision sensor, camera.
+        self._sensor_manager = SensorManager(
+            sensors_config=self._sensors_config,
+            sensor_suite=sensor_suite,
+            debug_logger=self._debug_logger,
+        )
 
         # Cached actor list for patrol obstacle proximity checks.  Rebuilt
         # once after all vehicles are spawned; avoids per-step world queries.
         self._all_vehicle_actors: List[Any] = []
 
-        # Cached filtered blueprint lists - rebuilt once per reset.
-        self._car_blueprints: List[Any] = []
+        # Cached blueprint lists -- fetched once on first connect, never re-fetched.
+        # Car blueprints are owned by LotSpawner; walker BPs shared with NPCController.
         self._walker_blueprints: List[Any] = []
-        # Easter-egg motorcycle blueprints (None when CARLA unavailable).
-        self._ninja_bp: Optional[Any] = None
-        self._yzf_bp: Optional[Any] = None
+        self._vehicle_bp: Optional[Any] = None
 
         # Pre-allocated observation buffer - reused every step to avoid
         # repeated small heap allocations.
         _obs_dim = self._compute_obs_dim()
         self._obs_buffer: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
+        self._obstacle_features_buffer: np.ndarray = np.zeros(
+            OBSTACLE_FEATURES_DIM, dtype=np.float32
+        )
 
         # Target bay (world frame, set in reset)
         self._target_bay: Dict[str, Any] = {
@@ -326,20 +286,12 @@ class CARLAParkingEnv(gym.Env):
         self._current_layout: Dict[str, Any] = {}
         self._current_floor_plan_name: str = ""
 
-        # Patrol NPC step counters
-        self._patrol_waypoint_indices: List[int] = []
-        # +1 = CCW (forward), -1 = CW (reverse). Randomised per episode.
-        self._patrol_waypoint_directions: List[int] = []
-        # Pedestrian step counters for heading re-randomisation and zone confinement
-        self._pedestrian_heading_steps: List[int] = []
-        self._pedestrian_headings: List[Tuple[float, float, float]] = []
-        self._pedestrian_lifetime_steps: List[int] = []
-        self._pedestrian_zones: List[Dict[str, float]] = []
-
         # Trajectory buffer for debug overlays (ring buffer of (x, y) tuples)
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
+        # Last action applied (for vis diagnostics)
+        self._last_action = np.zeros(3, dtype=np.float32)
 
         # Visualisation state writer (demand-driven via signal file)
         self._vis_history_path: Path = (
@@ -522,405 +474,55 @@ class CARLAParkingEnv(gym.Env):
 
     def _cache_blueprints(self) -> None:
         """
-        @brief Fetch and filter blueprint lists once per reset.
+        @brief Fetch blueprint lists once per reset and distribute to owners.
 
-        Stores results in self._car_blueprints and self._walker_blueprints so
-        that _spawn_static_vehicles(), _spawn_npc_patrol(), _spawn_pedestrians(),
-        and _respawn_pedestrian() can reuse the filtered lists without repeated
-        world queries.
-
-        Car blueprints: four-wheeled vehicles excluding _LARGE_VEHICLE_TYPES.
-        Walker blueprints: all walker.pedestrian.* blueprints.
+        LotSpawner receives vehicle blueprints (for static parked cars).
+        NPCController receives vehicle + walker blueprints (for patrol + peds).
         """
         if self.world is None:
             return
 
-        bp_lib = self.world.get_blueprint_library()
+        # LotSpawner builds its own car blueprint filter internally.
+        # Blueprints are static for the lifetime of the CARLA server so both
+        # managers skip the fetch on subsequent calls if already populated.
+        self._lot_spawner.refresh_blueprints(self.world)
 
-        vehicle_bps = bp_lib.filter("vehicle.*")
-        self._car_blueprints = [
-            bp
-            for bp in vehicle_bps
-            if int(bp.get_attribute("number_of_wheels").as_int()) == 4
-            and not any(excl in bp.id.lower() for excl in _LARGE_VEHICLE_TYPES)
-            and not any(excl in bp.id.lower() for excl in _SMALL_VEHICLE_TYPES)
-        ]
+        # Walker blueprints: only fetch once.
+        if not self._walker_blueprints:
+            bp_lib = self.world.get_blueprint_library()
+            self._walker_blueprints = list(bp_lib.filter("walker.pedestrian.*"))
 
-        self._walker_blueprints = list(bp_lib.filter("walker.pedestrian.*"))
-
-        # Easter-egg motorcycles: always parked in the two motorcycle bays.
-        self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
-        self._yzf_bp = bp_lib.find("vehicle.yamaha.yzf")
-
-    def _spawn_perimeter_cones(self) -> None:
-        """
-        @brief Spawn static markers along the lot perimeter polygon.
-
-        Markers are placed using _interpolate_cone_positions() and physics is
-        disabled so they don't move. The blueprint is configurable via
-        parking_scenarios.perimeter_marker_blueprint in train_config.yaml.
-        Markers are appended to self._spawned_cones.
-        """
-        if self.world is None:
-            return
-
-        corners_raw = self._current_layout.get("corners", [])
-        if not corners_raw:
-            logger.warning("No perimeter corners found in layout, skipping cones.")
-            return
-
-        corners: List[Tuple[float, float]] = [
-            (float(c["x"]), float(c["y"])) for c in corners_raw
-        ]
-        cone_positions = _interpolate_cone_positions(
-            corners,
-            self._cone_spacing,
+        self._npc_controller.refresh_blueprints(
+            self._lot_spawner._car_blueprints, self._walker_blueprints
         )
 
-        bp_lib = self.world.get_blueprint_library()
-        cone_bp = bp_lib.find(self._marker_blueprint)
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
-
-        for cx, cy, yaw_deg in cone_positions:
-            transform = carla.Transform(
-                carla.Location(x=cx, y=cy, z=z),
-                carla.Rotation(yaw=yaw_deg),
-            )
-            cone = self.world.try_spawn_actor(cone_bp, transform)
-            if cone is not None:
-                cone.set_simulate_physics(False)
-                self._spawned_cones.append(cone)
-                # Cache static position for obstacle feature extraction in _get_state()
-                self._static_obstacle_positions.append((cx, cy))
-
-        logger.debug(f"Spawned {len(self._spawned_cones)} perimeter markers.")
-
-    def _spawn_obstacle_cones(self) -> None:
+    def _spawn_lot_statics(self) -> None:
         """
-        @brief Spawn static markers around interior obstacle rectangles.
+        @brief Spawn all static lot actors (cones and parked vehicles).
 
-        Each obstacle in the layout YAML is a centre + half-extents rectangle.
-        Markers are placed along the four sides at the same spacing used for
-        perimeter markers. The blueprint is configurable via
-        parking_scenarios.perimeter_marker_blueprint in train_config.yaml.
-        Physics is disabled so they act as static LiDAR targets. Spawned
-        markers are appended to self._spawned_cones so they are cleaned up
-        with the rest of the episode actors.
+        Delegates to LotSpawner.spawn_all().
         """
-        if self.world is None:
-            return
-
-        obstacles = self._current_layout.get("obstacles", [])
-        if not obstacles:
-            return
-
-        bp_lib = self.world.get_blueprint_library()
-        cone_bp = bp_lib.find(self._marker_blueprint)
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
-
-        for obs in obstacles:
-            cx = float(obs["centre_x"])
-            cy = float(obs["centre_y"])
-            hw = float(obs["half_width"])
-            hh = float(obs["half_height"])
-
-            # Build cone positions around all four sides of the rectangle.
-            # Each entry is (x, y, yaw_deg) so markers align with the edge.
-            cone_positions: List[Tuple[float, float, float]] = []
-            # Bottom and top horizontal edges (y constant, yaw=0).
-            for edge_y in (cy - hh, cy + hh):
-                t = -hw
-                while t <= hw + 1e-6:
-                    cone_positions.append((cx + t, edge_y, 0.0))
-                    t += self._cone_spacing
-            # Left and right vertical edges (x constant, yaw=90), excluding corners.
-            for edge_x in (cx - hw, cx + hw):
-                t = -hh + self._cone_spacing
-                while t < hh - 1e-6:
-                    cone_positions.append((edge_x, cy + t, 90.0))
-                    t += self._cone_spacing
-
-            for px, py, yaw_deg in cone_positions:
-                transform = carla.Transform(
-                    carla.Location(x=px, y=py, z=z),
-                    carla.Rotation(yaw=yaw_deg),
-                )
-                cone = self.world.try_spawn_actor(cone_bp, transform)
-                if cone is not None:
-                    cone.set_simulate_physics(False)
-                    self._spawned_cones.append(cone)
-                    self._static_obstacle_positions.append((px, py))
-
-        logger.debug(
-            f"Spawned obstacle cones for {len(obstacles)} interior obstacle(s)."
+        self._lot_spawner.spawn_all(
+            self.world, self._current_layout, self._target_bay
         )
-
-    def _adjacent_bay_ids(self, target_id: str) -> List[str]:
-        """
-        @brief Return bay IDs adjacent (index +/-1, same type) to the target.
-
-        Bay IDs follow the convention '<type>_<index>' (e.g. 'parallel_3').
-        Adjacent bays are left empty each episode so the agent has clearance
-        to manoeuvre into the target bay.
-
-        @param target_id: Bay ID string of the selected target bay.
-        @return List of adjacent bay ID strings (may be empty if target is an end bay).
-        """
-        try:
-            bay_type, idx_str = target_id.rsplit("_", 1)
-            idx = int(idx_str)
-        except ValueError:
-            return []
-        return [f"{bay_type}_{idx - 1}", f"{bay_type}_{idx + 1}"]
-
-    def _spawn_static_vehicles(self) -> None:
-        """
-        @brief Fill non-target bays with static parked vehicles at the configured
-               occupancy rate.
-
-        Target bay and its immediate neighbours (same type, index +/-1) are
-        never filled. Keeping adjacent bays clear gives the agent realistic
-        manoeuvring clearance. Static vehicles have physics disabled and act
-        as obstacles for clearance checking.
-        """
-        if self.world is None:
-            return
-
-        bays = self._current_layout.get("bays", [])
-        target_id = self._target_bay.get("bay_id", "")
-
-        # Exclude the target bay and its immediate neighbours
-        excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
-
-        # Use the same z as the ego vehicle (origin z, typically 0.3 m).
-        # physics=False means no settling occurs, so the centre-of-mass is placed
-        # exactly at z -- matching origin_z keeps static cars flush with the ground.
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3))
-        # Spawn 2 m above the floor so the vehicle bounding box clears perimeter
-        # cones whose tops reach ~1 m.  Physics is immediately disabled and the
-        # actor is teleported back to the correct z.
-        z_spawn = z + 2.0
-        # Actors pending ground-level teleport after the post-spawn world tick.
-        _pending_ground: List[Tuple[Any, float, float, float]] = []
-
-        for bay in bays:
-            if bay.get("id", bay.get("bay_id", "")) in excluded_ids:
-                continue
-            if bay.get("always_empty", False):
-                continue
-            if random.random() > self._bay_occupancy_rate:
-                continue
-
-            bp = random.choice(self._car_blueprints)
-            if bp.has_attribute("color"):
-                color = random.choice(bp.get_attribute("color").recommended_values)
-                bp.set_attribute("color", color)
-
-            bay_x = float(bay["x"])
-            bay_y = float(bay["y"])
-            yaw = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
-            # Randomly reverse the parked car 50 % of the time - both nose-in
-            # and nose-out orientations are valid in a real car park.
-            if random.random() < 0.5:
-                yaw = (yaw + 180.0) % 360.0
-            transform = carla.Transform(
-                carla.Location(x=bay_x, y=bay_y, z=z_spawn),
-                carla.Rotation(yaw=yaw),
-            )
-            actor = self.world.try_spawn_actor(bp, transform)
-            if actor is not None:
-                actor.set_simulate_physics(False)
-                self._spawned_static_vehicles.append(actor)
-                # Cache static position for obstacle feature extraction in _get_state()
-                self._static_obstacle_positions.append((bay_x, bay_y))
-                _pending_ground.append((actor, bay_x, bay_y, yaw))
-
-        # Easter egg: always spawn the Kawasaki Ninja and Yamaha YZF in their
-        # dedicated motorcycle bays (bay_type="motorcycle", occupant field set).
-        _OCCUPANT_BP = {
-            "Kawasaki Ninja": self._ninja_bp,
-            "Yamaha YZF-R": self._yzf_bp,
-        }
-        for bay in bays:
-            if bay.get("bay_type") != "motorcycle":
-                continue
-            occupant = bay.get("occupant", "")
-            bp = _OCCUPANT_BP.get(occupant)
-            if bp is None:
-                continue
-            bay_x = float(bay["x"])
-            bay_y = float(bay["y"])
-            yaw = float(bay.get("yaw_deg", 0.0))
-            transform = carla.Transform(
-                carla.Location(x=bay_x, y=bay_y, z=z_spawn),
-                carla.Rotation(yaw=yaw),
-            )
-            actor = self.world.try_spawn_actor(bp, transform)
-            if actor is not None:
-                actor.set_simulate_physics(False)
-                self._spawned_static_vehicles.append(actor)
-                self._static_obstacle_positions.append((bay_x, bay_y))
-                _pending_ground.append((actor, bay_x, bay_y, yaw))
-
-        # Tick once so CARLA commits the physics-disabled state, then teleport
-        # every static vehicle to ground level.  Without the tick, set_transform
-        # is ignored in synchronous mode and cars remain at z_spawn (floating).
-        self.world.tick()
-        for actor, ax, ay, actor_yaw in _pending_ground:
-            actor.set_transform(
-                carla.Transform(
-                    carla.Location(x=ax, y=ay, z=z),
-                    carla.Rotation(yaw=actor_yaw),
-                )
-            )
-
-        logger.debug(f"Spawned {len(self._spawned_static_vehicles)} static vehicles.")
 
     def _spawn_npc_patrol(self) -> None:
         """
         @brief Spawn scripted patrol vehicles that follow waypoints in the lot.
 
-        Uses a proportional heading controller rather than the Traffic Manager,
-        since the lot is off-road and TM requires CARLA road network.
+        Delegates to NPCController.spawn_patrol().
         """
-        if self.world is None:
-            return
-
-        waypoints_raw = self._current_layout.get("patrol_waypoints", [])
-        if not waypoints_raw:
-            return
-
-        # num_patrol_vehicles_max=0 suppresses patrol entirely (e.g. inspector).
-        # Fixed count (not randomised): always spawn exactly num_patrol_vehicles_max
-        # patrol vehicles so behaviour is deterministic across episodes.
-        if self._num_patrol_max == 0:
-            return
-        num_patrol = self._num_patrol_max
-
-        waypoints: List[Tuple[float, float]] = [
-            (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
-        ]
-        # Drop a closing duplicate (e.g. rectangle layout repeats waypoint 0 at the end)
-        # so the cyclic modulo wrap works correctly and first_target_idx is never the
-        # same location as start_idx.
-        if len(waypoints) > 1 and waypoints[-1] == waypoints[0]:
-            waypoints = waypoints[:-1]
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.1
-
-        # Build a list of candidate start indices that are safely away from the ego
-        # spawn position.  The forward-cone check in _update_patrol_npcs() is
-        # direction-dependent and cannot prevent a patrol that spawns on top of the
-        # ego or approaches it from behind before the first tick.
-        ego_loc = self.vehicle.get_location() if self.vehicle is not None else None
-        min_spawn_dist = (
-            self._patrol_obstacle_distance + 4.5
-        )  # vehicle half-lengths + buffer
-        safe_indices = list(range(len(waypoints)))
-        if ego_loc is not None:
-            safe_indices = [
-                idx
-                for idx in safe_indices
-                if math.sqrt(
-                    (waypoints[idx][0] - ego_loc.x) ** 2
-                    + (waypoints[idx][1] - ego_loc.y) ** 2
-                )
-                >= min_spawn_dist
-            ]
-        # Fall back to full list if every waypoint is within the exclusion zone
-        # (very small lots where patrol path passes through the spawn area).
-        if not safe_indices:
-            safe_indices = list(range(len(waypoints)))
-
-        for i in range(num_patrol):
-            bp = random.choice(self._car_blueprints)
-            # Randomise start waypoint from ego-safe candidates only.
-            start_idx = random.choice(safe_indices)
-            # Randomly choose patrol direction before spawn so the initial yaw matches.
-            direction = random.choice([-1, 1])
-            # The NPC's first target is the waypoint it will immediately drive toward.
-            first_target_idx = (start_idx + direction) % len(waypoints)
-            wp = waypoints[start_idx]
-            first_target_wp = waypoints[first_target_idx]
-            # Face toward first target so the NPC never drives away from it at spawn.
-            spawn_yaw = math.degrees(
-                math.atan2(
-                    first_target_wp[1] - wp[1],
-                    first_target_wp[0] - wp[0],
-                )
-            )
-            transform = carla.Transform(
-                carla.Location(x=wp[0], y=wp[1], z=z),
-                carla.Rotation(yaw=spawn_yaw),
-            )
-            actor = self.world.try_spawn_actor(bp, transform)
-            if actor is not None:
-                actor.set_simulate_physics(True)
-                self._patrol_npcs.append(actor)
-                self._patrol_npc_ids.add(actor.id)
-                # Store first_target_idx as the current waypoint so _update_patrol_npcs
-                # immediately drives toward it, consistent with the spawn orientation.
-                self._patrol_waypoint_indices.append(first_target_idx)
-                self._patrol_waypoint_directions.append(direction)
-
-        logger.debug(f"Spawned {len(self._patrol_npcs)} patrol NPC vehicles.")
+        self._npc_controller.spawn_patrol(
+            self.world, self.vehicle, self._current_layout
+        )
 
     def _spawn_pedestrians(self) -> None:
         """
         @brief Spawn random-walk pedestrians inside the lot pedestrian zones.
 
-        Uses WalkerControl with a random direction, re-randomised every
-        pedestrian_heading_resample_steps steps.
+        Delegates to NPCController.spawn_pedestrians().
         """
-        if self.world is None:
-            return
-
-        zones_raw = self._current_layout.get("pedestrian_zones", [])
-        if not zones_raw:
-            return
-
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
-
-        def _to_zone_dict(zone_raw: Dict[str, Any]) -> Dict[str, float]:
-            """@brief Wrap zone_bbox tuple into the dict format used internally."""
-            x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
-            return {"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max}
-
-        zones: List[Dict[str, float]] = [_to_zone_dict(zr) for zr in zones_raw]
-
-        # One pedestrian per zone; each zone independently rolls spawn probability.
-        for ped_i, zone in enumerate(zones):
-            if random.random() > self._pedestrian_spawn_prob:
-                continue
-
-            bp = random.choice(self._walker_blueprints)
-            if bp.has_attribute("is_invincible"):
-                bp.set_attribute("is_invincible", "false")
-
-            # Retry spawn with fresh random positions -- narrow zones mean the
-            # first attempt may collide with an existing actor or parked car.
-            walker = None
-            for _ in range(5):
-                px = random.uniform(zone["x_min"], zone["x_max"])
-                py = random.uniform(zone["y_min"], zone["y_max"])
-                transform = carla.Transform(
-                    carla.Location(x=px, y=py, z=z),
-                    carla.Rotation(yaw=random.uniform(0.0, 360.0)),
-                )
-                walker = self.world.try_spawn_actor(bp, transform)
-                if walker is not None:
-                    break
-
-            if walker is not None:
-                heading_rad = random.uniform(0.0, 2.0 * math.pi)
-                self._pedestrian_actors.append(walker)
-                self._pedestrian_headings.append(
-                    (math.cos(heading_rad), math.sin(heading_rad), 0.0)
-                )
-                self._pedestrian_heading_steps.append(0)
-                self._pedestrian_lifetime_steps.append(0)
-                self._pedestrian_zones.append(zone)
-
-        logger.debug(f"Spawned {len(self._pedestrian_actors)} pedestrians.")
+        self._npc_controller.spawn_pedestrians(self.world, self._current_layout)
 
     # ------------------------------------------------------------------
     # Per-step NPC updates
@@ -931,288 +533,20 @@ class CARLAParkingEnv(gym.Env):
         @brief Advance patrol NPC vehicles one step using a proportional heading
                controller.
 
-        Proportional controller: steer = k_p * heading_error_to_next_waypoint.
-        Wraps to next waypoint when within 3 m.
+        Delegates to NPCController.update_patrol().
         """
-        waypoints_raw = self._current_layout.get("patrol_waypoints", [])
-        if not waypoints_raw:
-            return
-
-        waypoints: List[Tuple[float, float]] = [
-            (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
-        ]
-        # Mirror the deduplication in _spawn_npc_patrol so indices stay consistent.
-        if len(waypoints) > 1 and waypoints[-1] == waypoints[0]:
-            waypoints = waypoints[:-1]
-        k_p = self._patrol_heading_gain
-
-        # Use cached actor list; rebuilt once after spawn, avoids per-step world query
-        all_vehicles: List[Any] = self._all_vehicle_actors
-
-        for i, npc in enumerate(self._patrol_npcs):
-            if not (npc is not None and npc.is_alive):
-                continue
-
-            wp_idx = self._patrol_waypoint_indices[i]
-            wp_x, wp_y = waypoints[wp_idx]
-
-            t = npc.get_transform()
-            dx = wp_x - t.location.x
-            dy = wp_y - t.location.y
-            dist = math.sqrt(dx * dx + dy * dy)
-
-            if dist < 3.0:
-                # Advance to next waypoint in the NPC's chosen direction (cyclic)
-                direction = self._patrol_waypoint_directions[i]
-                wp_idx = (wp_idx + direction) % len(waypoints)
-                self._patrol_waypoint_indices[i] = wp_idx
-                wp_x, wp_y = waypoints[wp_idx]
-                dx = wp_x - t.location.x
-                dy = wp_y - t.location.y
-
-            # Heading error to waypoint
-            target_yaw = math.atan2(dy, dx)
-            ego_yaw = math.radians(t.rotation.yaw)
-            heading_error = math.atan2(
-                math.sin(target_yaw - ego_yaw),
-                math.cos(target_yaw - ego_yaw),
-            )
-
-            steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
-
-            # Obstacle proximity check - brake if any vehicle or pedestrian is near
-            npc_yaw = math.radians(t.rotation.yaw)
-            fwd_x = math.cos(npc_yaw)
-            fwd_y = math.sin(npc_yaw)
-            blocked = False
-
-            # Ego vehicle: omnidirectional stop -- patrol must never approach the ego
-            # from any direction, since the ego may be stationary and the forward-cone
-            # check would miss a rear or side approach.
-            if self.vehicle is not None and self.vehicle.is_alive:
-                ego_to_x = self.vehicle.get_location().x - t.location.x
-                ego_to_y = self.vehicle.get_location().y - t.location.y
-                ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
-                # Add ~2.5 m for vehicle half-lengths so the stop distance is a
-                # bumper-to-bumper gap, not a centre-to-centre distance.
-                if ego_dist < self._patrol_obstacle_distance + 1.0:
-                    blocked = True
-
-            for other in all_vehicles:
-                if blocked:
-                    break
-                if other.id == npc.id:
-                    continue
-                # Skip the ego vehicle -- already handled omnidirectionally above.
-                if self.vehicle is not None and other.id == self.vehicle.id:
-                    continue
-                to_x = other.get_location().x - t.location.x
-                to_y = other.get_location().y - t.location.y
-                fwd_proj = to_x * fwd_x + to_y * fwd_y
-                lat = abs(to_x * fwd_y - to_y * fwd_x)
-                other_dist = math.sqrt(to_x * to_x + to_y * to_y)
-                if (
-                    0.0 < fwd_proj
-                    and other_dist < self._patrol_obstacle_distance
-                    and lat < 2.0
-                ):
-                    blocked = True
-                    break
-
-            if not blocked:
-                # Brake if a pedestrian is in the forward cone (same lateral
-                # width check as the vehicle obstacle logic above).
-                for walker in self._pedestrian_actors:
-                    if walker is None or not walker.is_alive:
-                        continue
-                    to_x = walker.get_location().x - t.location.x
-                    to_y = walker.get_location().y - t.location.y
-                    fwd_proj = to_x * fwd_x + to_y * fwd_y
-                    lat = abs(to_x * fwd_y - to_y * fwd_x)
-                    walker_dist = math.sqrt(to_x * to_x + to_y * to_y)
-                    if (
-                        fwd_proj > 0.0
-                        and walker_dist < self._patrol_pedestrian_distance
-                        and lat < 2.0
-                    ):
-                        blocked = True
-                        break
-
-            v = npc.get_velocity()
-            speed = math.sqrt(v.x * v.x + v.y * v.y)
-            over_limit = speed > self._patrol_max_speed
-
-            control = carla.VehicleControl()
-            control.steer = steer
-            control.throttle = 0.0 if (blocked or over_limit) else 0.6
-            control.brake = 1.0 if blocked else (0.3 if over_limit else 0.0)
-            npc.apply_control(control)
-
-    def _respawn_pedestrian(self, idx: int) -> None:
-        """
-        @brief Destroy and respawn pedestrian at index idx within its assigned zone.
-
-        Called when a pedestrian exits its zone or exceeds its maximum lifetime.
-        The pedestrian is destroyed, a new walker is spawned at a random point
-        within the same zone, and the lifetime counter is reset.
-
-        @param idx: Index into _pedestrian_actors / _pedestrian_zones.
-        """
-        if self.world is None:
-            return
-        zone = self._pedestrian_zones[idx]
-        old = self._pedestrian_actors[idx]
-        if old is not None and old.is_alive:
-            old.destroy()
-
-        z = float(self._current_layout.get("origin", {}).get("z", 0.3)) + 0.05
-
-        bp = random.choice(self._walker_blueprints)
-        if bp.has_attribute("is_invincible"):
-            bp.set_attribute("is_invincible", "false")
-
-        # Retry with fresh positions -- narrow zones can cause collision failures
-        walker = None
-        for _ in range(5):
-            px = random.uniform(zone["x_min"], zone["x_max"])
-            py = random.uniform(zone["y_min"], zone["y_max"])
-            transform = carla.Transform(
-                carla.Location(x=px, y=py, z=z),
-                carla.Rotation(yaw=random.uniform(0.0, 360.0)),
-            )
-            walker = self.world.try_spawn_actor(bp, transform)
-            if walker is not None:
-                break
-
-        self._pedestrian_actors[idx] = walker
-        heading_rad = random.uniform(0.0, 2.0 * math.pi)
-        self._pedestrian_headings[idx] = (
-            math.cos(heading_rad),
-            math.sin(heading_rad),
-            0.0,
+        self._npc_controller.update_patrol(
+            self.vehicle, self.steps, self._current_layout
         )
-        self._pedestrian_heading_steps[idx] = 0
-        self._pedestrian_lifetime_steps[idx] = 0
 
     def _update_pedestrians(self) -> None:
         """
         @brief Advance pedestrians one step, re-randomise headings periodically,
                and handle zone boundaries, lifetime expiry, and ego avoidance.
 
-        Priority order for heading selection each step:
-          1. Ego/patrol avoidance: accumulate repulsion vectors from the ego
-             (within _EGO_AVOID_RADIUS) and any patrol NPC (within
-             _PATROL_AVOID_RADIUS). Walk away at normal speed in the combined
-             direction. When both are close the vectors are summed so the
-             pedestrian flees both simultaneously.
-          2. Zone boundary: steer toward zone centre when within _BOUNDARY_MARGIN
-             of any edge, to avoid the oscillation produced by velocity reflection.
-          3. Periodic re-randomisation: new random direction every
-             pedestrian_heading_resample_steps steps.
-
-        Lifetime expiry: after pedestrian_max_lifetime_steps steps the walker
-        is destroyed and respawned at a new random position within its zone.
+        Delegates to NPCController.update_pedestrians().
         """
-        # Stop walking when the ego is within this distance (metres, centre-to-centre).
-        # ~2.5 m covers the ego vehicle half-length plus a pedestrian body radius.
-        _EGO_AVOID_RADIUS = 2.5
-        # Activate inward correction when this close to any zone edge (metres)
-        _BOUNDARY_MARGIN = 0.5
-
-        ego_loc = (
-            self.vehicle.get_location()
-            if self.vehicle is not None and self.vehicle.is_alive
-            else None
-        )
-
-        for i, walker in enumerate(self._pedestrian_actors):
-            if not (walker is not None and walker.is_alive):
-                continue
-
-            self._pedestrian_lifetime_steps[i] += 1
-            self._pedestrian_heading_steps[i] += 1
-
-            # Lifetime expiry: respawn at random position within zone
-            if self._pedestrian_lifetime_steps[i] >= self._pedestrian_max_lifetime:
-                self._respawn_pedestrian(i)
-                continue
-
-            loc = walker.get_location()
-            zone = self._pedestrian_zones[i]
-
-            # --- Priority 1: ego + patrol avoidance --------------------------
-            # Accumulate repulsion vectors from ego and any close patrol NPC.
-            # The pedestrian walks away from all threats at normal speed.
-            # If the ego drives into the pedestrian at speed the impulse
-            # threshold in _on_collision() still catches it correctly.
-            _PATROL_AVOID_RADIUS = 4.0
-            repulse_x = 0.0
-            repulse_y = 0.0
-
-            if ego_loc is not None:
-                to_ego_x = ego_loc.x - loc.x
-                to_ego_y = ego_loc.y - loc.y
-                ego_dist = math.sqrt(to_ego_x * to_ego_x + to_ego_y * to_ego_y)
-                if ego_dist < _EGO_AVOID_RADIUS:
-                    away_mag = ego_dist if ego_dist > 1e-6 else 1.0
-                    repulse_x += -to_ego_x / away_mag
-                    repulse_y += -to_ego_y / away_mag
-
-            for patrol_npc in self._patrol_npcs:
-                if not (patrol_npc is not None and patrol_npc.is_alive):
-                    continue
-                to_px = patrol_npc.get_location().x - loc.x
-                to_py = patrol_npc.get_location().y - loc.y
-                patrol_dist = math.sqrt(to_px * to_px + to_py * to_py)
-                if patrol_dist < _PATROL_AVOID_RADIUS:
-                    away_mag = patrol_dist if patrol_dist > 1e-6 else 1.0
-                    repulse_x += -to_px / away_mag
-                    repulse_y += -to_py / away_mag
-
-            if repulse_x != 0.0 or repulse_y != 0.0:
-                mag = math.sqrt(repulse_x * repulse_x + repulse_y * repulse_y)
-                control = carla.WalkerControl()
-                control.direction = carla.Vector3D(
-                    x=repulse_x / mag, y=repulse_y / mag, z=0.0
-                )
-                control.speed = 1.0
-                walker.apply_control(control)
-                continue
-
-            # --- Priority 2: zone boundary -----------------------------------
-            near_boundary = (
-                loc.x < zone["x_min"] + _BOUNDARY_MARGIN
-                or loc.x > zone["x_max"] - _BOUNDARY_MARGIN
-                or loc.y < zone["y_min"] + _BOUNDARY_MARGIN
-                or loc.y > zone["y_max"] - _BOUNDARY_MARGIN
-            )
-
-            if near_boundary:
-                # Steer toward zone centre so the walker moves back inward
-                cx = (zone["x_min"] + zone["x_max"]) / 2.0
-                cy = (zone["y_min"] + zone["y_max"]) / 2.0
-                to_cx = cx - loc.x
-                to_cy = cy - loc.y
-                magnitude = math.sqrt(to_cx * to_cx + to_cy * to_cy)
-                if magnitude > 1e-6:
-                    to_cx, to_cy = to_cx / magnitude, to_cy / magnitude
-                self._pedestrian_headings[i] = (to_cx, to_cy, 0.0)
-                self._pedestrian_heading_steps[i] = 0
-            elif self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
-                # --- Priority 3: periodic random direction -------------------
-                heading_rad = random.uniform(0.0, 2.0 * math.pi)
-                self._pedestrian_headings[i] = (
-                    math.cos(heading_rad),
-                    math.sin(heading_rad),
-                    0.0,
-                )
-                self._pedestrian_heading_steps[i] = 0
-
-            dx, dy, dz = self._pedestrian_headings[i]
-            control = carla.WalkerControl()
-            control.direction = carla.Vector3D(x=dx, y=dy, z=dz)
-            control.speed = 1.2
-            walker.apply_control(control)
+        self._npc_controller.update_pedestrians(self.vehicle)
 
     # ------------------------------------------------------------------
     # Clearance and reward
@@ -1272,11 +606,9 @@ class CARLAParkingEnv(gym.Env):
             )),
         )
 
-        # Check collision (penalty + termination).  Flag set by _on_collision callback;
-        # consume and reset so each step only counts one collision event.
-        if self._collision_detected:
-            self._collision_detected = False
-            self._collision_impulse = 0.0
+        # Check collision (penalty + termination).  Flag set by SensorManager
+        # collision callback; consume_collision() reads and resets atomically.
+        if self._sensor_manager.consume_collision():
             self._prev_distance = position_error
             return -10.0, True, False
 
@@ -1341,6 +673,10 @@ class CARLAParkingEnv(gym.Env):
             vyaw = float(ekf_pose[5])
         else:
             # Fallback: EKF not yet initialised or ROS 2 unavailable (CI / unit tests)
+            self._debug_logger._logger.debug(
+                "[state] EKF pose unavailable at step %d -- using CARLA ground truth",
+                self.steps,
+            )
             transform = self.vehicle.get_transform()
             velocity = self.vehicle.get_velocity()
             angular_vel = self.vehicle.get_angular_velocity()
@@ -1390,9 +726,19 @@ class CARLAParkingEnv(gym.Env):
             uncertainty = None
 
         if uncertainty is None:
+            self._debug_logger._logger.debug(
+                "[state] EKF covariance unavailable at step %d -- zeroing features",
+                self.steps,
+            )
             uncertainty = np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32)
         else:
             uncertainty = uncertainty.astype(np.float32)
+            if not np.any(uncertainty):
+                self._debug_logger._logger.debug(
+                    "[state] EKF covariance all-zeros at step %d "
+                    "-- uncertainty signal absent",
+                    self.steps,
+                )
 
         # No obstacle obs:  [pose(6), cov(9), target(3)] = 18-dim
         # With obstacle obs: [pose(6), cov(9), target(3), obs(3)] = 21-dim
@@ -1432,11 +778,11 @@ class CARLAParkingEnv(gym.Env):
 
         Returns zeros when no LiDAR scan is available (sensor not yet ticked).
         """
-        with self._lidar_scan_lock:
-            scan = self._latest_lidar_scan
+        scan = self._sensor_manager.get_latest_lidar_scan()
 
         if scan is None or len(scan) == 0:
-            return np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
+            self._obstacle_features_buffer[:] = 0.0
+            return self._obstacle_features_buffer
 
         # Distances from vehicle origin in the horizontal plane (ignore z)
         dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
@@ -1458,7 +804,9 @@ class CARLAParkingEnv(gym.Env):
             wx = t.location.x + cos_yaw * px_v - sin_yaw * py_v
             wy = t.location.y + sin_yaw * px_v + cos_yaw * py_v
 
-            dynamic_actors = self._patrol_npcs + self._pedestrian_actors
+            dynamic_actors = (
+                self._npc_controller.patrol_npcs + self._npc_controller.pedestrian_actors
+            )
             for actor in dynamic_actors:
                 if actor is not None and actor.is_alive:
                     al = actor.get_location()
@@ -1466,15 +814,16 @@ class CARLAParkingEnv(gym.Env):
                         obstacle_type = 1.0
                         break
 
-        return np.array(
-            [nearest_dist, nearest_bearing, obstacle_type], dtype=np.float32
-        )
+        self._obstacle_features_buffer[0] = nearest_dist
+        self._obstacle_features_buffer[1] = nearest_bearing
+        self._obstacle_features_buffer[2] = obstacle_type
+        return self._obstacle_features_buffer
 
     # ------------------------------------------------------------------
     # Visualisation
     # ------------------------------------------------------------------
 
-    def _write_vis_state(self) -> None:
+    def _write_vis_state(self, end_reason: Optional[str] = None) -> None:
         """
         @brief Append a visualisation frame to the JSONL history file.
 
@@ -1482,6 +831,11 @@ class CARLAParkingEnv(gym.Env):
         which is created by the visualiser process. This avoids unnecessary I/O
         when nobody is watching. Each line is a complete JSON object with
         sim_time so the visualiser can pace playback at real-time speed.
+
+        @param end_reason: If set, written into the frame as "end_reason" so
+                           the visualiser can log why the episode terminated.
+                           One of: "collision", "success", "out_of_bounds",
+                           "timeout". None for mid-episode frames.
         """
         if self.vehicle is None:
             return
@@ -1495,8 +849,9 @@ class CARLAParkingEnv(gym.Env):
         y = transform.location.y
         yaw = transform.rotation.yaw
 
+        patrol_npcs = self._npc_controller.patrol_npcs
         actor_transforms = []
-        for actor in self._patrol_npcs + self._spawned_static_vehicles:
+        for actor in patrol_npcs + self._lot_spawner.spawned_static_vehicles:
             if actor is not None and actor.is_alive:
                 at = actor.get_transform()
                 actor_transforms.append(
@@ -1504,22 +859,55 @@ class CARLAParkingEnv(gym.Env):
                         "x": at.location.x,
                         "y": at.location.y,
                         "yaw": at.rotation.yaw,
-                        "type": "npc" if actor in self._patrol_npcs else "static",
+                        "type": "npc" if actor in patrol_npcs else "static",
                     }
                 )
 
         pedestrian_transforms = []
-        for walker in self._pedestrian_actors:
+        for walker in self._npc_controller.pedestrian_actors:
             if walker is not None and walker.is_alive:
                 wt = walker.get_transform()
                 pedestrian_transforms.append({"x": wt.location.x, "y": wt.location.y})
 
-        state = {
+        # Read CARLA world clock for diagnostics (not the computed sim_time)
+        carla_elapsed = 0.0
+        carla_sync = False
+        carla_fixed_dt = 0.0
+        if self.world is not None:
+            snap = self.world.get_snapshot()
+            carla_elapsed = snap.timestamp.elapsed_seconds
+            ws = self.world.get_settings()
+            carla_sync = ws.synchronous_mode
+            carla_fixed_dt = ws.fixed_delta_seconds
+
+        state: Dict[str, Any] = {
             "sim_time": self.steps * self._carla_timestep,
+            "carla_time": carla_elapsed,
+            "carla_sync": carla_sync,
+            "carla_fixed_dt": carla_fixed_dt,
             "episode_id": self._episode_id,
             "episode_step": self.steps,
             "carla_timestep": self._carla_timestep,
-            "ego": {"x": x, "y": y, "yaw": yaw},
+            "ego": {
+                "x": x, "y": y, "yaw": yaw,
+                "vx": self.vehicle.get_velocity().x,
+                "vy": self.vehicle.get_velocity().y,
+                "speed": math.sqrt(
+                    self.vehicle.get_velocity().x ** 2
+                    + self.vehicle.get_velocity().y ** 2
+                ),
+            },
+            "action": {
+                "steer": float(self._last_action[0])
+                if hasattr(self, "_last_action")
+                else 0.0,
+                "throttle": float(self._last_action[1])
+                if hasattr(self, "_last_action")
+                else 0.0,
+                "brake": float(self._last_action[2])
+                if hasattr(self, "_last_action")
+                else 0.0,
+            },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
             "pedestrians": pedestrian_transforms,
@@ -1528,6 +916,12 @@ class CARLAParkingEnv(gym.Env):
             "bays": self._current_layout.get("bays", []),
             "corners": self._current_layout.get("corners", []),
         }
+        if end_reason is not None:
+            state["end_reason"] = end_reason
+
+        debug_dict = self._debug_logger.step_debug_dict()
+        if debug_dict:
+            state["debug"] = debug_dict
 
         try:
             json_str = json.dumps(state)
@@ -1553,7 +947,7 @@ class CARLAParkingEnv(gym.Env):
         """
         try:
             self.client = carla.Client(self.carla_host, self.carla_port)
-            self.client.set_timeout(60.0)
+            self.client.set_timeout(120.0)
             self.world = self.client.get_world()
 
             current_map_name = self.world.get_map().name.split("/")[-1]
@@ -1583,39 +977,15 @@ class CARLAParkingEnv(gym.Env):
                 self.world = self.client.load_world(self.town)
                 time.sleep(8.0)
 
+            # Default to ClearNoon so the scene is always daytime.
+            # Training randomises weather per episode via _configure_weather().
+            if self.world is not None:
+                self.world.set_weather(carla.WeatherParameters.ClearNoon)
+
         except Exception as exc:
             logger.error(f"Could not connect to CARLA: {exc}")
             self.client = None
             self.world = None
-
-    def _unload_unnecessary_layers(self) -> None:
-        """
-        @brief Strip buildings, foliage, and props from the layered map to leave
-               only the ground mesh, reducing scene complexity.
-        """
-        if self.world is None or carla is None:
-            return
-
-        layers_to_unload = [
-            carla.MapLayer.Buildings,
-            carla.MapLayer.Foliage,
-            carla.MapLayer.Props,
-            carla.MapLayer.StreetLights,
-            carla.MapLayer.Walls,
-        ]
-        for layer in layers_to_unload:
-            try:
-                self.world.unload_map_layer(layer)
-            except Exception:
-                pass  # Layer may not exist for all maps
-
-        # Pin sun directly overhead so the scene is well-lit on the FlatPlane
-        # procedural world (which has no sky sphere and ignores preset sun angles).
-        weather = self.world.get_weather()
-        weather.sun_altitude_angle = 90.0
-        weather.sun_azimuth_angle = 0.0
-        weather.cloudiness = 0.0
-        self.world.set_weather(weather)
 
     def _spawn_vehicle(self) -> None:
         """
@@ -1634,18 +1004,20 @@ class CARLAParkingEnv(gym.Env):
         all_spawns = [primary] + list(extras)
 
         chosen = random.choice(all_spawns)
-        # Store for _spawn_perimeter_cones() so only this entry gap is opened.
+        # Store spawn transform so LotSpawner can open this entry gap in cones.
         self._chosen_spawn = chosen
         sx = float(chosen.get("x", 0.0))
         sy = float(chosen.get("y", 0.0))
         sz = float(chosen.get("z", default_z))
         syaw = float(chosen.get("yaw_deg", 0.0))
 
-        bp_lib = self.world.get_blueprint_library()
-        vehicle_bp = bp_lib.filter("vehicle.bmw.grandtourer")[0]
-        # The ROS bridge identifies the ego vehicle by role_name and publishes
-        # sensor data under /carla/ego_vehicle/* for Cartographer and the EKF.
-        vehicle_bp.set_attribute("role_name", "ego_vehicle")
+        if self._vehicle_bp is None:
+            bp_lib = self.world.get_blueprint_library()
+            self._vehicle_bp = bp_lib.filter("vehicle.bmw.grandtourer")[0]
+            # The ROS bridge identifies the ego vehicle by role_name and publishes
+            # sensor data under /carla/ego_vehicle/* for Cartographer and the EKF.
+            self._vehicle_bp.set_attribute("role_name", "ego_vehicle")
+        vehicle_bp = self._vehicle_bp
 
         spawn_transform = carla.Transform(
             carla.Location(x=sx, y=sy, z=sz),
@@ -1669,299 +1041,12 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Spawn sensors for the configured suite attached to the ego vehicle.
 
-        Dispatches to per-suite helpers based on self._sensor_suite. All suites
-        include an IMU. Sensor data flows through the CARLA ROS bridge into the
-        robot_localisation EKF.
-
-        Suite A: 2D LiDAR (front bumper) + IMU.
-        Suite B: 3D LiDAR (roof) + IMU.
-        Suite C: 3D LiDAR (roof) + RGB camera (windscreen) + IMU.
-
+        Delegates to SensorManager.spawn(), passing the NPC controller's patrol_npc_ids
+        set by reference so the collision callback can identify patrol vehicles.
         """
-        if self.vehicle is None or self.world is None:
-            return
-
-        # IMU is present in all suites
-        self._spawn_imu()
-
-        if self._sensor_suite == "suite_a":
-            self._spawn_lidar_2d()
-        elif self._sensor_suite == "suite_b":
-            self._spawn_lidar_3d()
-        elif self._sensor_suite == "suite_c":
-            # @todo(AG) Camera is currently passive. Pending supervisor decision
-            # on Suite C utility (visual odometry vs removal).
-            self._spawn_lidar_3d()
-            self._spawn_camera_rgb()
-        else:
-            logger.warning(
-                f"Unknown sensor_suite '{self._sensor_suite}'. "
-                "Defaulting to suite_a (2D LiDAR + IMU)."
-            )
-            self._spawn_lidar_2d()
-
-        # Collision sensor always spawned regardless of suite
-        self._spawn_collision_sensor()
-
-    def _spawn_imu(self) -> None:
-        """
-        @brief Spawn IMU sensor at centre-of-mass height.
-
-        Noise parameters and mount position come from carla_sensors_config.imu.
-        Mount defaults: x=0.0, y=0.0, z=0.3 (centre-of-mass height).
-        """
-        if self.vehicle is None or self.world is None:
-            return
-
-        imu_config = self._sensors_config.get("imu", {})
-        mount = imu_config.get("mount", {})
-
-        imu_bp = self.world.get_blueprint_library().find("sensor.other.imu")
-        # role_name determines the ROS topic: /carla/ego_vehicle/<role_name>.
-        # CARLA defaults all sensors to "front", causing topic collisions in the
-        # bridge when multiple sensors are attached. Each sensor needs a unique name.
-        imu_bp.set_attribute("role_name", "imu")
-        for attr, default in [
-            ("noise_accel_stddev_x", 0.1),
-            ("noise_accel_stddev_y", 0.1),
-            ("noise_accel_stddev_z", 0.1),
-            ("noise_gyro_stddev_x", 0.01),
-            ("noise_gyro_stddev_y", 0.01),
-            ("noise_gyro_stddev_z", 0.01),
-            ("sensor_tick", 0.05),
-        ]:
-            imu_bp.set_attribute(attr, str(imu_config.get(attr, default)))
-
-        imu_transform = carla.Transform(
-            carla.Location(
-                x=float(mount.get("x", 0.0)),
-                y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 0.3)),
-            )
+        self._sensor_manager.spawn(
+            self.world, self.vehicle, self._npc_controller.patrol_npc_ids
         )
-        imu_sensor = self.world.spawn_actor(
-            imu_bp, imu_transform, attach_to=self.vehicle
-        )
-        self._spawned_sensors.append(imu_sensor)
-
-    def _spawn_lidar_2d(self) -> None:
-        """
-        @brief Spawn 2D LiDAR sensor at front bumper height (Suite A).
-
-        Single-channel horizontal scan (SICK TiM 5xx / Hokuyo style). CARLA
-        ray_cast scans 360 deg; Cartographer receives raw PointCloud2 directly.
-
-        Config key: carla_sensors_config.lidar. Mount defaults: x=2.4, z=0.3.
-        """
-        if self.vehicle is None or self.world is None:
-            return
-
-        lidar_config = self._sensors_config.get("lidar", {})
-        mount = lidar_config.get("mount", {})
-
-        lidar_bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
-        lidar_bp.set_attribute("role_name", "lidar")
-        for attr, default in [
-            ("channels", 1),
-            ("range", 30.0),
-            ("points_per_second", 56000),
-            ("rotation_frequency", 10.0),
-            ("upper_fov", 0.0),
-            ("lower_fov", 0.0),
-            ("sensor_tick", 0.05),
-        ]:
-            lidar_bp.set_attribute(attr, str(lidar_config.get(attr, default)))
-
-        lidar_transform = carla.Transform(
-            carla.Location(
-                x=float(mount.get("x", 2.4)),
-                y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 0.5)),
-            )
-        )
-        lidar_sensor = self.world.spawn_actor(
-            lidar_bp, lidar_transform, attach_to=self.vehicle
-        )
-
-        # Register callback to update the LiDAR scan cache for obstacle features
-        lidar_sensor.listen(self._lidar_callback)
-        self._spawned_sensors.append(lidar_sensor)
-
-    def _spawn_lidar_3d(self) -> None:
-        """
-        @brief Spawn 3D LiDAR sensor at roof centre (Suite B and C).
-
-        Multi-channel scan (Velodyne VLP-16 style). Provides richer point clouds
-        for Cartographer and denser obstacle proximity information.
-
-        Config key: carla_sensors_config.lidar_3d. Mount defaults: x=0.0, z=1.5.
-        """
-        if self.vehicle is None or self.world is None:
-            return
-
-        lidar3d_config = self._sensors_config.get("lidar_3d", {})
-        mount = lidar3d_config.get("mount", {})
-
-        lidar_bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
-        lidar_bp.set_attribute("role_name", "lidar_3d")
-        for attr, default in [
-            ("channels", 16),
-            ("range", 100.0),
-            ("points_per_second", 300000),
-            ("rotation_frequency", 10.0),
-            ("upper_fov", 15.0),
-            ("lower_fov", -15.0),
-            ("sensor_tick", 0.05),
-        ]:
-            lidar_bp.set_attribute(attr, str(lidar3d_config.get(attr, default)))
-
-        lidar_transform = carla.Transform(
-            carla.Location(
-                x=float(mount.get("x", 0.0)),
-                y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 1.5)),
-            )
-        )
-        lidar_sensor = self.world.spawn_actor(
-            lidar_bp, lidar_transform, attach_to=self.vehicle
-        )
-
-        lidar_sensor.listen(self._lidar_callback)
-        self._spawned_sensors.append(lidar_sensor)
-
-    def _spawn_camera_rgb(self) -> None:
-        """
-        @brief Spawn forward-facing RGB camera at windscreen height (Suite C).
-
-        @note The camera is currently passive: spawned and registered so it
-              appears in CARLA diagnostics, but data is not consumed by the
-              RL observation or EKF pipeline. The listener is a no-op.
-
-        @todo(AG) Pending supervisor decision on Suite C utility.
-
-        Config key: carla_sensors_config.camera_rgb.
-        Mount defaults: x=2.0, z=1.2, pitch=-5 deg.
-        """
-        if self.vehicle is None or self.world is None:
-            return
-
-        cam_config = self._sensors_config.get("camera_rgb", {})
-        mount = cam_config.get("mount", {})
-
-        cam_bp = self.world.get_blueprint_library().find("sensor.camera.rgb")
-        cam_bp.set_attribute("role_name", "rgb_front")
-        for attr, default in [
-            ("image_size_x", 640),
-            ("image_size_y", 480),
-            ("fov", 90.0),
-            ("sensor_tick", 0.05),
-        ]:
-            cam_bp.set_attribute(attr, str(cam_config.get(attr, default)))
-
-        cam_transform = carla.Transform(
-            carla.Location(
-                x=float(mount.get("x", 2.0)),
-                y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 1.2)),
-            ),
-            carla.Rotation(pitch=float(mount.get("pitch", -5.0))),
-        )
-        cam_sensor = self.world.spawn_actor(
-            cam_bp, cam_transform, attach_to=self.vehicle
-        )
-        # Camera data is not consumed by the observation; listener is a no-op
-        # placeholder so the sensor is registered and visible in CARLA diagnostics.
-        cam_sensor.listen(lambda _: None)
-        self._spawned_sensors.append(cam_sensor)
-
-    def _spawn_collision_sensor(self) -> None:
-        """
-        @brief Spawn a CARLA collision sensor attached to the ego vehicle.
-
-        The sensor fires ``_on_collision`` on any physical contact.  The callback
-        sets ``self._collision_detected`` and records the impulse magnitude so
-        ``_compute_reward`` can decide whether to penalise.
-
-        The sensor is appended to ``self._spawned_sensors`` and destroyed with
-        the rest of the episode actors on cleanup.
-        """
-        if self.vehicle is None or self.world is None:
-            return
-        bp = self.world.get_blueprint_library().find("sensor.other.collision")
-        # Set role_name so the CARLA ROS bridge (register_all_sensors=True) can
-        # namespace this sensor's topic distinctly from other ego_vehicle topics.
-        # Without this, the bridge reuses "carla/ego_vehicle/front" and crashes
-        # with a type-incompatible publisher error.
-        bp.set_attribute("role_name", "collision")
-        sensor = self.world.spawn_actor(
-            bp,
-            carla.Transform(),
-            attach_to=self.vehicle,
-        )
-        sensor.listen(self._on_collision)
-        self._spawned_sensors.append(sensor)
-
-    def _on_collision(self, event: Any) -> None:
-        """
-        @brief Collision sensor callback.
-
-        Fires when the ego vehicle makes physical contact with any actor.
-        Records the collision so ``_compute_reward`` can apply the penalty.
-
-        Dynamic actors (pedestrians, patrol NPCs) only set the flag when the
-        ego vehicle was moving at the time (impulse > threshold), preventing
-        a parked/slow ego from being penalised when a pedestrian walks into it.
-
-        @param event: carla.CollisionEvent with ``other_actor`` and
-                      ``normal_impulse`` fields.
-        """
-        other = event.other_actor
-        impulse = event.normal_impulse
-        impulse_magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
-
-        is_pedestrian = other.type_id.startswith("walker.pedestrian")
-        is_patrol = other.id in self._patrol_npc_ids
-        is_dynamic = is_pedestrian or is_patrol
-
-        if is_dynamic:
-            # Only penalise dynamic actor collisions when ego was at fault
-            # (impulse above threshold indicates ego was moving into them).
-            # A pedestrian walking into a stationary ego produces near-zero impulse.
-            if impulse_magnitude > 500.0:
-                self._collision_detected = True
-                self._collision_impulse = impulse_magnitude
-        else:
-            # Static objects (cones, parked cars, walls, perimeter): always penalise
-            self._collision_detected = True
-            self._collision_impulse = impulse_magnitude
-
-    def _lidar_callback(self, lidar_data: Any) -> None:
-        """
-        @brief CARLA LiDAR sensor callback - caches point cloud for obstacle features.
-        @param lidar_data: carla.LidarMeasurement from ray_cast sensor.
-
-        Converts the raw measurement to a (N, 3) float32 numpy array in vehicle
-        frame (x-forward, y-left, z-up). Thread-safe via _lidar_scan_lock.
-
-        @note CARLA ray_cast encodes each point as 4 float32 values (x, y, z,
-              intensity) in a flat byte buffer. CARLA uses a left-handed coordinate
-              system; y is negated to convert to the ROS right-handed convention
-              (positive y = left).
-        """
-        raw = lidar_data.raw_data
-        n_bytes = len(raw)
-        # Each point is 4 float32 values: x, y, z, intensity (16 bytes total)
-        n_points = n_bytes // 16
-        if n_points == 0:
-            return
-
-        arr = np.frombuffer(raw, dtype=np.float32).reshape(n_points, 4)
-        # Negate y: CARLA left-handed -> ROS right-handed (positive y = left)
-        points_xyz = arr[:, :3].copy()
-        points_xyz[:, 1] *= -1.0
-
-        with self._lidar_scan_lock:
-            self._latest_lidar_scan = points_xyz
 
     def _wait_for_covariance(self) -> None:
         """
@@ -1996,43 +1081,12 @@ class CARLAParkingEnv(gym.Env):
         @brief Destroy all episode actors (sensors, cones, static vehicles, NPCs,
                pedestrians, ego vehicle).
         """
-        for sensor in self._spawned_sensors:
-            if sensor is not None and sensor.is_alive:
-                sensor.stop()
-                sensor.destroy()
-        self._spawned_sensors.clear()
+        # Delegates lifecycle to the three actor managers
+        self._sensor_manager.cleanup()
+        self._npc_controller.cleanup()
+        self._lot_spawner.cleanup()
 
-        for actor_list in [
-            self._spawned_cones,
-            self._spawned_static_vehicles,
-            self._patrol_npcs,
-            self._pedestrian_actors,
-        ]:
-            for actor in actor_list:
-                if actor is not None and actor.is_alive:
-                    actor.destroy()
-            actor_list.clear()
-
-        self._patrol_waypoint_indices.clear()
-        self._patrol_waypoint_directions.clear()
-        self._pedestrian_heading_steps.clear()
-        self._pedestrian_headings.clear()
-        self._pedestrian_lifetime_steps.clear()
-        self._pedestrian_zones.clear()
-
-        # Clear per-episode performance caches
-        self._static_obstacle_positions.clear()
         self._all_vehicle_actors.clear()
-        self._patrol_npc_ids.clear()
-
-        # Reset collision state so previous episode events do not carry over
-        self._collision_detected = False
-        self._collision_impulse = 0.0
-
-        # Reset LiDAR scan cache so stale points from the previous episode are
-        # not used to compute obstacle features at the start of the next episode.
-        with self._lidar_scan_lock:
-            self._latest_lidar_scan = None
 
         if self.vehicle is not None:
             if self.vehicle.is_alive:
@@ -2072,12 +1126,45 @@ class CARLAParkingEnv(gym.Env):
         if self.world is None:
             return np.zeros(self._compute_obs_dim(), dtype=np.float32), {}
 
+        # Flush pending destroy commands in synchronous mode.  Without this
+        # tick, CARLA queues the destroys from _cleanup_actors() and only
+        # processes them on the next tick, which happens inside LotSpawner.
+        # By then new actors are already spawned, causing ghost collisions and
+        # steadily increasing actor IDs (memory leak).  One explicit tick here
+        # ensures a clean slate before spawning.
+        self.world.tick()
+
+        # When covariance is included in the observation, synchronous mode must
+        # be active so the EKF runs in lock-step with the simulation.  A world
+        # reload (generate_opendrive_world / load_world) resets all CARLA
+        # settings to async defaults, so we apply sync mode ourselves rather
+        # than relying on the bridge to re-apply it after a reload.
+        # The bridge is configured with synchronous_mode: true in its launch
+        # YAML, which tells it to *expect* sync mode -- it does not re-set it
+        # after a world reload.
+        # When include_covariance=False (inspector, ablation baselines) the
+        # ROS bridge is not required and this block is skipped entirely.
+        if self._include_covariance:
+            settings = self.world.get_settings()
+            if not settings.synchronous_mode:
+                logger.info(
+                    "Applying synchronous mode (fixed_delta=%.3fs) ...",
+                    self._carla_timestep,
+                )
+                settings.synchronous_mode = True
+                settings.fixed_delta_seconds = self._carla_timestep
+                self.world.apply_settings(settings)
+                logger.info("Synchronous mode enabled.")
+            else:
+                logger.info(
+                    "Synchronous mode already active "
+                    f"(fixed_delta={settings.fixed_delta_seconds}s)."
+                )
+
         # Load floor plan and sample target bay
         if self._floor_plans_config:
             self._load_floor_plan()
             self._sample_target_bay()
-
-        self._unload_unnecessary_layers()
 
         # Cache blueprint lists once before any spawning to avoid repeated
         # world queries inside each spawn method.
@@ -2098,22 +1185,16 @@ class CARLAParkingEnv(gym.Env):
             syaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
             self._cov_subscriber.publish_initial_pose(sx, sy, syaw)
 
-        if self._spawn_perimeter_cones_flag:
-            self._spawn_perimeter_cones()
-        self._spawn_obstacle_cones()
-        # Resample bay occupancy uniformly each episode so the agent experiences
-        # varying LiDAR anchor density across training.
-        self._bay_occupancy_rate = random.uniform(
-            self._bay_occupancy_min, self._bay_occupancy_max
-        )
-        self._spawn_static_vehicles()
+        # Spawn all static lot actors (cones + parked vehicles) then NPCs
+        self._spawn_lot_statics()
         self._spawn_npc_patrol()
         self._spawn_pedestrians()
 
         # Rebuild vehicle actor cache after all vehicles are spawned so
-        # _update_patrol_npcs() can use it without a per-step world query.
+        # update_patrol() can use it without a per-step world query.
         if self.world is not None:
             self._all_vehicle_actors = list(self.world.get_actors().filter("vehicle.*"))
+            self._npc_controller.set_vehicle_cache(self._all_vehicle_actors)
 
         if self._include_covariance:
             self._wait_for_covariance()
@@ -2129,6 +1210,27 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = 0.0
 
         state = self._get_state()
+
+        # Emit debug reset summary (no-op when debug=False)
+        sx = float(self._chosen_spawn.get("x", 0.0))
+        sy = float(self._chosen_spawn.get("y", 0.0))
+        self._debug_logger.log_reset(
+            self._current_floor_plan_name,
+            self._target_bay.get("bay_id", ""),
+            sx,
+            sy,
+        )
+        self._debug_logger.log_actors(
+            n_static=len(self._lot_spawner.spawned_static_vehicles),
+            n_patrol=len(self._npc_controller.patrol_npcs),
+            n_peds=len(self._npc_controller.pedestrian_actors),
+            n_cones=len(self._lot_spawner.spawned_cones),
+        )
+
+        # Write the first vis frame for this episode so the visualiser shows
+        # the new layout immediately rather than displaying the previous
+        # episode's stale scene during the reset gap.
+        self._write_vis_state()
 
         info: Dict[str, Any] = {
             "floor_plan": self._current_floor_plan_name,
@@ -2150,6 +1252,9 @@ class CARLAParkingEnv(gym.Env):
         """
         self.steps += 1
 
+        # Cache the applied action for vis state diagnostics
+        self._last_action = action.copy()
+
         if self.vehicle is not None:
             control = carla.VehicleControl()
             control.steer = float(np.clip(action[0], -1.0, 1.0))
@@ -2169,9 +1274,68 @@ class CARLAParkingEnv(gym.Env):
         state = self._get_state()
         reward, terminated, success = self._compute_reward()
 
+        # Per-step debug diagnostics (no-op when debug=False)
+        if self._debug_logger.enabled and self.vehicle is not None:
+            _t = self.vehicle.get_transform()
+            _v = self.vehicle.get_velocity()
+            _pos_err = math.sqrt(
+                (_t.location.x - self._target_bay["x"]) ** 2
+                + (_t.location.y - self._target_bay["y"]) ** 2
+            )
+            _yaw_raw = math.radians(_t.rotation.yaw) - self._target_bay["yaw"]
+            _yaw_err = min(
+                abs(math.atan2(math.sin(_yaw_raw), math.cos(_yaw_raw))),
+                abs(math.atan2(
+                    math.sin(_yaw_raw + math.pi),
+                    math.cos(_yaw_raw + math.pi),
+                )),
+            )
+            _speed = math.sqrt(_v.x ** 2 + _v.y ** 2)
+            _unc: Optional[np.ndarray] = None
+            _ekf_pose: Optional[np.ndarray] = None
+            if self._cov_subscriber is not None:
+                _unc = self._cov_subscriber.get_latest_uncertainty()
+                _ekf_pose = self._cov_subscriber.get_latest_pose()
+            # EKF vs ground truth position drift (metres) -- key sim-to-real signal
+            _ekf_drift = 0.0
+            if _ekf_pose is not None:
+                _ekf_drift = math.sqrt(
+                    (_ekf_pose[0] - _t.location.x) ** 2
+                    + (_ekf_pose[1] - _t.location.y) ** 2
+                )
+            _obs_dist = float(state[18]) if len(state) > 18 else 0.0
+            _obs_type = float(state[20]) if len(state) > 20 else 0.0
+            _lidar_pts = self._sensor_manager.lidar_point_count()
+            self._debug_logger.log_step(
+                step=self.steps,
+                reward=reward,
+                pos_error=_pos_err,
+                yaw_error=_yaw_err,
+                speed=_speed,
+                action=self._last_action,
+                uncertainty=_unc,
+                obstacle_dist=_obs_dist,
+                obstacle_type=_obs_type,
+                ekf_drift=_ekf_drift,
+                lidar_points=_lidar_pts,
+            )
+
         truncated = self.steps >= self.max_steps
 
-        self._write_vis_state()
+        # Distinguish termination cause. _compute_reward() returns -10.0 for
+        # collision and -5.0 for out-of-bounds; -9.0 is the threshold between them.
+        if success:
+            end_reason: Optional[str] = "success"
+        elif terminated and reward <= -9.0:
+            end_reason = "collision"
+        elif terminated:
+            end_reason = "out_of_bounds"
+        elif truncated:
+            end_reason = "timeout"
+        else:
+            end_reason = None
+
+        self._write_vis_state(end_reason=end_reason)
 
         info: Dict[str, Any] = {
             "steps": self.steps,
@@ -2206,11 +1370,29 @@ class CARLAParkingEnv(gym.Env):
         """
         self._cleanup_actors()
 
+        # Restore asynchronous mode so CARLA does not freeze waiting for
+        # ticks after the training process exits.
+        if self.world is not None:
+            try:
+                settings = self.world.get_settings()
+                settings.synchronous_mode = False
+                settings.fixed_delta_seconds = None
+                self.world.apply_settings(settings)
+            except Exception:
+                pass
+
         if self._cov_subscriber is not None:
             self._cov_subscriber.destroy_node()
             self._cov_subscriber = None
 
         self.client = None
         self.world = None
+
+        # Remove the signal file so the visualiser knows training has ended
+        # and can exit cleanly rather than waiting indefinitely for new frames.
+        try:
+            self._vis_signal_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
         super().close()

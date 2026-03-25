@@ -93,7 +93,7 @@ Set up a lightweight virtualenv for these -no CARLA, ROS 2, or GPU needed:
 sudo apt install python3-venv python3-pip  # once, if not already installed
 python3 -m venv .venv-vis
 source .venv-vis/bin/activate
-pip install matplotlib numpy pyyaml
+pip install matplotlib numpy pyyaml pygame
 ```
 
 Then run visualisation commands inside that venv, or activate it once per terminal session. The training stack in Docker is unaffected.
