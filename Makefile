@@ -9,8 +9,8 @@
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
-.PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
+.PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-zcheck
 .PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short docker-watch-actors docker-watch-actors
 
 PYTHON := python3
@@ -48,14 +48,16 @@ install: ## Install package and dev dependencies
 # Docker: Lifecycle
 # ----------------------------------------------------------------------
 SERVICE ?=
-docker-build: ## Build Docker images. Usage: make docker-build
+docker-build: ## Build all Docker images (core + inspect stacks). Usage: make docker-build
 	$(DOCKER_COMPOSE) build $(SERVICE)
+	$(DOCKER_COMPOSE_INSPECT) build $(SERVICE)
 
 docker-build-prod: ## Build training image without dev dependencies (lighter)
 	$(DOCKER_COMPOSE) build --build-arg DEV_INSTALL=false training
 
 docker-build-no-cache: ## Build images without cache (clean rebuild)
 	$(DOCKER_COMPOSE) build --no-cache
+	$(DOCKER_COMPOSE_INSPECT) build --no-cache
 
 docker-up: ## Start all containers
 	$(DOCKER_COMPOSE) up -d
@@ -140,19 +142,23 @@ LOC_ENV = export CARTOGRAPHER_MODE=loc \
 docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
 	@echo "Training (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training \
+		bash -c "python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--log-dir logs \
-		--checkpoint-dir checkpoints
+		--checkpoint-dir checkpoints \
+		2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
 
 docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]
 	@echo "Training (loc, 10k steps): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/training/train_ppo.py \
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training \
+		bash -c "python $(SRC_DIR)/training/train_ppo.py \
 		--config $(CONFIG_DIR)/train_config.yaml \
 		--total-timesteps 10000 \
 		--log-dir logs \
-		--checkpoint-dir checkpoints
+		--checkpoint-dir checkpoints \
+		2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
 
 
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
@@ -225,6 +231,9 @@ docker-logs-carla: ## Follow logs from CARLA server
 docker-logs-ros2: ## Follow logs from ROS 2 bridge
 	$(DOCKER_COMPOSE) logs -f ros2-bridge
 
+docker-inspect-dryrun-logs: ## Follow dryrun training container logs (run alongside docker-inspect-dryrun)
+	$(DOCKER_COMPOSE_INSPECT) logs -f training-inspect-dryrun
+
 # ----------------------------------------------------------------------
 # Docker: Cleanup
 # ----------------------------------------------------------------------
@@ -253,22 +262,30 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 # Docker: Inspection Tools to confirm all is good in the simulator
 # ----------------------------------------------------------------------
 
-INSPECT_LAYOUT  ?= trapezoid
+INSPECT_LAYOUT  ?= rectangle
 INSPECT_EPISODES ?=
-docker-inspect-dryrun: ## Full training pipeline with random actions inside the running stack (carla-server + ros2-bridge + training). Spectator follows ego; EKF covariance printed every 50 steps. Requires make docker-up first. Usage: make docker-inspect-dryrun [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5]
+docker-inspect-dryrun: ## Full training pipeline with random actions in windowed CARLA. Spectator follows ego; EKF covariance printed every 50 steps. Usage: make docker-inspect-dryrun [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
-	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(INSPECT_LAYOUT)  EPISODES=$(INSPECT_EPISODES)"
+	$(eval LAYOUT := $(INSPECT_LAYOUT))
+	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(LAYOUT)  EPISODES=$(INSPECT_EPISODES)"
+	$(DOCKER_COMPOSE) down 2>/dev/null || true
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
+	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) $(DOCKER_COMPOSE) exec -e DISPLAY=$(_DISPLAY) training \
-		python -m scripts.inspect.lot_inspector \
-		--mode dryrun \
-		--layout $(INSPECT_LAYOUT) \
-		--host carla-server \
-		--port 2000 \
-		$(if $(INSPECT_EPISODES),--episodes $(INSPECT_EPISODES),)
+	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) EPISODES=$(INSPECT_EPISODES) \
+		CARTOGRAPHER_MODE=loc \
+		CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
+		SENSOR_SUITE=$(SENSOR_SUITE) \
+		$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun up \
+		--force-recreate --detach \
+		carla-server-demo ros2-bridge-inspect training-inspect-dryrun
+	@echo "Containers started. Streaming training output (Ctrl+C to abort)..."
+	@docker logs -f uncertainty-rl-training-inspect-dryrun 2>&1 | \
+		grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' || true
+	$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun down 2>/dev/null || true
 	xhost -local:docker 2>/dev/null || true
 
-docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
+docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
@@ -289,6 +306,17 @@ docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in win
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) $(DOCKER_COMPOSE_INSPECT) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
+	xhost -local:docker 2>/dev/null || true
+
+INSPECT_DURATION ?= 120
+docker-inspect-zcheck: ## Spawn one of each actor type in a row and print their actual z coords (verifies shared ground plane). Usage: make docker-inspect-zcheck [INSPECT_LAYOUT=rectangle] [INSPECT_DURATION=120]
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)"
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-zcheck 2>/dev/null || true
+	$(DOCKER_COMPOSE) down 2>/dev/null || true
+	docker network prune -f 2>/dev/null || true
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) DURATION=$(INSPECT_DURATION) $(DOCKER_COMPOSE_INSPECT) --profile inspect-zcheck up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-zcheck
 	xhost -local:docker 2>/dev/null || true
 
 INSPECT_SENSOR  ?= lidar

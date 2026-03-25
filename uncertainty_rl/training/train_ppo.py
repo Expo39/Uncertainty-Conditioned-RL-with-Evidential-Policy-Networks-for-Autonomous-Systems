@@ -8,6 +8,7 @@ with evidential actor networks for autonomous parking.
 
 import argparse
 import os
+import warnings
 from typing import Any, Callable, Dict, Optional
 
 import gymnasium as gym
@@ -25,6 +26,10 @@ from stable_baselines3.ppo import PPO
 
 from uncertainty_rl.envs import CARLAParkingEnv
 from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+
+# Suppress Gymnasium's float64->float32 precision warning for unbounded obs spaces.
+# spaces.Box with low/high=±inf always triggers this; it is harmless.
+warnings.filterwarnings("ignore", message=".*Box.*precision lowered.*", category=UserWarning)
 
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:

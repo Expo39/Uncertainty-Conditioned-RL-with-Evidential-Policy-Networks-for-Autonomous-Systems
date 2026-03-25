@@ -83,7 +83,7 @@ services:
       - ./configs/maps:/workspace/configs/maps:rw
       - ./logs/ros2:/workspace/logs:rw
       - ./outputs:/workspace/outputs:rw  # Shared with training for ekf_state.json
-      - ./uncertainty_rl/ros2:/workspace/ros2_nodes:ro
+      - ./uncertainty_rl/ros2:/workspace/src/uncertainty_rl_ros2:ro
     command: >
       bash -c "
         source /opt/ros/jazzy/setup.bash &&
@@ -164,7 +164,3 @@ networks:
   uncertainty-rl-network:
     driver: bridge
     name: uncertainty-rl-network
-
-volumes:
-  logs:
-  checkpoints:

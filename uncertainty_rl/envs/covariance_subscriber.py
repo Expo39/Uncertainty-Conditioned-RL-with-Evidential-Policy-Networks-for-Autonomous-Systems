@@ -71,6 +71,10 @@ class _CovarianceSubscriber(_NodeBase):
         self._lock = threading.Lock()
         self._latest_uncertainty: Optional[np.ndarray] = None
         self._latest_pose: Optional[np.ndarray] = None
+        # Monotonic time after which the file mtime must fall to be considered
+        # fresh.  Set by invalidate() at each episode reset so stale pre-reset
+        # data is never served as a valid current reading.
+        self._valid_after: float = 0.0
 
         # Initialise rclpy Node for /initialpose publisher only
         if _ROS2_AVAILABLE:
@@ -89,13 +93,39 @@ class _CovarianceSubscriber(_NodeBase):
                 f"initialpose={initial_pose_topic}"
             )
 
+    def invalidate(self) -> None:
+        """
+        @brief Mark cached data as stale at the current wall-clock time.
+
+        Call this at episode reset (before publish_initial_pose and before
+        _wait_for_covariance) so that any JSON written before this moment is
+        rejected.  _read_file() will only accept a file whose mtime is strictly
+        after the invalidation timestamp.
+        """
+        import time as _time
+
+        with self._lock:
+            self._valid_after = _time.time()
+            self._latest_uncertainty = None
+            self._latest_pose = None
+
     def _read_file(self) -> bool:
         """
         @brief Read the latest EKF state from the shared JSON file.
-        @return True if new data was read successfully.
+
+        Only accepts the file if its modification time is strictly after the
+        last invalidate() call, preventing stale pre-reset data from being
+        returned during the wait period at episode start.
+
+        @return True if fresh data was read successfully.
         """
         try:
             if not _EKF_STATE_PATH.exists():
+                return False
+            # Reject files written before the last invalidation.
+            with self._lock:
+                valid_after = self._valid_after
+            if _EKF_STATE_PATH.stat().st_mtime <= valid_after:
                 return False
             data = json.loads(_EKF_STATE_PATH.read_text())
             cov_3x3 = np.array(data["covariance"]).reshape(3, 3)

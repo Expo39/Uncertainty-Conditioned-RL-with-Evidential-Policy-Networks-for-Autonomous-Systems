@@ -215,7 +215,8 @@ class LotSpawner:
         @brief Spawn static markers along the lot perimeter polygon.
 
         Markers are placed using _interpolate_cone_positions() and physics is
-        disabled so they don't move. The blueprint is configurable via
+        disabled so they stay static (LiDAR detects physics-disabled actors;
+        termination is handled by the bounds check in _compute_reward()). The blueprint is configurable via
         parking_scenarios.perimeter_marker_blueprint in train_config.yaml.
 
         @param world: Live carla.World handle.
@@ -255,8 +256,8 @@ class LotSpawner:
 
         Each obstacle in the layout YAML is a centre + half-extents rectangle.
         Markers are placed along the four sides at the same spacing used for
-        perimeter markers. Physics is disabled so they act as static LiDAR
-        targets.
+        perimeter markers. Physics is disabled so they remain static LiDAR
+        targets for Cartographer.
 
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict with 'obstacles' key.
@@ -331,8 +332,11 @@ class LotSpawner:
         z = float(current_layout.get("origin", {}).get("z", 0.3))
         # Spawn 2 m above the floor so the bounding box clears perimeter cones
         # whose tops reach ~1 m. Physics is immediately disabled and the actor
-        # is teleported back to ground level after the post-spawn tick.
+        # is teleported to z + 0.1 after the post-spawn tick.  z + 0.1 is the
+        # vehicle CoM resting height on the CARLA ground surface (confirmed by
+        # patrol NPC physics settling in the z-check inspector).
         z_spawn = z + 2.0
+        z_rest = z + 0.1
         _pending_ground: List[Tuple[Any, float, float, float]] = []
 
         for bay in bays:
@@ -401,7 +405,7 @@ class LotSpawner:
         for actor, ax, ay, actor_yaw in _pending_ground:
             actor.set_transform(
                 carla.Transform(
-                    carla.Location(x=ax, y=ay, z=z),
+                    carla.Location(x=ax, y=ay, z=z_rest),
                     carla.Rotation(yaw=actor_yaw),
                 )
             )
