@@ -199,6 +199,12 @@ def generate_launch_description() -> LaunchDescription:
     cartographer_map = os.environ.get("CARTOGRAPHER_MAP", "")
     is_3d = sensor_suite in ("suite_b", "suite_c")
 
+    # synchronous_mode is passed to the bridge but has NO effect when passive=true.
+    # When passive, the bridge skips apply_settings entirely -- it never registers
+    # as a synchronous CARLA client and CARLA never waits for it.
+    # The training container's world.tick() is the sole tick driver.
+    bridge_sync_mode = "false"
+
     # -- Launch arguments --------------------------------------------------
 
     launch_args = [
@@ -233,11 +239,21 @@ def generate_launch_description() -> LaunchDescription:
                 "host": LaunchConfiguration("carla_host"),
                 "port": LaunchConfiguration("carla_port"),
                 "town": LaunchConfiguration("town"),
-                "synchronous_mode": "true",
+                # BRIDGE_SYNC_MODE env var lets the inspect-dryrun stack run the
+                # bridge in async mode so the training container's world.tick()
+                # is the sole synchronous client.  Training uses "true" (default).
+                "synchronous_mode": bridge_sync_mode,
                 "fixed_delta_seconds": "0.05",
                 "passive": "true",
                 "register_all_sensors": "true",
                 "timeout": "30",
+                # Prevent the bridge from subscribing to vehicle_control_cmd and
+                # overriding the training container's apply_control() each tick.
+                # The bridge looks for an actor with this role_name to control;
+                # setting it to a non-existent name means it never finds one.
+                # Sensors still publish under /carla/ego_vehicle/* because
+                # register_all_sensors discovers them by actor role_name directly.
+                "ego_vehicle_role_name": "hero",
             }.items(),
         )
     except Exception:

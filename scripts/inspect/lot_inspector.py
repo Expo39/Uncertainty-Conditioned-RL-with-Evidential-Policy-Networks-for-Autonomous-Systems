@@ -48,6 +48,7 @@ Arguments:
 
 import argparse
 import sys
+import warnings
 from typing import Any, Dict, Optional
 
 import yaml
@@ -63,9 +64,13 @@ from scripts.inspect._inspectors import (
     LayoutInspector,
     LiveInspector,
     SensorInspector,
+    ZCheckInspector,
     _Inspector,
 )
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+# Suppress Gymnasium's float64->float32 precision warning for unbounded obs spaces.
+warnings.filterwarnings("ignore", message=".*Box.*precision lowered.*", category=UserWarning)
 
 # ===========================================================================
 # Entry point
@@ -148,14 +153,16 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="sensors",
-        choices=["layout", "sensors", "live", "dryrun"],
+        choices=["layout", "sensors", "live", "dryrun", "zcheck"],
         help=(
             "Inspector mode: 'layout' = lot geometry only; "
             "'sensors' = sensors on lot; "
             "'live' = real spawned sensors with live output "
             "(LiDAR debug dots, or camera spectator view for suite_c); "
             "'dryrun' = full training pipeline with random actions (no model), "
-            "spectator follows ego, EKF covariance printed to console.  "
+            "spectator follows ego, EKF covariance printed to console; "
+            "'zcheck' = spawn one of each actor type in a row and confirm they "
+            "all share the same z-axis (prints actual z coords to console).  "
             "Default: sensors."
         ),
     )
@@ -314,6 +321,7 @@ def main() -> None:
             town=train_cfg.get("town", "FlatPlane"),
             parking_scenarios_config=scenarios,
             carla_sensors_config=sensors_cfg,
+            ros2_config=train_cfg.get("ros2", {}),
             sensor_suite="suite_a",
             include_covariance=True,
             include_obstacle_obs=True,
@@ -324,11 +332,33 @@ def main() -> None:
             env.close()
             sys.exit(1)
 
-        inspector = DryRunInspector(env, args.duration, args.episodes)
+        dryrun_action = train_cfg.get("inspect", {}).get("dryrun_action", None)
+        inspector = DryRunInspector(env, args.duration, args.episodes, dryrun_action)
         inspector.place_spectator()  # type: ignore[attr-defined]
-        print("Dry-run mode: full training pipeline, random actions, no model.")
+        action_desc = str(dryrun_action) if dryrun_action is not None else "random"
+        print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
         print("  Spectator follows ego vehicle.  EKF covariance printed every 50 steps.")
         print("  Press Ctrl+C to stop.")
+
+    elif args.mode == "zcheck":
+        # Use a clean env with no lot actors so the z-check scene is uncluttered.
+        # full_lot=False suppresses NPCs, cones, and parked cars.
+        env = _build_env(
+            args.host,
+            args.port,
+            args.layout,
+            train_cfg,
+            full_lot=False,
+        )
+        env.reset()
+        if env.world is None:
+            print("ERROR: Could not connect to CARLA.")
+            env.close()
+            sys.exit(1)
+
+        inspector = ZCheckInspector(env, args.duration)
+        print("Z-check mode: spawning reference actors to verify shared ground plane.")
+        print("  ego_vehicle  |  static_parked_car  |  motorcycle  |  patrol_npc  |  cone  |  pedestrian")
 
     else:  # live
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))

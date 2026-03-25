@@ -424,7 +424,7 @@ class NPCController:
                     if (
                         fwd_proj > 0.0
                         and walker_dist < self._patrol_pedestrian_distance
-                        and lat < 2.0
+                        and lat < 2.5
                     ):
                         blocked = True
                         break

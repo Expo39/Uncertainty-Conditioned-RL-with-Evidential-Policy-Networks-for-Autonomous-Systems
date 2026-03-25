@@ -220,6 +220,11 @@ class CARLAParkingEnv(gym.Env):
         # Used for /initialpose publishing to seed the EKF on reset.
         self._chosen_spawn: Dict[str, float] = {}
 
+        # Actual ground-plane z after the ego vehicle settles under gravity.
+        # Set in _spawn_vehicle() and passed to all static spawners so
+        # physics-disabled actors land on the same surface as the ego.
+        self._floor_z: float = 0.3
+
         # Per-step debug diagnostics (emits structured logs + populates vis HUD).
         # Instantiated here so NPCController / SensorManager can share the reference.
         self._debug_logger: DebugLogger = DebugLogger(debug=debug)
@@ -272,6 +277,14 @@ class CARLAParkingEnv(gym.Env):
         self._obstacle_features_buffer: np.ndarray = np.zeros(
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
+
+        # Offset from Cartographer odom frame to CARLA world frame (set each episode).
+        # Computed once after _wait_for_covariance() by comparing the CARLA spawn
+        # position (world frame) to the first EKF pose (odom frame).  Applied in
+        # _get_state() so the EKF position is expressed in CARLA world frame before
+        # _compute_relative_target_pose() uses it.
+        # Tuple: (dx_world_minus_odom, dy_world_minus_odom, dyaw_world_minus_odom)
+        self._ekf_odom_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
 
         # Target bay (world frame, set in reset)
         self._target_bay: Dict[str, Any] = {
@@ -564,18 +577,18 @@ class CARLAParkingEnv(gym.Env):
         Reward structure:
           - Progress: (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
             Positive when closing on target, negative when moving away.
+            OUT_OF_BOUNDS_THRESHOLD used as a fixed normalisation scale only.
           - Time penalty: -0.01 per step to discourage stalling.
           - Collision: -10.0 + termination.
           - Success: +10.0 + termination.
-          - Out-of-bounds: -5.0 + termination.
 
         Termination conditions (priority order):
           1. Collision: physical contact detected by collision sensor
+             (includes hitting perimeter cones -- the lot boundary).
           2. Success: position < SUCCESS_THRESHOLD_POSITION,
              yaw < SUCCESS_THRESHOLD_ORIENTATION,
              velocity < SUCCESS_THRESHOLD_VELOCITY
-          3. Out-of-bounds: > OUT_OF_BOUNDS_THRESHOLD from target
-          4. Time limit handled externally via truncated flag in step()
+          3. Time limit handled externally via truncated flag in step()
         """
         if self.vehicle is None:
             return 0.0, False, False
@@ -612,6 +625,28 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return -10.0, True, False
 
+        # Out-of-bounds: terminate when any part of the car body exits the lot.
+        # Uses the layout corners AABB shrunk by the vehicle half-width (1.0 m)
+        # so the check triggers when the car body -- not just its centre -- crosses
+        # the perimeter cone line. Perimeter cones are static props (no physics)
+        # so the collision sensor cannot detect them; this is the boundary enforcer.
+        # On real-world deployment: replace the YAML corners with the surveyed lot
+        # boundary -- no code changes needed.
+        corners = self._current_layout.get("corners", [])
+        if corners:
+            xs = [c["x"] for c in corners]
+            ys = [c["y"] for c in corners]
+            _half_width = 1.0  # BMW Grand Tourer half-width (metres)
+            _oob = (
+                x < min(xs) + _half_width
+                or x > max(xs) - _half_width
+                or y < min(ys) + _half_width
+                or y > max(ys) - _half_width
+            )
+            if _oob:
+                self._prev_distance = position_error
+                return -5.0, True, False
+
         # Success condition
         success = (
             position_error < SUCCESS_THRESHOLD_POSITION
@@ -622,13 +657,9 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return 10.0, True, True
 
-        # Out-of-bounds
-        if position_error > OUT_OF_BOUNDS_THRESHOLD:
-            self._prev_distance = position_error
-            return -5.0, True, False
-
         # Potential-based progress reward (Ng et al. 1999)
         # Positive when closing on the target, negative when drifting away.
+        # Normalised by a fixed scale factor to keep rewards in a consistent range.
         progress = (self._prev_distance - position_error) / OUT_OF_BOUNDS_THRESHOLD
         reward = progress - 0.01  # 0.01/step time penalty
         self._prev_distance = position_error
@@ -665,9 +696,14 @@ class CARLAParkingEnv(gym.Env):
             ekf_pose = self._cov_subscriber.get_latest_pose()
 
         if ekf_pose is not None:
-            x = float(ekf_pose[0])
-            y = float(ekf_pose[1])
-            yaw = float(ekf_pose[2])
+            # Transform EKF pose from Cartographer odom frame to CARLA world
+            # frame using the per-episode offset computed in
+            # _calibrate_ekf_frame_offset().  Velocities are frame-agnostic
+            # (differential quantities) so they are used directly.
+            _ox, _oy, _oyaw = self._ekf_odom_offset
+            x = float(ekf_pose[0]) + _ox
+            y = float(ekf_pose[1]) + _oy
+            yaw = float(ekf_pose[2]) + _oyaw
             vx = float(ekf_pose[3])
             vy = float(ekf_pose[4])
             vyaw = float(ekf_pose[5])
@@ -784,8 +820,18 @@ class CARLAParkingEnv(gym.Env):
             self._obstacle_features_buffer[:] = 0.0
             return self._obstacle_features_buffer
 
-        # Distances from vehicle origin in the horizontal plane (ignore z)
+        # Keep only the forward hemisphere (x > 0 in vehicle frame).
+        # The LiDAR is front-bumper mounted -- rearward rays are physically
+        # blocked by the car body on the real robot (270 deg FOV) and produce
+        # self-returns in CARLA's 360 deg simulation.  Discarding x <= 0
+        # replicates the real sensor FOV and eliminates all self-returns.
         dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
+        valid = scan[:, 0] > 0.0
+        if not np.any(valid):
+            self._obstacle_features_buffer[:] = 0.0
+            return self._obstacle_features_buffer
+        dists = dists[valid]
+        scan = scan[valid]
         nearest_idx = int(np.argmin(dists))
         nearest_dist = float(dists[nearest_idx])
 
@@ -834,8 +880,8 @@ class CARLAParkingEnv(gym.Env):
 
         @param end_reason: If set, written into the frame as "end_reason" so
                            the visualiser can log why the episode terminated.
-                           One of: "collision", "success", "out_of_bounds",
-                           "timeout". None for mid-episode frames.
+                           One of: "collision", "success", "timeout".
+                           None for mid-episode frames.
         """
         if self.vehicle is None:
             return
@@ -1026,16 +1072,21 @@ class CARLAParkingEnv(gym.Env):
 
         self.vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
         if self.vehicle is None:
-            # Fall back to any valid spawn point on the map
-            spawn_points = self.world.get_map().get_spawn_points()
-            if spawn_points:
-                self.vehicle = self.world.try_spawn_actor(
-                    vehicle_bp, random.choice(spawn_points)
-                )
-            logger.warning("Chosen spawn point occupied, using fallback spawn.")
+            logger.error("Ego vehicle could not be spawned at lot spawn point.")
 
-        if self.vehicle is not None:
-            time.sleep(0.5)
+        if self.vehicle is not None and self.world is not None:
+            # Tick until the vehicle settles onto the ground plane.
+            # In synchronous mode, time.sleep() does not advance physics --
+            # world.tick() is required.  Never toggle set_simulate_physics on
+            # the ego vehicle: in CARLA 0.9.16 that locks the drivetrain so
+            # the wheels steer but the vehicle cannot translate.
+            for _ in range(40):
+                self.world.tick(10.0)
+                if abs(self.vehicle.get_velocity().z) < 0.01:
+                    break
+            # Record the true floor z so static spawners use the same reference
+            # instead of a hardcoded layout_origin_z + guess offset.
+            self._floor_z = self.vehicle.get_transform().location.z
 
     def _spawn_sensors(self) -> None:
         """
@@ -1058,7 +1109,7 @@ class CARLAParkingEnv(gym.Env):
             return
 
         start = time.monotonic()
-        tick_interval = 0.05
+        tick_interval = 0.05  # 20 Hz -- matches simulation timestep
 
         while not self._cov_subscriber.has_data:
             elapsed = time.monotonic() - start
@@ -1069,11 +1120,67 @@ class CARLAParkingEnv(gym.Env):
                     f"Ensure ros2-bridge container is healthy."
                 )
             if self.world is not None:
-                self.world.tick()
+                self.world.tick(10.0)
             time.sleep(tick_interval)
 
         logger.debug(
             f"First covariance received after {time.monotonic() - start:.2f}s."
+        )
+
+    def _calibrate_ekf_frame_offset(self) -> None:
+        """
+        @brief Compute the translation offset from Cartographer odom frame to
+               CARLA world frame and store it in self._ekf_odom_offset.
+
+        Cartographer's odom frame origin is not aligned with CARLA world frame
+        coordinates -- it is initialised wherever the vehicle is when
+        Cartographer starts.  The /initialpose hint only seeds the pose graph
+        localisation within the frozen map; it does not change the odom-frame
+        origin.
+
+        Offset = CARLA_spawn - EKF_odom_pose (both measured at the same instant
+        after the EKF has converged).  Because the vehicle is stationary at
+        reset, the difference is purely translational.  Yaw offset is computed
+        similarly (CARLA spawn yaw minus EKF yaw).
+
+        If the EKF pose is unavailable the offset is left at (0, 0, 0), which
+        means the env falls back to EKF-frame coordinates (slightly wrong
+        relative target pose, but does not crash).
+        """
+        if self._cov_subscriber is None or self.vehicle is None:
+            return
+
+        ekf_pose = self._cov_subscriber.get_latest_pose()
+        if ekf_pose is None:
+            logger.warning(
+                "EKF pose unavailable during frame calibration -- "
+                "odom offset will be (0, 0, 0)."
+            )
+            self._ekf_odom_offset = (0.0, 0.0, 0.0)
+            return
+
+        carla_t = self.vehicle.get_transform()
+        world_x = carla_t.location.x
+        world_y = carla_t.location.y
+        world_yaw = math.radians(carla_t.rotation.yaw)
+
+        ekf_x = float(ekf_pose[0])
+        ekf_y = float(ekf_pose[1])
+        ekf_yaw = float(ekf_pose[2])
+
+        dx = world_x - ekf_x
+        dy = world_y - ekf_y
+        dyaw = math.atan2(
+            math.sin(world_yaw - ekf_yaw),
+            math.cos(world_yaw - ekf_yaw),
+        )
+        self._ekf_odom_offset = (dx, dy, dyaw)
+
+        logger.info(
+            f"EKF frame offset calibrated: dx={dx:.3f}m dy={dy:.3f}m "
+            f"dyaw={math.degrees(dyaw):.2f}deg  "
+            f"(CARLA spawn=({world_x:.2f},{world_y:.2f}) "
+            f"EKF odom=({ekf_x:.2f},{ekf_y:.2f}))"
         )
 
     def _cleanup_actors(self) -> None:
@@ -1132,7 +1239,7 @@ class CARLAParkingEnv(gym.Env):
         # By then new actors are already spawned, causing ghost collisions and
         # steadily increasing actor IDs (memory leak).  One explicit tick here
         # ensures a clean slate before spawning.
-        self.world.tick()
+        self.world.tick(10.0)
 
         # When covariance is included in the observation, synchronous mode must
         # be active so the EKF runs in lock-step with the simulation.  A world
@@ -1173,6 +1280,11 @@ class CARLAParkingEnv(gym.Env):
         self._spawn_vehicle()
         self._spawn_sensors()
 
+        # Invalidate stale pre-reset EKF data so _wait_for_covariance() blocks
+        # until a genuinely post-spawn reading arrives from ekf_state.json.
+        if self._include_covariance and self._cov_subscriber is not None:
+            self._cov_subscriber.invalidate()
+
         # Publish spawn pose to /initialpose so Cartographer pure localisation
         # can converge quickly at the start of each episode. Safe no-op in SLAM mode.
         if (
@@ -1198,6 +1310,7 @@ class CARLAParkingEnv(gym.Env):
 
         if self._include_covariance:
             self._wait_for_covariance()
+            self._calibrate_ekf_frame_offset()
 
         # Initialise prev_distance for potential-based reward shaping
         if self.vehicle is not None:
@@ -1260,12 +1373,15 @@ class CARLAParkingEnv(gym.Env):
             control.steer = float(np.clip(action[0], -1.0, 1.0))
             control.throttle = float(np.clip(action[1], 0.0, 1.0))
             control.brake = float(np.clip(action[2], 0.0, 1.0))
+
             self.vehicle.apply_control(control)
 
             if self.world is not None:
                 self._update_patrol_npcs()
                 self._update_pedestrians()
-                self.world.tick()
+                # 10s timeout surfaces a frozen CARLA server as an error rather
+                # than hanging the process indefinitely.
+                self.world.tick(10.0)
 
                 # Update trajectory buffer for vis state writer
                 t = self.vehicle.get_transform()
@@ -1296,12 +1412,14 @@ class CARLAParkingEnv(gym.Env):
             if self._cov_subscriber is not None:
                 _unc = self._cov_subscriber.get_latest_uncertainty()
                 _ekf_pose = self._cov_subscriber.get_latest_pose()
-            # EKF vs ground truth position drift (metres) -- key sim-to-real signal
+            # EKF vs ground truth position drift (metres) -- key sim-to-real signal.
+            # Apply odom->world offset before comparing so both are in CARLA world frame.
             _ekf_drift = 0.0
             if _ekf_pose is not None:
+                _ox, _oy, _ = self._ekf_odom_offset
                 _ekf_drift = math.sqrt(
-                    (_ekf_pose[0] - _t.location.x) ** 2
-                    + (_ekf_pose[1] - _t.location.y) ** 2
+                    (_ekf_pose[0] + _ox - _t.location.x) ** 2
+                    + (_ekf_pose[1] + _oy - _t.location.y) ** 2
                 )
             _obs_dist = float(state[18]) if len(state) > 18 else 0.0
             _obs_type = float(state[20]) if len(state) > 20 else 0.0
@@ -1322,14 +1440,13 @@ class CARLAParkingEnv(gym.Env):
 
         truncated = self.steps >= self.max_steps
 
-        # Distinguish termination cause. _compute_reward() returns -10.0 for
-        # collision and -5.0 for out-of-bounds; -9.0 is the threshold between them.
+        # Distinguish termination cause. Only collision (-10.0) terminates the
+        # episode; out-of-bounds is no longer a termination condition (the
+        # perimeter cones handle physical lot boundary via collision detection).
         if success:
             end_reason: Optional[str] = "success"
-        elif terminated and reward <= -9.0:
-            end_reason = "collision"
         elif terminated:
-            end_reason = "out_of_bounds"
+            end_reason = "collision"
         elif truncated:
             end_reason = "timeout"
         else:
@@ -1382,7 +1499,6 @@ class CARLAParkingEnv(gym.Env):
                 pass
 
         if self._cov_subscriber is not None:
-            self._cov_subscriber.destroy_node()
             self._cov_subscriber = None
 
         self.client = None

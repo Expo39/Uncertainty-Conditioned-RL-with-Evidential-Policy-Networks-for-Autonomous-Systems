@@ -1,6 +1,7 @@
 # ROS 2 Configuration for Covariance Extraction
 # Configuration for the ROS 2 bridge, EKF, and covariance extraction pipeline.
 
+
 # CARLA ROS bridge topics (Suite A: 2D LiDAR + IMU only)
 # Override topic names via launch argument remappings if your bridge version differs.
 carla_topics:

@@ -29,6 +29,8 @@ services:
       - inspect
       - inspect-sensors
       - inspect-live
+      - inspect-dryrun
+      - inspect-zcheck
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
@@ -249,6 +251,159 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # ROS 2 bridge for dryrun inspect -- connects to carla-server-demo (port 2100)
+  # instead of the headless carla-server. Provides EKF covariance to the dryrun
+  # training container via the shared outputs/ekf_state.json file.
+  ros2-bridge-inspect:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/ros2/Dockerfile
+      args:
+        ROS_DISTRO: jazzy
+    container_name: uncertainty-rl-ros2-inspect
+    runtime: nvidia
+    profiles:
+      - inspect-dryrun
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+      - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
+      - CARTOGRAPHER_MODE=${CARTOGRAPHER_MODE:-loc}
+      - CARTOGRAPHER_MAP=${CARTOGRAPHER_MAP:-}
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./configs:/workspace/configs:ro
+      - ./configs/maps:/workspace/configs/maps:rw
+      - ./logs/ros2:/workspace/logs:rw
+      - ./outputs:/workspace/outputs:rw
+      - ./uncertainty_rl/ros2:/workspace/src/uncertainty_rl_ros2:ro
+    command: >
+      bash -c "
+        source /opt/ros/jazzy/setup.bash &&
+        source /workspace/install/setup.bash &&
+        ros2 launch uncertainty_rl_ros2 carla_bridge.launch.py
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'ros2 launch' > /dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Dryrun inspector -- full training pipeline with random actions in windowed CARLA.
+  # Connects to carla-server-demo (port 2100) and ros2-bridge-inspect for EKF.
+  training-inspect-dryrun:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-dryrun
+    runtime: nvidia
+    profiles:
+      - inspect-dryrun
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - DISPLAY=${DISPLAY}
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+      ros2-bridge-inspect:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./logs:/workspace/logs:rw
+      - ./checkpoints:/workspace/checkpoints:rw
+      - ./tests:/workspace/tests:ro
+      - ./outputs:/workspace/outputs:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    working_dir: /workspace
+    command: >
+      bash -c "python -m scripts.inspect.lot_inspector
+      --mode dryrun
+      --layout ${LAYOUT:-rectangle}
+      --host carla-server-demo
+      --port 2100
+      $([ -n '${EPISODES}' ] && echo --episodes ${EPISODES} || true)
+      2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Z-check inspector -- spawns one of each actor type (ego, static car, motorcycle,
+  # patrol NPC, cone) in a row and reports their actual z coordinates to the console.
+  # Confirms all actors share the same ground plane as the training env.
+  # Usage: make docker-inspect-zcheck
+  training-inspect-zcheck:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-zcheck
+    runtime: nvidia
+    profiles:
+      - inspect-zcheck
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./outputs:/workspace/outputs:rw
+    working_dir: /workspace
+    command: >
+      python scripts/inspect/lot_inspector.py
+      --mode zcheck
+      --layout ${LAYOUT:-rectangle}
+      --host carla-server-demo
+      --port 2100
+      --duration ${DURATION:-120}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
 networks:
   # Declared with the same driver and name as docker-compose.yml so Compose
   # attaches to the existing network when the core stack is running, or creates
@@ -256,7 +411,3 @@ networks:
   uncertainty-rl-network:
     driver: bridge
     name: uncertainty-rl-network
-
-volumes:
-  logs:
-  checkpoints:

@@ -10,6 +10,7 @@ SensorManager instance and delegates sensor lifecycle calls to it.
 import logging
 import math
 import threading
+import time
 from typing import Any, Dict, Optional, Set
 
 import numpy as np
@@ -181,11 +182,32 @@ class SensorManager:
         @brief Stop and destroy all spawned sensors; reset collision and scan state.
 
         Called at the start of each episode reset before new sensors are spawned.
+
+        Two-phase teardown:
+        1. Stop all sensors (closes the underlying data stream).
+        2. Brief sleep so the CARLA ROS bridge's _update_thread can process the
+           stream closure before we call destroy().  Without this pause the bridge
+           thread races to call sensor.stop() on a file descriptor the env has
+           already closed, producing a "Bad file descriptor" crash that kills the
+           bridge's update thread and hangs world.tick() in sync mode.
+        3. Destroy all sensors.
         """
-        for sensor in self._spawned_sensors:
-            if sensor is not None and sensor.is_alive:
+        alive = [s for s in self._spawned_sensors if s is not None and s.is_alive]
+        for sensor in alive:
+            try:
                 sensor.stop()
-                sensor.destroy()
+            except Exception:
+                pass
+        # Give the bridge's _update_thread time to see the stream closure and
+        # clean up its own wrapper before we call destroy().
+        if alive:
+            time.sleep(0.15)
+        for sensor in alive:
+            try:
+                if sensor.is_alive:
+                    sensor.destroy()
+            except Exception:
+                pass
         self._spawned_sensors.clear()
 
         self._collision_detected = False
