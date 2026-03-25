@@ -20,7 +20,7 @@ from typing import Any, Dict, List
 import numpy as np
 import pytest
 
-from uncertainty_rl.envs.carla_parking import (
+from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
 )
@@ -62,7 +62,7 @@ class TestInterpolateConePositions:
         positions = _interpolate_cone_positions(corners, spacing=spacing)
 
         # Check distances between consecutive positions on first edge (y ~ 0)
-        edge_pts = [(x, y) for x, y in positions if abs(y) < 0.01]
+        edge_pts = [(x, y) for x, y, _ in positions if abs(y) < 0.01]
         for i in range(len(edge_pts) - 1):
             dx = edge_pts[i + 1][0] - edge_pts[i][0]
             dy = edge_pts[i + 1][1] - edge_pts[i][1]
@@ -254,10 +254,11 @@ class TestObservationSpaceShape:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 class TestGymnasiumAPIContract:
     """
     @class TestGymnasiumAPIContract
-    @brief Verify reset() and step() return correct types without CARLA.
+    @brief Verify reset() and step() return correct types with a live CARLA server.
     """
 
     def test_reset_returns_tuple_of_obs_and_info(self) -> None:

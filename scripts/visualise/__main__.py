@@ -1,21 +1,15 @@
 """
 @file __main__.py
-@brief CLI entry point for the 2D bird's-eye visualiser.
+@brief CLI entry point for the 2D bird's-eye Pygame visualiser.
 
 Usage:
     python -m scripts.visualise [--history-file PATH]
 """
 
-import os
+import argparse
+from pathlib import Path
 
-import matplotlib
-# Must set backend before any pyplot import (including from visualiser.py)
-matplotlib.use("TkAgg" if os.environ.get("DISPLAY") else "Agg")
-
-import argparse  # noqa: E402
-from pathlib import Path  # noqa: E402
-
-from scripts.visualise.visualiser import LiveVisualiser  # noqa: E402
+from scripts.visualise.visualiser import LiveVisualiser
 
 
 def _parse_args() -> argparse.Namespace:
@@ -24,24 +18,19 @@ def _parse_args() -> argparse.Namespace:
     @return Parsed namespace.
     """
     parser = argparse.ArgumentParser(
-        description="2D bird's-eye visualiser for CARLA parking."
+        description="2D bird's-eye Pygame visualiser for CARLA parking."
     )
     parser.add_argument(
         "--history-file",
         type=Path,
         default=None,
-        help=(
-            "Path to vis_history.jsonl "
-            "(default: outputs/vis_history.jsonl)."
-        ),
+        help="Path to vis_history.jsonl (default: outputs/vis_history.jsonl).",
     )
     return parser.parse_args()
 
 
 def main() -> None:
-    """
-    @brief Main entry point. Launches the live visualiser.
-    """
+    """@brief Main entry point. Launches the live visualiser."""
     args = _parse_args()
     vis = LiveVisualiser(history_file=args.history_file)
     vis.run()

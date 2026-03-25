@@ -19,7 +19,7 @@ Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 import math
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     import carla
@@ -687,3 +687,159 @@ class LiveInspector(_Inspector):
                 if sensor.is_alive:
                     sensor.destroy()
             self._sensors.clear()
+
+
+# ===========================================================================
+# Dry-run inspector -- full training pipeline, random actions, no model
+# ===========================================================================
+
+
+class DryRunInspector(_Inspector):
+    """
+    @class DryRunInspector
+    @brief Runs the full training environment (reset + step loop) with random
+           actions, no model.  Spectator follows the ego vehicle.
+
+    This mode uses the full pipeline: CARLA + ROS bridge + EKF covariance in the
+    observation.  It is identical to what training would see, but actions are
+    sampled uniformly at random from the action space.  Use this to verify:
+      - The environment resets and steps without errors
+      - Covariance features are non-zero (EKF is live)
+      - NPCs, pedestrians, and static actors spawn correctly each episode
+      - The spectator view looks exactly as training will see
+
+    @note Requires the full Docker stack: carla-server + ros2-bridge + training.
+    @note include_covariance must be True on the env for covariance to appear.
+    """
+
+    _LOG_INTERVAL: int = 50  # steps between console obs prints
+
+    def __init__(
+        self,
+        env: CARLAParkingEnv,
+        duration: int,
+        n_episodes: Optional[int] = None,
+    ) -> None:
+        """
+        @brief Construct the dry-run inspector.
+        @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
+        @param duration: Maximum wall-clock seconds to run (across all episodes).
+        @param n_episodes: If set, stop after this many episodes regardless of
+               duration.  If None, runs until duration expires.
+        """
+        super().__init__(env, duration)
+        self._n_episodes = n_episodes
+
+    def place_spectator(self) -> None:
+        """
+        @brief Position spectator 20 m behind and above the ego vehicle.
+
+        Called once after the first reset.  The run loop updates it every step.
+        """
+        if self._env.vehicle is None or self._env.world is None:
+            return
+        self._follow_vehicle()
+
+    def _follow_vehicle(self) -> None:
+        """
+        @brief Lock the spectator 20 m behind and 10 m above the ego vehicle.
+
+        Gives a clear view of the vehicle in context of the lot.
+        """
+        if self._env.vehicle is None or self._env.world is None:
+            return
+        vt = self._env.vehicle.get_transform()
+        yaw_rad = math.radians(vt.rotation.yaw)
+        # 20 m behind the vehicle
+        bx = vt.location.x - 20.0 * math.cos(yaw_rad)
+        by = vt.location.y - 20.0 * math.sin(yaw_rad)
+        bz = vt.location.z + 10.0
+        look_yaw = vt.rotation.yaw
+        spectator = self._env.world.get_spectator()
+        spectator.set_transform(
+            carla.Transform(
+                carla.Location(x=bx, y=by, z=bz),
+                carla.Rotation(pitch=-25.0, yaw=look_yaw, roll=0.0),
+            )
+        )
+
+    def _print_obs(self, obs: Any, step: int, episode: int) -> None:
+        """
+        @brief Print key observation values to the console for diagnosis.
+
+        Prints EKF pose (obs[0:3]), covariance diagonal (obs[6:9] = std_x,
+        std_y, std_yaw), and obstacle features (obs[18:21]) if present.
+
+        @param obs: Observation array from env.step() or env.reset().
+        @param step: Current step within the episode.
+        @param episode: Current episode index.
+        """
+        if obs is None or len(obs) < 6:
+            return
+        x, y, yaw = obs[0], obs[1], obs[2]
+        line = f"  ep={episode:3d}  step={step:4d}  pos=({x:7.2f},{y:7.2f})  yaw={yaw:6.3f}"
+        if len(obs) >= 15:
+            std_x, std_y, std_yaw = obs[6], obs[7], obs[8]
+            line += f"  std=({std_x:.4f},{std_y:.4f},{std_yaw:.4f})"
+        if len(obs) >= 21:
+            nd, nb, nt = obs[18], obs[19], obs[20]
+            line += f"  obs=({nd:.2f},{nb:.2f},{nt:.0f})"
+        print(line)
+
+    def run(self) -> None:
+        """
+        @brief Run the dry-run episode loop.
+
+        Each episode: reset() -> step loop with random actions -> on
+        termination/truncation reset again.  Spectator follows the ego
+        vehicle every step.  Key observation values are printed every
+        _LOG_INTERVAL steps so the EKF signal can be visually verified.
+        """
+        if self._env.world is None:
+            print("ERROR: CARLA world not available.  Aborting.")
+            return
+
+        deadline = time.monotonic() + self._duration
+        episode = 0
+        total_steps = 0
+
+        print(
+            f"Dry-run: random actions for up to {self._duration}s"
+            + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
+        )
+        print("  Columns: pos=(x,y)  yaw  std=(std_x,std_y,std_yaw)  obs=(dist,bearing,type)")
+
+        try:
+            while time.monotonic() < deadline:
+                if self._n_episodes is not None and episode >= self._n_episodes:
+                    break
+
+                obs, _ = self._env.reset()
+                episode += 1
+                step = 0
+                print(f"\n--- Episode {episode} ---")
+                self._follow_vehicle()
+                self._print_obs(obs, step, episode)
+
+                terminated = truncated = False
+                while not (terminated or truncated):
+                    if time.monotonic() >= deadline:
+                        break
+                    action = self._env.action_space.sample()
+                    obs, reward, terminated, truncated, info = self._env.step(action)
+                    step += 1
+                    total_steps += 1
+                    self._follow_vehicle()
+                    if step % self._LOG_INTERVAL == 0:
+                        self._print_obs(obs, step, episode)
+
+                reason = info.get("termination_reason", "truncated" if truncated else "terminated")
+                print(
+                    f"  Episode {episode} ended: {reason}"
+                    f"  steps={step}  total_steps={total_steps}"
+                )
+
+        except KeyboardInterrupt:
+            print("Interrupted.")
+
+        print(f"\nDry-run complete: {episode} episodes, {total_steps} steps.")

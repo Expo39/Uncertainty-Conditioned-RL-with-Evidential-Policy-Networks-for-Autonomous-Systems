@@ -10,6 +10,7 @@ Class hierarchy (defined in ``_inspectors.py``):
     LayoutInspector   -- lot bay outlines, spawn/patrol/pedestrian overlays
       SensorInspector -- sensor mount dots + LiDAR/camera FOV arcs on top of layout
     LiveInspector     -- real spawned sensors: LiDAR debug dots or camera spectator view
+    DryRunInspector   -- full training pipeline (reset+step loop), random actions, no model
 
 Drawing helpers (free functions) are in :mod:`scripts.inspect._drawing`.
 
@@ -20,26 +21,25 @@ Usage (via Make targets):
   make docker-inspect-live INSPECT_SUITE=suite_a        # Live LiDAR feed
   make docker-inspect-live INSPECT_SUITE=suite_c        # Live camera view (default)
   make docker-inspect-live INSPECT_SUITE=suite_c INSPECT_SENSOR=lidar  # LiDAR override
+  make docker-inspect-dryrun INSPECT_LAYOUT=rectangle   # Full pipeline, random actions
 
 Or directly:
   python -m scripts.inspect.lot_inspector --mode layout --layout trapezoid
   python -m scripts.inspect.lot_inspector --mode sensors --suite suite_a \
       --layout rectangle
-  python -m scripts.inspect.lot_inspector --mode sensors --suite suite_c \
-      --layout irregular_a
   python -m scripts.inspect.lot_inspector --mode live     --suite suite_a
-  python -m scripts.inspect.lot_inspector --mode live     --suite suite_c
-  python -m scripts.inspect.lot_inspector --mode live     --suite suite_c --sensor lidar
+  python -m scripts.inspect.lot_inspector --mode dryrun  --layout rectangle
 
 Arguments:
-  --mode       layout | sensors | live (default: sensors)
+  --mode       layout | sensors | live | dryrun (default: sensors)
   --layout     rectangle | trapezoid | irregular_a (default: rectangle)
   --suite      suite_a | suite_b | suite_c (default: suite_a, sensors/live modes only)
   --view       birds_eye | side | front (default: birds_eye, sensors mode only)
   --sensor     lidar | camera (live mode, suite_c only; suite_c defaults to camera)
   --host       CARLA server hostname (default: carla-server-demo)
   --port       CARLA server port (default: 2100)
-  --duration   Seconds to hold the scene (default: 300)
+  --duration   Seconds to run (default: 300)
+  --episodes   Max episodes for dryrun mode (default: unlimited)
 
 @note Runs in synchronous CARLA mode.  Requires the full Docker stack.
 @note CARLA 0.9.16 draw_line ignores colour -- overlays use draw_point at small
@@ -59,6 +59,7 @@ except ImportError:
     sys.exit(1)
 
 from scripts.inspect._inspectors import (
+    DryRunInspector,
     LayoutInspector,
     LiveInspector,
     SensorInspector,
@@ -147,12 +148,14 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="sensors",
-        choices=["layout", "sensors", "live"],
+        choices=["layout", "sensors", "live", "dryrun"],
         help=(
             "Inspector mode: 'layout' = lot geometry only; "
             "'sensors' = sensors on lot; "
             "'live' = real spawned sensors with live output "
-            "(LiDAR debug dots, or camera spectator view for suite_c).  "
+            "(LiDAR debug dots, or camera spectator view for suite_c); "
+            "'dryrun' = full training pipeline with random actions (no model), "
+            "spectator follows ego, EKF covariance printed to console.  "
             "Default: sensors."
         ),
     )
@@ -211,6 +214,15 @@ def main() -> None:
         type=int,
         default=300,
         help="Seconds to hold the scene (default: 300).",
+    )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        default=None,
+        help=(
+            "Maximum number of episodes for dryrun mode (default: unlimited).  "
+            "Ignored in all other modes."
+        ),
     )
     args = parser.parse_args()
 
@@ -283,6 +295,40 @@ def main() -> None:
         print("FOV arcs:")
         print("  light-blue arc = 270 deg (Suite A) | green ring = 360 deg (Suite B/C)")
         print("  orange arc = 90 deg camera (Suite C)")
+
+    elif args.mode == "dryrun":
+        scenarios = dict(train_cfg.get("parking_scenarios", {}))
+        scenarios["floor_plans"] = {
+            args.layout: {
+                "weight": 1.0,
+                "always_empty": [],
+                "layout_file": f"configs/layouts/{args.layout}.yaml",
+            }
+        }
+        sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
+        sensors_cfg["sensor_suite"] = "suite_a"
+
+        env = CARLAParkingEnv(
+            carla_host=args.host,
+            carla_port=args.port,
+            town=train_cfg.get("town", "FlatPlane"),
+            parking_scenarios_config=scenarios,
+            carla_sensors_config=sensors_cfg,
+            sensor_suite="suite_a",
+            include_covariance=True,
+            include_obstacle_obs=True,
+        )
+        env.reset()
+        if env.world is None or env.vehicle is None:
+            print("ERROR: Could not connect to CARLA or spawn vehicle.")
+            env.close()
+            sys.exit(1)
+
+        inspector = DryRunInspector(env, args.duration, args.episodes)
+        inspector.place_spectator()  # type: ignore[attr-defined]
+        print("Dry-run mode: full training pipeline, random actions, no model.")
+        print("  Spectator follows ego vehicle.  EKF covariance printed every 50 steps.")
+        print("  Press Ctrl+C to stop.")
 
     else:  # live
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
