@@ -22,7 +22,7 @@ from uncertainty_rl.utils.geometry import (
     _interpolate_cone_positions,
     zone_bbox,
 )
-from uncertainty_rl.utils.logging import MetricsLogger, UncertaintyTracker
+from uncertainty_rl.utils.logging import DebugLogger, MetricsLogger, UncertaintyTracker
 from uncertainty_rl.utils.visualisation import (
     plot_training_curves,
     plot_trajectory,
@@ -31,6 +31,7 @@ from uncertainty_rl.utils.visualisation import (
 
 __all__ = [
     # Logging and metrics
+    "DebugLogger",
     "MetricsLogger",
     "UncertaintyTracker",
     # Visualisation

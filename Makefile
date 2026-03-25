@@ -10,8 +10,8 @@
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live
-.PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
+.PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short docker-watch-actors docker-watch-actors
 
 PYTHON := python3
 PYTHON_VIS := .venv-vis/bin/python3
@@ -154,6 +154,7 @@ docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode.
 		--log-dir logs \
 		--checkpoint-dir checkpoints
 
+
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
 	@echo "Evaluation (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
@@ -253,6 +254,20 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 # ----------------------------------------------------------------------
 
 INSPECT_LAYOUT  ?= trapezoid
+INSPECT_EPISODES ?=
+docker-inspect-dryrun: ## Full training pipeline with random actions inside the running stack (carla-server + ros2-bridge + training). Spectator follows ego; EKF covariance printed every 50 steps. Requires make docker-up first. Usage: make docker-inspect-dryrun [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5]
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(INSPECT_LAYOUT)  EPISODES=$(INSPECT_EPISODES)"
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(_DISPLAY) $(DOCKER_COMPOSE) exec -e DISPLAY=$(_DISPLAY) training \
+		python -m scripts.inspect.lot_inspector \
+		--mode dryrun \
+		--layout $(INSPECT_LAYOUT) \
+		--host carla-server \
+		--port 2000 \
+		$(if $(INSPECT_EPISODES),--episodes $(INSPECT_EPISODES),)
+	xhost -local:docker 2>/dev/null || true
+
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=trapezoid]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"

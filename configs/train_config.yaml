@@ -6,6 +6,10 @@
 # data collection) with 21-dim vector observations and 3-dim continuous
 # actions. See the references below each parameter for justification.
 
+# Debug mode -- set true to emit per-step diagnostics and show a second HUD line
+# in the visualiser. Off by default to avoid I/O overhead during training runs.
+debug: false
+
 # Environment settings
 carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
 carla_port: 2000
@@ -129,10 +133,11 @@ parking_scenarios:
   num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
   patrol_obstacle_stop_distance: 3.0  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego, + 1.0 m bumper buffer in code)
   patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
-  patrol_max_speed_ms: 3.0            # Max patrol speed in m/s (~11 km/h, typical car park speed)
+  patrol_max_speed_ms: 3.0            # Patrol vehicle speed in m/s (applied directly via kinematic, no physics acceleration)
   patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
   patrol_stuck_speed_threshold: 0.3   # m/s below which NPC is considered stuck (while throttle applied)
   patrol_stuck_steps_max: 30          # Steps below threshold before teleporting NPC to next waypoint
+  pedestrian_speed_ms: 1.4            # Pedestrian walk speed in m/s (applied directly via WalkerControl)
   pedestrian_spawn_probability: 0.8    # Per-zone independent spawn probability each episode (0.0-1.0)
   pedestrian_heading_resample_steps: 30  # Steps between pedestrian direction changes
   pedestrian_max_lifetime_steps: 200  # Steps before a pedestrian despawns and respawns in its zone
