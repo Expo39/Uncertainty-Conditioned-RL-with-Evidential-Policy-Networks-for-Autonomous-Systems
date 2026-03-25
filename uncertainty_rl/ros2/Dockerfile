@@ -54,13 +54,15 @@ RUN mkdir -p /workspace/src
 # Patch CARLA_VERSION to 0.9.16: the bridge hardcodes 0.9.13 but is compatible with 0.9.16
 # Patch generate_opendrive_world to disable nav mesh (crashes on headless GPU) and
 # use custom OpendriveGenerationParameters matching our FlatPlane setup.
+COPY uncertainty_rl/ros2/patch_bridge.py /tmp/patch_bridge.py
 RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
     echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION && \
     sed -i 's|carla_world = carla_client.generate_opendrive_world(str(data))|carla_world = carla_client.generate_opendrive_world(str(data), carla.OpendriveGenerationParameters(vertex_distance=2.0, max_road_length=600.0, wall_height=0.0, additional_width=300.0, smooth_junctions=False, enable_mesh_visibility=True, enable_pedestrian_navigation=False))|' \
     /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
     sed -i 's|if self.on_tick_id:|if getattr(self, "on_tick_id", None):|' \
-    /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py
+    /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
+    python3 /tmp/patch_bridge.py
 
 # Install Python dependencies for CARLA
 # --break-system-packages needed on Ubuntu 24.04 (PEP 668); safe in a container
@@ -93,12 +95,10 @@ COPY uncertainty_rl/ros2/setup.cfg /workspace/src/uncertainty_rl_ros2/setup.cfg
 COPY uncertainty_rl/ros2/resource /workspace/src/uncertainty_rl_ros2/resource
 COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
-# Copy configs (loaded at launch time)
-COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
-# Create the maps directory so the configs/maps:rw volume mount has an anchor point.
+# Create the maps directory as an anchor for the configs/maps:rw bind-mount.
 # .pbstream files are generated at runtime via make docker-map; never baked in.
-# All configs (train_config.yaml, cartographer/) are provided at runtime
-# via the ./configs:/workspace/configs:ro volume mount in docker-compose.yml.
+# All configs (ros2_config.yaml, train_config.yaml, cartographer/) are provided
+# at runtime via the ./configs:/workspace/configs:ro bind-mount.
 RUN mkdir -p /workspace/configs/maps
 
 # Build custom messages and nodes
