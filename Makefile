@@ -10,7 +10,7 @@
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-zcheck
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
 .PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short docker-watch-actors docker-watch-actors
 
 PYTHON := python3
@@ -306,17 +306,6 @@ docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in win
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) $(DOCKER_COMPOSE_INSPECT) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
-	xhost -local:docker 2>/dev/null || true
-
-INSPECT_DURATION ?= 120
-docker-inspect-zcheck: ## Spawn one of each actor type in a row and print their actual z coords (verifies shared ground plane). Usage: make docker-inspect-zcheck [INSPECT_LAYOUT=rectangle] [INSPECT_DURATION=120]
-	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
-	@echo "Using DISPLAY=$(_DISPLAY)"
-	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-zcheck 2>/dev/null || true
-	$(DOCKER_COMPOSE) down 2>/dev/null || true
-	docker network prune -f 2>/dev/null || true
-	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) DURATION=$(INSPECT_DURATION) $(DOCKER_COMPOSE_INSPECT) --profile inspect-zcheck up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-zcheck
 	xhost -local:docker 2>/dev/null || true
 
 INSPECT_SENSOR  ?= lidar

@@ -12,6 +12,7 @@ Class hierarchy (defined in ``_inspectors.py``):
     LiveInspector     -- real spawned sensors: LiDAR debug dots or camera spectator view
     DryRunInspector   -- full training pipeline (reset+step loop), random actions, no model
 
+
 Drawing helpers (free functions) are in :mod:`scripts.inspect._drawing`.
 
 Usage (via Make targets):
@@ -64,7 +65,6 @@ from scripts.inspect._inspectors import (
     LayoutInspector,
     LiveInspector,
     SensorInspector,
-    ZCheckInspector,
     _Inspector,
 )
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
@@ -153,16 +153,14 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="sensors",
-        choices=["layout", "sensors", "live", "dryrun", "zcheck"],
+        choices=["layout", "sensors", "live", "dryrun"],
         help=(
             "Inspector mode: 'layout' = lot geometry only; "
             "'sensors' = sensors on lot; "
             "'live' = real spawned sensors with live output "
             "(LiDAR debug dots, or camera spectator view for suite_c); "
             "'dryrun' = full training pipeline with random actions (no model), "
-            "spectator follows ego, EKF covariance printed to console; "
-            "'zcheck' = spawn one of each actor type in a row and confirm they "
-            "all share the same z-axis (prints actual z coords to console).  "
+            "spectator follows ego, EKF covariance printed to console. "
             "Default: sensors."
         ),
     )
@@ -339,26 +337,6 @@ def main() -> None:
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
         print("  Spectator follows ego vehicle.  EKF covariance printed every 50 steps.")
         print("  Press Ctrl+C to stop.")
-
-    elif args.mode == "zcheck":
-        # Use a clean env with no lot actors so the z-check scene is uncluttered.
-        # full_lot=False suppresses NPCs, cones, and parked cars.
-        env = _build_env(
-            args.host,
-            args.port,
-            args.layout,
-            train_cfg,
-            full_lot=False,
-        )
-        env.reset()
-        if env.world is None:
-            print("ERROR: Could not connect to CARLA.")
-            env.close()
-            sys.exit(1)
-
-        inspector = ZCheckInspector(env, args.duration)
-        print("Z-check mode: spawning reference actors to verify shared ground plane.")
-        print("  ego_vehicle  |  static_parked_car  |  motorcycle  |  patrol_npc  |  cone  |  pedestrian")
 
     else:  # live
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
