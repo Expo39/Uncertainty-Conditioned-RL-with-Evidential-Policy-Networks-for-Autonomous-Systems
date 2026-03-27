@@ -8,12 +8,12 @@ from pre-computed layout YAMLs (configs/layouts/). Localisation uncertainty come
 from the robot_localisation EKF node (via ROS 2 DDS), driven by noisy CARLA
 sensors, weather conditions, and dynamic traffic - not from a simulated noise model.
 
-The observation comprises up to 21 dimensions (default, include_obstacle_obs=true):
+The observation comprises up to 20 dimensions (default, include_obstacle_obs=true):
   - indices  0-5:  EKF filtered pose (x, y, yaw, vx, vy, vyaw)
   - indices  6-14: EKF covariance features (std_x, std_y, std_yaw,
                    cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw)
   - indices 15-17: target bay in ego body frame (dx, dy, dyaw)
-  - indices 18-20: nearest obstacle (distance_m, bearing_rad, type 0=static/1=dynamic)
+  - indices 18-19: nearest obstacle (distance_m, bearing_rad)
                    only present when include_obstacle_obs=true (default)
 
 Actual obs dim depends on include_covariance and include_obstacle_obs flags;
@@ -58,6 +58,7 @@ from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
+    MAX_PARKING_SPEED,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_ORIENTATION,
@@ -95,19 +96,19 @@ class CARLAParkingEnv(gym.Env):
     manoeuvre the ego vehicle into the target bay. Uncertainty is produced
     naturally by the robot_localisation EKF processing noisy CARLA sensors.
 
-    Observation space when include_covariance=True, include_obstacle_obs=True (21-dim):
+    Observation space when include_covariance=True, include_obstacle_obs=True (20-dim):
       [0-5]   EKF pose: x, y, yaw, vx, vy, vyaw
       [6-14]  EKF covariance features
       [15-17] target bay in ego body frame
-      [18-20] obstacle awareness: nearest_dist_m, nearest_bearing_rad, obstacle_type
+      [18-19] obstacle awareness: nearest_dist_m, nearest_bearing_rad
 
-    When include_covariance=False (9-dim or 12-dim depending on include_obstacle_obs):
+    When include_covariance=False (9-dim or 11-dim depending on include_obstacle_obs):
       [0-5]   EKF pose
       [6-8]   target bay in ego body frame
-      [9-11]  obstacle awareness (only when include_obstacle_obs=True)
+      [9-10]  obstacle awareness (only when include_obstacle_obs=True)
 
-    Setting include_obstacle_obs=False removes obs indices 18-20 (reverts 21->18 dim,
-    or 12->9 dim). Set in train_config.yaml: include_obstacle_obs: false.
+    Setting include_obstacle_obs=False removes obs indices 18-19 (reverts 20->18 dim,
+    or 11->9 dim). Set in train_config.yaml: include_obstacle_obs: false.
 
     @note Docker + ROS 2 required for training. No standalone fallback.
     """
@@ -149,9 +150,9 @@ class CARLAParkingEnv(gym.Env):
                cone spacing, bay occupancy, NPC counts).
         @param include_covariance: If True, obs includes EKF covariance features
                (indices 6-14). If False, covariance omitted and no ROS 2 subscription.
-        @param include_obstacle_obs: If True, obs includes 3 obstacle awareness dims
-               (nearest_dist_m, nearest_bearing_rad, obstacle_type). Set False to
-               revert to 18-dim obs without changing any other code.
+        @param include_obstacle_obs: If True, obs includes 2 obstacle awareness dims
+               (nearest_dist_m, nearest_bearing_rad). Set False to revert to 18-dim
+               obs without changing any other code.
         @param sensor_suite: Sensor suite to spawn ('suite_a', 'suite_b', 'suite_c').
                suite_a = 2D LiDAR + IMU. suite_b = 3D LiDAR + IMU.
                suite_c = 3D LiDAR + camera + IMU.
@@ -184,6 +185,9 @@ class CARLAParkingEnv(gym.Env):
             "covariance_topic", "/odometry/filtered"
         )
         self._covariance_timeout = ros2_config.get("covariance_timeout", 10.0)
+        self._ekf_convergence_timeout: float = ros2_config.get(
+            "ekf_convergence_timeout", 15.0
+        )
 
         self._sensors_config = carla_sensors_config or {}
 
@@ -220,9 +224,9 @@ class CARLAParkingEnv(gym.Env):
         # Used for /initialpose publishing to seed the EKF on reset.
         self._chosen_spawn: Dict[str, float] = {}
 
-        # Actual ground-plane z after the ego vehicle settles under gravity.
-        # Set in _spawn_vehicle() and passed to all static spawners so
-        # physics-disabled actors land on the same surface as the ego.
+        # Ego vehicle CoM z after settling under gravity.  Set in _spawn_vehicle()
+        # and passed to all static spawners so props and vehicles land on the same
+        # ground surface instead of using the hardcoded YAML origin_z.
         self._floor_z: float = 0.3
 
         # Per-step debug diagnostics (emits structured logs + populates vis HUD).
@@ -354,7 +358,7 @@ class CARLAParkingEnv(gym.Env):
 
         Base: VEHICLE_STATE_DIM (6) + TARGET_POSE_DIM (3) = 9
         With include_covariance: +COVARIANCE_FEATURES_DIM (9) = 18
-        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (3) = 21 (or 12 without cov)
+        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (2) = 20 (or 11 without cov)
         """
         dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
         if self._include_covariance:
@@ -516,7 +520,8 @@ class CARLAParkingEnv(gym.Env):
         Delegates to LotSpawner.spawn_all().
         """
         self._lot_spawner.spawn_all(
-            self.world, self._current_layout, self._target_bay
+            self.world, self._current_layout, self._target_bay,
+            floor_contact_z=self._floor_z,
         )
 
     def _spawn_npc_patrol(self) -> None:
@@ -682,7 +687,7 @@ class CARLAParkingEnv(gym.Env):
         Indices 6-14: EKF covariance features log1p-transformed
                      (only when include_covariance=True).
         Indices 15-17 (or 6-8 without covariance): relative target bay pose.
-        Indices 18-20 (or 9-11 without covariance): obstacle awareness dims
+        Indices 18-19 (or 9-10 without covariance): obstacle awareness dims
                      (only when include_obstacle_obs=True).
         """
         if self.vehicle is None or self.world is None:
@@ -704,8 +709,12 @@ class CARLAParkingEnv(gym.Env):
             x = float(ekf_pose[0]) + _ox
             y = float(ekf_pose[1]) + _oy
             yaw = float(ekf_pose[2]) + _oyaw
-            vx = float(ekf_pose[3])
-            vy = float(ekf_pose[4])
+            # Clamp EKF velocities to physically plausible range.
+            # The IMU prediction step can integrate large noise spikes
+            # before the first scan-match correction at episode start,
+            # producing transient velocity readings in the hundreds of m/s.
+            vx = float(np.clip(ekf_pose[3], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
+            vy = float(np.clip(ekf_pose[4], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
             vyaw = float(ekf_pose[5])
         else:
             # Fallback: EKF not yet initialised or ROS 2 unavailable (CI / unit tests)
@@ -752,7 +761,7 @@ class CARLAParkingEnv(gym.Env):
             self._obs_buffer[7] = dy
             self._obs_buffer[8] = dyaw
             if self._include_obstacle_obs:
-                self._obs_buffer[9:12] = obstacle_features
+                self._obs_buffer[9:11] = obstacle_features
             return self._obs_buffer.copy()
 
         # -- EKF covariance features (indices 6-14) -----------------------
@@ -793,24 +802,18 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[16] = dy
         self._obs_buffer[17] = dyaw
         if self._include_obstacle_obs:
-            self._obs_buffer[18:21] = obstacle_features
+            self._obs_buffer[18:20] = obstacle_features
         return self._obs_buffer.copy()
 
     def _get_obstacle_features(self) -> np.ndarray:
         """
         @brief Extract nearest obstacle features from the cached LiDAR scan.
-        @return Float32 array [nearest_dist_m, bearing_rad, obstacle_type].
+        @return Float32 array [nearest_dist_m, bearing_rad].
 
         nearest_dist_m: distance to nearest LiDAR return (metres, clamped to
                         sensor range). Zero if no scan available.
         bearing_rad:    bearing to nearest return in ego body frame (radians,
                         0 = forward, positive = left per ROS convention).
-        obstacle_type:  0.0 = static (parked car, cone, perimeter wall),
-                        1.0 = dynamic (pedestrian or patrol vehicle).
-
-        Dynamic classification: the nearest return point (x, y in vehicle frame)
-        is transformed to world frame and checked against known dynamic actor
-        positions. If within 2 m of any dynamic actor, classified as dynamic.
 
         Returns zeros when no LiDAR scan is available (sensor not yet ticked).
         """
@@ -838,31 +841,8 @@ class CARLAParkingEnv(gym.Env):
         # Bearing: atan2(y, x) in vehicle frame (y-left, x-forward convention)
         nearest_bearing = float(np.arctan2(scan[nearest_idx, 1], scan[nearest_idx, 0]))
 
-        # Dynamic classification: transform nearest point to world frame and
-        # check proximity to known dynamic actors.
-        obstacle_type = 0.0
-        if self.vehicle is not None:
-            t = self.vehicle.get_transform()
-            cos_yaw = math.cos(math.radians(t.rotation.yaw))
-            sin_yaw = math.sin(math.radians(t.rotation.yaw))
-            px_v = float(scan[nearest_idx, 0])
-            py_v = float(scan[nearest_idx, 1])
-            wx = t.location.x + cos_yaw * px_v - sin_yaw * py_v
-            wy = t.location.y + sin_yaw * px_v + cos_yaw * py_v
-
-            dynamic_actors = (
-                self._npc_controller.patrol_npcs + self._npc_controller.pedestrian_actors
-            )
-            for actor in dynamic_actors:
-                if actor is not None and actor.is_alive:
-                    al = actor.get_location()
-                    if math.hypot(wx - al.x, wy - al.y) < 2.0:
-                        obstacle_type = 1.0
-                        break
-
         self._obstacle_features_buffer[0] = nearest_dist
         self._obstacle_features_buffer[1] = nearest_bearing
-        self._obstacle_features_buffer[2] = obstacle_type
         return self._obstacle_features_buffer
 
     # ------------------------------------------------------------------
@@ -1143,6 +1123,13 @@ class CARLAParkingEnv(gym.Env):
         reset, the difference is purely translational.  Yaw offset is computed
         similarly (CARLA spawn yaw minus EKF yaw).
 
+        After computing the offset, the method checks that the corrected EKF
+        position is within self._ekf_convergence_threshold metres of the CARLA
+        spawn.  If not, Cartographer has not yet matched the map -- the method
+        keeps ticking CARLA and retrying until convergence or
+        self._ekf_convergence_timeout elapses.  This prevents corrupted
+        position observations when the EKF is still in its initial drift phase.
+
         If the EKF pose is unavailable the offset is left at (0, 0, 0), which
         means the env falls back to EKF-frame coordinates (slightly wrong
         relative target pose, but does not crash).
@@ -1150,38 +1137,86 @@ class CARLAParkingEnv(gym.Env):
         if self._cov_subscriber is None or self.vehicle is None:
             return
 
-        ekf_pose = self._cov_subscriber.get_latest_pose()
-        if ekf_pose is None:
-            logger.warning(
-                "EKF pose unavailable during frame calibration -- "
-                "odom offset will be (0, 0, 0)."
-            )
-            self._ekf_odom_offset = (0.0, 0.0, 0.0)
-            return
-
         carla_t = self.vehicle.get_transform()
         world_x = carla_t.location.x
         world_y = carla_t.location.y
         world_yaw = math.radians(carla_t.rotation.yaw)
 
-        ekf_x = float(ekf_pose[0])
-        ekf_y = float(ekf_pose[1])
-        ekf_yaw = float(ekf_pose[2])
+        start = time.monotonic()
+        tick_interval = 0.05  # 20 Hz
 
-        dx = world_x - ekf_x
-        dy = world_y - ekf_y
-        dyaw = math.atan2(
-            math.sin(world_yaw - ekf_yaw),
-            math.cos(world_yaw - ekf_yaw),
-        )
-        self._ekf_odom_offset = (dx, dy, dyaw)
+        # Convergence detection: the vehicle is stationary at episode reset,
+        # so the EKF velocity should be near zero once Cartographer has matched
+        # the map and the IMU initialisation transient has settled.
+        # Velocity is a more reliable convergence signal than pose displacement
+        # because the EKF odom frame is not aligned with CARLA world frame
+        # (comparing positions across frames is meaningless), and because
+        # _read_file() caches the last result -- polling the same file twice
+        # would give step_motion=0 falsely.
+        # Threshold: 0.5 m/s is well above IMU noise (~0.1 m/s) but well below
+        # the spike magnitudes seen during non-convergence (100s of m/s).
+        _VEL_CONVERGED = 0.5  # m/s
 
-        logger.info(
-            f"EKF frame offset calibrated: dx={dx:.3f}m dy={dy:.3f}m "
-            f"dyaw={math.degrees(dyaw):.2f}deg  "
-            f"(CARLA spawn=({world_x:.2f},{world_y:.2f}) "
-            f"EKF odom=({ekf_x:.2f},{ekf_y:.2f}))"
-        )
+        while True:
+            ekf_pose = self._cov_subscriber.get_latest_pose()
+            elapsed = time.monotonic() - start
+
+            if ekf_pose is None:
+                if elapsed > self._ekf_convergence_timeout:
+                    logger.warning(
+                        "EKF pose unavailable after "
+                        f"{self._ekf_convergence_timeout:.0f}s -- "
+                        "odom offset will be (0, 0, 0)."
+                    )
+                    self._ekf_odom_offset = (0.0, 0.0, 0.0)
+                    return
+                if self.world is not None:
+                    self.world.tick(10.0)
+                time.sleep(tick_interval)
+                continue
+
+            ekf_x = float(ekf_pose[0])
+            ekf_y = float(ekf_pose[1])
+            ekf_yaw = float(ekf_pose[2])
+            ekf_vx = float(ekf_pose[3])
+            ekf_vy = float(ekf_pose[4])
+
+            dx = world_x - ekf_x
+            dy = world_y - ekf_y
+            dyaw = math.atan2(
+                math.sin(world_yaw - ekf_yaw),
+                math.cos(world_yaw - ekf_yaw),
+            )
+
+            ekf_speed = math.sqrt(ekf_vx ** 2 + ekf_vy ** 2)
+            if ekf_speed <= _VEL_CONVERGED:
+                self._ekf_odom_offset = (dx, dy, dyaw)
+                logger.info(
+                    f"EKF converged after {elapsed:.2f}s: "
+                    f"dx={dx:.3f}m dy={dy:.3f}m "
+                    f"dyaw={math.degrees(dyaw):.2f}deg "
+                    f"ekf_speed={ekf_speed:.3f}m/s "
+                    f"(CARLA spawn=({world_x:.2f},{world_y:.2f}) "
+                    f"EKF odom=({ekf_x:.2f},{ekf_y:.2f}))"
+                )
+                return
+
+            if elapsed > self._ekf_convergence_timeout:
+                self._ekf_odom_offset = (dx, dy, dyaw)
+                logger.warning(
+                    f"EKF convergence timeout ({self._ekf_convergence_timeout:.0f}s) "
+                    f"-- ekf_speed={ekf_speed:.2f}m/s still above threshold. "
+                    "Using best available offset; position obs may be inaccurate."
+                )
+                return
+
+            logger.debug(
+                f"Waiting for EKF convergence: "
+                f"ekf_speed={ekf_speed:.2f}m/s elapsed={elapsed:.1f}s"
+            )
+            if self.world is not None:
+                self.world.tick(10.0)
+            time.sleep(tick_interval)
 
     def _cleanup_actors(self) -> None:
         """
@@ -1412,8 +1447,8 @@ class CARLAParkingEnv(gym.Env):
             if self._cov_subscriber is not None:
                 _unc = self._cov_subscriber.get_latest_uncertainty()
                 _ekf_pose = self._cov_subscriber.get_latest_pose()
-            # EKF vs ground truth position drift (metres) -- key sim-to-real signal.
-            # Apply odom->world offset before comparing so both are in CARLA world frame.
+            # EKF vs ground truth drift (metres) -- key sim-to-real signal.
+            # Apply odom->world offset so both positions are in CARLA world frame.
             _ekf_drift = 0.0
             if _ekf_pose is not None:
                 _ox, _oy, _ = self._ekf_odom_offset
@@ -1422,7 +1457,6 @@ class CARLAParkingEnv(gym.Env):
                     + (_ekf_pose[1] + _oy - _t.location.y) ** 2
                 )
             _obs_dist = float(state[18]) if len(state) > 18 else 0.0
-            _obs_type = float(state[20]) if len(state) > 20 else 0.0
             _lidar_pts = self._sensor_manager.lidar_point_count()
             self._debug_logger.log_step(
                 step=self.steps,
@@ -1433,7 +1467,6 @@ class CARLAParkingEnv(gym.Env):
                 action=self._last_action,
                 uncertainty=_unc,
                 obstacle_dist=_obs_dist,
-                obstacle_type=_obs_type,
                 ekf_drift=_ekf_drift,
                 lidar_points=_lidar_pts,
             )

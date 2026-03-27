@@ -794,7 +794,7 @@ class LiveVisualiser:
                 f"cov={dbg.get('cov_rms', 0.0):.3f} "
                 f"drift={dbg.get('ekf_drift', 0.0):.2f}m "
                 f"lidar={dbg.get('lidar_pts', 0)}pts | "
-                f"obs={dbg.get('obs_dist', 0.0):.1f}m({dbg.get('obs_type', 'sta')}) "
+                f"obs={dbg.get('obs_dist', 0.0):.1f}m "
                 f"act=[{dbg.get('steer', 0.0):.2f} "
                 f"{dbg.get('throttle', 0.0):.2f} "
                 f"{dbg.get('brake', 0.0):.2f}]"

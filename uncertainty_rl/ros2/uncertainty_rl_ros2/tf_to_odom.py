@@ -184,9 +184,15 @@ class TfToOdomNode(Node):
                     math.cos(curr_yaw - prev_yaw),
                 )
 
-                # Velocities in the odom frame
-                odom.twist.twist.linear.x = dx / dt
-                odom.twist.twist.linear.y = dy / dt
+                # Rotate odom-frame displacement into vehicle body frame.
+                # dx/dy are in the odom (world-aligned) frame; the EKF
+                # odom0_config expects twist in the child frame (body frame).
+                cos_yaw = math.cos(curr_yaw)
+                sin_yaw = math.sin(curr_yaw)
+                vx_body = (cos_yaw * dx + sin_yaw * dy) / dt
+                vy_body = (-sin_yaw * dx + cos_yaw * dy) / dt
+                odom.twist.twist.linear.x = vx_body
+                odom.twist.twist.linear.y = vy_body
                 odom.twist.twist.angular.z = dyaw / dt
 
         # Pre-computed fixed twist covariance

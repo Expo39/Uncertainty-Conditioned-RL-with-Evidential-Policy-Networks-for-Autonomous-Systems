@@ -40,11 +40,18 @@ class CovarianceExtractorNode(Node):
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
         self.declare_parameter("publish_rate", 10.0)  # Hz
+        # When world_frame=odom in robot_localisation, twist is in the odom
+        # (world-aligned) frame and must be rotated into the vehicle body frame.
+        # Applies to both simulation and real robot when using the same EKF config.
+        # Only false if robot_localisation is explicitly configured with
+        # twist_in_robot_frame: true. Set via ros2_config.yaml.
+        self.declare_parameter("twist_in_odom_frame", True)
 
         # Get parameters
         odom_topic = self.get_parameter("odom_topic").value
         covariance_topic = self.get_parameter("covariance_topic").value
         publish_rate = self.get_parameter("publish_rate").value
+        self._twist_in_odom_frame: bool = self.get_parameter("twist_in_odom_frame").value
 
         # Set up QoS profile for reliable communication
         qos_profile = QoSProfile(
@@ -102,10 +109,21 @@ class CovarianceExtractorNode(Node):
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
         yaw = np.arctan2(siny_cosp, cosy_cosp)
 
-        # Extract EKF-filtered velocity from twist
-        vx = msg.twist.twist.linear.x
-        vy = msg.twist.twist.linear.y
+        # Extract EKF-filtered velocity from twist.
+        # When world_frame=odom, robot_localisation publishes twist in the odom
+        # (world-aligned) frame regardless of sim or real. Rotate into vehicle
+        # body frame so the policy sees forward/lateral speed consistently.
+        vx_raw = msg.twist.twist.linear.x
+        vy_raw = msg.twist.twist.linear.y
         vyaw = msg.twist.twist.angular.z
+        if self._twist_in_odom_frame:
+            cos_yaw = np.cos(yaw)
+            sin_yaw = np.sin(yaw)
+            vx = cos_yaw * vx_raw + sin_yaw * vy_raw
+            vy = -sin_yaw * vx_raw + cos_yaw * vy_raw
+        else:
+            vx = vx_raw
+            vy = vy_raw
 
         self.latest_pose = (x, y, yaw, vx, vy, vyaw)
 
