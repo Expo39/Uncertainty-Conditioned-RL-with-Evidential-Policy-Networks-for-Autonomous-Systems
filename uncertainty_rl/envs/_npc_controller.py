@@ -463,12 +463,17 @@ class NPCController:
 
         Priority order each step:
           1. Ego/patrol avoidance -- walk away from nearby threats.
+             Avoidance always wins, even at the zone boundary, so a pedestrian
+             is never forced back toward the ego by the boundary logic.
           2. Zone boundary -- steer toward zone centre when near an edge.
           3. Periodic random re-heading every pedestrian_resample_steps steps.
 
         @param vehicle: Ego vehicle actor (used for avoidance distance check).
         """
-        _EGO_AVOID_RADIUS = 2.5
+        # Larger radius so pedestrians react well before contact.
+        # Larger radius so pedestrians react well before contact.
+        _EGO_AVOID_RADIUS = 5.0
+        _PATROL_AVOID_RADIUS = 5.0
         _BOUNDARY_MARGIN = 0.5
 
         ego_loc = (
@@ -491,7 +496,6 @@ class NPCController:
             loc = walker.get_location()
             zone = self._pedestrian_zones[i]
 
-            _PATROL_AVOID_RADIUS = 4.0
             repulse_x = 0.0
             repulse_y = 0.0
 
@@ -500,9 +504,10 @@ class NPCController:
                 to_ego_y = ego_loc.y - loc.y
                 ego_dist = math.sqrt(to_ego_x * to_ego_x + to_ego_y * to_ego_y)
                 if ego_dist < _EGO_AVOID_RADIUS:
-                    away_mag = ego_dist if ego_dist > 1e-6 else 1.0
-                    repulse_x += -to_ego_x / away_mag
-                    repulse_y += -to_ego_y / away_mag
+                    # Inverse-distance weighting: stronger repulsion when closer.
+                    weight = 1.0 / max(ego_dist, 0.5)
+                    repulse_x += -to_ego_x * weight
+                    repulse_y += -to_ego_y * weight
 
             for patrol_npc in self.patrol_npcs:
                 if not (patrol_npc is not None and patrol_npc.is_alive):
@@ -511,9 +516,9 @@ class NPCController:
                 to_py = patrol_npc.get_location().y - loc.y
                 patrol_dist = math.sqrt(to_px * to_px + to_py * to_py)
                 if patrol_dist < _PATROL_AVOID_RADIUS:
-                    away_mag = patrol_dist if patrol_dist > 1e-6 else 1.0
-                    repulse_x += -to_px / away_mag
-                    repulse_y += -to_py / away_mag
+                    weight = 1.0 / max(patrol_dist, 0.5)
+                    repulse_x += -to_px * weight
+                    repulse_y += -to_py * weight
 
             near_boundary = (
                 loc.x < zone["x_min"] + _BOUNDARY_MARGIN
@@ -522,10 +527,41 @@ class NPCController:
                 or loc.y > zone["y_max"] - _BOUNDARY_MARGIN
             )
 
-            # Priority: boundary > avoidance > random heading.
-            # Boundary check runs first so avoidance can never push a
-            # pedestrian out of its zone.
-            if near_boundary:
+            # Priority: avoidance > boundary > random heading.
+            # Avoidance runs first so the boundary logic can never override it
+            # and push a pedestrian back toward the ego or a patrol vehicle.
+            if repulse_x != 0.0 or repulse_y != 0.0:
+                mag = math.sqrt(repulse_x * repulse_x + repulse_y * repulse_y)
+                # If also near the boundary, blend in the centre-pull at 30 % so
+                # the pedestrian both avoids the threat and does not escape the zone.
+                if near_boundary:
+                    cx = (zone["x_min"] + zone["x_max"]) / 2.0
+                    cy = (zone["y_min"] + zone["y_max"]) / 2.0
+                    to_cx = cx - loc.x
+                    to_cy = cy - loc.y
+                    c_mag = math.sqrt(to_cx * to_cx + to_cy * to_cy)
+                    if c_mag > 1e-6:
+                        blend = 0.3
+                        nx = (1.0 - blend) * repulse_x / mag + blend * to_cx / c_mag
+                        ny = (1.0 - blend) * repulse_y / mag + blend * to_cy / c_mag
+                        n_mag = math.sqrt(nx * nx + ny * ny)
+                        if n_mag > 1e-6:
+                            nx, ny = nx / n_mag, ny / n_mag
+                        self._pedestrian_headings[i] = (nx, ny, 0.0)
+                    else:
+                        self._pedestrian_headings[i] = (
+                            repulse_x / mag,
+                            repulse_y / mag,
+                            0.0,
+                        )
+                else:
+                    self._pedestrian_headings[i] = (
+                        repulse_x / mag,
+                        repulse_y / mag,
+                        0.0,
+                    )
+                self._pedestrian_heading_steps[i] = 0
+            elif near_boundary:
                 cx = (zone["x_min"] + zone["x_max"]) / 2.0
                 cy = (zone["y_min"] + zone["y_max"]) / 2.0
                 to_cx = cx - loc.x
@@ -535,13 +571,6 @@ class NPCController:
                     to_cx, to_cy = to_cx / magnitude, to_cy / magnitude
                 self._pedestrian_headings[i] = (to_cx, to_cy, 0.0)
                 self._pedestrian_heading_steps[i] = 0
-            elif repulse_x != 0.0 or repulse_y != 0.0:
-                mag = math.sqrt(repulse_x * repulse_x + repulse_y * repulse_y)
-                self._pedestrian_headings[i] = (
-                    repulse_x / mag,
-                    repulse_y / mag,
-                    0.0,
-                )
             elif self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
                 heading_rad = random.uniform(0.0, 2.0 * math.pi)
                 self._pedestrian_headings[i] = (

@@ -197,20 +197,20 @@ class TestObservationSpaceShape:
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 21
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 20
         env.close()
 
-    def test_12_dim_without_covariance(self) -> None:
+    def test_11_dim_without_covariance(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=True (default) -> 12-dim.
+        @brief include_covariance=False, include_obstacle_obs=True (default) -> 11-dim.
 
         Without covariance but with obstacle obs:
-        pose(6) + target(3) + obstacle(3) = 12.
+        pose(6) + target(3) + obstacle(2) = 11.
         """
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 12
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 11
         assert env.observation_space.shape == (expected,)
         env.close()
 

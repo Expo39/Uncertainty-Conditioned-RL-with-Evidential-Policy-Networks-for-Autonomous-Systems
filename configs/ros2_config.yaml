@@ -33,7 +33,11 @@ ekf:
   #                           ax, ay, az]
   imu0_config: [false, false, false, false, false, true,
                 false, false, false, false, false, true,
-                true, true, false]
+                false, false, false]
+  # Linear acceleration disabled: CARLA ROS bridge publishes zero IMU covariance,
+  # causing robot_localization to treat acceleration as infinitely reliable and
+  # override Cartographer velocity corrections. Yaw rate (vyaw) is sufficient
+  # for the IMU prediction step between LiDAR scan-match corrections.
   # Cartographer scan-matched odometry: x, y, yaw, vx, vy, vyaw.
   # Covariance from scan-matching quality drives EKF uncertainty variation.
   odom0: "/scan_matched_odometry"
@@ -47,6 +51,14 @@ covariance_topic: "/ekf_uncertainty/covariance"  # Output: CovarianceEstimate
 
 # Publishing settings
 publish_rate: 10.0  # Hz
+
+# Velocity frame convention.
+# When world_frame=odom in robot_localisation, twist is published in the odom
+# (world-aligned) frame and must be rotated into the vehicle body frame.
+# This applies to both simulation and real robot when using the same EKF config.
+# Only set false if robot_localisation is explicitly configured with
+# twist_in_robot_frame: true on the real robot deployment.
+twist_in_odom_frame: true
 
 # QoS settings
 qos:

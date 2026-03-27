@@ -23,7 +23,7 @@ inspect:
 carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
-max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
+max_steps: 1000  # Maximum episode length (500 steps at 20Hz = 25 seconds)
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 
 # ROS 2 covariance subscription settings
@@ -31,6 +31,11 @@ carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 ros2:
   covariance_topic: "/odometry/filtered"  # nav_msgs/Odometry from robot_localisation EKF
   covariance_timeout: 60.0  # Seconds to wait for first covariance message per episode
+  # Total seconds to keep waiting for EKF velocity to drop below 0.5 m/s
+  # (the convergence signal) before falling back to best available offset.
+  # Cartographer pure localisation typically converges within 1-3 s after
+  # /initialpose; 15 s covers slow scan-match cases (sparse lot, rain).
+  ekf_convergence_timeout: 15.0
   publish_initial_pose: true     # Publish /initialpose at episode reset for Cartographer pure
                                  # localisation convergence. Safe in SLAM mode (Cartographer ignores it).
   initial_pose_topic: "/initialpose"
@@ -169,10 +174,11 @@ sensor_suite: suite_a
 
 # Observation space flags
 # include_covariance: when true, EKF covariance features (indices 6-14) are included
-# include_obstacle_obs: when true, 3 obstacle awareness dims are appended (21-dim total)
+# include_obstacle_obs: when true, 2 obstacle awareness dims are appended (20-dim total)
 #   Set include_obstacle_obs: false to revert to 18-dim obs with no other changes.
+#   obstacle_type removed: relied on privileged CARLA actor list, not available on real robot.
 include_covariance: true
-include_obstacle_obs: true  # Adds nearest_dist_m, nearest_bearing_rad, obstacle_type
+include_obstacle_obs: true  # Adds nearest_dist_m, nearest_bearing_rad
 
 # ---------------------------------------------------------------------------
 # PPO hyperparameters
