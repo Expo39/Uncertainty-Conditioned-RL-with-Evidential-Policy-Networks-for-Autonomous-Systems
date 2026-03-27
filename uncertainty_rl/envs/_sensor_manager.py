@@ -258,6 +258,10 @@ class SensorManager:
             )
         )
         imu_sensor = world.spawn_actor(imu_bp, imu_transform, attach_to=vehicle)
+        # Register a no-op listener so CARLA considers the stream open.
+        # Without this, sensor.stop() during cleanup emits:
+        # "attempting to unsubscribe from stream but sensor wasn't listening".
+        imu_sensor.listen(lambda _: None)
         self._spawned_sensors.append(imu_sensor)
 
     def _spawn_lidar_2d(self, world: Any, vehicle: Any) -> None:

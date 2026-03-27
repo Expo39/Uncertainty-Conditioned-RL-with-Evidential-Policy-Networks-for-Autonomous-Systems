@@ -32,15 +32,17 @@ Or directly:
   python -m scripts.inspect.lot_inspector --mode dryrun  --layout rectangle
 
 Arguments:
-  --mode       layout | sensors | live | dryrun (default: sensors)
-  --layout     rectangle | trapezoid | irregular_a (default: rectangle)
-  --suite      suite_a | suite_b | suite_c (default: suite_a, sensors/live modes only)
-  --view       birds_eye | side | front (default: birds_eye, sensors mode only)
-  --sensor     lidar | camera (live mode, suite_c only; suite_c defaults to camera)
-  --host       CARLA server hostname (default: carla-server-demo)
-  --port       CARLA server port (default: 2100)
-  --duration   Seconds to run (default: 300)
-  --episodes   Max episodes for dryrun mode (default: unlimited)
+  --mode               layout | sensors | live | dryrun (default: sensors)
+  --layout             rectangle | trapezoid | irregular_a (default: rectangle)
+  --suite              suite_a | suite_b | suite_c (default: suite_a, sensors/live modes only)
+  --view               birds_eye | side | front (default: birds_eye, sensors mode only)
+  --sensor             lidar | camera (live mode, suite_c only; suite_c defaults to camera)
+  --host               CARLA server hostname (default: carla-server-demo)
+  --port               CARLA server port (default: 2100)
+  --duration           Seconds to run (default: 300)
+  --episodes           Max episodes for dryrun mode (default: unlimited)
+  --inspect-view       View for dryrun: third_person|side|back|front|free (default: third_person)
+  --termination-pause  Seconds to hold scene after episode ends (default: 3.0, dryrun only)
 
 @note Runs in synchronous CARLA mode.  Requires the full Docker stack.
 @note CARLA 0.9.16 draw_line ignores colour -- overlays use draw_point at small
@@ -229,6 +231,28 @@ def main() -> None:
             "Ignored in all other modes."
         ),
     )
+    parser.add_argument(
+        "--inspect-view",
+        default="third_person",
+        choices=["third_person", "side", "back", "front", "free"],
+        dest="inspect_view",
+        help=(
+            "Spectator view for dryrun mode (default: third_person).  "
+            "'free' places the spectator overhead once and then does not move "
+            "it, so you can fly around with CARLA's own controls.  "
+            "Ignored in all other modes."
+        ),
+    )
+    parser.add_argument(
+        "--termination-pause",
+        type=float,
+        default=3.0,
+        dest="termination_pause",
+        help=(
+            "Seconds to hold the scene after an episode ends before resetting "
+            "(default: 3.0).  Set to 0 to disable.  Dryrun mode only."
+        ),
+    )
     args = parser.parse_args()
 
     with open("configs/train_config.yaml", "r") as _f:
@@ -331,11 +355,18 @@ def main() -> None:
             sys.exit(1)
 
         dryrun_action = train_cfg.get("inspect", {}).get("dryrun_action", None)
-        inspector = DryRunInspector(env, args.duration, args.episodes, dryrun_action)
+        inspector = DryRunInspector(
+            env,
+            args.duration,
+            args.episodes,
+            dryrun_action,
+            initial_view=args.inspect_view,
+            termination_pause=args.termination_pause,
+        )
         inspector.place_spectator()  # type: ignore[attr-defined]
         action_desc = str(dryrun_action) if dryrun_action is not None else "random"
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
-        print("  Spectator follows ego vehicle.  EKF covariance printed every 50 steps.")
+        print(f"  View: {args.inspect_view}  |  termination pause: {args.termination_pause:.1f}s")
         print("  Press Ctrl+C to stop.")
 
     else:  # live

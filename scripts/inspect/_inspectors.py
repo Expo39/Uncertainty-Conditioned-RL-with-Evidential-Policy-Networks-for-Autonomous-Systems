@@ -701,20 +701,18 @@ class LiveInspector(_Inspector):
 # Dry-run inspector -- full training pipeline, random actions, no model
 # ===========================================================================
 
-
 class DryRunInspector(_Inspector):
     """
     @class DryRunInspector
     @brief Runs the full training environment (reset + step loop) with random
            actions, no model.  Spectator follows the ego vehicle.
 
-    This mode uses the full pipeline: CARLA + ROS bridge + EKF covariance in the
-    observation.  It is identical to what training would see, but actions are
-    sampled uniformly at random from the action space.  Use this to verify:
-      - The environment resets and steps without errors
-      - Covariance features are non-zero (EKF is live)
-      - NPCs, pedestrians, and static actors spawn correctly each episode
-      - The spectator view looks exactly as training will see
+    Views (set via --inspect-view):
+      third_person -- 20 m behind + 10 m above, follows vehicle heading
+      side         -- 15 m to the left, at ego z, level
+      back         -- 20 m behind, at ego z, level
+      front        -- 15 m ahead, at ego z, looking back
+      free         -- placed once at z=0, not updated; CARLA's own controls work
 
     @note Requires the full Docker stack: carla-server + ros2-bridge + training.
     @note include_covariance must be True on the env for covariance to appear.
@@ -728,16 +726,18 @@ class DryRunInspector(_Inspector):
         duration: int,
         n_episodes: Optional[int] = None,
         dryrun_action: Optional[List[float]] = None,
+        initial_view: str = "third_person",
+        termination_pause: float = 3.0,
     ) -> None:
         """
         @brief Construct the dry-run inspector.
         @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
         @param duration: Maximum wall-clock seconds to run (across all episodes).
-        @param n_episodes: If set, stop after this many episodes regardless of
-               duration.  If None, runs until duration expires.
-        @param dryrun_action: Fixed [steer, throttle, brake] action to apply each
-               step.  If None, falls back to action_space.sample() (random).
-               Set via inspect.dryrun_action in train_config.yaml.
+        @param n_episodes: Stop after this many episodes; None = run until duration.
+        @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
+               None = action_space.sample(). Set via inspect.dryrun_action in YAML.
+        @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
+        @param termination_pause: Seconds to hold scene after episode ends.
         """
         super().__init__(env, duration)
         self._n_episodes = n_episodes
@@ -746,76 +746,152 @@ class DryRunInspector(_Inspector):
             if dryrun_action is not None
             else None
         )
+        self._view: str = initial_view if initial_view in (
+            "third_person", "side", "back", "front", "free"
+        ) else "third_person"
+        self._termination_pause = termination_pause
+
+    # ------------------------------------------------------------------
+    # Spectator placement
+    # ------------------------------------------------------------------
 
     def place_spectator(self) -> None:
         """
-        @brief Position spectator 20 m behind and above the ego vehicle.
+        @brief Position spectator for the active view.
 
-        Called once after the first reset.  The run loop updates it every step.
+        'free' mode: placed once at z=0 beside the vehicle, not touched again.
+        All other views: delegates to _update_spectator().
         """
         if self._env.vehicle is None or self._env.world is None:
             return
-        self._follow_vehicle()
+        if self._view == "free":
+            vt = self._env.vehicle.get_transform()
+            yaw_rad = math.radians(vt.rotation.yaw)
+            sx = vt.location.x - 20.0 * math.sin(yaw_rad)
+            sy = vt.location.y + 20.0 * math.cos(yaw_rad)
+            look_yaw = math.degrees(math.atan2(vt.location.y - sy, vt.location.x - sx))
+            self._env.world.get_spectator().set_transform(
+                carla.Transform(
+                    carla.Location(x=sx, y=sy, z=0.0),
+                    carla.Rotation(pitch=10.0, yaw=look_yaw, roll=0.0),
+                )
+            )
+            print("  Free view: spectator at z=0, pitched up. Use CARLA controls to fly.")
+            return
+        self._update_spectator()
 
-    def _follow_vehicle(self) -> None:
+    def _update_spectator(self) -> None:
         """
-        @brief Lock the spectator 20 m behind and 10 m above the ego vehicle.
-
-        Gives a clear view of the vehicle in context of the lot.
+        @brief Move spectator to follow the ego vehicle.  No-op in 'free' mode.
         """
-        if self._env.vehicle is None or self._env.world is None:
+        if self._env.vehicle is None or self._env.world is None or self._view == "free":
             return
         vt = self._env.vehicle.get_transform()
         yaw_rad = math.radians(vt.rotation.yaw)
-        # 20 m behind the vehicle
-        bx = vt.location.x - 20.0 * math.cos(yaw_rad)
-        by = vt.location.y - 20.0 * math.sin(yaw_rad)
-        bz = vt.location.z + 10.0
-        look_yaw = vt.rotation.yaw
         spectator = self._env.world.get_spectator()
-        spectator.set_transform(
-            carla.Transform(
-                carla.Location(x=bx, y=by, z=bz),
-                carla.Rotation(pitch=-25.0, yaw=look_yaw, roll=0.0),
-            )
-        )
+
+        if self._view == "third_person":
+            spectator.set_transform(carla.Transform(
+                carla.Location(
+                    x=vt.location.x - 20.0 * math.cos(yaw_rad),
+                    y=vt.location.y - 20.0 * math.sin(yaw_rad),
+                    z=vt.location.z + 10.0,
+                ),
+                carla.Rotation(pitch=-25.0, yaw=vt.rotation.yaw),
+            ))
+        elif self._view == "side":
+            sx = vt.location.x - 15.0 * math.sin(yaw_rad)
+            sy = vt.location.y + 15.0 * math.cos(yaw_rad)
+            spectator.set_transform(carla.Transform(
+                carla.Location(x=sx, y=sy, z=vt.location.z),
+                carla.Rotation(pitch=0.0, yaw=math.degrees(
+                    math.atan2(vt.location.y - sy, vt.location.x - sx)
+                )),
+            ))
+        elif self._view == "back":
+            spectator.set_transform(carla.Transform(
+                carla.Location(
+                    x=vt.location.x - 20.0 * math.cos(yaw_rad),
+                    y=vt.location.y - 20.0 * math.sin(yaw_rad),
+                    z=vt.location.z,
+                ),
+                carla.Rotation(pitch=0.0, yaw=vt.rotation.yaw),
+            ))
+        else:  # front
+            fx = vt.location.x + 15.0 * math.cos(yaw_rad)
+            fy = vt.location.y + 15.0 * math.sin(yaw_rad)
+            spectator.set_transform(carla.Transform(
+                carla.Location(x=fx, y=fy, z=vt.location.z),
+                carla.Rotation(pitch=0.0, yaw=math.degrees(
+                    math.atan2(vt.location.y - fy, vt.location.x - fx)
+                )),
+            ))
+
+    # ------------------------------------------------------------------
+    # Observation logging
+    # ------------------------------------------------------------------
 
     def _print_obs(self, obs: Any, step: int, episode: int) -> None:
         """
         @brief Print key observation values to the console for diagnosis.
-
-        Prints EKF pose (obs[0:3]), covariance diagonal (obs[6:9] = std_x,
-        std_y, std_yaw), and obstacle features (obs[18:21]) if present.
-
         @param obs: Observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
         """
+        _YELLOW = "\033[33m"
+        _RESET = "\033[0m"
+
         if obs is None or len(obs) < 6:
             return
-        x, y, yaw = obs[0], obs[1], obs[2]
-        line = f"  ep={episode:3d}  step={step:4d}  pos=({x:7.2f},{y:7.2f})  yaw={yaw:6.3f}"
+        # EKF pose (indices 0-5)
+        parts = [
+            f"ep={episode:3d}  step={step:4d}",
+            f"pos=({obs[0]:7.2f},{obs[1]:7.2f})"
+            f"  yaw={math.degrees(obs[2]):+6.1f}deg"
+            f"  vel=({obs[3]:.2f},{obs[4]:.2f})m/s"
+            f"  vyaw={math.degrees(obs[5]):+.1f}deg/s",
+        ]
+        # CARLA ground truth (diagnostic only -- not fed to model)
         if self._env.vehicle is not None:
             t = self._env.vehicle.get_transform()
             v = self._env.vehicle.get_velocity()
             spd = math.sqrt(v.x ** 2 + v.y ** 2)
-            line += f"  carla=({t.location.x:7.2f},{t.location.y:7.2f})  spd={spd:.2f}"
+            parts.append(
+                _YELLOW
+                + f"[CARLA gt] pos=({t.location.x:7.2f},{t.location.y:7.2f})"
+                f"  yaw={t.rotation.yaw:+6.1f}deg  spd={spd:.2f}m/s"
+                + _RESET
+            )
+        # EKF covariance (indices 6-14)
         if len(obs) >= 15:
-            std_x, std_y, std_yaw = obs[6], obs[7], obs[8]
-            line += f"  std=({std_x:.4f},{std_y:.4f},{std_yaw:.4f})"
-        if len(obs) >= 21:
-            nd, nb, nt = obs[18], obs[19], obs[20]
-            line += f"  obs=({nd:.2f},{nb:.2f},{nt:.0f})"
-        print(line)
+            parts.append(
+                f"std=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})"
+                f"  cov_diag=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})"
+                f"  cov_off=({obs[12]:.4f},{obs[13]:.4f},{obs[14]:.4f})"
+            )
+        # Target bay in ego body frame (indices 15-17)
+        if len(obs) >= 18:
+            parts.append(
+                f"target: dx={obs[15]:.2f}m  dy={obs[16]:.2f}m"
+                f"  dyaw={math.degrees(obs[17]):+.1f}deg"
+            )
+        # Obstacle (indices 18-19)
+        if len(obs) >= 20:
+            parts.append(f"obstacle: {obs[18]:.2f}m  {math.degrees(obs[19]):+.1f}deg")
+        print("  " + "\n    ".join(parts))
+
+    # ------------------------------------------------------------------
+    # Run loop
+    # ------------------------------------------------------------------
 
     def run(self) -> None:
         """
         @brief Run the dry-run episode loop.
 
-        Each episode: reset() -> step loop with random actions -> on
-        termination/truncation reset again.  Spectator follows the ego
-        vehicle every step.  Key observation values are printed every
-        _LOG_INTERVAL steps so the EKF signal can be visually verified.
+        Each episode: reset() -> step loop -> on termination hold for
+        termination_pause seconds so the final state is visible in CARLA.
+        Spectator follows the ego every step.  Key obs printed every
+        _LOG_INTERVAL steps.
         """
         if self._env.world is None:
             print("ERROR: CARLA world not available.  Aborting.")
@@ -829,7 +905,12 @@ class DryRunInspector(_Inspector):
             f"Dry-run: random actions for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
-        print("  Columns: pos=(x,y)  yaw  std=(std_x,std_y,std_yaw)  obs=(dist,bearing,type)")
+        print("  Model inputs per step (20-dim obs):"
+              "\n    [0-5]  EKF pose:      pos(x,y)  yaw  vel(vx,vy)  vyaw"
+              "\n    [6-14] EKF cov:       std(x,y,yaw)  cov_diag(xx,yy,yawyaw)"
+              "  cov_off(xy,xyaw,yyaw)  [log1p-transformed]"
+              "\n    [15-17] Target bay:   dx  dy  dyaw (ego body frame)"
+              "\n    [18-19] Obstacle:     dist_m  bearing_deg (+ve=left)")
 
         try:
             while time.monotonic() < deadline:
@@ -839,8 +920,8 @@ class DryRunInspector(_Inspector):
                 obs, _ = self._env.reset()
                 episode += 1
                 step = 0
-                print(f"\n--- Episode {episode} ---")
-                self._follow_vehicle()
+                print(f"\n--- Episode {episode}  [view: {self._view}] ---")
+                self._update_spectator()
                 self._print_obs(obs, step, episode)
 
                 terminated = truncated = False
@@ -855,7 +936,7 @@ class DryRunInspector(_Inspector):
                     obs, reward, terminated, truncated, info = self._env.step(action)
                     step += 1
                     total_steps += 1
-                    self._follow_vehicle()
+                    self._update_spectator()
                     if step % self._LOG_INTERVAL == 0:
                         self._print_obs(obs, step, episode)
 
@@ -864,6 +945,18 @@ class DryRunInspector(_Inspector):
                     f"  Episode {episode} ended: {reason}"
                     f"  steps={step}  total_steps={total_steps}"
                 )
+
+                # Hold the scene so the final state can be inspected in CARLA.
+                if self._termination_pause > 0:
+                    print(
+                        f"  Pausing {self._termination_pause:.1f}s "
+                        "(Ctrl+C to skip) ..."
+                    )
+                    pause_end = time.monotonic() + self._termination_pause
+                    while time.monotonic() < pause_end:
+                        self._env.world.tick()
+                        self._update_spectator()
+                        time.sleep(1.0 / self._TICK_HZ)
 
         except KeyboardInterrupt:
             print("Interrupted.")

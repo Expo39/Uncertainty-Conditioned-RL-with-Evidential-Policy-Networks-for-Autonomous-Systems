@@ -219,6 +219,9 @@ docker-shell: ## Interactive shell in training container
 docker-shell-ros2: ## Interactive shell in ROS 2 container
 	$(DOCKER_COMPOSE) exec ros2-bridge /bin/bash
 
+docker-shell-ros2-inspect: ## Interactive shell in ROS 2 inspect container (use while docker-inspect-dryrun is running)
+	$(DOCKER_COMPOSE_INSPECT) exec ros2-bridge-inspect /bin/bash
+
 docker-logs: ## Follow logs from all containers
 	$(DOCKER_COMPOSE) logs -f
 
@@ -262,17 +265,20 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 # Docker: Inspection Tools to confirm all is good in the simulator
 # ----------------------------------------------------------------------
 
-INSPECT_LAYOUT  ?= rectangle
+INSPECT_LAYOUT   ?= rectangle
 INSPECT_EPISODES ?=
-docker-inspect-dryrun: ## Full training pipeline with random actions in windowed CARLA. Spectator follows ego; EKF covariance printed every 50 steps. Usage: make docker-inspect-dryrun [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5]
+INSPECT_VIEW     ?= third_person
+INSPECT_PAUSE    ?= 3.0
+docker-inspect-dryrun: ## Full training pipeline with random actions in windowed CARLA. Usage: make docker-inspect-dryrun [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free] [INSPECT_PAUSE=3.0]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	$(eval LAYOUT := $(INSPECT_LAYOUT))
-	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(LAYOUT)  EPISODES=$(INSPECT_EPISODES)"
+	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(LAYOUT)  VIEW=$(INSPECT_VIEW)  PAUSE=$(INSPECT_PAUSE)  EPISODES=$(INSPECT_EPISODES)"
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) EPISODES=$(INSPECT_EPISODES) \
+		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
 		CARTOGRAPHER_MODE=loc \
 		CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 		SENSOR_SUITE=$(SENSOR_SUITE) \
@@ -280,10 +286,18 @@ docker-inspect-dryrun: ## Full training pipeline with random actions in windowed
 		--force-recreate --detach \
 		carla-server-demo ros2-bridge-inspect training-inspect-dryrun
 	@echo "Containers started. Streaming training output (Ctrl+C to abort)..."
-	@docker logs -f uncertainty-rl-training-inspect-dryrun 2>&1 | \
-		grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' || true
-	$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun down 2>/dev/null || true
-	xhost -local:docker 2>/dev/null || true
+	@bash -c '\
+		cleanup() { \
+			echo ""; \
+			echo "Stopping inspect containers..."; \
+			$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun down 2>/dev/null || true; \
+			xhost -local:docker 2>/dev/null || true; \
+		}; \
+		trap cleanup EXIT INT TERM; \
+		docker logs -f uncertainty-rl-training-inspect-dryrun 2>&1 & \
+		LOG_PID=$$!; \
+		wait $$LOG_PID \
+	'
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))

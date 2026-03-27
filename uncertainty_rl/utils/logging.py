@@ -225,7 +225,6 @@ class DebugLogger:
         action: "np.ndarray",
         uncertainty: Optional["np.ndarray"],
         obstacle_dist: float,
-        obstacle_type: float = 0.0,
         ekf_drift: float = 0.0,
         lidar_points: int = 0,
     ) -> None:
@@ -241,7 +240,6 @@ class DebugLogger:
         @param uncertainty: 9-element EKF covariance feature vector (log1p-
                             transformed), or None when covariance is disabled.
         @param obstacle_dist: Distance to nearest obstacle from LiDAR (metres).
-        @param obstacle_type: 0.0=static, 1.0=dynamic nearest obstacle.
         @param ekf_drift: Distance between EKF filtered position and CARLA
                           ground truth (metres). Non-zero indicates localisation
                           error -- key signal for sim-to-real debugging.
@@ -262,8 +260,6 @@ class DebugLogger:
         brake = float(action[2]) if len(action) > 2 else 0.0
 
         yaw_deg = math.degrees(yaw_error)
-        obs_label = "dyn" if obstacle_type > 0.5 else "sta"
-
         self._last_dict = {
             "pos_err": round(pos_error, 3),
             "yaw_err_deg": round(yaw_deg, 1),
@@ -271,7 +267,6 @@ class DebugLogger:
             "reward": round(reward, 4),
             "cov_rms": round(cov_mag, 4),
             "obs_dist": round(obstacle_dist, 2),
-            "obs_type": obs_label,
             "ekf_drift": round(ekf_drift, 3),
             "lidar_pts": lidar_points,
             "steer": round(steer, 3),
@@ -283,7 +278,7 @@ class DebugLogger:
             "[step %4d] "
             "pos_err=%.2fm  yaw=%.1fdeg  spd=%.2fm/s  "
             "rwd=%.4f  cov_rms=%.4f  "
-            "obs=%.2fm(%s)  ekf_drift=%.3fm  lidar=%dpts  "
+            "obs=%.2fm  ekf_drift=%.3fm  lidar=%dpts  "
             "act=[%.2f %.2f %.2f]",
             step,
             pos_error,
@@ -292,7 +287,6 @@ class DebugLogger:
             reward,
             cov_mag,
             obstacle_dist,
-            obs_label,
             ekf_drift,
             lidar_points,
             steer,
