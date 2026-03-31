@@ -2,7 +2,7 @@
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration verify
-.PHONY: lint format typecheck clean
+.PHONY: lint format typecheck clean clean-venv
 .PHONY: backup-configs restore-configs
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
@@ -12,15 +12,23 @@
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
 .PHONY: docker-map docker-train-loc docker-train-loc-short
 
-PYTHON := python3
-PYTHON_VIS := .venv-vis/bin/python3
-PYTEST := pytest
-CONFIG_DIR := configs
-SRC_DIR := uncertainty_rl
-TESTS_DIR := tests
+VENV        := .venv
+PYTHON      := $(VENV)/bin/python3
+PYTEST      := $(VENV)/bin/pytest
+CONFIG_DIR  := configs
+SRC_DIR     := uncertainty_rl
+TESTS_DIR   := tests
 SCRIPTS_DIR := scripts
 DOCKER_COMPOSE         := docker compose
 DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose.inspect.yml
+
+# Ensure the local venv exists and the package is installed.
+# Runs automatically before every local target that needs Python.
+define ensure-venv
+	@if [ ! -f "$(VENV)/bin/python3" ]; then \
+		$(MAKE) install; \
+	fi
+endef
 
 # ----------------------------------------------------------------------
 # Help
@@ -34,9 +42,11 @@ help: ## Show this help
 # Setup
 # ----------------------------------------------------------------------
 
-install: ## Install package and dev dependencies
-	pip install -e ".[dev]"
-	pre-commit install
+install: ## Create .venv and install package + dev dependencies
+	python3 -m venv $(VENV)
+	$(VENV)/bin/pip install --upgrade pip
+	$(VENV)/bin/pip install -e ".[dev]"
+	$(VENV)/bin/pre-commit install
 
 
 # ======================================================================
@@ -316,8 +326,9 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. INSPECT_SENSOR=camer
 # ----------------------------------------------------------------------
 
 generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
+	$(call ensure-venv)
 	mkdir -p configs/layouts outputs/layouts
-	$(PYTHON_VIS) scripts/layouts/generate_layouts.py \
+	$(PYTHON) scripts/layouts/generate_layouts.py \
 		--output-dir configs/layouts \
 		--plot-dir outputs/layouts \
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
@@ -331,36 +342,42 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 # ----------------------------------------------------------------------
 
 visualise: ## Open 2D bird's-eye viewer (use while training is running). Usage: make visualise
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON_VIS) scripts/visualise/visualiser.py
+	$(call ensure-venv)
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON) scripts/visualise/visualiser.py
 
 eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
+	$(call ensure-venv)
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
 	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--train-config $(CONFIG_DIR)/train_config.yaml
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON_VIS) scripts/visualise/visualiser.py
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON) scripts/visualise/visualiser.py
 
 # ----------------------------------------------------------------------
 # Testing
 # ----------------------------------------------------------------------
 
 test: ## Run full test suite (unit + integration)
+	$(call ensure-venv)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short
 
 test-unit: ## Run unit tests only (no GPU, no CARLA, no ROS 2)
+	$(call ensure-venv)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
 
 test-integration: ## Run integration tests (requires CARLA + ROS 2 + GPU)
+	$(call ensure-venv)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "integration"
 
 verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
+	$(call ensure-venv)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
-	flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
-	black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
-	mypy $(SRC_DIR) --ignore-missing-imports
+	$(VENV)/bin/flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	$(VENV)/bin/isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	$(VENV)/bin/black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	$(VENV)/bin/mypy $(SRC_DIR) --ignore-missing-imports
 	$(PYTHON) -c "import uncertainty_rl; print('All checks passed.')"
 
 # ----------------------------------------------------------------------
@@ -368,36 +385,43 @@ verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
 # ----------------------------------------------------------------------
 
 lint: ## Run all linters (flake8 + isort + black)
-	flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
-	black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	$(call ensure-venv)
+	$(VENV)/bin/flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	$(VENV)/bin/isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	$(VENV)/bin/black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 
 format: ## Auto-format code with black + isort
-	isort $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
-	black $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	$(call ensure-venv)
+	$(VENV)/bin/isort $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
+	$(VENV)/bin/black $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 
 typecheck: ## Run mypy type checking
-	mypy $(SRC_DIR) --ignore-missing-imports
+	$(call ensure-venv)
+	$(VENV)/bin/mypy $(SRC_DIR) --ignore-missing-imports
 
 # ----------------------------------------------------------------------
 # Sanity Check
 # ----------------------------------------------------------------------
 
 sanity: ## Quick import check
+	$(call ensure-venv)
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
 
 # ----------------------------------------------------------------------
 # Cleanup
 # ----------------------------------------------------------------------
 
-clean: ## Remove build artefacts, caches, generated outputs, maps, and layouts (preserves .xodr)
+clean: ## Remove build artefacts, caches, generated outputs, maps, and layouts (preserves .xodr and .venv)
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
 	sudo rm -rf logs/ checkpoints/ evaluation_results/ experiments/ results/
 	sudo rm -rf outputs/
 	sudo rm -rf configs/maps/
 	find configs/layouts/ -type f ! -name "*.xodr" -delete 2>/dev/null || true
-	find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
-	find . -type f -name "*.pyc" -delete 2>/dev/null || true
+	find . -path ./$(VENV) -prune -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -path ./$(VENV) -prune -o -type f -name "*.pyc" -delete 2>/dev/null || true
+
+clean-venv: ## Remove the local virtual environment (re-create with make install)
+	rm -rf $(VENV)
 
 # ----------------------------------------------------------------------
 # Config Backup

@@ -24,8 +24,7 @@ wheels/
 venv/
 env/
 ENV/
-.venv
-.venv-vis
+.venv/
 
 # IDE
 .vscode/
