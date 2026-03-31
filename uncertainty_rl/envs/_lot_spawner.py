@@ -27,6 +27,22 @@ from uncertainty_rl.utils.geometry import (
 
 logger = logging.getLogger(__name__)
 
+
+def _bay_yaw_deg(bay: Dict[str, Any]) -> float:
+    """
+    @brief Extract bay heading in degrees from a layout YAML bay dict.
+
+    Layout YAMLs may store heading as ``yaw_deg`` (degrees, preferred) or
+    ``yaw`` (radians, legacy).  Returns 0.0 if neither key is present.
+
+    @param bay: Single bay entry from the layout YAML.
+    @return Heading in degrees.
+    """
+    if "yaw_deg" in bay:
+        return float(bay["yaw_deg"])
+    return math.degrees(float(bay.get("yaw", 0.0)))
+
+
 # Vehicle types that overhang a standard 2.5 m bay.
 _LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
     "ambulance",
@@ -82,6 +98,15 @@ class LotSpawner:
     All CARLA world handles are passed as parameters -- this class does not
     store world references to avoid holding stale handles between episodes.
     """
+
+    # Spawn height offsets above floor_contact_z
+    _CONE_Z_OFFSET: float = 0.5
+    _VEHICLE_Z_OFFSET: float = 1.0
+    # Settle loop parameters
+    _SETTLE_TICKS: int = 20
+    _SETTLE_VZ_THRESHOLD: float = 0.01
+    # Motorcycle occupant name -> blueprint attribute (matches YAML 'occupant' field)
+    _MOTORCYCLE_OCCUPANTS: Tuple[str, ...] = ("Kawasaki Ninja", "Yamaha YZF-R")
 
     def __init__(
         self,
@@ -235,15 +260,7 @@ class LotSpawner:
                 self._spawn_obstacle_cones(world, current_layout, floor_contact_z)
             )
 
-            # Settle cones (they need fewer ticks than vehicles on FlatPlane).
-            for _ in range(20):
-                world.tick()
-                if all(
-                    abs(a.get_velocity().z) < 0.01
-                    for a, _, _, _ in cone_pending
-                    if a.is_alive
-                ):
-                    break
+            self._settle_pending(world, cone_pending)
 
             for actor, ax, ay, actor_yaw in cone_pending:
                 if not actor.is_alive:
@@ -269,17 +286,9 @@ class LotSpawner:
             world, current_layout, target_bay, floor_contact_z
         )
 
-        # Tick until all vehicles have settled (up to 20 ticks at 20 Hz = 1 s).
+        # Tick until all vehicles have settled (up to _SETTLE_TICKS at 20 Hz = 1 s).
         # On FlatPlane the drop height is <0.1 m; vehicles settle in 2-4 ticks.
-        # 20 ticks gives a comfortable safety margin without the 3 s worst-case.
-        for _ in range(20):
-            world.tick()
-            if all(
-                abs(a.get_velocity().z) < 0.01
-                for a, _, _, _ in vehicle_pending
-                if a.is_alive
-            ):
-                break
+        self._settle_pending(world, vehicle_pending)
 
         for actor, ax, ay, actor_yaw in vehicle_pending:
             if not actor.is_alive:
@@ -328,6 +337,30 @@ class LotSpawner:
     # Private helpers
     # ------------------------------------------------------------------
 
+    def _settle_pending(
+        self,
+        world: Any,
+        pending: List[Tuple[Any, float, float, float]],
+    ) -> None:
+        """
+        @brief Tick the world until all pending actors have settled under gravity.
+
+        Actors in ``pending`` must have physics enabled.  Ticks up to
+        ``_SETTLE_TICKS`` times (1 s at 20 Hz), stopping early once every
+        alive actor's vertical velocity drops below ``_SETTLE_VZ_THRESHOLD``.
+
+        @param world: Live carla.World handle.
+        @param pending: List of (actor, x, y, yaw) tuples awaiting settlement.
+        """
+        for _ in range(self._SETTLE_TICKS):
+            world.tick()
+            if all(
+                abs(a.get_velocity().z) < self._SETTLE_VZ_THRESHOLD
+                for a, _, _, _ in pending
+                if a.is_alive
+            ):
+                break
+
     def _spawn_perimeter_cones(
         self, world: Any, current_layout: Dict[str, Any], floor_contact_z: float
     ) -> List[Tuple[Any, float, float, float]]:
@@ -353,15 +386,14 @@ class LotSpawner:
         ]
         cone_positions = _interpolate_cone_positions(corners, self._cone_spacing)
 
-        cone_bp = self._cone_bp
         # Spawn slightly above the ego CoM z so the cone clears the surface
         # before physics drops it flush to the ground.
-        z = floor_contact_z + 0.5
+        z = floor_contact_z + self._CONE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
         for cx, cy, yaw_deg in cone_positions:
             cone = world.try_spawn_actor(
-                cone_bp,
+                self._cone_bp,
                 carla.Transform(carla.Location(x=cx, y=cy, z=z), carla.Rotation(yaw=yaw_deg)),
             )
             if cone is not None:
@@ -389,8 +421,7 @@ class LotSpawner:
         if not obstacles:
             return []
 
-        cone_bp = self._cone_bp
-        z = floor_contact_z + 0.5
+        z = floor_contact_z + self._CONE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
         for obs in obstacles:
@@ -416,7 +447,7 @@ class LotSpawner:
 
             for px, py, yaw_deg in cone_positions:
                 cone = world.try_spawn_actor(
-                    cone_bp,
+                    self._cone_bp,
                     carla.Transform(carla.Location(x=px, y=py, z=z), carla.Rotation(yaw=yaw_deg)),
                 )
                 if cone is not None:
@@ -456,11 +487,12 @@ class LotSpawner:
         target_id = target_bay.get("bay_id", "")
         excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
 
-        z_spawn = floor_contact_z + 1.0
+        z_spawn = floor_contact_z + self._VEHICLE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
         for bay in bays:
-            if bay.get("id", bay.get("bay_id", "")) in excluded_ids:
+            # Layout YAMLs may use 'bay_id' or the shorter 'id' key.
+            if bay.get("bay_id", bay.get("id", "")) in excluded_ids:
                 continue
             if bay.get("always_empty", False):
                 continue
@@ -474,7 +506,8 @@ class LotSpawner:
 
             bay_x = float(bay["x"])
             bay_y = float(bay["y"])
-            yaw = float(bay.get("yaw_deg", math.degrees(bay.get("yaw", 0.0))))
+            # YAML stores heading as 'yaw_deg' (degrees) or 'yaw' (radians).
+            yaw = _bay_yaw_deg(bay)
             if random.random() < 0.5:
                 yaw = (yaw + 180.0) % 360.0
 
@@ -489,9 +522,9 @@ class LotSpawner:
 
         # Easter egg: always spawn Kawasaki Ninja and Yamaha YZF in their
         # dedicated motorcycle bays (bay_type="motorcycle", occupant field set).
-        _occupant_bp = {
-            "Kawasaki Ninja": self._ninja_bp,
-            "Yamaha YZF-R": self._yzf_bp,
+        _occupant_bp: Dict[str, Optional[Any]] = {
+            self._MOTORCYCLE_OCCUPANTS[0]: self._ninja_bp,
+            self._MOTORCYCLE_OCCUPANTS[1]: self._yzf_bp,
         }
         for bay in bays:
             if bay.get("bay_type") != "motorcycle":
@@ -502,7 +535,7 @@ class LotSpawner:
                 continue
             bay_x = float(bay["x"])
             bay_y = float(bay["y"])
-            yaw = float(bay.get("yaw_deg", 0.0))
+            yaw = _bay_yaw_deg(bay)
             transform = carla.Transform(
                 carla.Location(x=bay_x, y=bay_y, z=z_spawn),
                 carla.Rotation(yaw=yaw),

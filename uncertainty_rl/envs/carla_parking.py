@@ -258,14 +258,12 @@ class CARLAParkingEnv(gym.Env):
             pedestrian_speed=self._pedestrian_speed,
             pedestrian_resample_steps=self._pedestrian_resample_steps,
             pedestrian_max_lifetime=self._pedestrian_max_lifetime,
-            debug_logger=self._debug_logger,
         )
 
         # Sensor manager -- owns IMU, LiDAR, collision sensor, camera.
         self._sensor_manager = SensorManager(
             sensors_config=self._sensors_config,
             sensor_suite=sensor_suite,
-            debug_logger=self._debug_logger,
         )
 
         # Cached actor list for patrol obstacle proximity checks.  Rebuilt
@@ -687,12 +685,17 @@ class CARLAParkingEnv(gym.Env):
         if self.vehicle is None or self.world is None:
             return np.zeros(self._compute_obs_dim(), dtype=np.float32)
 
-        # -- Pose (indices 0-5) -------------------------------------------
+        # -- Pose (indices 0-5) and covariance (indices 6-14) ----------------
+        # Read the shared JSON file once for both pose and uncertainty to avoid
+        # a second stat + JSON parse later in the covariance section below.
         # Prefer EKF filtered estimate for sim-to-real transfer; fall back to
         # CARLA ground truth when rclpy is unavailable (CI / unit tests).
         ekf_pose: Optional[np.ndarray] = None
+        _prefetched_uncertainty: Optional[np.ndarray] = None
         if self._cov_subscriber is not None:
-            ekf_pose = self._cov_subscriber.get_latest_pose()
+            ekf_pose, _prefetched_uncertainty = (
+                self._cov_subscriber.get_latest_state()
+            )
 
         if ekf_pose is not None:
             # Use EKF pose directly in Cartographer odom frame.
@@ -762,10 +765,9 @@ class CARLAParkingEnv(gym.Env):
             return self._obs_buffer.copy()
 
         # -- EKF covariance features (indices 6-14) -----------------------
-        if self._cov_subscriber is not None:
-            uncertainty = self._cov_subscriber.get_latest_uncertainty()
-        else:
-            uncertainty = None
+        # Use the uncertainty already fetched alongside the pose above (one
+        # file read for both) rather than triggering a second read here.
+        uncertainty = _prefetched_uncertainty
 
         if uncertainty is None:
             self._debug_logger._logger.debug(
@@ -1471,11 +1473,10 @@ class CARLAParkingEnv(gym.Env):
                 )),
             )
             _speed = math.sqrt(_v.x ** 2 + _v.y ** 2)
-            _unc: Optional[np.ndarray] = None
             _ekf_pose: Optional[np.ndarray] = None
+            _unc: Optional[np.ndarray] = None
             if self._cov_subscriber is not None:
-                _unc = self._cov_subscriber.get_latest_uncertainty()
-                _ekf_pose = self._cov_subscriber.get_latest_pose()
+                _ekf_pose, _unc = self._cov_subscriber.get_latest_state()
             # EKF vs ground truth drift (metres) -- key sim-to-real signal.
             # Apply the full odom->world rigid transform so both positions are
             # in CARLA world frame before computing the error.

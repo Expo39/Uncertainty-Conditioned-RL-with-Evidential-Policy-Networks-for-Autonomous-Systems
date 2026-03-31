@@ -20,7 +20,6 @@ except ImportError:
     carla = None  # Running without CARLA (CI or tests)
 
 from uncertainty_rl.utils.geometry import zone_bbox
-from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,19 @@ class NPCController:
     episodes.
     """
 
+    # Number of sectors to divide each zone into for respawn placement.
+    _RESPAWN_N_SECTORS: int = 5
+    # Distance threshold: ego_dist >= threshold -> all sectors available.
+    # Each _threshold / n metres closer excludes one more sector (nearest excluded first).
+    _RESPAWN_SECTOR_THRESHOLD: float = 8.0
+    # Pedestrian avoidance radii (metres) used in update_pedestrians()
+    _EGO_AVOID_RADIUS: float = 5.0
+    _PATROL_AVOID_RADIUS: float = 5.0
+    # Zone boundary margin (metres): steer toward zone centre inside this band
+    _BOUNDARY_MARGIN: float = 0.5
+    # Zone clustering radius (metres): zones within this distance share one pedestrian
+    _CLUSTER_RADIUS: float = 12.0
+
     def __init__(
         self,
         num_patrol_max: int,
@@ -51,7 +63,6 @@ class NPCController:
         pedestrian_speed: float,
         pedestrian_resample_steps: int,
         pedestrian_max_lifetime: int,
-        debug_logger: DebugLogger,
     ) -> None:
         """
         @brief Construct NPCController with fixed config parameters.
@@ -67,7 +78,6 @@ class NPCController:
         @param pedestrian_speed: Walk speed (m/s).
         @param pedestrian_resample_steps: Steps between random heading changes.
         @param pedestrian_max_lifetime: Steps before a pedestrian is respawned.
-        @param debug_logger: Shared DebugLogger for per-event diagnostics.
         """
         self._num_patrol_max = num_patrol_max
         self._patrol_obstacle_distance = patrol_obstacle_distance
@@ -78,7 +88,6 @@ class NPCController:
         self._pedestrian_speed = pedestrian_speed
         self._pedestrian_resample_steps = pedestrian_resample_steps
         self._pedestrian_max_lifetime = pedestrian_max_lifetime
-        self._debug_logger = debug_logger
 
         # Blueprint lists -- refreshed each reset via refresh_blueprints()
         self._car_blueprints: List[Any] = []
@@ -248,32 +257,25 @@ class NPCController:
 
         z = float(current_layout.get("origin", {}).get("z", 0.3)) + 0.05
 
-        def _to_zone_dict(zone_raw: Dict[str, Any]) -> Dict[str, float]:
-            """@brief Wrap zone_bbox tuple into the dict format used internally."""
-            x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
-            return {"x_min": x_min, "x_max": x_max, "y_min": y_min, "y_max": y_max}
-
-        zones: List[Dict[str, float]] = [_to_zone_dict(zr) for zr in zones_raw]
+        zones: List[Dict[str, float]] = [
+            dict(zip(("x_min", "x_max", "y_min", "y_max"), zone_bbox(zr)))
+            for zr in zones_raw
+        ]
 
         # Group zones into spatial clusters so that adjacent corridor segments
         # do not each spawn their own pedestrian.  Two zones belong to the same
         # cluster when their centres are within _CLUSTER_RADIUS metres of each
         # other (union-find via greedy single-linkage).
-        _CLUSTER_RADIUS = 12.0
-
-        def _zone_centre(z: Dict[str, float]) -> Tuple[float, float]:
-            return (
-                (z["x_min"] + z["x_max"]) / 2.0,
-                (z["y_min"] + z["y_max"]) / 2.0,
-            )
 
         cluster_id: List[int] = list(range(len(zones)))
         for i in range(len(zones)):
             for j in range(i + 1, len(zones)):
-                cx_i, cy_i = _zone_centre(zones[i])
-                cx_j, cy_j = _zone_centre(zones[j])
+                cx_i = (zones[i]["x_min"] + zones[i]["x_max"]) / 2.0
+                cy_i = (zones[i]["y_min"] + zones[i]["y_max"]) / 2.0
+                cx_j = (zones[j]["x_min"] + zones[j]["x_max"]) / 2.0
+                cy_j = (zones[j]["y_min"] + zones[j]["y_max"]) / 2.0
                 dist = math.sqrt((cx_i - cx_j) ** 2 + (cy_i - cy_j) ** 2)
-                if dist <= _CLUSTER_RADIUS:
+                if dist <= self._CLUSTER_RADIUS:
                     # Merge j's cluster into i's cluster
                     old_id = cluster_id[j]
                     new_id = cluster_id[i]
@@ -351,7 +353,7 @@ class NPCController:
         all_vehicles: List[Any] = self._all_vehicle_actors
 
         for i, npc in enumerate(self.patrol_npcs):
-            if not (npc is not None and npc.is_alive):
+            if npc is None or not npc.is_alive:
                 continue
 
             wp_idx = self._patrol_waypoint_indices[i]
@@ -370,16 +372,15 @@ class NPCController:
                 dx = wp_x - t.location.x
                 dy = wp_y - t.location.y
 
+            npc_yaw = math.radians(t.rotation.yaw)
             target_yaw = math.atan2(dy, dx)
-            ego_yaw = math.radians(t.rotation.yaw)
             heading_error = math.atan2(
-                math.sin(target_yaw - ego_yaw),
-                math.cos(target_yaw - ego_yaw),
+                math.sin(target_yaw - npc_yaw),
+                math.cos(target_yaw - npc_yaw),
             )
 
             steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
 
-            npc_yaw = math.radians(t.rotation.yaw)
             fwd_x = math.cos(npc_yaw)
             fwd_y = math.sin(npc_yaw)
             blocked = False
@@ -437,16 +438,15 @@ class NPCController:
                 npc.apply_control(control)
                 # Log every 20 steps so patrol stalls are visible without spam
                 if steps % 20 == 0:
-                    self._debug_logger._logger.debug(
+                    logger.debug(
                         "[patrol] npc %d braking (blocked)  wp=%d  step=%d",
                         npc.id,
                         self._patrol_waypoint_indices[i],
                         steps,
                     )
             else:
-                speed = math.sqrt(
-                    npc.get_velocity().x ** 2 + npc.get_velocity().y ** 2
-                )
+                vel = npc.get_velocity()
+                speed = math.sqrt(vel.x ** 2 + vel.y ** 2)
                 speed_ratio = speed / max(self._patrol_max_speed, 0.1)
                 throttle = float(np.clip(1.0 - speed_ratio, 0.1, 1.0))
 
@@ -470,11 +470,6 @@ class NPCController:
 
         @param vehicle: Ego vehicle actor (used for avoidance distance check).
         """
-        # Larger radius so pedestrians react well before contact.
-        _EGO_AVOID_RADIUS = 5.0
-        _PATROL_AVOID_RADIUS = 5.0
-        _BOUNDARY_MARGIN = 0.5
-
         ego_loc = (
             vehicle.get_location()
             if vehicle is not None and vehicle.is_alive
@@ -502,7 +497,7 @@ class NPCController:
                 to_ego_x = ego_loc.x - loc.x
                 to_ego_y = ego_loc.y - loc.y
                 ego_dist = math.sqrt(to_ego_x * to_ego_x + to_ego_y * to_ego_y)
-                if ego_dist < _EGO_AVOID_RADIUS:
+                if ego_dist < self._EGO_AVOID_RADIUS:
                     # Inverse-distance weighting: stronger repulsion when closer.
                     weight = 1.0 / max(ego_dist, 0.5)
                     repulse_x += -to_ego_x * weight
@@ -514,16 +509,16 @@ class NPCController:
                 to_px = patrol_npc.get_location().x - loc.x
                 to_py = patrol_npc.get_location().y - loc.y
                 patrol_dist = math.sqrt(to_px * to_px + to_py * to_py)
-                if patrol_dist < _PATROL_AVOID_RADIUS:
+                if patrol_dist < self._PATROL_AVOID_RADIUS:
                     weight = 1.0 / max(patrol_dist, 0.5)
                     repulse_x += -to_px * weight
                     repulse_y += -to_py * weight
 
             near_boundary = (
-                loc.x < zone["x_min"] + _BOUNDARY_MARGIN
-                or loc.x > zone["x_max"] - _BOUNDARY_MARGIN
-                or loc.y < zone["y_min"] + _BOUNDARY_MARGIN
-                or loc.y > zone["y_max"] - _BOUNDARY_MARGIN
+                loc.x < zone["x_min"] + self._BOUNDARY_MARGIN
+                or loc.x > zone["x_max"] - self._BOUNDARY_MARGIN
+                or loc.y < zone["y_min"] + self._BOUNDARY_MARGIN
+                or loc.y > zone["y_max"] - self._BOUNDARY_MARGIN
             )
 
             # Priority: avoidance > boundary > random heading.
@@ -615,13 +610,6 @@ class NPCController:
     # Private helpers
     # ------------------------------------------------------------------
 
-    # Number of sectors to divide each zone into for respawn placement.
-    _RESPAWN_N_SECTORS = 5
-    # Distance step (metres) at which one additional sector is excluded.
-    # At ego_dist >= threshold, all sectors available.
-    # At ego_dist < threshold, top sector excluded; at < threshold/2, top two; etc.
-    _RESPAWN_SECTOR_THRESHOLD = 8.0
-
     def _respawn_pedestrian(self, idx: int, vehicle: Any) -> None:
         """
         @brief Destroy and respawn pedestrian at index idx within its zone.
@@ -648,7 +636,7 @@ class NPCController:
         else:
             # Cannot respawn without a world reference -- mark as gone
             self.pedestrian_actors[idx] = None
-            self._debug_logger._logger.debug(
+            logger.debug(
                 "[pedestrian] respawn idx=%d SKIPPED (no world reference)", idx
             )
             return
@@ -725,11 +713,11 @@ class NPCController:
 
         self.pedestrian_actors[idx] = walker
         if walker is None:
-            self._debug_logger._logger.debug(
+            logger.debug(
                 "[pedestrian] respawn idx=%d FAILED after 5 attempts", idx
             )
         else:
-            self._debug_logger._logger.debug(
+            logger.debug(
                 "[pedestrian] respawn idx=%d ok  sectors_allowed=%d/%d",
                 idx,
                 len(sectors),
