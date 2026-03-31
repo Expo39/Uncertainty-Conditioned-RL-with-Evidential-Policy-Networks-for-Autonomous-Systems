@@ -31,8 +31,8 @@ python uncertainty_rl/training/train_ppo.py \
 
 | `policy_type` | Agent | Policy | Observation |
 |---------------|-------|--------|-------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 21-dim (full method) or 12-dim (output\_uncertainty) |
-| `"standard"` | `PPO` | `MlpPolicy` | 21-dim (input\_uncertainty) or 12-dim (vanilla\_ppo) |
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 20-dim (full method) or 11-dim (output\_uncertainty) |
+| `"standard"` | `PPO` | `MlpPolicy` | 20-dim (input\_uncertainty) or 11-dim (vanilla\_ppo) |
 
 The `include_covariance` and `include_obstacle_obs` flags (from baseline YAML) control observation dimensionality. `include_obstacle_obs: true` in all 4 baselines so obstacle dims are not the experimental variable.
 

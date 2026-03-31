@@ -29,9 +29,9 @@ CARLAParkingEnv(
 )
 ```
 
-### State Space (21-dimensional default)
+### State Space (20-dimensional default)
 
-**All 21 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
+**All 20 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
 
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|
@@ -43,12 +43,11 @@ CARLAParkingEnv(
 | 15-17 | dx, dy, dyaw | Target bay (relative) | Target bay pose in ego body frame |
 | 18 | nearest\_dist | LiDAR scan | Distance to nearest obstacle (m) |
 | 19 | nearest\_bearing | LiDAR scan | Bearing to nearest obstacle in ego frame (rad) |
-| 20 | obstacle\_type | LiDAR + actor proximity | 0.0 = static, 1.0 = dynamic |
 
 **Ablation flags:**
 - `include_covariance=False` drops indices 6-14 (9 dims less).
-- `include_obstacle_obs=False` drops indices 18-20 (3 dims less).
-- Obs dims: 21 (default), 18 (no obstacle), 12 (no covariance), 9 (neither).
+- `include_obstacle_obs=False` drops indices 18-19 (2 dims less).
+- Obs dims: 20 (default), 18 (no obstacle), 11 (no covariance), 9 (neither).
 
 Covariance features are log1p-transformed to compress heavy tails from high-uncertainty conditions (rain, sensor noise) that would otherwise distort VecNormalize running statistics.
 
