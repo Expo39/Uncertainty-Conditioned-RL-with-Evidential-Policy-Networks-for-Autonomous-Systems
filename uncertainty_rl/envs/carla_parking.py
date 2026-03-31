@@ -566,9 +566,7 @@ class CARLAParkingEnv(gym.Env):
 
         Delegates to NPCController.update_patrol().
         """
-        self._npc_controller.update_patrol(
-            self.vehicle, self.steps, self._current_layout
-        )
+        self._npc_controller.update_patrol(self.vehicle, self.steps)
 
     def _update_pedestrians(self) -> None:
         """

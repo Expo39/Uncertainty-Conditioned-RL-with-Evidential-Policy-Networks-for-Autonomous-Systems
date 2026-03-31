@@ -10,9 +10,7 @@ instance and delegates NPC lifecycle calls to it.
 import logging
 import math
 import random
-from typing import Any, Dict, List, Optional, Tuple
-
-import numpy as np
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 try:
     import carla
@@ -99,7 +97,7 @@ class NPCController:
 
         # Per-episode patrol state
         self.patrol_npcs: List[Any] = []
-        self.patrol_npc_ids: set = set()
+        self.patrol_npc_ids: Set[int] = set()
         self._patrol_waypoint_indices: List[int] = []
         self._patrol_waypoint_directions: List[int] = []
         self._patrol_waypoints_cache: List[Tuple[float, float]] = []
@@ -332,7 +330,6 @@ class NPCController:
         self,
         vehicle: Any,
         steps: int,
-        current_layout: Dict[str, Any],
     ) -> None:
         """
         @brief Advance patrol NPC vehicles one step via proportional heading
@@ -340,10 +337,11 @@ class NPCController:
 
         Wraps to next waypoint when within 3 m. Applies omnidirectional ego
         avoidance and forward-cone obstacle/pedestrian detection.
+        Waypoints are read from self._patrol_waypoints_cache (populated by
+        spawn_patrol()).
 
         @param vehicle: Ego vehicle actor.
         @param steps: Current episode step count (used for debug throttle).
-        @param current_layout: Parsed floor plan YAML dict with patrol_waypoints.
         """
         waypoints = self._patrol_waypoints_cache
         if not waypoints:
@@ -379,7 +377,7 @@ class NPCController:
                 math.cos(target_yaw - npc_yaw),
             )
 
-            steer = float(np.clip(k_p * heading_error, -1.0, 1.0))
+            steer = max(-1.0, min(1.0, k_p * heading_error))
 
             fwd_x = math.cos(npc_yaw)
             fwd_y = math.sin(npc_yaw)
@@ -448,7 +446,7 @@ class NPCController:
                 vel = npc.get_velocity()
                 speed = math.sqrt(vel.x ** 2 + vel.y ** 2)
                 speed_ratio = speed / max(self._patrol_max_speed, 0.1)
-                throttle = float(np.clip(1.0 - speed_ratio, 0.1, 1.0))
+                throttle = max(0.1, min(1.0, 1.0 - speed_ratio))
 
                 control = carla.VehicleControl()
                 control.throttle = throttle
@@ -477,7 +475,7 @@ class NPCController:
         )
 
         for i, walker in enumerate(self.pedestrian_actors):
-            if not (walker is not None and walker.is_alive):
+            if walker is None or not walker.is_alive:
                 continue
 
             self._pedestrian_lifetime_steps[i] += 1
@@ -504,7 +502,7 @@ class NPCController:
                     repulse_y += -to_ego_y * weight
 
             for patrol_npc in self.patrol_npcs:
-                if not (patrol_npc is not None and patrol_npc.is_alive):
+                if patrol_npc is None or not patrol_npc.is_alive:
                     continue
                 to_px = patrol_npc.get_location().x - loc.x
                 to_py = patrol_npc.get_location().y - loc.y
