@@ -193,25 +193,42 @@ docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside t
 # Docker: Testing & Linting
 # ----------------------------------------------------------------------
 
-docker-test: ## Run full test suite inside container
+# Ensure the core training stack is running.
+# Only starts containers if the training service is not already up.
+# Never touches the inspect stack (docker-compose.inspect.yml).
+define ensure-core-stack-running
+	@if ! $(DOCKER_COMPOSE) ps --status running training 2>/dev/null | grep -q training; then \
+		echo "Core stack not running -- starting (this may take up to 90s)..."; \
+		$(DOCKER_COMPOSE) up -d --wait; \
+	fi
+endef
+
+docker-test: ## Run full test suite inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short
 
-docker-test-unit: ## Run unit tests inside container (no CARLA/ROS 2 needed)
+docker-test-unit: ## Run unit tests inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "not integration"
 
-docker-test-integration: ## Run integration tests inside container (requires full stack)
+docker-test-integration: ## Run integration tests inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
 
-docker-verify: ## Run all checks inside container (tests + lint + typecheck)
+docker-verify: ## Run all checks inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training make verify
 
-docker-lint: ## Run linters inside container
+docker-lint: ## Run linters inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training make lint
 
-docker-format: ## Format code inside container
+docker-format: ## Format code inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training make format
 
-docker-typecheck: ## Run mypy inside container
+docker-typecheck: ## Run mypy inside container (auto-starts core stack if needed)
+	$(call ensure-core-stack-running)
 	$(DOCKER_COMPOSE) exec training make typecheck
 
 # ----------------------------------------------------------------------
