@@ -11,7 +11,7 @@ import logging
 import math
 import threading
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
 
@@ -19,8 +19,6 @@ try:
     import carla
 except ImportError:
     carla = None  # Running without CARLA (CI or tests)
-
-from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
 
@@ -40,11 +38,17 @@ class SensorManager:
     stale references between episodes.
     """
 
+    # Impulse threshold (N*s) below which a dynamic-actor collision is ignored.
+    # A pedestrian walking into a stationary ego produces near-zero impulse;
+    # this threshold filters those out so only ego-at-fault events are penalised.
+    _DYNAMIC_COLLISION_IMPULSE_THRESHOLD: float = 500.0
+    # Bytes per LiDAR point in the CARLA raw buffer: 4 float32 fields (x, y, z, intensity)
+    _LIDAR_BYTES_PER_POINT: int = 16
+
     def __init__(
         self,
         sensors_config: Dict[str, Any],
         sensor_suite: str,
-        debug_logger: DebugLogger,
     ) -> None:
         """
         @brief Construct SensorManager with fixed config parameters.
@@ -56,14 +60,12 @@ class SensorManager:
                'suite_a' = 2D LiDAR + IMU,
                'suite_b' = 3D LiDAR + IMU,
                'suite_c' = 3D LiDAR + RGB camera + IMU.
-        @param debug_logger: Shared DebugLogger instance for diagnostic output.
         """
         self._sensors_config = sensors_config
         self._sensor_suite = sensor_suite
-        self._debug_logger = debug_logger
 
         # Per-episode sensor actor list
-        self._spawned_sensors: list = []
+        self._spawned_sensors: List[Any] = []
 
         # Latest LiDAR point cloud in vehicle frame ([N, 3] float32 array).
         # Updated by _lidar_callback(). Used by CARLAParkingEnv._get_obstacle_features().
@@ -444,16 +446,16 @@ class SensorManager:
             # Only penalise dynamic actor collisions when ego was at fault
             # (impulse above threshold indicates ego was moving into them).
             # A pedestrian walking into a stationary ego produces near-zero impulse.
-            if impulse_magnitude > 500.0:
+            if impulse_magnitude > self._DYNAMIC_COLLISION_IMPULSE_THRESHOLD:
                 self._collision_detected = True
                 self._collision_impulse = impulse_magnitude
-                self._debug_logger._logger.debug(
+                logger.debug(
                     "[collision] dynamic  actor=%s  impulse=%.1f N*s",
                     other.type_id,
                     impulse_magnitude,
                 )
             else:
-                self._debug_logger._logger.debug(
+                logger.debug(
                     "[collision] dynamic IGNORED (low impulse)  actor=%s  "
                     "impulse=%.1f N*s",
                     other.type_id,
@@ -463,7 +465,7 @@ class SensorManager:
             # Static objects (cones, parked cars, walls, perimeter): always penalise
             self._collision_detected = True
             self._collision_impulse = impulse_magnitude
-            self._debug_logger._logger.debug(
+            logger.debug(
                 "[collision] static  actor=%s  impulse=%.1f N*s",
                 other.type_id,
                 impulse_magnitude,
@@ -485,8 +487,7 @@ class SensorManager:
         """
         raw = lidar_data.raw_data
         n_bytes = len(raw)
-        # Each point is 4 float32 values: x, y, z, intensity (16 bytes total)
-        n_points = n_bytes // 16
+        n_points = n_bytes // self._LIDAR_BYTES_PER_POINT
         if n_points == 0:
             return
 
