@@ -39,12 +39,18 @@ from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
 if TYPE_CHECKING:
+    # For static analysis: always treat the base class as rclpy.Node so mypy
+    # can resolve all Node attributes (get_logger, create_publisher, etc.).
     from rclpy.node import Node as _NodeBase
 else:
+    # At runtime: inherit from Node when available, plain object otherwise.
+    # plain object is only used in CI / unit tests where rclpy is absent;
+    # the Node-specific methods (create_publisher, get_clock) are never
+    # called in that context.
     _NodeBase = Node if _ROS2_AVAILABLE else object
 
 
-class _CovarianceSubscriber(_NodeBase):
+class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
     """
     @class _CovarianceSubscriber
     @brief Reads EKF state from a shared JSON file + publishes /initialpose.

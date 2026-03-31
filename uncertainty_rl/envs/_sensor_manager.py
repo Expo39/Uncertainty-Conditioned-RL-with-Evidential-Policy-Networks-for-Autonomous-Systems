@@ -165,7 +165,7 @@ class SensorManager:
         elif self._sensor_suite == "suite_b":
             self._spawn_lidar_3d(world, vehicle)
         elif self._sensor_suite == "suite_c":
-            # @todo(AG) Camera is currently passive. Pending supervisor decision
+            # @todo(AG) Camera is currently passive. Pending decision
             # on Suite C utility (visual odometry vs removal).
             self._spawn_lidar_3d(world, vehicle)
             self._spawn_camera_rgb(world, vehicle)
@@ -357,7 +357,7 @@ class SensorManager:
               appears in CARLA diagnostics, but data is not consumed by the
               RL observation or EKF pipeline. The listener is a no-op.
 
-        @todo(AG) Pending supervisor decision on Suite C utility.
+        @todo(AG) Pending decision on Suite C utility.
 
         Config key: sensors_config.camera_rgb.
         Mount defaults: x=2.0, z=1.2, pitch=-5 deg.
@@ -492,7 +492,7 @@ class SensorManager:
             return
 
         arr = np.frombuffer(raw, dtype=np.float32).reshape(n_points, 4)
-        # Negate y: CARLA left-handed -> ROS right-handed (positive y = left)
+        # Negate y: CARLA left-handed (y rightward) -> vehicle frame (y leftward).
         points_xyz = arr[:, :3].copy()
         points_xyz[:, 1] *= -1.0
 
