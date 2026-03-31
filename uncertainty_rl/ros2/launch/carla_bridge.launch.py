@@ -334,8 +334,16 @@ def generate_launch_description() -> LaunchDescription:
     #
     # Cartographer publishes its pose estimate via TF (odom -> tracking_frame)
     # but not as an Odometry topic. The EKF needs nav_msgs/Odometry on odom0.
-    # This node bridges the gap by looking up the TF and publishing Odometry
-    # on /scan_matched_odometry at 20 Hz with fixed covariance.
+    # This node bridges the gap and publishes dynamic covariance: inflated when
+    # Cartographer loses scan-match lock (stale TF) or relocalises (TF jump).
+    # This varying covariance propagates through the EKF and becomes the
+    # localisation uncertainty signal in the RL policy observation.
+
+    # tracking_frame depends on sensor suite: Suite A uses the 2D LiDAR frame,
+    # Suite B/C use the 3D LiDAR frame (both are Cartographer's published_frame).
+    tf_tracking_frame = (
+        "ego_vehicle/lidar_3d" if is_3d else "ego_vehicle/lidar"
+    )
 
     tf_to_odom_node = Node(
         package="uncertainty_rl_ros2",
@@ -345,11 +353,25 @@ def generate_launch_description() -> LaunchDescription:
             {
                 "use_sim_time": True,
                 "odom_frame": "odom",
-                "tracking_frame": "ego_vehicle/imu",
+                "tracking_frame": tf_tracking_frame,
                 "publish_topic": "/scan_matched_odometry",
                 "publish_rate": 20.0,
-                "pose_covariance_diagonal": [0.05, 0.05, 1e6, 1e6, 1e6, 0.1],
-                "twist_covariance_diagonal": [0.1, 0.1, 1e6, 1e6, 1e6, 0.2],
+                # Dynamic covariance parameters.
+                # base_xy_variance / base_yaw_variance: nominal (best-case)
+                # variances when Cartographer is actively matching.
+                "base_xy_variance": 0.05,
+                "base_yaw_variance": 0.05,
+                # TF staleness inflation: when Cartographer stops publishing
+                # TF updates (lost scan match), covariance ramps up to
+                # staleness_scale x nominal over stale_max_sec seconds.
+                "stale_threshold_sec": 0.15,
+                "staleness_scale": 100.0,
+                "stale_max_sec": 2.0,
+                # Jump inflation: covariance spikes on Cartographer
+                # relocalisation events (large TF discontinuity).
+                "jump_threshold_m": 1.0,
+                "jump_scale": 50.0,
+                "jump_decay_steps": 10,
             }
         ],
     )
@@ -368,6 +390,10 @@ def generate_launch_description() -> LaunchDescription:
                     "covariance_topic", "/ekf_uncertainty/covariance"
                 ),
                 "publish_rate": ros2_config.get("publish_rate", 10.0),
+                # When world_frame=odom, robot_localisation publishes twist in
+                # the odom (world-aligned) frame. The extractor rotates it into
+                # the vehicle body frame before writing to ekf_state.json.
+                "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", True),
             }
         ],
     )
