@@ -1,6 +1,6 @@
 # scripts/visualise/
 
-Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evaluation. Runs on the host machine — no CARLA connection, no Docker, no GPU required.
+Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evaluation. Runs on the host machine - no CARLA connection, no Docker, no GPU required.
 
 ## How it works
 
@@ -11,11 +11,15 @@ The visualiser tails the JSONL file in real-time, groups lines into episodes, an
 ## Running
 
 ```bash
-make visualise               # Live window during training
-make eval-visualise-2d       # Load checkpoint + headless CARLA + live window
+# Training is already running in another terminal -- just open the viewer:
+make visualise
+
+# Load a checkpoint, start demo drive in Docker, open the viewer (all-in-one):
+make eval-visualise-2d
+make eval-visualise-2d CHECKPOINT=checkpoints/step_500000
 ```
 
-Both commands use the host's `python3` from `.venv-vis/` (Pygame + numpy only — no PyTorch, no gymnasium).
+The viewer (`make visualise`) uses the host's `python3` from `.venv-vis/` (Pygame + numpy only - no PyTorch, no gymnasium). `eval-visualise-2d` additionally starts the full Docker stack and runs `demo_drive.py` in the background before opening the viewer.
 
 ## File protocol
 
@@ -53,7 +57,7 @@ Each JSONL line is a complete frame dict with keys:
 7. Ego trajectory trail (faded cyan, capped at 500 points)
 8. Ego vehicle (cyan rectangle + heading arrow)
 9. HUD bar (floor plan, episode, step, sim time, episode history position)
-10. Debug HUD bar (position error, yaw error, speed, reward, covariance, actions) — only when `debug` key is present
+10. Debug HUD bar (position error, yaw error, speed, reward, covariance, actions) - only when `debug` key is present
 11. Legend panel (right-hand side, static)
 
 ## Controls
@@ -69,9 +73,9 @@ Each JSONL line is a complete frame dict with keys:
 
 | File | Purpose |
 |------|---------|
-| `visualiser.py` | `LiveVisualiser` class — JSONL tailing, Pygame rendering, viewport calculation |
+| `visualiser.py` | `LiveVisualiser` class - JSONL tailing, Pygame rendering, viewport calculation |
 | `__main__.py` | CLI entry point (`python -m scripts.visualise [--history-file PATH]`) |
-| `__init__.py` | Package init — sets non-interactive Matplotlib backend (guard for any indirect import) |
+| `__init__.py` | Package init - sets non-interactive Matplotlib backend (guard for any indirect import) |
 
 ## Dependencies
 
