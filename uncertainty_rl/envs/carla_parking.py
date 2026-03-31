@@ -282,13 +282,17 @@ class CARLAParkingEnv(gym.Env):
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
 
-        # Offset from Cartographer odom frame to CARLA world frame (set each episode).
-        # Computed once after _wait_for_covariance() by comparing the CARLA spawn
-        # position (world frame) to the first EKF pose (odom frame).  Applied in
-        # _get_state() so the EKF position is expressed in CARLA world frame before
-        # _compute_relative_target_pose() uses it.
-        # Tuple: (dx_world_minus_odom, dy_world_minus_odom, dyaw_world_minus_odom)
-        self._ekf_odom_offset: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # Full 2D rigid body transform from Cartographer odom frame to CARLA
+        # world frame, computed once per episode in _calibrate_ekf_frame_offset().
+        # Stored as (tx, ty, cos_r, sin_r, r) where:
+        #   tx, ty   -- world translation after applying the rotation
+        #   cos_r, sin_r -- 2D rotation matrix components (odom->world)
+        #   r        -- rotation angle (world_yaw - ekf_yaw at convergence)
+        # Used only by the debug drift calculation in step(); the observation
+        # path uses odom-frame coordinates directly via _target_bay_odom.
+        self._ekf_odom_offset: Tuple[float, float, float, float, float] = (
+            0.0, 0.0, 1.0, 0.0, 0.0
+        )
 
         # Target bay (world frame, set in reset)
         self._target_bay: Dict[str, Any] = {
@@ -298,6 +302,13 @@ class CARLAParkingEnv(gym.Env):
             "width": 2.5,
             "depth": 5.0,
         }
+
+        # Target bay expressed in Cartographer odom frame (set each episode after
+        # _calibrate_ekf_frame_offset() resolves the odom->world transform).
+        # Using odom-frame coordinates for the relative target computation means
+        # both the vehicle pose (EKF output) and the target are in the same
+        # drifting frame, so mid-episode odom drift cancels in the subtraction.
+        self._target_bay_odom: Dict[str, float] = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
         # Current floor plan layout (loaded from YAML in reset)
         self._current_layout: Dict[str, Any] = {}
@@ -522,6 +533,7 @@ class CARLAParkingEnv(gym.Env):
         self._lot_spawner.spawn_all(
             self.world, self._current_layout, self._target_bay,
             floor_contact_z=self._floor_z,
+            layout_name=self._current_floor_plan_name,
         )
 
     def _spawn_npc_patrol(self) -> None:
@@ -701,14 +713,13 @@ class CARLAParkingEnv(gym.Env):
             ekf_pose = self._cov_subscriber.get_latest_pose()
 
         if ekf_pose is not None:
-            # Transform EKF pose from Cartographer odom frame to CARLA world
-            # frame using the per-episode offset computed in
-            # _calibrate_ekf_frame_offset().  Velocities are frame-agnostic
-            # (differential quantities) so they are used directly.
-            _ox, _oy, _oyaw = self._ekf_odom_offset
-            x = float(ekf_pose[0]) + _ox
-            y = float(ekf_pose[1]) + _oy
-            yaw = float(ekf_pose[2]) + _oyaw
+            # Use EKF pose directly in Cartographer odom frame.
+            # Both the vehicle pose and the target bay (_target_bay_odom) are
+            # expressed in this frame, so mid-episode odom drift cancels in the
+            # relative-target subtraction.  No world-frame transform is needed.
+            x = float(ekf_pose[0])
+            y = float(ekf_pose[1])
+            yaw = float(ekf_pose[2])
             # Clamp EKF velocities to physically plausible range.
             # The IMU prediction step can integrate large noise spikes
             # before the first scan-match correction at episode start,
@@ -732,14 +743,16 @@ class CARLAParkingEnv(gym.Env):
             vy = velocity.y
             vyaw = math.radians(angular_vel.z)
 
-        # Relative target pose in ego body frame
+        # Relative target pose in ego body frame.
+        # Both vehicle pose (x, y, yaw) and target are in Cartographer odom frame,
+        # so odom drift cancels in the subtraction.
         dx, dy, dyaw = _compute_relative_target_pose(
             x,
             y,
             yaw,
-            self._target_bay["x"],
-            self._target_bay["y"],
-            self._target_bay["yaw"],
+            self._target_bay_odom["x"],
+            self._target_bay_odom["y"],
+            self._target_bay_odom["yaw"],
         )
 
         # -- Obstacle features (computed once, used in both branches) ------
@@ -1107,32 +1120,55 @@ class CARLAParkingEnv(gym.Env):
             f"First covariance received after {time.monotonic() - start:.2f}s."
         )
 
+    def _compute_target_bay_odom(
+        self, tx: float, ty: float, cos_r: float, sin_r: float, r: float
+    ) -> None:
+        """
+        @brief Project the world-frame target bay into Cartographer odom frame.
+
+        The forward transform is p_world = R * p_odom + t.
+        The inverse (world -> odom) is p_odom = R^T * (p_world - t),
+        where R^T = [[cos_r, sin_r], [-sin_r, cos_r]].
+
+        Storing the target in odom frame means both the EKF pose estimate and
+        the target are expressed in the same (drifting) frame.  Mid-episode
+        odom drift therefore cancels in the relative-target subtraction.
+
+        @param tx: World translation X after rotation (from _ekf_odom_offset).
+        @param ty: World translation Y after rotation (from _ekf_odom_offset).
+        @param cos_r: cos of the odom-to-world rotation angle.
+        @param sin_r: sin of the odom-to-world rotation angle.
+        @param r: Odom-to-world rotation angle (radians).
+        """
+        bx = self._target_bay["x"] - tx
+        by = self._target_bay["y"] - ty
+        # Apply inverse rotation: R^T * (p_world - t)
+        self._target_bay_odom = {
+            "x": cos_r * bx + sin_r * by,
+            "y": -sin_r * bx + cos_r * by,
+            "yaw": math.atan2(
+                math.sin(self._target_bay["yaw"] - r),
+                math.cos(self._target_bay["yaw"] - r),
+            ),
+        }
+
     def _calibrate_ekf_frame_offset(self) -> None:
         """
-        @brief Compute the translation offset from Cartographer odom frame to
-               CARLA world frame and store it in self._ekf_odom_offset.
+        @brief Compute the full 2D rigid body transform from Cartographer odom
+               frame to CARLA world frame and store it in self._ekf_odom_offset.
 
-        Cartographer's odom frame origin is not aligned with CARLA world frame
-        coordinates -- it is initialised wherever the vehicle is when
-        Cartographer starts.  The /initialpose hint only seeds the pose graph
-        localisation within the frozen map; it does not change the odom-frame
-        origin.
+        Cartographer's odom x-axis aligns with the vehicle's heading at
+        Cartographer startup. For a spawn at yaw=0 this matches CARLA world x,
+        but for yaw=90 the odom x-axis points along CARLA world y -- so a
+        pure translation offset is insufficient. A rotation must be applied
+        first to bring odom coordinates into CARLA world axis alignment.
 
-        Offset = CARLA_spawn - EKF_odom_pose (both measured at the same instant
-        after the EKF has converged).  Because the vehicle is stationary at
-        reset, the difference is purely translational.  Yaw offset is computed
-        similarly (CARLA spawn yaw minus EKF yaw).
+        The transform is: p_world = R * p_odom + t
+        where R is a 2D rotation matrix by angle `r = world_yaw - ekf_yaw`
+        and t is the translation after rotation.
 
-        After computing the offset, the method checks that the corrected EKF
-        position is within self._ekf_convergence_threshold metres of the CARLA
-        spawn.  If not, Cartographer has not yet matched the map -- the method
-        keeps ticking CARLA and retrying until convergence or
-        self._ekf_convergence_timeout elapses.  This prevents corrupted
-        position observations when the EKF is still in its initial drift phase.
-
-        If the EKF pose is unavailable the offset is left at (0, 0, 0), which
-        means the env falls back to EKF-frame coordinates (slightly wrong
-        relative target pose, but does not crash).
+        Computed once per episode while the vehicle is stationary at reset,
+        after the EKF velocity has settled below 0.5 m/s (convergence signal).
         """
         if self._cov_subscriber is None or self.vehicle is None:
             return
@@ -1148,13 +1184,6 @@ class CARLAParkingEnv(gym.Env):
         # Convergence detection: the vehicle is stationary at episode reset,
         # so the EKF velocity should be near zero once Cartographer has matched
         # the map and the IMU initialisation transient has settled.
-        # Velocity is a more reliable convergence signal than pose displacement
-        # because the EKF odom frame is not aligned with CARLA world frame
-        # (comparing positions across frames is meaningless), and because
-        # _read_file() caches the last result -- polling the same file twice
-        # would give step_motion=0 falsely.
-        # Threshold: 0.5 m/s is well above IMU noise (~0.1 m/s) but well below
-        # the spike magnitudes seen during non-convergence (100s of m/s).
         _VEL_CONVERGED = 0.5  # m/s
 
         while True:
@@ -1166,9 +1195,11 @@ class CARLAParkingEnv(gym.Env):
                     logger.warning(
                         "EKF pose unavailable after "
                         f"{self._ekf_convergence_timeout:.0f}s -- "
-                        "odom offset will be (0, 0, 0)."
+                        "odom transform will be identity."
                     )
-                    self._ekf_odom_offset = (0.0, 0.0, 0.0)
+                    self._ekf_odom_offset = (0.0, 0.0, 1.0, 0.0, 0.0)
+                    # Identity transform: odom frame = world frame.
+                    self._compute_target_bay_odom(0.0, 0.0, 1.0, 0.0, 0.0)
                     return
                 if self.world is not None:
                     self.world.tick(10.0)
@@ -1181,32 +1212,46 @@ class CARLAParkingEnv(gym.Env):
             ekf_vx = float(ekf_pose[3])
             ekf_vy = float(ekf_pose[4])
 
-            dx = world_x - ekf_x
-            dy = world_y - ekf_y
-            dyaw = math.atan2(
+            # Rotation angle: odom frame -> CARLA world frame.
+            # Cartographer odom x-axis points along the vehicle heading at
+            # startup, so the rotation is world_yaw - ekf_yaw.
+            r = math.atan2(
                 math.sin(world_yaw - ekf_yaw),
                 math.cos(world_yaw - ekf_yaw),
             )
+            cos_r = math.cos(r)
+            sin_r = math.sin(r)
+
+            # Rotate the odom-frame origin into world-aligned coordinates,
+            # then compute the translation to reach the CARLA world position.
+            rotated_x = cos_r * ekf_x - sin_r * ekf_y
+            rotated_y = sin_r * ekf_x + cos_r * ekf_y
+            tx = world_x - rotated_x
+            ty = world_y - rotated_y
 
             ekf_speed = math.sqrt(ekf_vx ** 2 + ekf_vy ** 2)
             if ekf_speed <= _VEL_CONVERGED:
-                self._ekf_odom_offset = (dx, dy, dyaw)
+                self._ekf_odom_offset = (tx, ty, cos_r, sin_r, r)
+                self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
                 logger.info(
                     f"EKF converged after {elapsed:.2f}s: "
-                    f"dx={dx:.3f}m dy={dy:.3f}m "
-                    f"dyaw={math.degrees(dyaw):.2f}deg "
+                    f"rotation={math.degrees(r):.1f}deg "
+                    f"tx={tx:.3f}m ty={ty:.3f}m "
                     f"ekf_speed={ekf_speed:.3f}m/s "
                     f"(CARLA spawn=({world_x:.2f},{world_y:.2f}) "
-                    f"EKF odom=({ekf_x:.2f},{ekf_y:.2f}))"
+                    f"EKF odom=({ekf_x:.2f},{ekf_y:.2f})) "
+                    f"target_odom=({self._target_bay_odom['x']:.2f},"
+                    f"{self._target_bay_odom['y']:.2f})"
                 )
                 return
 
             if elapsed > self._ekf_convergence_timeout:
-                self._ekf_odom_offset = (dx, dy, dyaw)
+                self._ekf_odom_offset = (tx, ty, cos_r, sin_r, r)
+                self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
                 logger.warning(
                     f"EKF convergence timeout ({self._ekf_convergence_timeout:.0f}s) "
                     f"-- ekf_speed={ekf_speed:.2f}m/s still above threshold. "
-                    "Using best available offset; position obs may be inaccurate."
+                    "Using best available transform; position obs may be inaccurate."
                 )
                 return
 
@@ -1448,13 +1493,16 @@ class CARLAParkingEnv(gym.Env):
                 _unc = self._cov_subscriber.get_latest_uncertainty()
                 _ekf_pose = self._cov_subscriber.get_latest_pose()
             # EKF vs ground truth drift (metres) -- key sim-to-real signal.
-            # Apply odom->world offset so both positions are in CARLA world frame.
+            # Apply the full odom->world rigid transform so both positions are
+            # in CARLA world frame before computing the error.
             _ekf_drift = 0.0
             if _ekf_pose is not None:
-                _ox, _oy, _ = self._ekf_odom_offset
+                _tx, _ty, _cos_r, _sin_r, _ = self._ekf_odom_offset
+                _world_ex = _cos_r * _ekf_pose[0] - _sin_r * _ekf_pose[1] + _tx
+                _world_ey = _sin_r * _ekf_pose[0] + _cos_r * _ekf_pose[1] + _ty
                 _ekf_drift = math.sqrt(
-                    (_ekf_pose[0] + _ox - _t.location.x) ** 2
-                    + (_ekf_pose[1] + _oy - _t.location.y) ** 2
+                    (_world_ex - _t.location.x) ** 2
+                    + (_world_ey - _t.location.y) ** 2
                 )
             _obs_dist = float(state[18]) if len(state) > 18 else 0.0
             _lidar_pts = self._sensor_manager.lidar_point_count()
@@ -1519,6 +1567,8 @@ class CARLAParkingEnv(gym.Env):
         @brief Clean up all resources including CARLA actors and ROS 2 nodes.
         """
         self._cleanup_actors()
+        # Destroy cached cones that _cleanup_actors() (episode reset) preserves.
+        self._lot_spawner.cleanup_all()
 
         # Restore asynchronous mode so CARLA does not freeze waiting for
         # ticks after the training process exits.

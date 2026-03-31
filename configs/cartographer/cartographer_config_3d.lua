@@ -17,11 +17,15 @@
 -- Pipeline (Suite B/C):
 --   /carla/ego_vehicle/lidar_3d (PointCloud2, 16-channel, 360 deg)
 --       -> Cartographer 2D (project all channels via min_z/max_z slice)
---       -> TF: odom -> ego_vehicle/imu
---       -> tf_to_odom node -> /scan_matched_odometry (Odometry)
+--       -> TF: odom -> ego_vehicle/lidar_3d
+--       -> tf_to_odom node -> /scan_matched_odometry (Odometry, dynamic covariance)
 --       -> robot_localisation EKF (odom0 correction step)
 --
--- @note IMU is mandatory (tracking_frame = ego_vehicle/imu).
+-- @note tracking_frame=ego_vehicle/lidar_3d avoids a TF conflict: the CARLA
+--       bridge publishes map -> ego_vehicle/imu directly, preventing Cartographer
+--       from owning that frame. use_imu_data=false because Cartographer requires
+--       the IMU frame to be colocated with the tracking frame (< 1e-5 m offset).
+--       IMU yaw rate still feeds the EKF imu0 prediction step independently.
 -- @note Suite C also spawns an RGB camera -- not consumed by Cartographer.
 -- ==========================================================================
 
@@ -32,12 +36,15 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- TF frame names: tracking ego_vehicle/imu satisfies Cartographer's IMU
-  -- colocation requirement. 3D LiDAR data (ego_vehicle/lidar_3d) is
-  -- transformed to the tracking frame via the static TF tree.
+  -- TF frame names: tracking ego_vehicle/lidar_3d avoids a TF conflict where
+  -- the CARLA bridge publishes map -> ego_vehicle/imu directly (37 Hz), which
+  -- prevents Cartographer from publishing odom -> ego_vehicle/imu (two parents).
+  -- ego_vehicle/lidar_3d is the primary moving frame for Suite B/C and has no
+  -- Cartographer conflict. IMU data is still fused via the static TF chain
+  -- ego_vehicle/lidar_3d -> ego_vehicle -> ego_vehicle/imu in the launch file.
   map_frame = "map",
-  tracking_frame = "ego_vehicle/imu",
-  published_frame = "ego_vehicle/imu",
+  tracking_frame = "ego_vehicle/lidar_3d",
+  published_frame = "ego_vehicle/lidar_3d",
   odom_frame = "odom",
 
   provide_odom_frame = true,
@@ -74,7 +81,7 @@ MAP_BUILDER.use_trajectory_builder_2d = true
 TRAJECTORY_BUILDER_2D.min_range = 0.1
 TRAJECTORY_BUILDER_2D.max_range = 50.0          -- Parking lot is ~65 x 45 m
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = true       -- IMU motion prior for sparse environment alignment
+TRAJECTORY_BUILDER_2D.use_imu_data = false  -- colocation requirement: IMU frame is not at ego_vehicle/lidar_3d
 
 -- Z-range for horizontal slice extraction from 3D point cloud (sensor frame).
 -- The 3D LiDAR is roof-mounted at z=1.9 in vehicle frame. Cones at ground

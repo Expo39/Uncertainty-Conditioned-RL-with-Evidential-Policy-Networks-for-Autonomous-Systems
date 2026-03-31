@@ -9,8 +9,8 @@
 .PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
-.PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
+.PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
+.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
 .PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short docker-watch-actors docker-watch-actors
 
 PYTHON := python3
@@ -64,6 +64,11 @@ docker-up: ## Start all containers
 
 docker-down: ## Stop all containers
 	$(DOCKER_COMPOSE) down
+
+docker-inspect-down: ## Stop all inspect containers (all profiles)
+	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-dryrun --profile inspect-sensors --profile inspect-live down
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect uncertainty-rl-training-inspect-dryrun uncertainty-rl-training-inspect-sensors uncertainty-rl-training-inspect-live 2>/dev/null || true
+	xhost -local:docker 2>/dev/null || true
 
 docker-restart: ## Restart all containers
 	$(DOCKER_COMPOSE) restart
@@ -236,6 +241,9 @@ docker-logs-ros2: ## Follow logs from ROS 2 bridge
 
 docker-inspect-dryrun-logs: ## Follow dryrun training container logs (run alongside docker-inspect-dryrun)
 	$(DOCKER_COMPOSE_INSPECT) logs -f training-inspect-dryrun
+
+docker-logs-ros2-inspect: ## Follow ROS 2 inspect container logs (run alongside docker-inspect-dryrun)
+	$(DOCKER_COMPOSE_INSPECT) logs -f ros2-bridge-inspect
 
 # ----------------------------------------------------------------------
 # Docker: Cleanup

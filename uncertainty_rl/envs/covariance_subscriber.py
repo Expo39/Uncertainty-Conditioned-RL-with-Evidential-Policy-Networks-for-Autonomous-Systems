@@ -170,20 +170,28 @@ class _CovarianceSubscriber(_NodeBase):
         @brief Publish the vehicle spawn pose to /initialpose for Cartographer
                pure localisation mode.
 
-        @param x: Spawn X in world frame (metres).
-        @param y: Spawn Y in world frame (metres).
-        @param yaw: Spawn heading in radians.
+        Converts from CARLA world frame (left-handed, y increases rightward)
+        to ROS/Cartographer map frame (right-handed, y increases leftward) by
+        negating y and yaw before publishing.
+
+        @param x: Spawn X in CARLA world frame (metres).
+        @param y: Spawn Y in CARLA world frame (metres).
+        @param yaw: Spawn heading in radians (CARLA convention).
         """
         if not _ROS2_AVAILABLE:
             return
+
+        # CARLA -> ROS frame: negate y and yaw (left-hand to right-hand mirror)
+        ros_y = -y
+        ros_yaw = -yaw
 
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = "map"
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.pose.position.x = x
-        msg.pose.pose.position.y = y
-        msg.pose.pose.orientation.z = math.sin(yaw / 2.0)
-        msg.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        msg.pose.pose.position.y = ros_y
+        msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
         msg.pose.covariance[0] = 0.1   # xx
         msg.pose.covariance[7] = 0.1   # yy
         msg.pose.covariance[35] = 0.05  # yaw-yaw

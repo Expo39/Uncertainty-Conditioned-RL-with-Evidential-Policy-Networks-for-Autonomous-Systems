@@ -48,10 +48,12 @@ class CovarianceExtractorNode(Node):
         self.declare_parameter("twist_in_odom_frame", True)
 
         # Get parameters
-        odom_topic = self.get_parameter("odom_topic").value
-        covariance_topic = self.get_parameter("covariance_topic").value
-        publish_rate = self.get_parameter("publish_rate").value
-        self._twist_in_odom_frame: bool = self.get_parameter("twist_in_odom_frame").value
+        odom_topic: str = str(self.get_parameter("odom_topic").value)
+        covariance_topic: str = str(self.get_parameter("covariance_topic").value)
+        publish_rate: float = float(self.get_parameter("publish_rate").value)
+        self._twist_in_odom_frame: bool = bool(
+            self.get_parameter("twist_in_odom_frame").value
+        )
 
         # Set up QoS profile for reliable communication
         qos_profile = QoSProfile(
@@ -81,9 +83,11 @@ class CovarianceExtractorNode(Node):
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
-        self.get_logger().info("Covariance extractor node initialised")
-        self.get_logger().info(f"  Subscribing to: {odom_topic}")
-        self.get_logger().info(f"  Publishing to: {covariance_topic}")
+        self.get_logger().info(
+            f"CovarianceExtractor: {odom_topic} -> {covariance_topic} "
+            f"at {publish_rate} Hz "
+            f"(twist_in_odom_frame={self._twist_in_odom_frame})"
+        )
 
     def odom_callback(self, msg: Odometry) -> None:
         """
@@ -96,7 +100,12 @@ class CovarianceExtractorNode(Node):
         """
         # Extract pose
         x = msg.pose.pose.position.x
-        y = msg.pose.pose.position.y
+        # Negate y: CARLA uses a left-handed coordinate system (y increases
+        # rightward / southward) while ROS/Cartographer uses right-handed
+        # (y increases leftward / northward). Negating here ensures all
+        # downstream consumers (training container, calibration, _get_state)
+        # work in CARLA world-frame convention consistently.
+        y = -msg.pose.pose.position.y
 
         # Extract yaw from quaternion
         qx = msg.pose.pose.orientation.x
@@ -104,18 +113,26 @@ class CovarianceExtractorNode(Node):
         qz = msg.pose.pose.orientation.z
         qw = msg.pose.pose.orientation.w
 
-        # Convert quaternion to yaw
+        # Convert quaternion to yaw. Negate because the y-axis flip mirrors
+        # the rotation direction (left-hand vs right-hand convention).
+        # Wrap explicitly to [-pi, pi]: robot_localization's EKF yaw state
+        # can drift past +/-pi when two_d_mode=true accumulates yaw without
+        # normalisation, producing values like -270 deg = -4.71 rad.
+        # Re-deriving yaw from the published quaternion (which IS normalised)
+        # rather than reading the EKF state directly avoids this.
         siny_cosp = 2.0 * (qw * qz + qx * qy)
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        yaw = -np.arctan2(siny_cosp, cosy_cosp)
 
         # Extract EKF-filtered velocity from twist.
         # When world_frame=odom, robot_localisation publishes twist in the odom
         # (world-aligned) frame regardless of sim or real. Rotate into vehicle
         # body frame so the policy sees forward/lateral speed consistently.
         vx_raw = msg.twist.twist.linear.x
-        vy_raw = msg.twist.twist.linear.y
-        vyaw = msg.twist.twist.angular.z
+        # Negate vy_raw: y-axis flip applies to lateral velocity too.
+        vy_raw = -msg.twist.twist.linear.y
+        # Negate vyaw: yaw rate sign flips with y-axis mirror.
+        vyaw = -msg.twist.twist.angular.z
         if self._twist_in_odom_frame:
             cos_yaw = np.cos(yaw)
             sin_yaw = np.sin(yaw)

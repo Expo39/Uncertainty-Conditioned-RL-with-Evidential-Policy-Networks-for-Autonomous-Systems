@@ -14,8 +14,8 @@
 -- Pipeline (Suite B/C, loc mode):
 --   /carla/ego_vehicle/lidar_3d (PointCloud2, 16-channel, 360 deg)
 --       -> Cartographer 2D (match against frozen .pbstream, all channels projected)
---       -> TF: odom -> ego_vehicle/imu
---       -> tf_to_odom node -> /scan_matched_odometry (Odometry)
+--       -> TF: odom -> ego_vehicle/lidar_3d
+--       -> tf_to_odom node -> /scan_matched_odometry (Odometry, dynamic covariance)
 --       -> robot_localisation EKF (odom0 correction step)
 --
 -- @note cartographer_ros reads this file at startup via --configuration_basename.
@@ -29,11 +29,15 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- TF frame names: tracking ego_vehicle/imu satisfies Cartographer's IMU
-  -- colocation requirement.
+  -- TF frame names: tracking ego_vehicle/lidar_3d avoids a TF conflict where
+  -- the CARLA bridge publishes map -> ego_vehicle/imu directly (37 Hz), which
+  -- prevents Cartographer from publishing odom -> ego_vehicle/imu (two parents).
+  -- ego_vehicle/lidar_3d is the primary moving frame for Suite B/C and has no
+  -- Cartographer conflict. IMU data is still fused via the static TF chain
+  -- ego_vehicle/lidar_3d -> ego_vehicle -> ego_vehicle/imu in the launch file.
   map_frame = "map",
-  tracking_frame = "ego_vehicle/imu",
-  published_frame = "ego_vehicle/imu",
+  tracking_frame = "ego_vehicle/lidar_3d",
+  published_frame = "ego_vehicle/lidar_3d",
   odom_frame = "odom",
 
   provide_odom_frame = true,
@@ -76,7 +80,7 @@ TRAJECTORY_BUILDER.pure_localization_trimmer = {
 TRAJECTORY_BUILDER_2D.min_range = 0.1
 TRAJECTORY_BUILDER_2D.max_range = 50.0
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = true       -- IMU motion prior for sparse environment alignment
+TRAJECTORY_BUILDER_2D.use_imu_data = false  -- colocation requirement: IMU frame is not at ego_vehicle/lidar_3d
 
 -- Z-range for horizontal slice extraction from 3D point cloud (sensor frame).
 -- Widen min_z to capture cone returns from roof-mounted LiDAR.

@@ -10,13 +10,19 @@
 -- Pipeline (Suite A):
 --   /carla/ego_vehicle/lidar (PointCloud2, 360 deg, single channel)
 --       -> Cartographer (num_point_clouds=1, raw PointCloud2 scan matching)
---       -> TF: odom -> ego_vehicle/imu
---       -> tf_to_odom node -> /scan_matched_odometry (Odometry)
+--       -> TF: odom -> ego_vehicle/lidar
+--       -> tf_to_odom node -> /scan_matched_odometry (Odometry, dynamic covariance)
 --       -> robot_localisation EKF (odom0 correction step)
 --
--- @note Cartographer tracks ego_vehicle/imu (IMU colocation requirement when
---       use_imu_data=true). LiDAR scans in ego_vehicle/lidar frame are
---       transformed to the tracking frame via the static TF tree.
+-- The tf_to_odom node publishes dynamic covariance: inflated when the TF is
+-- stale (Cartographer lost scan-match lock) or jumps (relocalisation event).
+-- This varying covariance is the primary uncertainty signal in the RL policy.
+--
+-- @note tracking_frame=ego_vehicle/lidar avoids a TF conflict: the CARLA bridge
+--       publishes map -> ego_vehicle/imu directly, preventing Cartographer from
+--       owning that frame. use_imu_data=false because Cartographer requires the
+--       IMU frame to be colocated with the tracking frame (< 1e-5 m offset).
+--       IMU yaw rate still feeds the EKF imu0 prediction step independently.
 --
 -- Tuning guidance:
 --   - TRANSLATION_WEIGHT / ROTATION_WEIGHT: balance how aggressively scan
@@ -35,12 +41,15 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- TF frame names: tracking ego_vehicle/imu satisfies Cartographer's IMU
-  -- colocation requirement. LiDAR data (ego_vehicle/lidar) is transformed
-  -- to the tracking frame via the static TF tree published by the launch file.
+  -- TF frame names: tracking ego_vehicle/lidar avoids a TF conflict where the
+  -- CARLA bridge publishes map -> ego_vehicle/imu directly (37 Hz), which
+  -- prevents Cartographer from publishing odom -> ego_vehicle/imu (two parents).
+  -- ego_vehicle/lidar is the primary moving frame published by the bridge and
+  -- has no Cartographer conflict. IMU data is still fused via the static TF
+  -- ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu in the launch file.
   map_frame = "map",
-  tracking_frame = "ego_vehicle/imu",
-  published_frame = "ego_vehicle/imu",
+  tracking_frame = "ego_vehicle/lidar",
+  published_frame = "ego_vehicle/lidar",
   odom_frame = "odom",
 
   provide_odom_frame = true,
@@ -80,9 +89,7 @@ MAP_BUILDER.use_trajectory_builder_2d = true
 TRAJECTORY_BUILDER_2D.min_range = 0.1          -- metres (ignore returns < 10 cm)
 TRAJECTORY_BUILDER_2D.max_range = 25.0         -- metres (SICK TiM571 max range)
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = true      -- IMU provides motion prior for scan-to-scan alignment;
-                                                -- critical for sparse environments (discrete cones)
-                                                -- where scan matching alone suffers perceptual aliasing
+TRAJECTORY_BUILDER_2D.use_imu_data = false  -- colocation requirement: IMU frame is not at ego_vehicle/lidar
 
 -- Adaptive voxel filter: target ~200 points per scan after downsampling
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
