@@ -8,9 +8,9 @@ with both the 2D bird's-eye visualiser (make visualise) and the 3D CARLA
 spectator view (--render flag).
 
 Usage:
-    python scripts/demo_drive.py --checkpoint checkpoints/final_model
-    python scripts/demo_drive.py --checkpoint checkpoints/final_model --render
-    python scripts/demo_drive.py --checkpoint checkpoints/final_model --episodes 5
+    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model
+    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model --render
+    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model --episodes 5
 """
 
 import argparse
