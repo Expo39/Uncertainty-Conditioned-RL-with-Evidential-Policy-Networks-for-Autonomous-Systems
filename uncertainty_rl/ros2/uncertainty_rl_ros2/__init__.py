@@ -17,8 +17,8 @@ try:
         "CovarianceExtractorNode",
         "CovarianceMonitorNode",
     ]
-except ModuleNotFoundError:
+except ImportError:
     # Outside the ros2-bridge container (CI, unit tests, host dev).
-    # uncertainty_rl_ros2 is an ament_python package only available
-    # after colcon build inside the container.
+    # rclpy / uncertainty_rl_ros2 are only available after colcon build
+    # inside the container.
     __all__ = []
