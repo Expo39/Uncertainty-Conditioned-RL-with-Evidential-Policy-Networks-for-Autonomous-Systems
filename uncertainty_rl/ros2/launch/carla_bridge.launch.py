@@ -59,8 +59,14 @@ def _load_yaml(path_str: str, env_override: str = "") -> dict:
     path = Path(resolved)
 
     if not path.exists():
-        # Fallback: check relative to this file (for local development)
-        path = Path(__file__).resolve().parents[3] / "configs" / path.name
+        # Fallback: resolve relative to the project root for local development.
+        # Preserve any subdirectory structure from the original path by taking
+        # the portion after "configs/" rather than just path.name.
+        try:
+            rel = path.relative_to("configs")
+        except ValueError:
+            rel = Path(path.name)
+        path = Path(__file__).resolve().parents[3] / "configs" / rel
 
     if path.exists():
         with open(path) as f:
@@ -264,8 +270,8 @@ def generate_launch_description() -> LaunchDescription:
 
     # -- EKF node ----------------------------------------------------------
 
-    ekf_params = ros2_config.get("ekf", {})
-    ekf_params["use_sim_time"] = True
+    # Spread into a new dict to avoid mutating the live ros2_config object.
+    ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": True}
 
     ekf_node = Node(
         package="robot_localization",
@@ -345,6 +351,9 @@ def generate_launch_description() -> LaunchDescription:
         "ego_vehicle/lidar_3d" if is_3d else "ego_vehicle/lidar"
     )
 
+    # Dynamic covariance parameters read from ros2_config.yaml (tf_to_odom section).
+    # This allows real-robot tuning without touching Python source.
+    tf_cfg = ros2_config.get("tf_to_odom", {})
     tf_to_odom_node = Node(
         package="uncertainty_rl_ros2",
         executable="tf_to_odom",
@@ -352,26 +361,23 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": True,
-                "odom_frame": "odom",
+                "odom_frame": ros2_config.get("ekf", {}).get("odom_frame", "odom"),
                 "tracking_frame": tf_tracking_frame,
+                # Must match ekf.base_link_frame so robot_localisation correctly
+                # interprets the velocity as expressed in the body frame.
+                "body_frame": ros2_config.get("ekf", {}).get(
+                    "base_link_frame", "ego_vehicle"
+                ),
                 "publish_topic": "/scan_matched_odometry",
-                "publish_rate": 20.0,
-                # Dynamic covariance parameters.
-                # base_xy_variance / base_yaw_variance: nominal (best-case)
-                # variances when Cartographer is actively matching.
-                "base_xy_variance": 0.05,
-                "base_yaw_variance": 0.05,
-                # TF staleness inflation: when Cartographer stops publishing
-                # TF updates (lost scan match), covariance ramps up to
-                # staleness_scale x nominal over stale_max_sec seconds.
-                "stale_threshold_sec": 0.15,
-                "staleness_scale": 100.0,
-                "stale_max_sec": 2.0,
-                # Jump inflation: covariance spikes on Cartographer
-                # relocalisation events (large TF discontinuity).
-                "jump_threshold_m": 1.0,
-                "jump_scale": 50.0,
-                "jump_decay_steps": 10,
+                "publish_rate": ros2_config.get("ekf", {}).get("frequency", 20.0),
+                "base_xy_variance": tf_cfg.get("base_xy_variance", 0.05),
+                "base_yaw_variance": tf_cfg.get("base_yaw_variance", 0.05),
+                "stale_threshold_sec": tf_cfg.get("stale_threshold_sec", 0.15),
+                "staleness_scale": tf_cfg.get("staleness_scale", 100.0),
+                "stale_max_sec": tf_cfg.get("stale_max_sec", 2.0),
+                "jump_threshold_m": tf_cfg.get("jump_threshold_m", 1.0),
+                "jump_scale": tf_cfg.get("jump_scale", 50.0),
+                "jump_decay_steps": int(tf_cfg.get("jump_decay_steps", 10)),
             }
         ],
     )

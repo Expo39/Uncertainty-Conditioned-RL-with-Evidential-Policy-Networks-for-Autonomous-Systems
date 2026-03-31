@@ -98,6 +98,7 @@ class TfToOdomNode(Node):
         # -- Parameters -------------------------------------------------------
         self.declare_parameter("odom_frame", "odom")
         self.declare_parameter("tracking_frame", "ego_vehicle/lidar")
+        self.declare_parameter("body_frame", "ego_vehicle")
         self.declare_parameter("publish_topic", "/scan_matched_odometry")
         self.declare_parameter("publish_rate", 20.0)
 
@@ -126,6 +127,9 @@ class TfToOdomNode(Node):
 
         self._odom_frame = str(self.get_parameter("odom_frame").value)
         self._tracking_frame = str(self.get_parameter("tracking_frame").value)
+        # body_frame must match robot_localisation's base_link_frame so the EKF
+        # correctly interprets the velocity as expressed in the body frame.
+        self._body_frame = str(self.get_parameter("body_frame").value)
         publish_topic = str(self.get_parameter("publish_topic").value)
         publish_rate = float(self.get_parameter("publish_rate").value)
 
@@ -190,6 +194,7 @@ class TfToOdomNode(Node):
 
         self.get_logger().info(
             f"TfToOdom: {self._odom_frame} -> {self._tracking_frame} "
+            f"(child_frame_id={self._body_frame}) "
             f"at {publish_rate} Hz on {publish_topic} "
             f"(dynamic covariance: base_xy={self._base_xy_var}, "
             f"base_yaw={self._base_yaw_var}, "
@@ -315,7 +320,10 @@ class TfToOdomNode(Node):
         odom = Odometry()
         odom.header.stamp = tf.header.stamp
         odom.header.frame_id = self._odom_frame
-        odom.child_frame_id = self._tracking_frame
+        # child_frame_id must be the body frame (ego_vehicle), not the sensor
+        # frame (ego_vehicle/lidar). robot_localisation matches this against
+        # base_link_frame to know which frame velocities are expressed in.
+        odom.child_frame_id = self._body_frame
         odom.pose.pose.position.x = curr_x
         odom.pose.pose.position.y = curr_y
         odom.pose.pose.position.z = tf.transform.translation.z

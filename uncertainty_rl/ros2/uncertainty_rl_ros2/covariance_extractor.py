@@ -95,6 +95,11 @@ class CovarianceExtractorNode(Node):
         self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
 
+        # Ensure the shared outputs directory exists before the first file write.
+        # The Dockerfile creates /workspace/configs/maps but not /workspace/outputs;
+        # this guard prevents a FileNotFoundError on the first odom_callback.
+        os.makedirs(os.path.dirname(self._SHARED_PATH), exist_ok=True)
+
         # Create timer for publishing
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
