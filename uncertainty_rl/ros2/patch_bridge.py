@@ -12,12 +12,14 @@ BASE = pathlib.Path("/workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_br
 
 # sensor.py: catch RuntimeError on stop()/destroy() of an already-gone actor
 p = BASE / "sensor.py"
-t = p.read_text()
-t = t.replace(
+original = p.read_text()
+_SENSOR_TARGET = (
     "        self._callback_active.acquire()\n"
     "        if self.carla_actor.is_listening:\n"
     "            self.carla_actor.stop()\n"
-    "        super(Sensor, self).destroy()",
+    "        super(Sensor, self).destroy()"
+)
+_SENSOR_PATCH = (
     "        self._callback_active.acquire()\n"
     "        try:\n"
     "            if self.carla_actor.is_listening:\n"
@@ -27,18 +29,24 @@ t = t.replace(
     "        try:\n"
     "            super(Sensor, self).destroy()\n"
     "        except Exception:\n"
-    "            pass",
+    "            pass"
 )
-p.write_text(t)
+assert _SENSOR_TARGET in original, (
+    f"patch_bridge.py: patch target not found in {p}. "
+    "ros-bridge may have been updated -- review and update the patch."
+)
+p.write_text(original.replace(_SENSOR_TARGET, _SENSOR_PATCH))
 
 # actor_factory.py: catch RuntimeError on destroy() of an already-gone actor
 p = BASE / "actor_factory.py"
-t = p.read_text()
-t = t.replace(
+original = p.read_text()
+_FACTORY_TARGET = (
     '        actor.destroy()\n'
     '        if carla_actor and delete_actor:\n'
     '            carla_actor.destroy()\n'
-    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))',
+    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))'
+)
+_FACTORY_PATCH = (
     '        try:\n'
     '            actor.destroy()\n'
     '        except Exception:\n'
@@ -48,6 +56,10 @@ t = t.replace(
     '                carla_actor.destroy()\n'
     '            except Exception:\n'
     '                pass\n'
-    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))',
+    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))'
 )
-p.write_text(t)
+assert _FACTORY_TARGET in original, (
+    f"patch_bridge.py: patch target not found in {p}. "
+    "ros-bridge may have been updated -- review and update the patch."
+)
+p.write_text(original.replace(_FACTORY_TARGET, _FACTORY_PATCH))
