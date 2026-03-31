@@ -18,10 +18,10 @@ Override-only configs for the 2x2 ablation study. Each file contains only the ke
 
 | File | Observation | Policy | Notes |
 |------|-------------|--------|-------|
-| `vanilla_ppo.yaml` | 12-dim (pose + target + obstacle) | Standard | `include_covariance: false`, `policy_type: "standard"` |
-| `input_uncertainty.yaml` | 21-dim (full) | Standard | `include_covariance: true`, `policy_type: "standard"` |
-| `output_uncertainty.yaml` | 12-dim (pose + target + obstacle) | Evidential | `include_covariance: false`, `policy_type: "evidential"` |
-| `full_method.yaml` | 21-dim (full) | Evidential | `include_covariance: true`, `policy_type: "evidential"` - main contribution |
+| `vanilla_ppo.yaml` | 11-dim (pose + target + obstacle) | Standard | `include_covariance: false`, `policy_type: "standard"` |
+| `input_uncertainty.yaml` | 20-dim (full) | Standard | `include_covariance: true`, `policy_type: "standard"` |
+| `output_uncertainty.yaml` | 11-dim (pose + target + obstacle) | Evidential | `include_covariance: false`, `policy_type: "evidential"` |
+| `full_method.yaml` | 20-dim (full) | Evidential | `include_covariance: true`, `policy_type: "evidential"` - main contribution |
 
 ### `carla_nav/`
 

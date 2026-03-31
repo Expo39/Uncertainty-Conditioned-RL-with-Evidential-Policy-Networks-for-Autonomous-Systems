@@ -83,7 +83,7 @@ A small subset of commands **must run on the host** because they open GUI window
 
 | Command | What it does | Host dep |
 |---------|-------------|----------|
-| `make visualise` | Live 2D bird's-eye window (polls `outputs/vis_state.json` written by the training container) | `matplotlib`, `numpy` |
+| `make visualise` | Live 2D bird's-eye window (tails `outputs/vis_history.jsonl` written by the training container) | `matplotlib`, `numpy` |
 | `make visualise-record` | Same + saves MP4 to `outputs/recordings/` on window close | `matplotlib`, `numpy` |
 | `make generate-layouts` | Generates lot layout YAMLs and bird's-eye PNGs into `outputs/layouts/` | `matplotlib`, `numpy` (PNGs only; YAML generation works without them) |
 
@@ -134,7 +134,7 @@ make docker-down     # stop all containers when done
 | `make docker-dev` | Start stack + drop into training shell | Yes |
 | `make docker-clean` | Stop and remove volumes | No |
 | `make generate-layouts` | Generate lot layout YAMLs + bird's-eye PNGs -**host only**, no CARLA needed | No |
-| `make visualise` | Live 2D bird's-eye window -**host only**, reads `outputs/vis_state.json` from container | No |
+| `make visualise` | Live 2D bird's-eye window -**host only**, tails `outputs/vis_history.jsonl` from container | No |
 | `make visualise-record` | Same as `visualise` + saves MP4 to `outputs/recordings/` on close -**host only** | No |
 | `make docker-demo MODEL=` | Windowed 3D CARLA demo with checkpoint (requires X11) | Yes |
 
@@ -145,7 +145,7 @@ Run `make help` for the full list.
 ```
 uncertainty_rl/                      # Main Python package
 |-- networks/evidential_policy.py    # Evidential layers, NIG distributions
-|-- envs/carla_parking.py            # CARLA Gymnasium environment (18D state, 3D action)
+|-- envs/carla_parking.py            # CARLA Gymnasium environment (20D state, 3D action)
 |-- training/
 |   |-- train_ppo.py                 # PPO training with SB3
 |   +-- Dockerfile                   # Training container (NGC PyTorch + SB3)
@@ -223,9 +223,9 @@ All hyperparameters live in `configs/` YAML files - never hardcoded in source.
 
 | File | Key Parameters |
 |------|---------------|
-| `train_config.yaml` | `learning_rate` (0.0003), `batch_size` (256), `buffer_size` (1M), `uncertainty_noise_std` (0.1m), `net_arch` ([256, 256]), `evidential.lambda_reg` (0.01) |
-| `eval_config.yaml` | `noise_levels`, `n_episodes` (100), `success_criteria` thresholds |
-| `ros2_config.yaml` | `odom_topic`, `covariance_topic`, `publish_rate` (10 Hz) |
+| `train_config.yaml` | `learning_rate` (0.0003), `batch_size` (256), `n_steps` (2048), `net_arch` ([256, 256]), `evidential.lambda_reg` (0.01), `sensor_suite` (suite_a), `parking_scenarios.*` |
+| `eval_config.yaml` | `eval_conditions` (10 conditions), `n_episodes` (100), `success_criteria` thresholds |
+| `ros2_config.yaml` | `carla_topics.*`, `ekf.*`, `odom_topic`, `covariance_topic` |
 
 ## Troubleshooting
 

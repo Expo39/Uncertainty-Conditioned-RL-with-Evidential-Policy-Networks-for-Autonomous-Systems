@@ -25,11 +25,12 @@ make docker-experiment          # Full ablation inside container (GPU required)
 make docker-experiment-dry      # Dry-run inside container
 ```
 
-### `visualise_training.py`
+### `visualise/` (package)
 
-Detachable 2D bird's-eye visualiser. Polls `outputs/vis_state.json` (written
-atomically by `VisStateWriter` in `carla_parking.py`) and renders ego vehicle,
-NPCs, target bay, trajectory trail, and lot geometry in a Matplotlib window.
+Detachable 2D bird's-eye visualiser. Tails `outputs/vis_history.jsonl` (appended
+atomically by `VisStateWriter` in `carla_parking.py` when `outputs/.vis_active`
+signal file exists) and renders ego vehicle, NPCs, target bay, trajectory trail,
+and lot geometry in a Matplotlib window.
 
 Runs on the host without a CARLA connection -- start it any time during training:
 
