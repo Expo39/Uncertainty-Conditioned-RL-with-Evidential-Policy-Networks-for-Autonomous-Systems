@@ -60,16 +60,16 @@ services:
       retries: 5
       start_period: 60s
 
-  # Demo drive container - loads checkpoint and drives in the windowed CARLA
-  # server for visual inspection. No metrics, just the model parking.
+  # Checkpoint demo container - loads a trained checkpoint and drives in windowed
+  # CARLA (3D spectator view) for visual inspection. No metrics, no training.
   # Start with: make docker-eval-visualise-3d [CHECKPOINT=path]
-  training-demo:
+  checkpoint-demo:
     build:
       context: .
       dockerfile: uncertainty_rl/training/Dockerfile
       args:
         PYTORCH_VERSION: 24.10-py3
-    container_name: uncertainty-rl-training-demo
+    container_name: uncertainty-rl-checkpoint-demo
     runtime: nvidia
     profiles:
       - demo
@@ -88,12 +88,11 @@ services:
       - ./uncertainty_rl:/workspace/uncertainty_rl:ro
       - ./configs:/workspace/configs:ro
       - ./scripts:/workspace/scripts:ro
-      - ./logs:/workspace/logs:rw
-      - ./checkpoints:/workspace/checkpoints:rw
+      - ./checkpoints:/workspace/checkpoints:ro
       - ./outputs:/workspace/outputs:rw
     working_dir: /workspace
     command: >
-      python scripts/demo_drive.py
+      python scripts/visualise/demo_drive.py
       --checkpoint ${CHECKPOINT:-checkpoints/final_model}
       --train-config configs/train_config.yaml
       --render

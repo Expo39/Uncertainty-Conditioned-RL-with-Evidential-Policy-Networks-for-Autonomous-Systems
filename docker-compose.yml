@@ -147,6 +147,51 @@ services:
               count: 1
               capabilities: [gpu]
 
+  # Demo / evaluation container -- same image as training but runs demo_drive.py.
+  # Started on demand by make eval-visualise-2d; never started by make docker-up.
+  # Separated from the training container so a live training run is never interrupted.
+  demo:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-demo
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - ROS_DOMAIN_ID=42
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - PYTHONUNBUFFERED=1
+      - CARLA_HOST=carla-server
+      - CARLA_PORT=2000
+      - CARTOGRAPHER_MODE=${CARTOGRAPHER_MODE:-loc}
+      - CARTOGRAPHER_MAP=${CARTOGRAPHER_MAP:-}
+      - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
+    depends_on:
+      carla-server:
+        condition: service_healthy
+      ros2-bridge:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./checkpoints:/workspace/checkpoints:ro
+      - ./outputs:/workspace/outputs:rw
+    working_dir: /workspace
+    profiles:
+      - demo
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
   # TensorBoard for monitoring training metrics (optional)
   tensorboard:
     image: python:3.10-slim

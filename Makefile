@@ -2,16 +2,15 @@
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration verify
-.PHONY: lint format typecheck clean syntax-check
+.PHONY: lint format typecheck clean
 .PHONY: backup-configs restore-configs
-.PHONY: train-loc train-loc-short evaluate
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
-.PHONY: docker-build docker-build-prod docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
+.PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
-.PHONY: docker-shell docker-shell-ros2 docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
-.PHONY: docker-clean docker-clean-all docker-full-build docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
-.PHONY: docker-generate-layouts docker-map docker-train-loc docker-train-loc-short docker-watch-actors docker-watch-actors
+.PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
+.PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
+.PHONY: docker-map docker-train-loc docker-train-loc-short
 
 PYTHON := python3
 PYTHON_VIS := .venv-vis/bin/python3
@@ -51,9 +50,6 @@ SERVICE ?=
 docker-build: ## Build all Docker images (core + inspect stacks). Usage: make docker-build
 	$(DOCKER_COMPOSE) build $(SERVICE)
 	$(DOCKER_COMPOSE_INSPECT) build $(SERVICE)
-
-docker-build-prod: ## Build training image without dev dependencies (lighter)
-	$(DOCKER_COMPOSE) build --build-arg DEV_INSTALL=false training
 
 docker-build-no-cache: ## Build images without cache (clean rebuild)
 	$(DOCKER_COMPOSE) build --no-cache
@@ -106,33 +102,11 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 	@# --wait blocks until all healthchecks pass (CARLA ~60s, bridge ~30s).
 	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) down
 	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) up -d --wait
-	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) exec training python -m scripts.mapping_drive \
+	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) exec training python -m scripts.mapping.mapping_drive \
 		--layout $(LAYOUT) \
 		--carla-host carla-server \
 		--carla-port 2000
-	@echo "Serialising Cartographer state to .pbstream..."
-	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) exec ros2-bridge bash -c \
-		"source /opt/ros/jazzy/setup.bash && \
-		 source /workspace/install/setup.bash && \
-		 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
-		 '{filename: \"/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream\", include_unfinished_submaps: true}'"
-	@echo "Saved configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream"
-	@# Occupancy grid PNG is optional (Cairo can fail on small maps).
-	@# The PGM is written to configs/maps/ (rw mount in ros2-bridge), then
-	@# converted to PNG via the training container (which has PIL + outputs mount).
-	-$(DOCKER_COMPOSE) exec ros2-bridge bash -c \
-		"source /opt/ros/jazzy/setup.bash && \
-		 source /workspace/install/setup.bash && \
-		 ros2 run cartographer_ros cartographer_pbstream_to_ros_map \
-		   --pbstream_filename /workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-		   --map_filestem /workspace/configs/maps/$(MAP_DIM)/$(LAYOUT)_grid \
-		   --resolution 0.05"
-	@if [ -f configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm ]; then \
-		$(DOCKER_COMPOSE) exec training python -c \
-			"from PIL import Image; Image.open('/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm').convert('RGB').save('/workspace/outputs/maps/$(MAP_DIM)/$(LAYOUT).png')"; \
-		rm -f configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.pgm configs/maps/$(MAP_DIM)/$(LAYOUT)_grid.yaml; \
-		echo "Saved outputs/maps/$(MAP_DIM)/$(LAYOUT).png"; \
-	fi
+	bash scripts/mapping/save_map.sh $(LAYOUT) $(MAP_DIM)
 
 # ----------------------------------------------------------------------
 # Docker: Training & Evaluation
@@ -147,23 +121,12 @@ LOC_ENV = export CARTOGRAPHER_MODE=loc \
 docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
 	@echo "Training (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training \
-		bash -c "python $(SRC_DIR)/training/train_ppo.py \
-		--config $(CONFIG_DIR)/train_config.yaml \
-		--log-dir logs \
-		--checkpoint-dir checkpoints \
-		2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh
 
 docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]
 	@echo "Training (loc, 10k steps): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training \
-		bash -c "python $(SRC_DIR)/training/train_ppo.py \
-		--config $(CONFIG_DIR)/train_config.yaml \
-		--total-timesteps 10000 \
-		--log-dir logs \
-		--checkpoint-dir checkpoints \
-		2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
 
 
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
@@ -175,19 +138,10 @@ docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		--output-dir evaluation_results
 
-
-# ----------------------------------------------------------------------
-# Docker: Layout Generation (no CARLA needed)
-# ----------------------------------------------------------------------
-
-docker-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs inside training container. Usage: make docker-generate-layouts [LAYOUT=trapezoid]
-	$(DOCKER_COMPOSE) exec training bash -c \
-		"mkdir -p configs/layouts outputs/layouts && \
-		 python scripts/layouts/generate_layouts.py \
-		   --output-dir configs/layouts \
-		   --plot-dir outputs/layouts \
-		   $(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)"
-
+docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [CHECKPOINT=path]
+	@echo "Demo drive 3D: checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
+	DISPLAY=$(or $(DISPLAY),:0) CHECKPOINT=$(or $(CHECKPOINT),checkpoints/final_model) \
+		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
 
 # ----------------------------------------------------------------------
 # Docker: Testing & Linting
@@ -274,6 +228,10 @@ docker-clean-all: ## Remove all containers, images, and volumes
 	$(DOCKER_COMPOSE) down -v --rmi all
 	docker system prune -af
 
+docker-dev: ## Start full stack and drop into training shell (GPU machine workflow)
+	$(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) exec training /bin/bash
+
 # ----------------------------------------------------------------------
 # Docker: Demo to evaluate model in windowed mode
 # ----------------------------------------------------------------------
@@ -310,19 +268,7 @@ docker-inspect-dryrun: ## Full training pipeline with random actions in windowed
 		$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun up \
 		--force-recreate --detach \
 		carla-server-demo ros2-bridge-inspect training-inspect-dryrun
-	@echo "Containers started. Streaming training output (Ctrl+C to abort)..."
-	@bash -c '\
-		cleanup() { \
-			echo ""; \
-			echo "Stopping inspect containers..."; \
-			$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun down 2>/dev/null || true; \
-			xhost -local:docker 2>/dev/null || true; \
-		}; \
-		trap cleanup EXIT INT TERM; \
-		docker logs -f uncertainty-rl-training-inspect-dryrun 2>&1 & \
-		LOG_PID=$$!; \
-		wait $$LOG_PID \
-	'
+	bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
@@ -378,54 +324,23 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 
 
 # ----------------------------------------------------------------------
-# Training & Evaluation
+# Visualisation (host-side viewer + Docker driver)
+# Two use cases:
+#   make visualise          -- training already running, just open the viewer
+#   make eval-visualise-2d  -- start checkpoint demo drive + open viewer
 # ----------------------------------------------------------------------
 
-train-loc: ## Train PPO agent in pure localisation mode against a pre-built .pbstream map. Usage: make train-loc [LAYOUT=rectangle]
-	CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	$(PYTHON) $(SRC_DIR)/training/train_ppo.py \
-		--config $(CONFIG_DIR)/train_config.yaml \
-		--log-dir ./logs \
-		--checkpoint-dir ./checkpoints
+visualise: ## Open 2D bird's-eye viewer (use while training is running). Usage: make visualise
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON_VIS) scripts/visualise/visualiser.py
 
-train-loc-short: ## Quick training run (10k steps) in pure localisation mode. Usage: make train-loc-short [LAYOUT=rectangle]
-	CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	$(PYTHON) $(SRC_DIR)/training/train_ppo.py \
-		--config $(CONFIG_DIR)/train_config.yaml \
-		--total-timesteps 10000 \
-		--log-dir ./logs \
-		--checkpoint-dir ./checkpoints
-
-evaluate: ## Evaluate trained agent in pure localisation mode. Usage: make evaluate [LAYOUT=rectangle]
-	CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	$(PYTHON) $(SRC_DIR)/evaluation/evaluate.py \
-		--model-path checkpoints/final_model \
-		--config $(CONFIG_DIR)/eval_config.yaml \
-		--output-dir ./evaluation_results
-
-# ----------------------------------------------------------------------
-# Visualisation (host-side, detachable from training) 
-# IMPORTANT: Containers MUST be running to see live data !
-# ----------------------------------------------------------------------
-
-visualise: ## Open 2D bird's-eye live visualiser (tails outputs/vis_history.jsonl, detachable)
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON_VIS) -m scripts.visualise
-
-eval-visualise-2d: ## Load checkpoint + headless CARLA + 2D bird's-eye. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
-	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec -d training python $(SCRIPTS_DIR)/demo_drive.py \
+	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
+	$(LOC_ENV) && $(DOCKER_COMPOSE) --profile demo run --rm -d demo \
+		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--train-config $(CONFIG_DIR)/train_config.yaml
-	@echo "Model driving in background. Open the 2D visualiser with: make visualise"
-
-docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [CHECKPOINT=path]
-	@echo "Demo drive 3D: checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
-	DISPLAY=$(or $(DISPLAY),:0) CHECKPOINT=$(or $(CHECKPOINT),checkpoints/final_model) \
-		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON_VIS) scripts/visualise/visualiser.py
 
 # ----------------------------------------------------------------------
 # Testing
@@ -470,9 +385,6 @@ typecheck: ## Run mypy type checking
 
 sanity: ## Quick import check
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
-
-syntax-check: ## Check Python syntax with py_compile (no execution)
-	$(PYTHON) -m py_compile uncertainty_rl/envs/carla_parking.py && echo "Syntax OK: carla_parking.py"
 
 # ----------------------------------------------------------------------
 # Cleanup

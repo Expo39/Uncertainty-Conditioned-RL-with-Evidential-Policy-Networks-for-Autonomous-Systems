@@ -11,6 +11,8 @@
 # NOTE: uncertainty_rl/, configs/, tests/, and scripts/ are NOT baked into the
 # image -- they are provided at runtime via bind-mounts in docker-compose.yml.
 # Only pyproject.toml and the ROS 2 msgs package are COPYed at build time.
+# Dev dependencies (linting, testing) are always installed -- the image is used
+# for both training and CI-equivalent checks inside the container.
 #
 # @author Antonio Galdes
 
@@ -23,14 +25,10 @@ ENV PYTHONUNBUFFERED=1
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies required for ROS 2 apt key setup
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
-    wget \
     curl \
-    vim \
-    htop \
-    tmux \
     software-properties-common \
     gnupg \
     lsb-release \
@@ -90,14 +88,8 @@ COPY pyproject.toml /workspace/pyproject.toml
 # Install CARLA Python API (system-level dependency, not on PyPI reliably)
 RUN pip install --no-cache-dir carla==0.9.16
 
-# Install dependencies from pyproject.toml
-# Set DEV_INSTALL=false for lighter production builds without linting/testing tools
-ARG DEV_INSTALL=true
-RUN if [ "$DEV_INSTALL" = "true" ]; then \
-        pip install --no-cache-dir -e "/workspace[dev]"; \
-    else \
-        pip install --no-cache-dir -e "/workspace"; \
-    fi
+# Install all dependencies from pyproject.toml (dev deps included for testing/linting in container)
+RUN pip install --no-cache-dir -e "/workspace[dev]"
 
 # Create anchor directories so bind-mounts have a target even on first run
 RUN mkdir -p /workspace/logs /workspace/checkpoints
