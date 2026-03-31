@@ -1,77 +1,120 @@
-# ROS 2 Configuration for Covariance Extraction
-# Configuration for the ROS 2 bridge, EKF, and covariance extraction pipeline.
+# ROS 2 configuration for the sensor-to-uncertainty pipeline.
+#
+# Pipeline summary (Suite A, 2D LiDAR + IMU):
+#
+#   /carla/ego_vehicle/lidar  (PointCloud2)
+#       -> Cartographer (loc mode, matching against frozen .pbstream)
+#       -> TF: odom -> ego_vehicle/lidar
+#       -> tf_to_odom node  -> /scan_matched_odometry  (Odometry, dynamic covariance)
+#
+#   /carla/ego_vehicle/imu  (sensor_msgs/Imu)
+#       -> EKF imu0: yaw rate PREDICTION step between LiDAR scan corrections
+#
+#   robot_localisation EKF fuses both:
+#       odom0 = /scan_matched_odometry  (x, y, yaw, vx, vy) -- CORRECTION step
+#       imu0  = /carla/ego_vehicle/imu  (vyaw only)          -- PREDICTION step
+#       output = /odometry/filtered  (pose + 6x6 covariance)
+#
+#   CovarianceExtractorNode reads /odometry/filtered and writes ekf_state.json.
+#   Training container reads ekf_state.json for obs[0-14] (pose + covariance).
+#
+# The EKF output covariance reflects Cartographer scan-match quality:
+#   strong match (clear lot, all cones visible) -> low covariance -> small std_x, std_y
+#   weak match (crowded lot, rain, cone occlusion) -> high covariance -> large std_x, std_y
+# This covariance variation is the primary uncertainty signal for the RL policy.
 
-
-# CARLA ROS bridge topics (Suite A: 2D LiDAR + IMU only)
-# Override topic names via launch argument remappings if your bridge version differs.
+# CARLA ROS bridge topic names (used as reference -- bridge publishes these automatically)
 carla_topics:
-  imu: "/carla/ego_vehicle/imu"             # sensor_msgs/Imu from CARLA bridge
-  lidar: "/carla/ego_vehicle/lidar"         # sensor_msgs/PointCloud2 (2D single-channel)
+  imu: "/carla/ego_vehicle/imu"    # sensor_msgs/Imu
+  lidar: "/carla/ego_vehicle/lidar"  # sensor_msgs/PointCloud2 (2D single-channel, Suite A)
 
-# robot_localisation EKF settings
-# These configure the EKF node launched via carla_bridge.launch.py.
-# The launch file loads this section directly as EKF node parameters.
-# Sensor fusion:
-#   - IMU (prediction step): yaw rate + linear acceleration between LiDAR scans
-#   - Cartographer scan-matched odometry (correction step): x, y, yaw, vx, vy, vyaw
-# The scan-matching covariance from Cartographer drives EKF covariance variation,
-# which is the primary uncertainty signal for the RL policy.
+# robot_localisation EKF node parameters.
+# Loaded directly by carla_bridge.launch.py as node parameters.
 ekf:
-  frequency: 20.0           # EKF update rate (Hz), matches CARLA timestep
-  two_d_mode: true           # Constrain to 2D (no z, roll, pitch)
-  world_frame: "odom"        # Frame of reference for EKF output
+  frequency: 20.0        # EKF update rate (Hz) -- matches CARLA timestep
+  two_d_mode: true       # Constrain to 2D: suppress z, roll, pitch states
+  world_frame: "odom"    # EKF output expressed in the Cartographer odom frame
   odom_frame: "odom"
-  # The CARLA bridge in passive mode publishes sensor TF frames directly under
-  # "map" with no "ego_vehicle" body frame. Static TF publishers in the launch
-  # file create: ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu, so the
-  # EKF can use "ego_vehicle" as the central body frame for all sensors.
-  base_link_frame: "ego_vehicle"
+  base_link_frame: "ego_vehicle"  # Central body frame for all sensors.
+  # The CARLA bridge (passive mode) publishes TF frames directly under "map"
+  # with no "ego_vehicle" body frame. Static TF publishers in carla_bridge.launch.py
+  # create the chain: ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu,
+  # so robot_localisation can resolve all sensor poses relative to ego_vehicle.
   publish_tf: true
+
+  # IMU sensor: prediction step only.
+  # Enabled: yaw (index 5) and vyaw (index 11).
+  # Linear acceleration disabled: CARLA bridge publishes zero IMU covariance,
+  # so robot_localization would treat acceleration as infinitely reliable and
+  # override the Cartographer velocity corrections. Yaw rate alone is sufficient
+  # to propagate the heading estimate between 20 Hz scan-match corrections.
   imu0: "/carla/ego_vehicle/imu"
-  # 15-element boolean list: [x, y, z, roll, pitch, yaw,
-  #                           vx, vy, vz, vroll, vpitch, vyaw,
-  #                           ax, ay, az]
-  imu0_config: [false, false, false, false, false, true,
+  # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+  imu0_config: [false, false, false, false, false, false,
                 false, false, false, false, false, true,
                 false, false, false]
-  # Linear acceleration disabled: CARLA ROS bridge publishes zero IMU covariance,
-  # causing robot_localization to treat acceleration as infinitely reliable and
-  # override Cartographer velocity corrections. Yaw rate (vyaw) is sufficient
-  # for the IMU prediction step between LiDAR scan-match corrections.
-  # Cartographer scan-matched odometry: x, y, yaw, vx, vy, vyaw.
-  # Covariance from scan-matching quality drives EKF uncertainty variation.
+
+  # Cartographer scan-matched odometry: correction step.
+  # Published by tf_to_odom node with dynamic covariance:
+  #   - Nominal: base_xy_variance=0.05, base_yaw_variance=0.05
+  #   - Stale TF (lost scan match): inflates up to 100x over 2 s
+  #   - Jump (relocalisation): inflates 50x, decays over 10 steps
+  # This dynamic covariance propagates through the EKF filter and produces
+  # the varying std_x, std_y, std_yaw that appear in obs[6-8].
+  # Enabled: x (0), y (1), yaw (5), vx (6), vy (7).
   odom0: "/scan_matched_odometry"
+  # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   odom0_config: [true, true, false, false, false, true,
-                 true, true, false, false, false, true,
+                 true, true, false, false, false, false,
                  false, false, false]
 
-# Covariance extraction node topics
-odom_topic: "/odometry/filtered"  # Input: EKF-filtered odometry
-covariance_topic: "/ekf_uncertainty/covariance"  # Output: CovarianceEstimate
+# tf_to_odom dynamic covariance parameters.
+# These are read by carla_bridge.launch.py and passed to TfToOdomNode.
+# Tune these for the real robot without touching any Python code.
+tf_to_odom:
+  # Nominal variances when Cartographer is actively matching (best-case).
+  # x/y: 0.05 m^2 (std ~0.22 m).  yaw: 0.05 rad^2 (std ~13 deg).
+  base_xy_variance: 0.05
+  base_yaw_variance: 0.05
 
-# Publishing settings
-publish_rate: 10.0  # Hz
+  # Hard clamps on the published pose variance (applied after inflation).
+  # Floor prevents the EKF treating Cartographer as infinitely reliable.
+  # Ceiling prevents a frozen EKF when Cartographer is completely lost.
+  min_variance: 0.01    # m^2 -- never more confident than std ~0.10 m
+  max_variance: 50.0    # m^2 -- caps inflation; EKF stays numerically stable
+
+  # Staleness inflation: covariance ramps up when TF stops updating.
+  stale_threshold_sec: 0.15   # seconds without a new TF before inflation starts
+  staleness_scale: 100.0      # maximum multiplier at stale_max_sec
+  stale_max_sec: 2.0          # seconds to reach full staleness_scale
+
+  # Jump inflation: covariance spikes on Cartographer relocalisation events.
+  # At 20 Hz, normal parking speed (~2 m/s) moves 0.10 m/step.
+  # Anything above 1.0 m is a Cartographer jump, not vehicle motion.
+  jump_threshold_m: 1.0
+  jump_scale: 50.0
+  jump_decay_steps: 10
+
+# CovarianceExtractorNode configuration.
+# Subscribes to /odometry/filtered, extracts 3x3 [x, y, yaw] covariance submatrix,
+# and writes pose + covariance to ekf_state.json for the training container.
+odom_topic: "/odometry/filtered"            # EKF output topic
+covariance_topic: "/ekf_uncertainty/covariance"  # CovarianceEstimate publisher (unused in training -- file-based)
+publish_rate: 10.0                           # Hz (file write rate)
 
 # Velocity frame convention.
-# When world_frame=odom in robot_localisation, twist is published in the odom
-# (world-aligned) frame and must be rotated into the vehicle body frame.
-# This applies to both simulation and real robot when using the same EKF config.
-# Only set false if robot_localisation is explicitly configured with
-# twist_in_robot_frame: true on the real robot deployment.
+# robot_localisation with world_frame=odom publishes twist in the odom
+# (world-aligned) frame, not the vehicle body frame. The extractor rotates
+# it into body frame before writing to ekf_state.json.
+# Set false only if robot_localisation is configured with twist_in_robot_frame: true.
 twist_in_odom_frame: true
 
-# QoS settings
+# QoS settings for ROS 2 subscribers/publishers
 qos:
-  reliability: "reliable"  # reliable or best_effort
+  reliability: "reliable"
   history: "keep_last"
   depth: 10
 
 # Logging
-log_level: "info"  # debug, info, warn, error
-log_rate: 1.0  # Log statistics every N seconds
-
-# Covariance processing
-covariance:
-  min_variance: 0.0001  # Minimum variance threshold (m^2)
-  max_variance: 100.0  # Maximum variance threshold (m^2)
-  outlier_rejection: true  # Reject outlier covariance values
+log_level: "info"   # debug, info, warn, error
+log_rate: 1.0       # Log uncertainty statistics every N seconds

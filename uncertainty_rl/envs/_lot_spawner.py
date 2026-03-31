@@ -110,6 +110,14 @@ class LotSpawner:
         self.spawned_cones: List[Any] = []
         self.spawned_static_vehicles: List[Any] = []
 
+        # Cones (perimeter + obstacle) are layout-specific and fixed for the
+        # lifetime of a floor plan.  Caching them avoids destroying and
+        # re-spawning ~60-80 actors every episode reset, which would otherwise
+        # cause a large burst of bridge callbacks that temporarily starves
+        # Cartographer of LiDAR data.
+        self._cached_cones_layout: str = ""
+        self._cached_cone_positions: List[Tuple[float, float]] = []
+
         # Cached (x, y) positions of all static objects in world frame.
         # Populated during spawning; used by _get_obstacle_features() to
         # classify LiDAR returns without per-step actor queries.
@@ -168,12 +176,16 @@ class LotSpawner:
         current_layout: Dict[str, Any],
         target_bay: Dict[str, Any],
         floor_contact_z: float = 0.3,
+        layout_name: str = "",
     ) -> None:
         """
         @brief Spawn all static actors for one episode.
 
-        Spawns perimeter cones (if enabled), interior obstacle cones, and
-        static parked vehicles. Resamples bay occupancy rate each call.
+        Perimeter and obstacle cones are cached across episodes for the same
+        floor plan -- they are layout-fixed and do not need to be destroyed and
+        re-spawned every reset.  Only parked vehicles are re-randomised each
+        episode.  This avoids the large bridge callback burst that would
+        otherwise temporarily starve Cartographer of LiDAR data.
 
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict.
@@ -181,6 +193,8 @@ class LotSpawner:
         @param floor_contact_z: Ego vehicle CoM z after settling under gravity.
                Prop origins (cones) are placed at this z; vehicles settle by
                physics so this is only used as the drop height reference.
+        @param layout_name: Floor plan name for cone cache invalidation.
+               Pass the same value as self._current_floor_plan_name in the env.
         """
         if world is None:
             return
@@ -189,35 +203,80 @@ class LotSpawner:
             self._bay_occupancy_min, self._bay_occupancy_max
         )
 
-        # Collect all physics-ON actors from every spawner, settle them in one
-        # shared tick loop, then freeze.  This is cheaper than three separate
-        # settle loops and ensures cones and vehicles land at the same time.
-        pending: List[Tuple[Any, float, float, float]] = []
+        # --- Cones (layout-fixed, cached across episodes) ---
+        cones_already_spawned = (
+            layout_name
+            and layout_name == self._cached_cones_layout
+            and all(c.is_alive for c in self.spawned_cones)
+        )
 
-        if self._spawn_perimeter_cones_flag:
-            pending.extend(
-                self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
+        if cones_already_spawned:
+            # Reuse existing cone actors; rebuild static_obstacle_positions
+            # from the cached positions so vehicle positions can be appended.
+            self.static_obstacle_positions = list(self._cached_cone_positions)
+            logger.debug("Reusing %d cached cone actors for layout '%s'.",
+                         len(self.spawned_cones), layout_name)
+        else:
+            # Destroy any stale cones from a previous layout then re-spawn.
+            for cone in self.spawned_cones:
+                if cone is not None and cone.is_alive:
+                    cone.destroy()
+            self.spawned_cones.clear()
+
+            cone_pending: List[Tuple[Any, float, float, float]] = []
+            if self._spawn_perimeter_cones_flag:
+                cone_pending.extend(
+                    self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
+                )
+            cone_pending.extend(
+                self._spawn_obstacle_cones(world, current_layout, floor_contact_z)
             )
-        pending.extend(
-            self._spawn_obstacle_cones(world, current_layout, floor_contact_z)
-        )
-        pending.extend(
-            self._spawn_static_vehicles(world, current_layout, target_bay, floor_contact_z)
+
+            # Settle cones first (they need fewer ticks than vehicles).
+            for _ in range(60):
+                world.tick()
+                if all(
+                    abs(a.get_velocity().z) < 0.01
+                    for a, _, _, _ in cone_pending
+                    if a.is_alive
+                ):
+                    break
+
+            for actor, ax, ay, actor_yaw in cone_pending:
+                if not actor.is_alive:
+                    continue
+                actor.set_simulate_physics(False)
+                settled_z = actor.get_transform().location.z
+                actor.set_transform(
+                    carla.Transform(
+                        carla.Location(x=ax, y=ay, z=settled_z),
+                        carla.Rotation(yaw=actor_yaw),
+                    )
+                )
+                self.spawned_cones.append(actor)
+                self.static_obstacle_positions.append((ax, ay))
+
+            self._cached_cones_layout = layout_name
+            self._cached_cone_positions = list(self.static_obstacle_positions)
+            logger.debug("Spawned and cached %d cone actors for layout '%s'.",
+                         len(self.spawned_cones), layout_name)
+
+        # --- Parked vehicles (re-randomised every episode) ---
+        vehicle_pending = self._spawn_static_vehicles(
+            world, current_layout, target_bay, floor_contact_z
         )
 
-        # Tick until all actors have settled (up to 60 ticks at 20 Hz = 3 s).
+        # Tick until all vehicles have settled (up to 60 ticks at 20 Hz = 3 s).
         for _ in range(60):
             world.tick()
             if all(
                 abs(a.get_velocity().z) < 0.01
-                for a, _, _, _ in pending
+                for a, _, _, _ in vehicle_pending
                 if a.is_alive
             ):
                 break
 
-        # Freeze every actor at its settled z, re-lock XY to its spawn position,
-        # and register into the appropriate per-episode list.
-        for actor, ax, ay, actor_yaw in pending:
+        for actor, ax, ay, actor_yaw in vehicle_pending:
             if not actor.is_alive:
                 continue
             actor.set_simulate_physics(False)
@@ -228,20 +287,27 @@ class LotSpawner:
                     carla.Rotation(yaw=actor_yaw),
                 )
             )
-            # Register into the correct per-episode list for cleanup and obstacle
-            # classification.  CARLA blueprint IDs for vehicles start with
-            # 'vehicle.'; everything else here is a static prop (cone).
-            if actor.type_id.startswith("vehicle."):
-                self.spawned_static_vehicles.append(actor)
-            else:
-                self.spawned_cones.append(actor)
+            self.spawned_static_vehicles.append(actor)
             self.static_obstacle_positions.append((ax, ay))
 
     def cleanup(self) -> None:
         """
-        @brief Destroy all spawned static actors and clear position caches.
+        @brief Destroy per-episode actors (parked vehicles only) and reset caches.
 
-        Call at the start of each episode reset before spawning new actors.
+        Cones are kept alive and reused by the next episode if the floor plan
+        has not changed.  Call at the start of each episode reset.
+        """
+        for actor in self.spawned_static_vehicles:
+            if actor is not None and actor.is_alive:
+                actor.destroy()
+        self.spawned_static_vehicles.clear()
+        self.static_obstacle_positions.clear()
+
+    def cleanup_all(self) -> None:
+        """
+        @brief Destroy all static actors including cached cones.
+
+        Call from CARLAParkingEnv.close() to fully clean up on shutdown.
         """
         for actor_list in [self.spawned_cones, self.spawned_static_vehicles]:
             for actor in actor_list:
@@ -250,6 +316,8 @@ class LotSpawner:
             actor_list.clear()
 
         self.static_obstacle_positions.clear()
+        self._cached_cones_layout = ""
+        self._cached_cone_positions.clear()
 
     # ------------------------------------------------------------------
     # Private helpers

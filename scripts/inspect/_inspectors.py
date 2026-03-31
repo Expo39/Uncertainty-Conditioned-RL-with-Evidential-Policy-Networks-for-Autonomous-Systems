@@ -869,12 +869,33 @@ class DryRunInspector(_Inspector):
                 f"  cov_diag=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})"
                 f"  cov_off=({obs[12]:.4f},{obs[13]:.4f},{obs[14]:.4f})"
             )
-        # Target bay in ego body frame (indices 15-17)
+        # Target bay in ego body frame (indices 15-17) -- odom-frame relative
         if len(obs) >= 18:
             parts.append(
-                f"target: dx={obs[15]:.2f}m  dy={obs[16]:.2f}m"
+                f"target(odom): dx={obs[15]:.2f}m  dy={obs[16]:.2f}m"
                 f"  dyaw={math.degrees(obs[17]):+.1f}deg"
             )
+        # GT target cross-check: show the world-frame target the env selected
+        # and the odom-frame target computed at reset.  These should be
+        # geometrically consistent: rotating odom back to world should match.
+        gt = self._env._target_bay
+        odom_t = self._env._target_bay_odom
+        gt_line = (
+            _YELLOW
+            + f"[GT target] world=({gt['x']:.2f},{gt['y']:.2f})"
+            f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
+            f"  |  odom=({odom_t['x']:.2f},{odom_t['y']:.2f})"
+            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg"
+            + _RESET
+        )
+        # Cross-check: reconstruct world position from odom target + offset
+        # to verify the inverse transform is self-consistent.
+        tx, ty, cos_r, sin_r, _ = self._env._ekf_odom_offset
+        recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
+        recon_wy = sin_r * odom_t["x"] + cos_r * odom_t["y"] + ty
+        err_m = math.sqrt((recon_wx - gt["x"]) ** 2 + (recon_wy - gt["y"]) ** 2)
+        gt_line += f"  [recon_err={err_m:.3f}m]"
+        parts.append(gt_line)
         # Obstacle (indices 18-19)
         if len(obs) >= 20:
             parts.append(f"obstacle: {obs[18]:.2f}m  {math.degrees(obs[19]):+.1f}deg")
@@ -905,12 +926,14 @@ class DryRunInspector(_Inspector):
             f"Dry-run: random actions for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
-        print("  Model inputs per step (20-dim obs):"
+        print("  Model inputs per step (20-dim obs, all in Cartographer odom frame):"
               "\n    [0-5]  EKF pose:      pos(x,y)  yaw  vel(vx,vy)  vyaw"
               "\n    [6-14] EKF cov:       std(x,y,yaw)  cov_diag(xx,yy,yawyaw)"
               "  cov_off(xy,xyaw,yyaw)  [log1p-transformed]"
-              "\n    [15-17] Target bay:   dx  dy  dyaw (ego body frame)"
-              "\n    [18-19] Obstacle:     dist_m  bearing_deg (+ve=left)")
+              "\n    [15-17] Target bay:   dx  dy  dyaw (odom-frame, ego body relative)"
+              "\n    [18-19] Obstacle:     dist_m  bearing_deg (+ve=left)"
+              "\n  [GT target] world + odom coordinates logged per step (yellow) + recon_err"
+              "\n  recon_err should be < 0.05 m (transform self-consistency check)")
 
         try:
             while time.monotonic() < deadline:
