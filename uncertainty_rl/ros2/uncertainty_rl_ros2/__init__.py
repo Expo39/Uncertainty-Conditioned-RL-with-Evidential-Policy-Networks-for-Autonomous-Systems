@@ -7,12 +7,18 @@ ros2-bridge container. The actual node implementations live in
 covariance_extractor.py within this directory.
 """
 
-from uncertainty_rl_ros2.covariance_extractor import (
-    CovarianceExtractorNode,
-    CovarianceMonitorNode,
-)
+try:
+    from uncertainty_rl_ros2.covariance_extractor import (
+        CovarianceExtractorNode,
+        CovarianceMonitorNode,
+    )
 
-__all__ = [
-    "CovarianceExtractorNode",
-    "CovarianceMonitorNode",
-]
+    __all__ = [
+        "CovarianceExtractorNode",
+        "CovarianceMonitorNode",
+    ]
+except ModuleNotFoundError:
+    # Outside the ros2-bridge container (CI, unit tests, host dev).
+    # uncertainty_rl_ros2 is an ament_python package only available
+    # after colcon build inside the container.
+    __all__ = []
