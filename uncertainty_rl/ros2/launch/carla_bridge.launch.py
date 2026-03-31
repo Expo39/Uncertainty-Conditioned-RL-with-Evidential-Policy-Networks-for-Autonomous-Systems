@@ -181,7 +181,13 @@ def _select_cartographer_config(mode: str, is_3d: bool) -> str:
         ("loc", False): "cartographer_config_loc.lua",
         ("loc", True): "cartographer_config_3d_loc.lua",
     }
-    return configs[(mode, is_3d)]
+    key = (mode, is_3d)
+    if key not in configs:
+        raise ValueError(
+            f"Unknown CARTOGRAPHER_MODE '{mode}'. "
+            "Expected 'slam' or 'loc'."
+        )
+    return configs[key]
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -199,9 +205,8 @@ def generate_launch_description() -> LaunchDescription:
     cartographer_map = os.environ.get("CARTOGRAPHER_MAP", "")
     is_3d = sensor_suite in ("suite_b", "suite_c")
 
-    # synchronous_mode is passed to the bridge but has NO effect when passive=true.
-    # When passive, the bridge skips apply_settings entirely -- it never registers
-    # as a synchronous CARLA client and CARLA never waits for it.
+    # synchronous_mode has NO effect when passive=true: the bridge skips
+    # apply_settings entirely and never registers as a synchronous CARLA client.
     # The training container's world.tick() is the sole tick driver.
     bridge_sync_mode = "false"
 
@@ -220,8 +225,8 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "town",
-            default_value="Town01",
-            description="CARLA town/map to load.",
+            default_value=train_config.get("town", "FlatPlane"),
+            description="CARLA town/map to load (read from train_config.yaml).",
         ),
     ]
 
@@ -239,20 +244,18 @@ def generate_launch_description() -> LaunchDescription:
                 "host": LaunchConfiguration("carla_host"),
                 "port": LaunchConfiguration("carla_port"),
                 "town": LaunchConfiguration("town"),
-                # BRIDGE_SYNC_MODE env var lets the inspect-dryrun stack run the
-                # bridge in async mode so the training container's world.tick()
-                # is the sole synchronous client.  Training uses "true" (default).
+                # No effect when passive=true (bridge never calls world.tick()).
                 "synchronous_mode": bridge_sync_mode,
                 "fixed_delta_seconds": "0.05",
                 "passive": "true",
                 "register_all_sensors": "true",
                 "timeout": "30",
-                # Prevent the bridge from subscribing to vehicle_control_cmd and
-                # overriding the training container's apply_control() each tick.
-                # The bridge looks for an actor with this role_name to control;
-                # setting it to a non-existent name means it never finds one.
-                # Sensors still publish under /carla/ego_vehicle/* because
-                # register_all_sensors discovers them by actor role_name directly.
+                # Prevent the bridge from sending vehicle_control_cmd to the ego
+                # vehicle and overriding the training container's apply_control().
+                # The bridge matches control targets by role_name; "hero" does not
+                # match our "ego_vehicle" actor, so no controls are injected.
+                # Sensor publishing is unaffected: register_all_sensors=True
+                # discovers all sensors regardless of actor role_name.
                 "ego_vehicle_role_name": "hero",
             }.items(),
         )
@@ -269,7 +272,6 @@ def generate_launch_description() -> LaunchDescription:
         executable="ekf_node",
         name="ekf_filter_node",
         parameters=[ekf_params],
-        remappings=[("odometry/filtered", "/odometry/filtered")],
     )
 
     # -- Static TF: sensor mount tree --------------------------------------
@@ -305,21 +307,19 @@ def generate_launch_description() -> LaunchDescription:
             "true",
         ]
 
-    # All suites use raw PointCloud2 input directly to Cartographer.
-    # Suite A: /carla/ego_vehicle/lidar (single-channel 2D, 360 deg).
-    # Suite B/C: /carla/ego_vehicle/lidar_3d (16-channel 3D, 360 deg).
-    if is_3d:
-        carto_remappings = [
-            ("points2", "/carla/ego_vehicle/lidar_3d"),
-            ("imu", "/carla/ego_vehicle/imu"),
-            ("odom", "/scan_matched_odometry"),
-        ]
-    else:
-        carto_remappings = [
-            ("points2", "/carla/ego_vehicle/lidar"),
-            ("imu", "/carla/ego_vehicle/imu"),
-            ("odom", "/scan_matched_odometry"),
-        ]
+    # All suites feed raw PointCloud2 to Cartographer on the "points2" topic.
+    # Suite A: single-channel 2D LiDAR at /carla/ego_vehicle/lidar (360 deg).
+    # Suite B/C: 16-channel 3D LiDAR at /carla/ego_vehicle/lidar_3d (360 deg).
+    lidar_topic = (
+        "/carla/ego_vehicle/lidar_3d" if is_3d else "/carla/ego_vehicle/lidar"
+    )
+    # No odom input remapping: Cartographer uses LiDAR + IMU only.
+    # The "odom" remapping would only be needed if feeding an external odometry
+    # source into Cartographer, which we do not do.
+    carto_remappings = [
+        ("points2", lidar_topic),
+        ("imu", "/carla/ego_vehicle/imu"),
+    ]
 
     cartographer_node = Node(
         package="cartographer_ros",
@@ -399,16 +399,26 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # -- Assemble launch description ---------------------------------------
+    # Startup order matters: bridge must be up before Cartographer tries to
+    # subscribe to sensor topics; static TFs must exist before the EKF starts.
 
-    actions = [
-        *launch_args,
-        ekf_node,
-        *static_tf_nodes,
+    actions = [*launch_args]
+
+    # CARLA ROS bridge first so sensor topics exist when Cartographer starts.
+    if carla_bridge is not None:
+        actions.append(carla_bridge)
+
+    # Static TFs before the EKF and Cartographer so the frame tree is complete.
+    actions.extend(static_tf_nodes)
+
+    actions.extend([
         cartographer_node,
         tf_to_odom_node,
+        ekf_node,
         covariance_extractor,
-    ]
+    ])
 
+    # Occupancy grid node only needed during SLAM mapping, not training.
     if cartographer_mode == "slam":
         actions.append(
             Node(
@@ -418,8 +428,5 @@ def generate_launch_description() -> LaunchDescription:
                 parameters=[{"use_sim_time": True, "resolution": 0.05}],
             )
         )
-
-    if carla_bridge is not None:
-        actions.insert(len(launch_args), carla_bridge)
 
     return LaunchDescription(actions)

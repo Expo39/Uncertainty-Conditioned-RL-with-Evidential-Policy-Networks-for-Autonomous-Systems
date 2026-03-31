@@ -29,13 +29,13 @@ Covariance model:
 """
 
 import math
-from typing import Optional
+from typing import List, Optional
 
 import rclpy
+from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from geometry_msgs.msg import TransformStamped
 from tf2_ros import Buffer, TransformListener
 
 
@@ -53,15 +53,15 @@ def _yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> floa
     return math.atan2(siny_cosp, cosy_cosp)
 
 
-def _make_diagonal_covariance(diag: list) -> list:
+def _make_diagonal_covariance(diag: List[float]) -> List[float]:
     """
     @brief Build a flat 36-element covariance array from a 6-element diagonal.
-    @param diag: List of 6 diagonal variance values [x, y, z, r, p, yaw].
+    @param diag: Six diagonal variance values [x, y, z, roll, pitch, yaw].
     @return Flat list of 36 floats (row-major 6x6 matrix, zeros off-diagonal).
     """
     cov = [0.0] * 36
-    for i in range(6):
-        cov[i * 7] = diag[i]
+    for i, v in enumerate(diag):
+        cov[i * 7] = v
     return cov
 
 
@@ -75,6 +75,18 @@ class TfToOdomNode(Node):
     jump detection. Stale or jumping TF -> high covariance -> EKF output
     covariance rises -> RL policy sees high localisation uncertainty.
     """
+
+    # Nominal twist covariance values (scaled by the same inflation factor as pose).
+    # vxy: 0.1 m^2/s^2 nominal; vyaw: 0.2 rad^2/s^2 nominal.
+    # These are loose enough to allow the EKF to weight the scan-matched velocity
+    # without dominating the IMU prediction between Cartographer updates.
+    _NOMINAL_VXY_VAR: float = 0.1
+    _NOMINAL_VYAW_VAR: float = 0.2
+
+    # Unconstrained axes (z, roll, pitch) get a very large variance so the EKF
+    # ignores them entirely (two_d_mode=true already disables them in the EKF,
+    # but the message must still fill all 36 entries).
+    _UNCONSTRAINED_VAR: float = 1e6
 
     def __init__(self, node_name: str = "tf_to_odom") -> None:
         """
@@ -115,7 +127,7 @@ class TfToOdomNode(Node):
         self._odom_frame = str(self.get_parameter("odom_frame").value)
         self._tracking_frame = str(self.get_parameter("tracking_frame").value)
         publish_topic = str(self.get_parameter("publish_topic").value)
-        publish_rate = float(self.get_parameter("publish_rate").value or 20.0)
+        publish_rate = float(self.get_parameter("publish_rate").value)
 
         self._base_xy_var: float = float(
             self.get_parameter("base_xy_variance").value
@@ -141,6 +153,16 @@ class TfToOdomNode(Node):
         self._jump_decay_steps: int = int(
             self.get_parameter("jump_decay_steps").value
         )
+
+        # Precompute the denominator for the staleness ramp to avoid the
+        # max(..., 1e-6) guard on every timer tick. Validated once at init.
+        ramp_range = self._stale_max_sec - self._stale_threshold
+        if ramp_range <= 0.0:
+            raise ValueError(
+                f"stale_max_sec ({self._stale_max_sec}) must be greater than "
+                f"stale_threshold_sec ({self._stale_threshold})."
+            )
+        self._stale_ramp_range: float = ramp_range
 
         # -- TF listener -------------------------------------------------------
         self._tf_buffer = Buffer()
@@ -175,7 +197,9 @@ class TfToOdomNode(Node):
             f"jump_scale={self._jump_scale}x)"
         )
 
-    def _compute_covariance_scale(self, position_delta_m: float) -> float:
+    def _compute_covariance_scale(
+        self, position_delta_m: float, now_wall: float
+    ) -> float:
         """
         @brief Compute the covariance inflation factor for this step.
 
@@ -185,10 +209,10 @@ class TfToOdomNode(Node):
         inflate the covariance and signal uncertainty to the EKF.
 
         @param position_delta_m: Distance moved since last TF lookup (metres).
+        @param now_wall: Current wall-clock time in seconds (passed in to avoid
+                         a redundant clock read; caller already holds this value).
         @return Multiplicative inflation factor >= 1.0.
         """
-        now_wall = self.get_clock().now().nanoseconds * 1e-9
-
         # -- Staleness inflation -----------------------------------------------
         staleness_factor = 1.0
         if self._last_tf_wall_sec is not None:
@@ -197,8 +221,7 @@ class TfToOdomNode(Node):
                 # Linear ramp from 1.0 at stale_threshold to staleness_scale
                 # at stale_max_sec, then clamped.
                 t = min(
-                    (age - self._stale_threshold)
-                    / max(self._stale_max_sec - self._stale_threshold, 1e-6),
+                    (age - self._stale_threshold) / self._stale_ramp_range,
                     1.0,
                 )
                 staleness_factor = 1.0 + t * (self._staleness_scale - 1.0)
@@ -225,6 +248,10 @@ class TfToOdomNode(Node):
         """
         @brief Timer callback: look up TF and publish Odometry with dynamic covariance.
         """
+        # Single clock read for this tick; passed to _compute_covariance_scale
+        # to avoid redundant clock calls.
+        now_wall = self.get_clock().now().nanoseconds * 1e-9
+
         try:
             tf = self._tf_buffer.lookup_transform(
                 self._odom_frame,
@@ -232,13 +259,13 @@ class TfToOdomNode(Node):
                 rclpy.time.Time(),
             )
         except Exception:
-            # TF not yet available -- inflate covariance without publishing.
+            # TF not yet available -- do not publish.
             # _last_tf_wall_sec remains None or stale, so staleness inflation
-            # will naturally ramp up on subsequent calls.
+            # ramps up naturally on subsequent calls to _compute_covariance_scale.
             return
 
-        # Mark successful TF lookup time (wall clock).
-        self._last_tf_wall_sec = self.get_clock().now().nanoseconds * 1e-9
+        # Record wall-clock time of successful lookup for staleness detection.
+        self._last_tf_wall_sec = now_wall
 
         # -- Pose from TF -----------------------------------------------------
         curr_time_sec = tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9
@@ -251,30 +278,38 @@ class TfToOdomNode(Node):
             tf.transform.rotation.w,
         )
 
-        # -- Position delta for jump detection --------------------------------
+        # -- Previous pose (used for both jump detection and twist) -----------
+        # Extract once here; reused in both the covariance-scale and twist
+        # sections below without a second attribute lookup.
         position_delta = 0.0
+        prev_x: Optional[float] = None
+        prev_y: Optional[float] = None
+        prev_yaw: Optional[float] = None
         if self._prev_transform is not None:
             prev_x = self._prev_transform.transform.translation.x
             prev_y = self._prev_transform.transform.translation.y
+            prev_yaw = _yaw_from_quaternion(
+                self._prev_transform.transform.rotation.x,
+                self._prev_transform.transform.rotation.y,
+                self._prev_transform.transform.rotation.z,
+                self._prev_transform.transform.rotation.w,
+            )
             position_delta = math.sqrt(
                 (curr_x - prev_x) ** 2 + (curr_y - prev_y) ** 2
             )
 
         # -- Dynamic covariance -----------------------------------------------
-        scale = self._compute_covariance_scale(position_delta)
+        scale = self._compute_covariance_scale(position_delta, now_wall)
         xy_var = self._base_xy_var * scale
         yaw_var = self._base_yaw_var * scale
-        # Twist covariance uses the same scale (jump/staleness equally affects
-        # velocity reliability).
-        vxy_var = 0.1 * scale
-        vyaw_var = 0.2 * scale
+        # Twist covariance uses the same scale: jump/staleness equally affects
+        # velocity reliability from finite differences.
+        vxy_var = self._NOMINAL_VXY_VAR * scale
+        vyaw_var = self._NOMINAL_VYAW_VAR * scale
 
-        pose_cov = _make_diagonal_covariance(
-            [xy_var, xy_var, 1e6, 1e6, 1e6, yaw_var]
-        )
-        twist_cov = _make_diagonal_covariance(
-            [vxy_var, vxy_var, 1e6, 1e6, 1e6, vyaw_var]
-        )
+        uc = self._UNCONSTRAINED_VAR
+        pose_cov = _make_diagonal_covariance([xy_var, xy_var, uc, uc, uc, yaw_var])
+        twist_cov = _make_diagonal_covariance([vxy_var, vxy_var, uc, uc, uc, vyaw_var])
 
         # -- Build Odometry message -------------------------------------------
         odom = Odometry()
@@ -288,17 +323,14 @@ class TfToOdomNode(Node):
         odom.pose.covariance = pose_cov
 
         # -- Twist via finite differences -------------------------------------
-        if self._prev_transform is not None and self._prev_time_sec is not None:
+        if (
+            prev_x is not None
+            and prev_y is not None
+            and prev_yaw is not None
+            and self._prev_time_sec is not None
+        ):
             dt = curr_time_sec - self._prev_time_sec
             if dt > 1e-6:
-                prev_x = self._prev_transform.transform.translation.x
-                prev_y = self._prev_transform.transform.translation.y
-                prev_yaw = _yaw_from_quaternion(
-                    self._prev_transform.transform.rotation.x,
-                    self._prev_transform.transform.rotation.y,
-                    self._prev_transform.transform.rotation.z,
-                    self._prev_transform.transform.rotation.w,
-                )
                 dx = curr_x - prev_x
                 dy = curr_y - prev_y
                 dyaw = math.atan2(

@@ -51,9 +51,14 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
 # Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
-# Patch CARLA_VERSION to 0.9.16: the bridge hardcodes 0.9.13 but is compatible with 0.9.16
-# Patch generate_opendrive_world to disable nav mesh (crashes on headless GPU) and
-# use custom OpendriveGenerationParameters matching our FlatPlane setup.
+# Three patches applied to the cloned ros-bridge source:
+#   1. CARLA_VERSION: bridge hardcodes 0.9.13 but is wire-compatible with 0.9.16.
+#   2. generate_opendrive_world: add OpendriveGenerationParameters to disable nav
+#      mesh (crashes on headless GPU) and match our FlatPlane world setup.
+#   3. on_tick_id guard: AttributeError when shutdown() is called before on_tick_id
+#      is assigned during rapid restart. getattr fallback makes it a no-op.
+#   4. patch_bridge.py: catches RuntimeError on destroy() of already-gone actors
+#      (sensor.py + actor_factory.py) to prevent hang in world.tick() sync mode.
 COPY uncertainty_rl/ros2/patch_bridge.py /tmp/patch_bridge.py
 RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
@@ -78,7 +83,10 @@ RUN rosdep update && \
     qtbase5-dev libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
     ackermann_msgs" || true
 
-# Build only the CARLA bridge packages we need (no rviz, rqt, PCL, manual control)
+# Build only the CARLA bridge packages needed at runtime.
+# carla_manual_control is included because carla_ros_bridge depends on it at
+# build time (looks for carla_manual_control/package.sh during colcon build).
+# It is never launched at runtime. rviz2/rqt packages are excluded (GUI only).
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
@@ -112,9 +120,11 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
     echo "source /workspace/install/setup.bash" >> ~/.bashrc
 
-# Health check for ROS 2 daemon
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD ros2 topic list || exit 1
+# Health check: verify the colcon install is intact and ROS 2 can be sourced.
+# ros2 topic list hangs with CycloneDDS when no DDS participant is present,
+# so check the install directory instead of querying the live graph.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD test -f /workspace/install/setup.bash || exit 1
 
 WORKDIR /workspace
 CMD ["/bin/bash"]
