@@ -40,6 +40,14 @@ _LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
     "bus",
 )
 
+# Emergency / special-purpose vehicles excluded from both parked and patrol pools.
+# Police cars and taxis are visually implausible in a civilian parking lot scenario.
+_EXCLUDED_VEHICLE_TYPES: Tuple[str, ...] = (
+    "police",
+    "taxi",
+    "cab",
+)
+
 # Micro/novelty vehicles excluded from parked car pool.
 _SMALL_VEHICLE_TYPES: Tuple[str, ...] = (
     "microlino",
@@ -81,7 +89,6 @@ class LotSpawner:
         marker_blueprint: str,
         bay_occupancy_min: float,
         bay_occupancy_max: float,
-        spawn_perimeter_cones: bool,
     ) -> None:
         """
         @brief Construct LotSpawner with fixed config parameters.
@@ -93,15 +100,11 @@ class LotSpawner:
                with parked cars [0, 1]. Resampled each episode.
         @param bay_occupancy_max: Maximum fraction of non-target bays to fill
                with parked cars [0, 1]. Resampled each episode.
-        @param spawn_perimeter_cones: If True, spawn cones along the lot
-               perimeter polygon. Set False when perimeter is already embedded
-               in the xodr mesh or when running without Cartographer mapping.
         """
         self._cone_spacing = cone_spacing
         self._marker_blueprint = marker_blueprint
         self._bay_occupancy_min = bay_occupancy_min
         self._bay_occupancy_max = bay_occupancy_max
-        self._spawn_perimeter_cones_flag = spawn_perimeter_cones
 
         # Per-episode occupancy rate; resampled in spawn_static_vehicles().
         self._bay_occupancy_rate: float = bay_occupancy_max
@@ -160,6 +163,7 @@ class LotSpawner:
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
             and not any(excl in bp.id.lower() for excl in _LARGE_VEHICLE_TYPES)
             and not any(excl in bp.id.lower() for excl in _SMALL_VEHICLE_TYPES)
+            and not any(excl in bp.id.lower() for excl in _EXCLUDED_VEHICLE_TYPES)
         ]
 
         self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
@@ -224,16 +228,15 @@ class LotSpawner:
             self.spawned_cones.clear()
 
             cone_pending: List[Tuple[Any, float, float, float]] = []
-            if self._spawn_perimeter_cones_flag:
-                cone_pending.extend(
-                    self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
-                )
+            cone_pending.extend(
+                self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
+            )
             cone_pending.extend(
                 self._spawn_obstacle_cones(world, current_layout, floor_contact_z)
             )
 
-            # Settle cones first (they need fewer ticks than vehicles).
-            for _ in range(60):
+            # Settle cones (they need fewer ticks than vehicles on FlatPlane).
+            for _ in range(20):
                 world.tick()
                 if all(
                     abs(a.get_velocity().z) < 0.01
@@ -266,8 +269,10 @@ class LotSpawner:
             world, current_layout, target_bay, floor_contact_z
         )
 
-        # Tick until all vehicles have settled (up to 60 ticks at 20 Hz = 3 s).
-        for _ in range(60):
+        # Tick until all vehicles have settled (up to 20 ticks at 20 Hz = 1 s).
+        # On FlatPlane the drop height is <0.1 m; vehicles settle in 2-4 ticks.
+        # 20 ticks gives a comfortable safety margin without the 3 s worst-case.
+        for _ in range(20):
             world.tick()
             if all(
                 abs(a.get_velocity().z) < 0.01

@@ -21,11 +21,11 @@ CARLAParkingEnv(
     render_mode=None,
     ros2_config={"covariance_topic": "/odometry/filtered", "covariance_timeout": 10.0},
     carla_sensors_config={"imu": {...}, "lidar": {...}},  # Suite A: 2D LiDAR + IMU
-    carla_conditions_config={"weather_presets": ["ClearNoon", "HardRainNoon"]},
     parking_scenarios_config={...},  # parking_scenarios section from train_config.yaml
     include_covariance=True,
     include_obstacle_obs=True,
     sensor_suite="suite_a",
+    map_load_sleep=5.0,   # seconds to wait after FlatPlane OpenDRIVE load (from config)
 )
 ```
 

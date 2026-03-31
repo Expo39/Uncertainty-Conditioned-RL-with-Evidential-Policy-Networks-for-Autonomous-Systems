@@ -114,6 +114,32 @@ def _interpolate_cone_positions(
     return positions
 
 
+def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> bool:
+    """
+    @brief Ray-casting point-in-polygon test.
+
+    Returns True when (x, y) is strictly inside the polygon defined by
+    corners.  Used for OOB detection against the actual lot boundary rather
+    than its axis-aligned bounding box, which over-extends at non-rectangular
+    corners (trapezoid, irregular_a layouts).
+
+    @param x: Query point x coordinate.
+    @param y: Query point y coordinate.
+    @param corners: Ordered polygon vertices as (x, y) pairs (closed automatically).
+    @return True if the point is inside the polygon.
+    """
+    n = len(corners)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = corners[i]
+        xj, yj = corners[j]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
 def _compute_relative_target_pose(
     x_ego: float,
     y_ego: float,
