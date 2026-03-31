@@ -76,6 +76,7 @@ def make_env(
             sensor_suite=config.get("sensor_suite", "suite_a"),
             carla_timestep=config.get("carla_timestep", 0.05),
             debug=config.get("debug", False),
+            map_load_sleep=config.get("map_load_sleep", 5.0),
         )
         return env
 

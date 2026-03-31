@@ -14,6 +14,7 @@ carla_host: "localhost"
 carla_port: 2000
 town: "FlatPlane"  # Special value: loads configs/layouts/flat_plane.xodr via generate_opendrive_world()
 max_steps: 500
+map_load_sleep: 5.0  # Seconds to wait after loading flat_plane.xodr before continuing.
 
 # ROS 2 covariance subscription (same topic as training)
 ros2:
@@ -117,12 +118,6 @@ eval_conditions:
     pedestrian_spawn_probability: 1.0  # All zones occupied -- maximum occlusion
     bay_occupancy_rate: 0.0        # Zero parked cars -- no scan-match anchors
     floor_plan: "rectangle"        # Familiar training geometry (not OOD)
-
-# Perimeter cone override for evaluation conditions.
-# When false (default), physical perimeter cones are not spawned -- Cartographer
-# uses the pre-built map (make generate-maps) as LiDAR anchors instead.
-# Individual conditions can override this by adding spawn_perimeter_cones: true.
-spawn_perimeter_cones: false
 
 # Output settings
 output_dir: "evaluation_results"

@@ -136,6 +136,7 @@ class CARLAParkingEnv(gym.Env):
         carla_timestep: float = 0.05,
         eval_mode: bool = False,
         debug: bool = False,
+        map_load_sleep: float = 5.0,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -167,6 +168,8 @@ class CARLAParkingEnv(gym.Env):
                If False (training), only non-OOD floor plans are used.
         @param debug: If True, emit per-step diagnostics via DebugLogger and include
                a debug dict in vis frames for the visualiser HUD. Off by default.
+        @param map_load_sleep: Seconds to wait after loading the FlatPlane OpenDRIVE
+               world before continuing. Increase on slow servers (default 5.0).
         """
         super().__init__()
 
@@ -178,6 +181,7 @@ class CARLAParkingEnv(gym.Env):
         self._include_covariance = include_covariance
         self._include_obstacle_obs = include_obstacle_obs
         self._eval_mode = eval_mode
+        self._map_load_sleep = map_load_sleep
 
         ros2_config = ros2_config or {}
         self._ros2_config: Dict[str, Any] = ros2_config
@@ -241,7 +245,6 @@ class CARLAParkingEnv(gym.Env):
             ),
             bay_occupancy_min=scenarios.get("bay_occupancy_min", 0.3),
             bay_occupancy_max=scenarios.get("bay_occupancy_max", 0.8),
-            spawn_perimeter_cones=scenarios.get("spawn_perimeter_cones", False),
         )
 
         # NPC controller -- owns patrol vehicles and pedestrians.
@@ -600,8 +603,9 @@ class CARLAParkingEnv(gym.Env):
           - Success: +10.0 + termination.
 
         Termination conditions (priority order):
-          1. Collision: physical contact detected by collision sensor
-             (includes hitting perimeter cones -- the lot boundary).
+          1. Collision: physical contact detected by collision sensor.
+             Perimeter cones are physics-solid props (set_simulate_physics(False)
+             after settling) so driving into them registers as a collision.
           2. Success: position < SUCCESS_THRESHOLD_POSITION,
              yaw < SUCCESS_THRESHOLD_ORIENTATION,
              velocity < SUCCESS_THRESHOLD_VELOCITY
@@ -641,28 +645,6 @@ class CARLAParkingEnv(gym.Env):
         if self._sensor_manager.consume_collision():
             self._prev_distance = position_error
             return -10.0, True, False
-
-        # Out-of-bounds: terminate when any part of the car body exits the lot.
-        # Uses the layout corners AABB shrunk by the vehicle half-width (1.0 m)
-        # so the check triggers when the car body -- not just its centre -- crosses
-        # the perimeter cone line. Perimeter cones are static props (no physics)
-        # so the collision sensor cannot detect them; this is the boundary enforcer.
-        # On real-world deployment: replace the YAML corners with the surveyed lot
-        # boundary -- no code changes needed.
-        corners = self._current_layout.get("corners", [])
-        if corners:
-            xs = [c["x"] for c in corners]
-            ys = [c["y"] for c in corners]
-            _half_width = 1.0  # BMW Grand Tourer half-width (metres)
-            _oob = (
-                x < min(xs) + _half_width
-                or x > max(xs) - _half_width
-                or y < min(ys) + _half_width
-                or y > max(ys) - _half_width
-            )
-            if _oob:
-                self._prev_distance = position_error
-                return -5.0, True, False
 
         # Success condition
         success = (
@@ -724,9 +706,11 @@ class CARLAParkingEnv(gym.Env):
             # The IMU prediction step can integrate large noise spikes
             # before the first scan-match correction at episode start,
             # producing transient velocity readings in the hundreds of m/s.
+            # MAX_PARKING_SPEED (15 m/s) is the translational cap; pi rad/s
+            # (180 deg/s) is a generous upper bound for parking yaw rates.
             vx = float(np.clip(ekf_pose[3], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
             vy = float(np.clip(ekf_pose[4], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
-            vyaw = float(ekf_pose[5])
+            vyaw = float(np.clip(ekf_pose[5], -math.pi, math.pi))
         else:
             # Fallback: EKF not yet initialised or ROS 2 unavailable (CI / unit tests)
             self._debug_logger._logger.debug(
@@ -763,7 +747,7 @@ class CARLAParkingEnv(gym.Env):
 
         if not self._include_covariance:
             # Without covariance: [pose(6), target(3)] = 9-dim
-            # With obstacle obs:  [pose(6), target(3), obstacle(3)] = 12-dim
+            # With obstacle obs:  [pose(6), target(3), obstacle(2)] = 11-dim
             self._obs_buffer[0] = x
             self._obs_buffer[1] = y
             self._obs_buffer[2] = yaw
@@ -799,7 +783,7 @@ class CARLAParkingEnv(gym.Env):
                 )
 
         # No obstacle obs:  [pose(6), cov(9), target(3)] = 18-dim
-        # With obstacle obs: [pose(6), cov(9), target(3), obs(3)] = 21-dim
+        # With obstacle obs: [pose(6), cov(9), target(3), obs(2)] = 20-dim
         self._obs_buffer[0] = x
         self._obs_buffer[1] = y
         self._obs_buffer[2] = yaw
@@ -836,13 +820,26 @@ class CARLAParkingEnv(gym.Env):
             self._obstacle_features_buffer[:] = 0.0
             return self._obstacle_features_buffer
 
-        # Keep only the forward hemisphere (x > 0 in vehicle frame).
-        # The LiDAR is front-bumper mounted -- rearward rays are physically
-        # blocked by the car body on the real robot (270 deg FOV) and produce
-        # self-returns in CARLA's 360 deg simulation.  Discarding x <= 0
-        # replicates the real sensor FOV and eliminates all self-returns.
         dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
-        valid = scan[:, 0] > 0.0
+
+        # Strip self-returns: any return closer than 1.0 m is the car's own body.
+        # Mount heights are chosen to avoid this (Suite A z=0.5, Suite B/C z=1.9)
+        # but CARLA's mesh geometry can still produce near-zero returns on
+        # low-angle beams.  1.0 m is safely larger than the vehicle half-width
+        # and smaller than the nearest real obstacle (bay lines are ~1.25 m away).
+        _MIN_DIST = 1.0
+        valid = dists >= _MIN_DIST
+
+        # Suite A only: also discard the rear hemisphere (x <= 0).
+        # The 2D LiDAR is front-bumper mounted -- rearward rays are physically
+        # blocked by the car body on the real robot (~270 deg FOV) and produce
+        # self-returns in CARLA's 360 deg simulation.  Discarding x <= 0
+        # replicates the real sensor FOV and eliminates remaining self-returns.
+        # Suite B/C (roof-mounted 3D LiDAR) has a full 360 deg field of view,
+        # so the rear half must not be discarded.
+        if self._sensor_manager._sensor_suite == "suite_a":
+            valid = valid & (scan[:, 0] > 0.0)
+
         if not np.any(valid):
             self._obstacle_features_buffer[:] = 0.0
             return self._obstacle_features_buffer
@@ -884,6 +881,7 @@ class CARLAParkingEnv(gym.Env):
             return
 
         transform = self.vehicle.get_transform()
+        vel = self.vehicle.get_velocity()
         x = transform.location.x
         y = transform.location.y
         yaw = transform.rotation.yaw
@@ -929,23 +927,14 @@ class CARLAParkingEnv(gym.Env):
             "carla_timestep": self._carla_timestep,
             "ego": {
                 "x": x, "y": y, "yaw": yaw,
-                "vx": self.vehicle.get_velocity().x,
-                "vy": self.vehicle.get_velocity().y,
-                "speed": math.sqrt(
-                    self.vehicle.get_velocity().x ** 2
-                    + self.vehicle.get_velocity().y ** 2
-                ),
+                "vx": vel.x,
+                "vy": vel.y,
+                "speed": math.sqrt(vel.x ** 2 + vel.y ** 2),
             },
             "action": {
-                "steer": float(self._last_action[0])
-                if hasattr(self, "_last_action")
-                else 0.0,
-                "throttle": float(self._last_action[1])
-                if hasattr(self, "_last_action")
-                else 0.0,
-                "brake": float(self._last_action[2])
-                if hasattr(self, "_last_action")
-                else 0.0,
+                "steer": float(self._last_action[0]),
+                "throttle": float(self._last_action[1]),
+                "brake": float(self._last_action[2]),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -978,11 +967,11 @@ class CARLAParkingEnv(gym.Env):
 
     def _connect_to_carla(self) -> None:
         """
-        @brief Connect to CARLA and load the world.
+        @brief Connect to CARLA and load the FlatPlane OpenDRIVE world.
 
-        @note When town is "FlatPlane", loads configs/layouts/flat_plane.xodr via
-              generate_opendrive_world() - a clean flat plane with no roads or
-              buildings. Otherwise uses load_world() for named CARLA towns.
+        Loads configs/layouts/flat_plane.xodr via generate_opendrive_world()
+        if not already active -- a clean flat ground plane with no roads or
+        buildings. Only FlatPlane is supported; named CARLA towns are not used.
         """
         try:
             self.client = carla.Client(self.carla_host, self.carla_port)
@@ -990,31 +979,26 @@ class CARLAParkingEnv(gym.Env):
             self.world = self.client.get_world()
 
             current_map_name = self.world.get_map().name.split("/")[-1]
-            if self.town == "FlatPlane":
-                if current_map_name != "FlatPlane":
-                    xodr = Path("configs/layouts/flat_plane.xodr").read_text(
-                        encoding="utf-8"
-                    )
-                    logger.info("Loading configs/layouts/flat_plane.xodr ...")
-                    self.world = self.client.generate_opendrive_world(
-                        xodr,
-                        carla.OpendriveGenerationParameters(
-                            vertex_distance=2.0,
-                            max_road_length=600.0,
-                            wall_height=0.0,
-                            additional_width=300.0,
-                            smooth_junctions=False,
-                            enable_mesh_visibility=True,
-                            enable_pedestrian_navigation=False,
-                        ),
-                    )
-                    time.sleep(5.0)
-                else:
-                    logger.info("FlatPlane already loaded.")
-            elif current_map_name != self.town:
-                logger.info(f"Loading map: {self.town}")
-                self.world = self.client.load_world(self.town)
-                time.sleep(8.0)
+            if current_map_name != "FlatPlane":
+                xodr = Path("configs/layouts/flat_plane.xodr").read_text(
+                    encoding="utf-8"
+                )
+                logger.info("Loading configs/layouts/flat_plane.xodr ...")
+                self.world = self.client.generate_opendrive_world(
+                    xodr,
+                    carla.OpendriveGenerationParameters(
+                        vertex_distance=2.0,
+                        max_road_length=600.0,
+                        wall_height=0.0,
+                        additional_width=300.0,
+                        smooth_junctions=False,
+                        enable_mesh_visibility=True,
+                        enable_pedestrian_navigation=False,
+                    ),
+                )
+                time.sleep(self._map_load_sleep)
+            else:
+                logger.info("FlatPlane already loaded.")
 
             # Default to ClearNoon so the scene is always daytime.
             # Training randomises weather per episode via _configure_weather().
@@ -1504,7 +1488,13 @@ class CARLAParkingEnv(gym.Env):
                     (_world_ex - _t.location.x) ** 2
                     + (_world_ey - _t.location.y) ** 2
                 )
-            _obs_dist = float(state[18]) if len(state) > 18 else 0.0
+            # Obstacle features are always the last OBSTACLE_FEATURES_DIM dims;
+            # index 18 is only correct when include_covariance=True.
+            _obs_dist = (
+                float(state[-OBSTACLE_FEATURES_DIM])
+                if self._include_obstacle_obs
+                else 0.0
+            )
             _lidar_pts = self._sensor_manager.lidar_point_count()
             self._debug_logger.log_step(
                 step=self.steps,
@@ -1521,9 +1511,8 @@ class CARLAParkingEnv(gym.Env):
 
         truncated = self.steps >= self.max_steps
 
-        # Distinguish termination cause. Only collision (-10.0) terminates the
-        # episode; out-of-bounds is no longer a termination condition (the
-        # perimeter cones handle physical lot boundary via collision detection).
+        # Distinguish termination cause for vis state writer.
+        # Both collision and OOB set terminated=True; success is the third path.
         if success:
             end_reason: Optional[str] = "success"
         elif terminated:

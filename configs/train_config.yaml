@@ -25,6 +25,7 @@ carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 1000  # Maximum episode length (500 steps at 20Hz = 25 seconds)
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
+map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
 
 # ROS 2 covariance subscription settings
 # The training container subscribes to real EKF covariance via DDS
@@ -130,9 +131,6 @@ carla_sensors:
 # stored in configs/layouts/. The env reads from these YAML files directly.
 # ---------------------------------------------------------------------------
 parking_scenarios:
-  spawn_perimeter_cones: true          # Markers define the static perimeter map for Cartographer pure
-                                       # localisation. Must be true for both the one-time SLAM mapping
-                                       # run (make docker-mapping-drive) and all training runs.
   perimeter_marker_blueprint: "static.prop.constructioncone"
                                        # CARLA blueprint for perimeter/obstacle markers. Options:
                                        #   static.prop.constructioncone  - traffic cone (~0.7m, good LiDAR return)
@@ -141,11 +139,11 @@ parking_scenarios:
                                        #   static.prop.ironplank         - metal plank/rail
                                        # Run world.get_blueprint_library().filter('static.prop.*') in
                                        # CARLA to enumerate all available props for your map.
-  perimeter_cone_spacing: 2.0          # Metres between perimeter markers (only used if spawn_perimeter_cones: true)
+  perimeter_cone_spacing: 2.0          # Metres between perimeter markers
   bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
   bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
   num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
-  patrol_obstacle_stop_distance: 3.0  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego, + 1.0 m bumper buffer in code)
+  patrol_obstacle_stop_distance: 6.0  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego, + 1.0 m bumper buffer in code)
   patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Patrol vehicle speed in m/s (applied directly via kinematic, no physics acceleration)
   patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
