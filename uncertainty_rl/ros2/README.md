@@ -34,7 +34,7 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 | Node | Purpose |
 |------|---------|
-| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes `CovarianceEstimate` (semantic fields: header, x, y, yaw, covariance[9]) |
+| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes `CovarianceEstimate` (semantic fields: header, x, y, yaw, vx, vy, vyaw, covariance[9]) |
 | `CovarianceMonitorNode` | Debug/visualisation node for monitoring covariance values (subscribes to `CovarianceEstimate`) |
 
 ## EKF Sensor Fusion
