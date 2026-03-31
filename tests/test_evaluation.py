@@ -7,8 +7,10 @@ and the evaluation helper functions.
 """
 
 import numpy as np
+import pytest
 
 from uncertainty_rl.evaluation import EvaluationMetrics
+from uncertainty_rl.evaluation.evaluate import _scale_sensor_noise
 
 
 class TestEvaluationMetrics:
@@ -142,3 +144,93 @@ class TestMakeEvalEnvPatrolVehiclesKey:
         """
         condition: dict = {}
         assert condition.get("num_patrol_vehicles", 0) == 0
+
+
+# ===========================================================================
+# TestScaleSensorNoise
+# ===========================================================================
+
+
+class TestScaleSensorNoise:
+    """
+    @class TestScaleSensorNoise
+    @brief Tests for the _scale_sensor_noise() helper.
+    """
+
+    def _base_sensors(self) -> dict:
+        """
+        @brief Return a representative sensor config mirroring train_config.yaml.
+        """
+        return {
+            "imu": {
+                "accel_stddev": 0.1,
+                "gyro_stddev": 0.05,
+                "accel_bias": 0.001,
+                "noise_seed": 42,
+            },
+            "lidar": {
+                "channels": 1,
+                "range": 30.0,
+            },
+        }
+
+    def test_stddev_keys_scaled_by_multiplier(self) -> None:
+        """
+        @brief Keys containing 'stddev' in the IMU section are multiplied.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=2.0)
+
+        assert result["imu"]["accel_stddev"] == pytest.approx(0.2)
+        assert result["imu"]["gyro_stddev"] == pytest.approx(0.1)
+
+    def test_non_stddev_keys_unchanged(self) -> None:
+        """
+        @brief Keys without 'stddev' in their name are not modified.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=5.0)
+
+        assert result["imu"]["accel_bias"] == pytest.approx(0.001)
+        assert result["imu"]["noise_seed"] == 42
+
+    def test_multiplier_one_leaves_values_unchanged(self) -> None:
+        """
+        @brief imu_multiplier=1.0 should be a no-op on all values.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=1.0)
+
+        assert result["imu"]["accel_stddev"] == pytest.approx(0.1)
+        assert result["imu"]["gyro_stddev"] == pytest.approx(0.05)
+
+    def test_multiplier_zero_zeros_all_stddevs(self) -> None:
+        """
+        @brief imu_multiplier=0.0 should set all stddev values to zero.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=0.0)
+
+        assert result["imu"]["accel_stddev"] == pytest.approx(0.0)
+        assert result["imu"]["gyro_stddev"] == pytest.approx(0.0)
+
+    def test_does_not_mutate_original(self) -> None:
+        """
+        @brief The original sensor config dict must not be modified (deepcopy).
+        """
+        sensors = self._base_sensors()
+        original_accel = sensors["imu"]["accel_stddev"]
+
+        _scale_sensor_noise(sensors, imu_multiplier=10.0)
+
+        assert sensors["imu"]["accel_stddev"] == pytest.approx(original_accel)
+
+    def test_lidar_section_untouched(self) -> None:
+        """
+        @brief Non-IMU sections are copied unchanged even with a large multiplier.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=100.0)
+
+        assert result["lidar"]["channels"] == 1
+        assert result["lidar"]["range"] == pytest.approx(30.0)
