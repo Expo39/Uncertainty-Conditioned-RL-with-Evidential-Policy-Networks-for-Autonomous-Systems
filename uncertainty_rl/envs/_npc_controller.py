@@ -471,7 +471,6 @@ class NPCController:
         @param vehicle: Ego vehicle actor (used for avoidance distance check).
         """
         # Larger radius so pedestrians react well before contact.
-        # Larger radius so pedestrians react well before contact.
         _EGO_AVOID_RADIUS = 5.0
         _PATROL_AVOID_RADIUS = 5.0
         _BOUNDARY_MARGIN = 0.5
@@ -616,17 +615,28 @@ class NPCController:
     # Private helpers
     # ------------------------------------------------------------------
 
+    # Number of sectors to divide each zone into for respawn placement.
+    _RESPAWN_N_SECTORS = 5
+    # Distance step (metres) at which one additional sector is excluded.
+    # At ego_dist >= threshold, all sectors available.
+    # At ego_dist < threshold, top sector excluded; at < threshold/2, top two; etc.
+    _RESPAWN_SECTOR_THRESHOLD = 8.0
+
     def _respawn_pedestrian(self, idx: int, vehicle: Any) -> None:
         """
         @brief Destroy and respawn pedestrian at index idx within its zone.
 
         Called when a pedestrian exceeds its maximum lifetime. The walker is
-        destroyed, a new one is spawned at a random point within the same zone,
-        and the lifetime counter is reset.
+        destroyed, a new one is spawned within an allowed set of sectors of the
+        same zone, and the lifetime counter is reset.
+
+        Sectors are slices along the zone's longest axis, ranked by distance
+        from the ego (farthest first). As the ego approaches, the closest
+        sectors are progressively excluded so the pedestrian always respawns
+        away from the ego. At least one sector is always available.
 
         @param idx: Index into pedestrian_actors / _pedestrian_zones.
-        @param vehicle: Ego vehicle actor (unused directly; kept for future
-               ego-proximity guard during respawn).
+        @param vehicle: Ego vehicle actor (used for sector selection).
         """
         # _respawn_pedestrian needs world access -- infer from current actors.
         # The zone dict and walker blueprints are all we need.
@@ -650,10 +660,61 @@ class NPCController:
         if bp.has_attribute("is_invincible"):
             bp.set_attribute("is_invincible", "false")
 
+        # Build sectors along the longest axis, ranked farthest-from-ego first.
+        n = self._RESPAWN_N_SECTORS
+        x_span = zone["x_max"] - zone["x_min"]
+        y_span = zone["y_max"] - zone["y_min"]
+        # Slice along the longer axis for maximum separation between sectors.
+        slice_x = x_span >= y_span
+
+        ego_loc = (
+            vehicle.get_location()
+            if vehicle is not None and vehicle.is_alive
+            else None
+        )
+
+        # Each sector is a sub-rectangle of the zone.
+        sectors: List[Tuple[float, float, float, float]] = []
+        for s in range(n):
+            if slice_x:
+                s_lo = zone["x_min"] + s * x_span / n
+                s_hi = zone["x_min"] + (s + 1) * x_span / n
+                sectors.append((s_lo, s_hi, zone["y_min"], zone["y_max"]))
+            else:
+                s_lo = zone["y_min"] + s * y_span / n
+                s_hi = zone["y_min"] + (s + 1) * y_span / n
+                sectors.append((zone["x_min"], zone["x_max"], s_lo, s_hi))
+
+        if ego_loc is not None:
+            # Score each sector by distance from its centre to the ego.
+            def _sector_dist(sec: Tuple[float, float, float, float]) -> float:
+                cx = (sec[0] + sec[1]) / 2.0
+                cy = (sec[2] + sec[3]) / 2.0
+                return math.sqrt((cx - ego_loc.x) ** 2 + (cy - ego_loc.y) ** 2)
+
+            sectors.sort(key=_sector_dist, reverse=True)  # farthest first
+
+            # Exclude the closest sectors based on how close the ego is to the
+            # nearest sector (not the zone centre -- avoids the symmetric case
+            # where all sectors are equidistant and the ranking is arbitrary).
+            # ego closer to nearest sector -> more sectors excluded.
+            # ego_dist >= threshold -> all n sectors available (0 excluded).
+            # ego_dist -> 0         -> n-1 sectors excluded (1 always remains).
+            nearest_dist = _sector_dist(sectors[-1])  # sectors sorted far->near
+            excluded = int(
+                (n - 1) * max(0.0, 1.0 - nearest_dist / self._RESPAWN_SECTOR_THRESHOLD)
+            )
+            allowed = max(1, n - excluded)
+            sectors = sectors[:allowed]
+
+        # Sample uniformly from the allowed sectors, then pick a random point
+        # within the chosen sector.
+        chosen = random.choice(sectors)
+
         walker = None
         for _ in range(5):
-            px = random.uniform(zone["x_min"], zone["x_max"])
-            py = random.uniform(zone["y_min"], zone["y_max"])
+            px = random.uniform(chosen[0], chosen[1])
+            py = random.uniform(chosen[2], chosen[3])
             transform = carla.Transform(
                 carla.Location(x=px, y=py, z=z),
                 carla.Rotation(yaw=random.uniform(0.0, 360.0)),
@@ -669,7 +730,10 @@ class NPCController:
             )
         else:
             self._debug_logger._logger.debug(
-                "[pedestrian] respawn idx=%d ok", idx
+                "[pedestrian] respawn idx=%d ok  sectors_allowed=%d/%d",
+                idx,
+                len(sectors),
+                n,
             )
         heading_rad = random.uniform(0.0, 2.0 * math.pi)
         self._pedestrian_headings[idx] = (

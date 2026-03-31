@@ -888,13 +888,29 @@ class DryRunInspector(_Inspector):
             f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg"
             + _RESET
         )
-        # Cross-check: reconstruct world position from odom target + offset
+        # Cross-check: reconstruct world position and yaw from odom target + offset
         # to verify the inverse transform is self-consistent.
-        tx, ty, cos_r, sin_r, _ = self._env._ekf_odom_offset
+        tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
         recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
         recon_wy = sin_r * odom_t["x"] + cos_r * odom_t["y"] + ty
         err_m = math.sqrt((recon_wx - gt["x"]) ** 2 + (recon_wy - gt["y"]) ** 2)
-        gt_line += f"  [recon_err={err_m:.3f}m]"
+        # Yaw cross-check: odom_yaw + r should equal world_yaw (mod 2pi).
+        recon_world_yaw = math.atan2(
+            math.sin(odom_t["yaw"] + r),
+            math.cos(odom_t["yaw"] + r),
+        )
+        world_yaw_wrapped = math.atan2(math.sin(gt["yaw"]), math.cos(gt["yaw"]))
+        yaw_err_deg = math.degrees(
+            abs(math.atan2(
+                math.sin(recon_world_yaw - world_yaw_wrapped),
+                math.cos(recon_world_yaw - world_yaw_wrapped),
+            ))
+        )
+        gt_line += (
+            f"  [recon_err={err_m:.3f}m"
+            f"  yaw_err={yaw_err_deg:.1f}deg"
+            f"  r={math.degrees(r):+.1f}deg]"
+        )
         parts.append(gt_line)
         # Obstacle (indices 18-19)
         if len(obs) >= 20:
