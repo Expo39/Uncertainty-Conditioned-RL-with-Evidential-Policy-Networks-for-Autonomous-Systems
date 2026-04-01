@@ -64,6 +64,7 @@ known_first_party = ["uncertainty_rl"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests requiring CARLA or ROS 2",

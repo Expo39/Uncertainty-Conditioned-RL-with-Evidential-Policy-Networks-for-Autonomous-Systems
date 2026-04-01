@@ -94,6 +94,10 @@ class CovarianceExtractorNode(Node):
         )
         self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
+        # Monotonically increasing counter written into ekf_state.json so the
+        # training container can detect genuinely new writes without relying on
+        # file mtime (which is unreliable across Docker container clocks).
+        self._write_seq: int = 0
 
         # Ensure the shared outputs directory exists before the first file write.
         # The Dockerfile creates /workspace/configs/maps but not /workspace/outputs;
@@ -174,7 +178,14 @@ class CovarianceExtractorNode(Node):
         # Cross-distro access: training container (Humble) reads this file since
         # DDS wire protocol is incompatible between Jazzy and Humble containers.
         # Atomic rename prevents partial reads by the training container.
+        # `seq` is a monotonically increasing counter; the training container
+        # tracks the last-seen seq and only accepts a read whose seq is strictly
+        # greater than the seq at the time of the last invalidate() call.
+        # This is clock-skew-proof -- mtime comparisons across Docker container
+        # clocks are unreliable on some host configurations.
+        self._write_seq += 1
         data = {
+            "seq": self._write_seq,
             "x": float(x), "y": float(y), "yaw": float(yaw),
             "vx": float(vx), "vy": float(vy), "vyaw": float(vyaw),
             "covariance": cov_flat,

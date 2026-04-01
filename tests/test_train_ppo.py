@@ -8,7 +8,7 @@ Docker stack).
 """
 
 from typing import Any, Dict, List
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
@@ -83,25 +83,13 @@ class TestLinearSchedule:
 # ===========================================================================
 
 
-def _make_callback_with_infos(
-    infos: List[Dict[str, Any]],
-) -> EnvDiagnosticsCallback:
-    """
-    @brief Build an EnvDiagnosticsCallback with pre-loaded locals and a mock logger.
-    @param infos: List of info dicts as returned by CARLAParkingEnv.step().
-    @return Callback instance ready to have _on_rollout_end() called.
-    """
-    cb = EnvDiagnosticsCallback()
-    cb.locals = {"infos": infos}
-    cb.logger = MagicMock()
-    cb._on_step()
-    return cb
-
-
 class TestEnvDiagnosticsCallback:
     """
     @class TestEnvDiagnosticsCallback
     @brief Tests for the EnvDiagnosticsCallback TensorBoard helper.
+
+    SB3's BaseCallback.logger is a read-only property, so tests use
+    patch.object to inject a MagicMock logger rather than direct assignment.
     """
 
     def test_on_step_accumulates_pos_error(self) -> None:
@@ -110,27 +98,29 @@ class TestEnvDiagnosticsCallback:
         """
         cb = EnvDiagnosticsCallback()
         cb.locals = {"infos": [{"pos_error": 3.0}, {"pos_error": 7.0}]}
-        cb.logger = MagicMock()
-        cb._on_step()
+        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: MagicMock())):
+            cb._on_step()
         assert cb._ep_pos_errors == [3.0, 7.0]
 
     def test_on_rollout_end_records_mean_pos_error(self) -> None:
         """
         @brief _on_rollout_end() calls logger.record with the rolling mean pos_error.
         """
-        cb = _make_callback_with_infos([
+        cb = EnvDiagnosticsCallback()
+        cb.locals = {"infos": [
             {"pos_error": 4.0, "orientation_error": 0.1, "speed": 1.0,
              "progress_reward": 0.1},
             {"pos_error": 6.0, "orientation_error": 0.2, "speed": 2.0,
              "progress_reward": 0.2},
-        ])
-        cb._on_rollout_end()
+        ]}
+        mock_logger = MagicMock()
+        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+            cb._on_step()
+            cb._on_rollout_end()
 
-        recorded_keys = [call.args[0] for call in cb.logger.record.call_args_list]
+        recorded_keys = [call.args[0] for call in mock_logger.record.call_args_list]
         assert "env/mean_pos_error_m" in recorded_keys
-
-        # Find the recorded value for pos_error
-        for call in cb.logger.record.call_args_list:
+        for call in mock_logger.record.call_args_list:
             if call.args[0] == "env/mean_pos_error_m":
                 assert call.args[1] == pytest.approx(5.0)
 
@@ -138,11 +128,15 @@ class TestEnvDiagnosticsCallback:
         """
         @brief After _on_rollout_end(), all accumulators are empty.
         """
-        cb = _make_callback_with_infos([
+        cb = EnvDiagnosticsCallback()
+        cb.locals = {"infos": [
             {"pos_error": 1.0, "orientation_error": 0.0, "speed": 0.0,
              "progress_reward": 0.0},
-        ])
-        cb._on_rollout_end()
+        ]}
+        mock_logger = MagicMock()
+        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+            cb._on_step()
+            cb._on_rollout_end()
 
         assert cb._ep_pos_errors == []
         assert cb._ep_orientation_errors == []
@@ -154,14 +148,18 @@ class TestEnvDiagnosticsCallback:
         @brief success_rate, collision_rate, timeout_rate are recorded when an
                episode ends (success, collision, or timeout flag is set).
         """
-        cb = _make_callback_with_infos([
+        cb = EnvDiagnosticsCallback()
+        cb.locals = {"infos": [
             {"pos_error": 0.1, "orientation_error": 0.0, "speed": 0.0,
              "progress_reward": 0.0, "success": True, "collision": False,
              "timeout": False},
-        ])
-        cb._on_rollout_end()
+        ]}
+        mock_logger = MagicMock()
+        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+            cb._on_step()
+            cb._on_rollout_end()
 
-        recorded_keys = [call.args[0] for call in cb.logger.record.call_args_list]
+        recorded_keys = [call.args[0] for call in mock_logger.record.call_args_list]
         assert "env/success_rate" in recorded_keys
         assert "env/collision_rate" in recorded_keys
         assert "env/timeout_rate" in recorded_keys
@@ -170,17 +168,21 @@ class TestEnvDiagnosticsCallback:
         """
         @brief success_rate == 1.0 when every terminal step was a success.
         """
-        cb = _make_callback_with_infos([
+        cb = EnvDiagnosticsCallback()
+        cb.locals = {"infos": [
             {"pos_error": 0.0, "orientation_error": 0.0, "speed": 0.0,
              "progress_reward": 0.0, "success": True, "collision": False,
              "timeout": False},
             {"pos_error": 0.0, "orientation_error": 0.0, "speed": 0.0,
              "progress_reward": 0.0, "success": True, "collision": False,
              "timeout": False},
-        ])
-        cb._on_rollout_end()
+        ]}
+        mock_logger = MagicMock()
+        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+            cb._on_step()
+            cb._on_rollout_end()
 
-        for call in cb.logger.record.call_args_list:
+        for call in mock_logger.record.call_args_list:
             if call.args[0] == "env/success_rate":
                 assert call.args[1] == pytest.approx(1.0)
 
@@ -190,6 +192,7 @@ class TestEnvDiagnosticsCallback:
                is recorded (no KeyError, no spurious log entries).
         """
         cb = EnvDiagnosticsCallback()
-        cb.logger = MagicMock()
-        cb._on_rollout_end()
-        cb.logger.record.assert_not_called()
+        mock_logger = MagicMock()
+        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+            cb._on_rollout_end()
+        mock_logger.record.assert_not_called()
