@@ -26,7 +26,10 @@ Override-only configs for the 2x2 ablation study. Each file contains only the ke
 
 ### `carla/`
 
-Pre-built CARLA pedestrian navigation mesh (`OpenDriveMap.bin`) for the FlatPlane OpenDRIVE world. Pre-built because CARLA segfaults during nav mesh generation on headless GPU setups. See `carla/README.md` for regeneration instructions.
+CARLA-specific config and assets:
+
+- `env_config.yaml` -- all CARLA environment and sensor settings (connection, sensor noise, parking scenarios, observation flags). Loaded by all scripts that interact with CARLA.
+- `OpenDriveMap.bin` -- pre-built pedestrian navigation mesh for the FlatPlane OpenDRIVE world. Pre-built because CARLA segfaults during nav mesh generation on headless GPU setups. See `carla/README.md` for regeneration instructions.
 
 ### `cartographer/`
 
