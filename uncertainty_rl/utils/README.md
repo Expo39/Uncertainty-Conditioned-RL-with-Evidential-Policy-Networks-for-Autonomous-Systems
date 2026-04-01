@@ -47,10 +47,14 @@ When `include_covariance=False` and `include_obstacle_obs=False` (both flags off
 
 ### `logging.py`
 
-| Class | Purpose |
-|-------|---------|
-| `MetricsLogger` | Logs training and evaluation metrics to CSV and JSON. Handles per-episode and per-step logging. |
-| `UncertaintyTracker` | Sliding-window tracker for monitoring epistemic and aleatoric uncertainty trends during training. |
+`DebugLogger` only. Zero-overhead per-step diagnostics for `CARLAParkingEnv` — all methods are no-ops when `debug=False`. When enabled, emits a structured `DEBUG` line each step and caches a compact dict for the visualiser HUD. Training metrics are handled by SB3's built-in logger.
+
+| Method | Purpose |
+|--------|---------|
+| `log_step(...)` | Emit reward, pose error, yaw error, speed, covariance RMS, obstacle distance, EKF drift, LiDAR point count, and action |
+| `log_reset(...)` | Emit floor plan name, target bay ID, and spawn coordinates at episode start |
+| `log_actors(...)` | Emit actor counts (static vehicles, patrol NPCs, pedestrians, cones) after spawn |
+| `step_debug_dict()` | Return the cached dict from the last `log_step` call (empty when `debug=False`) |
 
 ### `visualisation.py`
 
