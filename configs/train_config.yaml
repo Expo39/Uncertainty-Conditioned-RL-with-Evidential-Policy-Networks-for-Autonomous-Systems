@@ -247,6 +247,7 @@ activation: "relu"  # Validated for evidential architectures
 # ---------------------------------------------------------------------------
 checkpoint_freq: 50000  # Save checkpoint every N steps
 log_interval: 10        # Log every N episodes
+verbose: 1              # SB3 verbosity: 0=silent, 1=training info, 2=debug
 enable_visualiser: true  # Write vis_state.json for the 2D bird's-eye visualiser (make visualise)
 
 # Training settings
