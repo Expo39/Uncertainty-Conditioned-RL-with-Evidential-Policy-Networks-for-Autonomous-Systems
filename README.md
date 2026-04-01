@@ -223,7 +223,8 @@ All hyperparameters live in `configs/` YAML files - never hardcoded in source.
 
 | File | Key Parameters |
 |------|---------------|
-| `train_config.yaml` | `learning_rate` (0.0003), `batch_size` (256), `n_steps` (2048), `net_arch` ([256, 256]), `evidential.lambda_reg` (0.01), `sensor_suite` (suite_a), `parking_scenarios.*` |
+| `carla/env_config.yaml` | `carla_host`, `carla_port`, `town`, `max_steps`, `carla_sensors.*`, `parking_scenarios.*`, `sensor_suite` (suite_a), `include_covariance`, `include_obstacle_obs` |
+| `train_config.yaml` | `learning_rate` (0.0003), `batch_size` (256), `n_steps` (2048), `net_arch` ([256, 256]), `evidential.lambda_reg` (0.01), `policy_type` |
 | `eval_config.yaml` | `eval_conditions` (10 conditions), `n_episodes` (100), `success_criteria` thresholds |
 | `ros2_config.yaml` | `carla_topics.*`, `ekf.*`, `odom_topic`, `covariance_topic` |
 
