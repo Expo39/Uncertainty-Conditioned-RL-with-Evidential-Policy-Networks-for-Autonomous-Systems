@@ -33,21 +33,23 @@ CARLAParkingEnv(
 
 **All 20 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
 
+Absolute EKF position (x, y, yaw) is excluded: it accumulates across episodes in the Cartographer odom frame and carries no consistent signal for the policy. Navigation intent is fully encoded by dx/dy/dyaw (indices 12-14).
+
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|
-| 0-2 | x, y, yaw | EKF filtered pose | Position and heading estimate (noisy) |
-| 3-5 | vx, vy, vyaw | EKF filtered pose | Velocity estimate (noisy) |
-| 6-8 | std\_x, std\_y, std\_yaw | EKF covariance | Standard deviations (log1p-transformed) |
-| 9-11 | cov\_xx, cov\_yy, cov\_yawyaw | EKF covariance | Diagonal elements (log1p-transformed) |
-| 12-14 | cov\_xy, cov\_xyaw, cov\_yyaw | EKF covariance | Off-diagonal elements (log1p-transformed) |
-| 15-17 | dx, dy, dyaw | Target bay (relative) | Target bay pose in ego body frame |
-| 18 | nearest\_dist | LiDAR scan | Distance to nearest obstacle (m) |
-| 19 | nearest\_bearing | LiDAR scan | Bearing to nearest obstacle in ego frame (rad) |
+| 0-2 | vx, vy, vyaw | EKF filtered pose | Velocity estimate in ego body frame (noisy) |
+| 3-5 | std\_x, std\_y, std\_yaw | EKF covariance | Standard deviations (log1p-transformed) |
+| 6-8 | cov\_xx, cov\_yy, cov\_yawyaw | EKF covariance | Diagonal elements (log1p-transformed) |
+| 9-11 | cov\_xy, cov\_xyaw, cov\_yyaw | EKF covariance | Off-diagonal elements (log1p-transformed) |
+| 12-14 | dx, dy, dyaw | Target bay (relative) | Target bay pose in ego body frame |
+| 15-16 | left\_dist, left\_bearing | LiDAR scan | Nearest obstacle in left hemisphere (y > 0) |
+| 17-18 | right\_dist, right\_bearing | LiDAR scan | Nearest obstacle in right hemisphere (y < 0) |
+| 19 | forward\_dist | LiDAR scan | Nearest obstacle in forward cone (bearing within +/-30 deg) |
 
 **Ablation flags:**
-- `include_covariance=False` drops indices 6-14 (9 dims less).
-- `include_obstacle_obs=False` drops indices 18-19 (2 dims less).
-- Obs dims: 20 (default), 18 (no obstacle), 11 (no covariance), 9 (neither).
+- `include_covariance=False` drops indices 3-11 (9 dims less).
+- `include_obstacle_obs=False` drops indices 15-19 (5 dims less).
+- Obs dims: 20 (default), 15 (no obstacle), 11 (no covariance), 6 (neither).
 
 Covariance features are log1p-transformed to compress heavy tails from high-uncertainty conditions (rain, sensor noise) that would otherwise distort VecNormalize running statistics.
 

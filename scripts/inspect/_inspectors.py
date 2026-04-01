@@ -841,15 +841,13 @@ class DryRunInspector(_Inspector):
         _YELLOW = "\033[33m"
         _RESET = "\033[0m"
 
-        if obs is None or len(obs) < 6:
+        if obs is None or len(obs) < 3:
             return
-        # EKF pose (indices 0-5)
+        # Velocity (indices 0-2)
         parts = [
             f"ep={episode:3d}  step={step:4d}",
-            f"pos=({obs[0]:7.2f},{obs[1]:7.2f})"
-            f"  yaw={math.degrees(obs[2]):+6.1f}deg"
-            f"  vel=({obs[3]:.2f},{obs[4]:.2f})m/s"
-            f"  vyaw={math.degrees(obs[5]):+.1f}deg/s",
+            f"vel=({obs[0]:.2f},{obs[1]:.2f})m/s"
+            f"  vyaw={math.degrees(obs[2]):+.1f}deg/s",
         ]
         # CARLA ground truth (diagnostic only -- not fed to model)
         if self._env.vehicle is not None:
@@ -862,22 +860,20 @@ class DryRunInspector(_Inspector):
                 f"  yaw={t.rotation.yaw:+6.1f}deg  spd={spd:.2f}m/s"
                 + _RESET
             )
-        # EKF covariance (indices 6-14)
+        # EKF covariance (indices 3-11)
+        if len(obs) >= 12:
+            parts.append(
+                f"std=({obs[3]:.4f},{obs[4]:.4f},{obs[5]:.4f})"
+                f"  cov_diag=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})"
+                f"  cov_off=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})"
+            )
+        # Target bay in ego body frame (indices 12-14) -- odom-frame relative
         if len(obs) >= 15:
             parts.append(
-                f"std=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})"
-                f"  cov_diag=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})"
-                f"  cov_off=({obs[12]:.4f},{obs[13]:.4f},{obs[14]:.4f})"
+                f"target(odom): dx={obs[12]:.2f}m  dy={obs[13]:.2f}m"
+                f"  dyaw={math.degrees(obs[14]):+.1f}deg"
             )
-        # Target bay in ego body frame (indices 15-17) -- odom-frame relative
-        if len(obs) >= 18:
-            parts.append(
-                f"target(odom): dx={obs[15]:.2f}m  dy={obs[16]:.2f}m"
-                f"  dyaw={math.degrees(obs[17]):+.1f}deg"
-            )
-        # GT target cross-check: show the world-frame target the env selected
-        # and the odom-frame target computed at reset.  These should be
-        # geometrically consistent: rotating odom back to world should match.
+        # GT target cross-check
         gt = self._env._target_bay
         odom_t = self._env._target_bay_odom
         gt_line = (
@@ -888,13 +884,10 @@ class DryRunInspector(_Inspector):
             f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg"
             + _RESET
         )
-        # Cross-check: reconstruct world position and yaw from odom target + offset
-        # to verify the inverse transform is self-consistent.
         tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
         recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
         recon_wy = sin_r * odom_t["x"] + cos_r * odom_t["y"] + ty
         err_m = math.sqrt((recon_wx - gt["x"]) ** 2 + (recon_wy - gt["y"]) ** 2)
-        # Yaw cross-check: odom_yaw + r should equal world_yaw (mod 2pi).
         recon_world_yaw = math.atan2(
             math.sin(odom_t["yaw"] + r),
             math.cos(odom_t["yaw"] + r),
@@ -912,9 +905,13 @@ class DryRunInspector(_Inspector):
             f"  r={math.degrees(r):+.1f}deg]"
         )
         parts.append(gt_line)
-        # Obstacle (indices 18-19)
+        # Hemispheric obstacle clearance (indices 15-19)
         if len(obs) >= 20:
-            parts.append(f"obstacle: {obs[18]:.2f}m  {math.degrees(obs[19]):+.1f}deg")
+            parts.append(
+                f"left: {obs[15]:.2f}m  {math.degrees(obs[16]):+.1f}deg"
+                f"  |  right: {obs[17]:.2f}m  {math.degrees(obs[18]):+.1f}deg"
+                f"  |  fwd: {obs[19]:.2f}m"
+            )
         print("  " + "\n    ".join(parts))
 
     # ------------------------------------------------------------------
@@ -942,12 +939,12 @@ class DryRunInspector(_Inspector):
             f"Dry-run: random actions for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
-        print("  Model inputs per step (20-dim obs, all in Cartographer odom frame):"
-              "\n    [0-5]  EKF pose:      pos(x,y)  yaw  vel(vx,vy)  vyaw"
-              "\n    [6-14] EKF cov:       std(x,y,yaw)  cov_diag(xx,yy,yawyaw)"
+        print("  Model inputs per step (20-dim obs):"
+              "\n    [0-2]   Velocity:     vx  vy  vyaw"
+              "\n    [3-11]  EKF cov:      std(x,y,yaw)  cov_diag(xx,yy,yawyaw)"
               "  cov_off(xy,xyaw,yyaw)  [log1p-transformed]"
-              "\n    [15-17] Target bay:   dx  dy  dyaw (odom-frame, ego body relative)"
-              "\n    [18-19] Obstacle:     dist_m  bearing_deg (+ve=left)"
+              "\n    [12-14] Target bay:   dx  dy  dyaw (odom-frame, ego body relative)"
+              "\n    [15-19] Clearance:    left(dist,bearing)  right(dist,bearing)  fwd_dist"
               "\n  [GT target] world + odom coordinates logged per step (yellow) + recon_err"
               "\n  recon_err should be < 0.05 m (transform self-consistency check)")
 
