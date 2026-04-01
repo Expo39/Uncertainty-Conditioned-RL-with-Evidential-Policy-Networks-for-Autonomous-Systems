@@ -21,7 +21,7 @@ CARLAParkingEnv(
     render_mode=None,
     ros2_config={"covariance_topic": "/odometry/filtered", "covariance_timeout": 10.0},
     carla_sensors_config={"imu": {...}, "lidar": {...}},  # Suite A: 2D LiDAR + IMU
-    parking_scenarios_config={...},  # parking_scenarios section from train_config.yaml
+    parking_scenarios_config={...},  # parking_scenarios section from carla/env_config.yaml
     include_covariance=True,
     include_obstacle_obs=True,
     sensor_suite="suite_a",
