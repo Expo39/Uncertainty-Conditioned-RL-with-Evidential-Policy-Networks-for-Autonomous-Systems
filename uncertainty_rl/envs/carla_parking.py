@@ -584,10 +584,13 @@ class CARLAParkingEnv(gym.Env):
     # Clearance and reward
     # ------------------------------------------------------------------
 
-    def _compute_reward(self) -> Tuple[float, bool, bool]:
+    def _compute_reward(self) -> Tuple[float, bool, bool, Dict[str, float]]:
         """
         @brief Compute reward and termination flags for the current step.
-        @return Tuple of (reward, terminated, success).
+        @return Tuple of (reward, terminated, success, diagnostics) where
+                diagnostics contains per-step scalars for TensorBoard logging:
+                pos_error (m), orientation_error (rad), speed (m/s),
+                collision (0/1), progress_reward (shaping term only).
 
         Uses CARLA ground truth transform (not EKF pose) for position and
         orientation errors. Potential-based reward shaping (Ng et al. 1999)
@@ -611,7 +614,11 @@ class CARLAParkingEnv(gym.Env):
           3. Time limit handled externally via truncated flag in step()
         """
         if self.vehicle is None:
-            return 0.0, False, False
+            _empty: Dict[str, float] = {
+                "pos_error": 0.0, "orientation_error": 0.0,
+                "speed": 0.0, "collision": 0.0, "progress_reward": 0.0,
+            }
+            return 0.0, False, False, _empty
 
         transform = self.vehicle.get_transform()
         velocity = self.vehicle.get_velocity()
@@ -632,11 +639,20 @@ class CARLAParkingEnv(gym.Env):
         # Both nose-in and nose-out are valid -- use the smaller of the two errors.
         orientation_error = abs(wrap_angle_symmetric(yaw - target_yaw))
 
+        diag: Dict[str, float] = {
+            "pos_error": position_error,
+            "orientation_error": orientation_error,
+            "speed": speed,
+            "collision": 0.0,
+            "progress_reward": 0.0,
+        }
+
         # Check collision (penalty + termination).  Flag set by SensorManager
         # collision callback; consume_collision() reads and resets atomically.
         if self._sensor_manager.consume_collision():
             self._prev_distance = position_error
-            return -10.0, True, False
+            diag["collision"] = 1.0
+            return -10.0, True, False, diag
 
         # Success condition
         success = (
@@ -646,7 +662,7 @@ class CARLAParkingEnv(gym.Env):
         )
         if success:
             self._prev_distance = position_error
-            return 10.0, True, True
+            return 10.0, True, True, diag
 
         # Potential-based progress reward (Ng et al. 1999)
         # Positive when closing on the target, negative when drifting away.
@@ -654,8 +670,9 @@ class CARLAParkingEnv(gym.Env):
         progress = (self._prev_distance - position_error) / OUT_OF_BOUNDS_THRESHOLD
         reward = progress - 0.01  # 0.01/step time penalty
         self._prev_distance = position_error
+        diag["progress_reward"] = float(progress)
 
-        return float(reward), False, False
+        return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
     # State
@@ -1448,7 +1465,7 @@ class CARLAParkingEnv(gym.Env):
                 self._trajectory_buffer.append((t.location.x, t.location.y))
 
         state = self._get_state()
-        reward, terminated, success = self._compute_reward()
+        reward, terminated, success, reward_diag = self._compute_reward()
 
         # Per-step debug diagnostics (no-op when debug=False)
         if self._debug_logger.enabled and self.vehicle is not None:
@@ -1522,7 +1539,14 @@ class CARLAParkingEnv(gym.Env):
         info: Dict[str, Any] = {
             "steps": self.steps,
             "success": success,
+            "collision": bool(reward_diag["collision"]),
+            "timeout": truncated,
             "floor_plan": self._current_floor_plan_name,
+            # Per-step reward diagnostics for TensorBoard callback
+            "pos_error": reward_diag["pos_error"],
+            "orientation_error": reward_diag["orientation_error"],
+            "speed": reward_diag["speed"],
+            "progress_reward": reward_diag["progress_reward"],
         }
 
         return state, reward, terminated, truncated, info

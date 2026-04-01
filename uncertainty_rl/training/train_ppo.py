@@ -10,13 +10,14 @@ import argparse
 import logging
 import os
 import warnings
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import gymnasium as gym
 import numpy as np
 import torch
 import yaml
 from stable_baselines3.common.callbacks import (
+    BaseCallback,
     CallbackList,
     CheckpointCallback,
     EvalCallback,  # Reserved: re-enable when multi-instance CARLA eval is supported.
@@ -113,6 +114,99 @@ def merge_configs(
     """
     merged = {**env_config, **train_config}
     return merged
+
+
+class EnvDiagnosticsCallback(BaseCallback):
+    """
+    @class EnvDiagnosticsCallback
+    @brief SB3 callback that logs per-episode environment diagnostics to TensorBoard.
+
+    Reads from the `info` dict returned by `CARLAParkingEnv.step()` and records
+    rolling means of reward components (position error, orientation error, speed,
+    progress reward) plus episode outcome rates (success, collision, timeout).
+    These appear under the `env/` namespace in TensorBoard alongside SB3's
+    built-in `rollout/` and `train/` metrics.
+
+    Logged at every rollout collection step (i.e. every `n_steps` environment
+    steps), matching the cadence of SB3's own metric dumps.
+    """
+
+    def __init__(self) -> None:
+        """@brief Initialise accumulators."""
+        super().__init__(verbose=0)
+        self._ep_pos_errors: List[float] = []
+        self._ep_orientation_errors: List[float] = []
+        self._ep_speeds: List[float] = []
+        self._ep_progress_rewards: List[float] = []
+        self._ep_successes: List[float] = []
+        self._ep_collisions: List[float] = []
+        self._ep_timeouts: List[float] = []
+
+    def _on_step(self) -> bool:
+        """
+        @brief Accumulate diagnostics from the latest env step.
+        @return Always True (training continues).
+        """
+        # self.locals["infos"] is a list of info dicts, one per parallel env.
+        for info in self.locals.get("infos", []):
+            self._ep_pos_errors.append(float(info.get("pos_error", 0.0)))
+            self._ep_orientation_errors.append(
+                float(info.get("orientation_error", 0.0))
+            )
+            self._ep_speeds.append(float(info.get("speed", 0.0)))
+            self._ep_progress_rewards.append(
+                float(info.get("progress_reward", 0.0))
+            )
+            # Episode-terminal flags -- only count when the episode actually ended.
+            if info.get("success", False) or info.get("collision", False) or info.get("timeout", False):
+                self._ep_successes.append(1.0 if info.get("success", False) else 0.0)
+                self._ep_collisions.append(1.0 if info.get("collision", False) else 0.0)
+                self._ep_timeouts.append(1.0 if info.get("timeout", False) else 0.0)
+        return True
+
+    def _on_rollout_end(self) -> None:
+        """
+        @brief Flush accumulated diagnostics to TensorBoard at rollout end."""
+        if self._ep_pos_errors:
+            self.logger.record(
+                "env/mean_pos_error_m",
+                float(np.mean(self._ep_pos_errors)),
+            )
+            self.logger.record(
+                "env/mean_orientation_error_rad",
+                float(np.mean(self._ep_orientation_errors)),
+            )
+            self.logger.record(
+                "env/mean_speed_ms",
+                float(np.mean(self._ep_speeds)),
+            )
+            self.logger.record(
+                "env/mean_progress_reward",
+                float(np.mean(self._ep_progress_rewards)),
+            )
+
+        if self._ep_successes:
+            self.logger.record(
+                "env/success_rate",
+                float(np.mean(self._ep_successes)),
+            )
+            self.logger.record(
+                "env/collision_rate",
+                float(np.mean(self._ep_collisions)),
+            )
+            self.logger.record(
+                "env/timeout_rate",
+                float(np.mean(self._ep_timeouts)),
+            )
+
+        # Reset accumulators for the next rollout window.
+        self._ep_pos_errors.clear()
+        self._ep_orientation_errors.clear()
+        self._ep_speeds.clear()
+        self._ep_progress_rewards.clear()
+        self._ep_successes.clear()
+        self._ep_collisions.clear()
+        self._ep_timeouts.clear()
 
 
 def train(config: Dict[str, Any]) -> None:
@@ -250,7 +344,7 @@ def train(config: Dict[str, Any]) -> None:
         save_vecnormalize=True,
     )
 
-    callbacks = [checkpoint_callback]
+    callbacks = [checkpoint_callback, EnvDiagnosticsCallback()]
     if eval_env is not None:
         eval_callback = EvalCallback(
             eval_env,
