@@ -22,7 +22,10 @@ inspect:
 carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
-max_steps: 1000  # Maximum episode length (500 steps at 20Hz = 25 seconds)
+max_steps: 1000  # Maximum episode length (1000 steps at 20Hz = 50 seconds).
+                 # Lot diagonal ~79m (65x45m). At 6m/s cruise ~13s traversal +
+                 # ~15-20s slow approach and parking manoeuvre = ~30s typical.
+                 # 50s gives headroom for course corrections during early training.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
 
