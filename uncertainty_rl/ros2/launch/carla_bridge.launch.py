@@ -306,6 +306,11 @@ def generate_launch_description() -> LaunchDescription:
                 "CARTOGRAPHER_MODE=loc requires CARTOGRAPHER_MAP env var "
                 "pointing to a .pbstream file. Run `make docker-map` first."
             )
+        if not os.path.isfile(cartographer_map):
+            raise RuntimeError(
+                f"CARTOGRAPHER_MAP pbstream not found: '{cartographer_map}'. "
+                f"Run `make docker-map LAYOUT=<layout>` to generate it first."
+            )
         carto_args += [
             "-load_state_filename",
             cartographer_map,

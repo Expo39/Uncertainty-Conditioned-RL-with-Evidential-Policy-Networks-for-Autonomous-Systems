@@ -371,9 +371,9 @@ class CARLAParkingEnv(gym.Env):
         @brief Compute the observation dimension based on active feature flags.
         @return Integer observation dimension.
 
-        Base: VEHICLE_STATE_DIM (6) + TARGET_POSE_DIM (3) = 9
-        With include_covariance: +COVARIANCE_FEATURES_DIM (9) = 18
-        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (2) = 20 (or 11 without cov)
+        Base: VEHICLE_STATE_DIM (3) + TARGET_POSE_DIM (3) = 6
+        With include_covariance: +COVARIANCE_FEATURES_DIM (9) = 15
+        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) = 20 (or 11 without cov)
         """
         dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
         if self._include_covariance:
@@ -683,15 +683,16 @@ class CARLAParkingEnv(gym.Env):
         @brief Build the observation vector.
         @return Float32 array of shape (_compute_obs_dim(),).
 
-        Indices 0-5: EKF filtered pose (x, y, yaw, vx, vy, vyaw).
-                     Read from _CovarianceSubscriber.get_latest_pose() when the
-                     EKF subscriber is available. Falls back to CARLA ground truth
-                     when rclpy is unavailable (CI / unit tests).
-        Indices 6-14: EKF covariance features log1p-transformed
-                     (only when include_covariance=True).
-        Indices 15-17 (or 6-8 without covariance): relative target bay pose.
-        Indices 18-19 (or 9-10 without covariance): obstacle awareness dims
-                     (only when include_obstacle_obs=True).
+        Indices 0-2:   velocity (vx, vy, vyaw). EKF filtered when available,
+                       falls back to CARLA ground truth (CI / unit tests).
+        Indices 3-11:  EKF covariance features log1p-transformed
+                       (only when include_covariance=True).
+        Indices 12-14 (or 3-5 without covariance): relative target bay pose
+                       (dx, dy, dyaw) in ego body frame.
+        Indices 15-19 (or 6-10 without covariance): hemispheric obstacle
+                       clearance [left_dist, left_bearing, right_dist,
+                       right_bearing, forward_dist]
+                       (only when include_obstacle_obs=True).
         """
         if self.vehicle is None or self.world is None:
             return np.zeros(self._compute_obs_dim(), dtype=np.float32)
@@ -760,22 +761,19 @@ class CARLAParkingEnv(gym.Env):
             obstacle_features = np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
 
         if not self._include_covariance:
-            # Without covariance: [pose(6), target(3)] = 9-dim
-            # With obstacle obs:  [pose(6), target(3), obstacle(2)] = 11-dim
-            self._obs_buffer[0] = x
-            self._obs_buffer[1] = y
-            self._obs_buffer[2] = yaw
-            self._obs_buffer[3] = vx
-            self._obs_buffer[4] = vy
-            self._obs_buffer[5] = vyaw
-            self._obs_buffer[6] = dx
-            self._obs_buffer[7] = dy
-            self._obs_buffer[8] = dyaw
+            # Without covariance: [vel(3), target(3)] = 6-dim
+            # With obstacle obs:  [vel(3), target(3), obstacle(5)] = 11-dim
+            self._obs_buffer[0] = vx
+            self._obs_buffer[1] = vy
+            self._obs_buffer[2] = vyaw
+            self._obs_buffer[3] = dx
+            self._obs_buffer[4] = dy
+            self._obs_buffer[5] = dyaw
             if self._include_obstacle_obs:
-                self._obs_buffer[9:11] = obstacle_features
+                self._obs_buffer[6:11] = obstacle_features
             return self._obs_buffer.copy()
 
-        # -- EKF covariance features (indices 6-14) -----------------------
+        # -- EKF covariance features (indices 3-11) -----------------------
         # Use the uncertainty already fetched alongside the pose above (one
         # file read for both) rather than triggering a second read here.
         uncertainty = _prefetched_uncertainty
@@ -795,36 +793,35 @@ class CARLAParkingEnv(gym.Env):
                     self.steps,
                 )
 
-        # No obstacle obs:  [pose(6), cov(9), target(3)] = 18-dim
-        # With obstacle obs: [pose(6), cov(9), target(3), obs(2)] = 20-dim
-        self._obs_buffer[0] = x
-        self._obs_buffer[1] = y
-        self._obs_buffer[2] = yaw
-        self._obs_buffer[3] = vx
-        self._obs_buffer[4] = vy
-        self._obs_buffer[5] = vyaw
+        # No obstacle obs:  [vel(3), cov(9), target(3)] = 15-dim
+        # With obstacle obs: [vel(3), cov(9), target(3), obstacle(5)] = 20-dim
+        self._obs_buffer[0] = vx
+        self._obs_buffer[1] = vy
+        self._obs_buffer[2] = vyaw
         # log1p compresses heavy tails from high-uncertainty conditions (rain, sensor
         # noise) that would otherwise distort VecNormalize running statistics.
         # np.sign preserves the sign of off-diagonal covariance terms (cov_xy,
         # cov_xyaw, cov_yyaw) which can be negative.
-        self._obs_buffer[6:15] = np.sign(uncertainty) * np.log1p(np.abs(uncertainty))
-        self._obs_buffer[15] = dx
-        self._obs_buffer[16] = dy
-        self._obs_buffer[17] = dyaw
+        self._obs_buffer[3:12] = np.sign(uncertainty) * np.log1p(np.abs(uncertainty))
+        self._obs_buffer[12] = dx
+        self._obs_buffer[13] = dy
+        self._obs_buffer[14] = dyaw
         if self._include_obstacle_obs:
-            self._obs_buffer[18:20] = obstacle_features
+            self._obs_buffer[15:20] = obstacle_features
         return self._obs_buffer.copy()
 
     def _get_obstacle_features(self) -> np.ndarray:
         """
-        @brief Extract nearest obstacle features from the cached LiDAR scan.
-        @return Float32 array [nearest_dist_m, bearing_rad].
+        @brief Extract hemispheric obstacle clearance features from the LiDAR scan.
+        @return Float32 array of shape (OBSTACLE_FEATURES_DIM,):
+                [left_dist, left_bearing, right_dist, right_bearing, forward_dist]
 
-        nearest_dist_m: distance to nearest LiDAR return (metres, clamped to
-                        sensor range). Zero if no scan available.
-        bearing_rad:    bearing to nearest return in ego body frame (radians,
-                        0 = forward, positive = left per ROS convention).
+        left_dist/bearing:    nearest return in left hemisphere (y > 0, bearing > 0).
+        right_dist/bearing:   nearest return in right hemisphere (y < 0, bearing < 0).
+        forward_dist:         nearest return in forward cone (|bearing| <= 30 deg).
 
+        Distances in metres. Bearings in radians (0 = forward, +ve = left).
+        Returns zeros for any hemisphere with no valid returns.
         Returns zeros when no LiDAR scan is available (sensor not yet ticked).
         """
         scan = self._sensor_manager.get_latest_lidar_scan()
@@ -836,36 +833,56 @@ class CARLAParkingEnv(gym.Env):
         dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
 
         # Strip self-returns: any return closer than 1.0 m is the car's own body.
-        # Mount heights are chosen to avoid this (Suite A z=0.5, Suite B/C z=1.9)
-        # but CARLA's mesh geometry can still produce near-zero returns on
-        # low-angle beams.  1.0 m is safely larger than the vehicle half-width
-        # and smaller than the nearest real obstacle (bay lines are ~1.25 m away).
         _MIN_DIST = 1.0
         valid = dists >= _MIN_DIST
 
-        # Suite A only: also discard the rear hemisphere (x <= 0).
-        # The 2D LiDAR is front-bumper mounted -- rearward rays are physically
-        # blocked by the car body on the real robot (~270 deg FOV) and produce
-        # self-returns in CARLA's 360 deg simulation.  Discarding x <= 0
-        # replicates the real sensor FOV and eliminates remaining self-returns.
-        # Suite B/C (roof-mounted 3D LiDAR) has a full 360 deg field of view,
-        # so the rear half must not be discarded.
+        # Suite A only: discard rear hemisphere (x <= 0). Front-bumper-mounted
+        # 2D LiDAR is physically blocked rearward on the real robot; discarding
+        # replicates the ~270 deg FOV and removes CARLA self-returns.
+        # Suite B/C roof-mounted 3D LiDAR has full 360 deg FOV -- keep all.
         if self._sensor_manager._sensor_suite == "suite_a":
             valid = valid & (scan[:, 0] > 0.0)
 
         if not np.any(valid):
             self._obstacle_features_buffer[:] = 0.0
             return self._obstacle_features_buffer
+
         dists = dists[valid]
         scan = scan[valid]
-        nearest_idx = int(np.argmin(dists))
-        nearest_dist = float(dists[nearest_idx])
+        bearings = np.arctan2(scan[:, 1], scan[:, 0])
 
-        # Bearing: atan2(y, x) in vehicle frame (y-left, x-forward convention)
-        nearest_bearing = float(np.arctan2(scan[nearest_idx, 1], scan[nearest_idx, 0]))
+        # -- Left hemisphere (y > 0, bearing > 0) ----------------------------
+        left_mask = scan[:, 1] > 0.0
+        if np.any(left_mask):
+            idx = int(np.argmin(dists[left_mask]))
+            left_dists = dists[left_mask]
+            left_bearings = bearings[left_mask]
+            self._obstacle_features_buffer[0] = float(left_dists[idx])
+            self._obstacle_features_buffer[1] = float(left_bearings[idx])
+        else:
+            self._obstacle_features_buffer[0] = 0.0
+            self._obstacle_features_buffer[1] = 0.0
 
-        self._obstacle_features_buffer[0] = nearest_dist
-        self._obstacle_features_buffer[1] = nearest_bearing
+        # -- Right hemisphere (y < 0, bearing < 0) ---------------------------
+        right_mask = scan[:, 1] < 0.0
+        if np.any(right_mask):
+            idx = int(np.argmin(dists[right_mask]))
+            right_dists = dists[right_mask]
+            right_bearings = bearings[right_mask]
+            self._obstacle_features_buffer[2] = float(right_dists[idx])
+            self._obstacle_features_buffer[3] = float(right_bearings[idx])
+        else:
+            self._obstacle_features_buffer[2] = 0.0
+            self._obstacle_features_buffer[3] = 0.0
+
+        # -- Forward cone (|bearing| <= 30 deg) ------------------------------
+        _FORWARD_HALF_ANGLE = math.radians(30.0)
+        forward_mask = np.abs(bearings) <= _FORWARD_HALF_ANGLE
+        if np.any(forward_mask):
+            self._obstacle_features_buffer[4] = float(np.min(dists[forward_mask]))
+        else:
+            self._obstacle_features_buffer[4] = 0.0
+
         return self._obstacle_features_buffer
 
     # ------------------------------------------------------------------
@@ -1091,9 +1108,15 @@ class CARLAParkingEnv(gym.Env):
 
     def _wait_for_covariance(self) -> None:
         """
-        @brief Block until the first EKF covariance message arrives.
+        @brief Block until all EKF inputs are present and covariance is available.
 
-        Ticks the CARLA simulation while waiting. Raises RuntimeError on timeout.
+        Checks two conditions before allowing an episode to start:
+          1. LiDAR scan received by SensorManager (Cartographer input).
+          2. EKF state file written by CovarianceExtractorNode (EKF output).
+
+        Ticks the CARLA simulation while waiting. Raises RuntimeError naming
+        the specific missing input if either condition is not met within the
+        configured covariance_timeout.
         """
         if self._cov_subscriber is None:
             return
@@ -1101,20 +1124,40 @@ class CARLAParkingEnv(gym.Env):
         start = time.monotonic()
         tick_interval = 0.05  # 20 Hz -- matches simulation timestep
 
-        while not self._cov_subscriber.has_data:
+        while True:
+            lidar_ready = self._sensor_manager.get_latest_lidar_scan() is not None
+            ekf_ready = self._cov_subscriber.has_data
+
+            if lidar_ready and ekf_ready:
+                break
+
             elapsed = time.monotonic() - start
             if elapsed > self._covariance_timeout:
+                missing = []
+                if not lidar_ready:
+                    missing.append(
+                        "LiDAR scan (check CARLA sensor spawned and "
+                        "CARLA ROS bridge is publishing on "
+                        "/carla/ego_vehicle/lidar)"
+                    )
+                if not ekf_ready:
+                    missing.append(
+                        "EKF covariance (check ros2-bridge container is "
+                        "healthy and CovarianceExtractorNode is writing "
+                        "ekf_state.json)"
+                    )
                 raise RuntimeError(
-                    f"No covariance message received within "
-                    f"{self._covariance_timeout}s. "
-                    f"Ensure ros2-bridge container is healthy."
+                    f"EKF inputs not ready after {self._covariance_timeout:.0f}s. "
+                    f"Missing: {'; '.join(missing)}"
                 )
+
             if self.world is not None:
                 self.world.tick(10.0)
             time.sleep(tick_interval)
 
         logger.debug(
-            f"First covariance received after {time.monotonic() - start:.2f}s."
+            f"EKF inputs ready after {time.monotonic() - start:.2f}s "
+            f"(lidar + covariance)."
         )
 
     def _compute_target_bay_odom(
