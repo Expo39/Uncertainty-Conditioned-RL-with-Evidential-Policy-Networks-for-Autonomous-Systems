@@ -10,8 +10,9 @@ import csv
 import json
 import logging
 import math
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Deque, Dict, List, Optional
 
 import numpy as np
 
@@ -127,8 +128,8 @@ class UncertaintyTracker:
         @param window_size: Size of sliding window for computing statistics.
         """
         self.window_size = window_size
-        self.epistemic_values: List[float] = []
-        self.aleatoric_values: List[float] = []
+        self.epistemic_values: Deque[float] = deque(maxlen=window_size)
+        self.aleatoric_values: Deque[float] = deque(maxlen=window_size)
 
     def update(self, epistemic: float, aleatoric: float) -> None:
         """
@@ -136,13 +137,9 @@ class UncertaintyTracker:
         @param epistemic: Epistemic uncertainty value.
         @param aleatoric: Aleatoric uncertainty value.
         """
+        # deque(maxlen=window_size) automatically drops the oldest value
         self.epistemic_values.append(epistemic)
         self.aleatoric_values.append(aleatoric)
-
-        # Keep only recent values
-        if len(self.epistemic_values) > self.window_size:
-            self.epistemic_values.pop(0)
-            self.aleatoric_values.pop(0)
 
     def get_statistics(self) -> Dict[str, Dict[str, float]]:
         """
@@ -302,7 +299,7 @@ class DebugLogger:
         consumers can safely do ``frame.get('debug', {})``.
 
         @return Dict with keys: pos_err, yaw_err_deg, speed, reward, cov_rms,
-                obs_dist, steer, throttle, brake.
+                obs_dist, ekf_drift, lidar_pts, steer, throttle, brake.
         """
         if not self._debug:
             return {}

@@ -67,7 +67,10 @@ from uncertainty_rl.utils.constants import (
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
 )
-from uncertainty_rl.utils.geometry import _compute_relative_target_pose
+from uncertainty_rl.utils.geometry import (
+    _compute_relative_target_pose,
+    wrap_angle_symmetric,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -627,14 +630,7 @@ class CARLAParkingEnv(gym.Env):
 
         position_error = math.sqrt((x - target_x) ** 2 + (y - target_y) ** 2)
         # Both nose-in and nose-out are valid -- use the smaller of the two errors.
-        yaw_error_raw = yaw - target_yaw
-        orientation_error = min(
-            abs(math.atan2(math.sin(yaw_error_raw), math.cos(yaw_error_raw))),
-            abs(math.atan2(
-                math.sin(yaw_error_raw + math.pi),
-                math.cos(yaw_error_raw + math.pi),
-            )),
-        )
+        orientation_error = abs(wrap_angle_symmetric(yaw - target_yaw))
 
         # Check collision (penalty + termination).  Flag set by SensorManager
         # collision callback; consume_collision() reads and resets atomically.

@@ -127,6 +127,9 @@ def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> 
     @param y: Query point y coordinate.
     @param corners: Ordered polygon vertices as (x, y) pairs (closed automatically).
     @return True if the point is inside the polygon.
+
+    @note 1e-12 division guard prevents zero-division when the query point lies
+          exactly on a horizontal edge (yj == yi).
     """
     n = len(corners)
     inside = False
@@ -134,10 +137,49 @@ def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> 
     for i in range(n):
         xi, yi = corners[i]
         xj, yj = corners[j]
-        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi) + xi):
+        if ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+        ):
             inside = not inside
         j = i
     return inside
+
+
+def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float:
+    """
+    @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
+
+    Uses the standard ZYX Euler decomposition. Only valid for 2D operation
+    (z-axis rotation only -- roll and pitch are assumed zero).
+
+    @param q_x: Quaternion x component.
+    @param q_y: Quaternion y component.
+    @param q_z: Quaternion z component.
+    @param q_w: Quaternion w component.
+    @return Yaw angle in radians, wrapped to [-pi, pi].
+    """
+    siny_cosp = 2.0 * (q_w * q_z + q_x * q_y)
+    cosy_cosp = 1.0 - 2.0 * (q_y * q_y + q_z * q_z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def wrap_angle_symmetric(angle: float) -> float:
+    """
+    @brief Wrap an angle to (-pi, pi] with 180-degree parking symmetry.
+
+    Both nose-in and nose-out are valid parking orientations. This function
+    returns whichever of ``angle`` or ``angle + pi`` has the smaller absolute
+    value, wrapped to (-pi, pi].
+
+    Used wherever a heading error should be invariant to the vehicle entering
+    a bay forwards or in reverse (e.g. reward computation, target pose).
+
+    @param angle: Raw heading error in radians.
+    @return Heading error in (-pi, pi] with 180-deg symmetry applied.
+    """
+    wrapped = math.atan2(math.sin(angle), math.cos(angle))
+    wrapped_flip = math.atan2(math.sin(angle + math.pi), math.cos(angle + math.pi))
+    return wrapped_flip if abs(wrapped_flip) < abs(wrapped) else wrapped
 
 
 def _compute_relative_target_pose(
@@ -170,14 +212,5 @@ def _compute_relative_target_pose(
     dx = cos_yaw * dx_world + sin_yaw * dy_world
     dy = -sin_yaw * dx_world + cos_yaw * dy_world
 
-    # Both nose-in and nose-out are valid parking orientations (180 deg symmetry).
-    # Pick whichever heading error is smaller in magnitude.
-    raw_dyaw = yaw_target - yaw_ego
-    dyaw = math.atan2(math.sin(raw_dyaw), math.cos(raw_dyaw))
-    dyaw_flipped = math.atan2(
-        math.sin(raw_dyaw + math.pi), math.cos(raw_dyaw + math.pi)
-    )
-    if abs(dyaw_flipped) < abs(dyaw):
-        dyaw = dyaw_flipped
-
+    dyaw = wrap_angle_symmetric(yaw_target - yaw_ego)
     return dx, dy, dyaw
