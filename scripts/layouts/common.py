@@ -27,6 +27,15 @@ BAY_DIMS: Dict[str, Dict[str, float]] = {
 
 BAYS_PER_TYPE = 5  # Exactly 5 bays per type per floor plan
 
+# Shared spacing constants used by all layout modules.
+# _WALL_GAP: minimum clearance between a bay's back face and the perimeter wall/cones.
+# PED_STRIP: width of a pedestrian zone strip alongside an aisle face (m).
+# _PED_MARGIN: inset applied to both ends of a pedestrian zone so it does not
+#              overlap the perimeter cone boundary.
+_WALL_GAP: float = 0.5
+PED_STRIP: float = 3.0
+_PED_MARGIN: float = 0.5
+
 
 # ---------------------------------------------------------------------------
 # Low-level geometry helpers
@@ -483,7 +492,6 @@ def plot_layout(
     try:
         import matplotlib.patches as mpatches
         import matplotlib.pyplot as plt
-        from matplotlib.patches import FancyArrowPatch, Polygon  # noqa: F401
     except ImportError:
         print("  WARNING: matplotlib not available, skipping plot.")
         return

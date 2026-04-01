@@ -44,6 +44,9 @@ from typing import Any, Dict, List
 
 from scripts.layouts.common import (
     BAY_DIMS,
+    PED_STRIP,
+    _PED_MARGIN,
+    _WALL_GAP,
     ang_offset_from_wall,
     ang_x_margin,
     angled_bays_along_wall,
@@ -57,8 +60,6 @@ ORIGIN_Y = 0.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = True
-
-_WALL_GAP = 0.5  # minimum clearance between bay back face and perimeter wall/cones
 
 
 def generate() -> Dict[str, Any]:
@@ -397,10 +398,9 @@ def generate() -> Dict[str, Any]:
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face (PED_STRIP = 3.0 m).
+    # Pedestrian zones -- one strip per distinct aisle face.
+    # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
-    PED_STRIP = 3.0
-    _PED_MARGIN = 0.5
 
     obs_tb_cx_end = obs_tb_cx_start + (PERP_OBS_TB - 1) * dims_perp["width"]
     obs_row_c_nose_y = obs_row_c_cy - dims_perp["depth"] / 2.0  # 11.5
