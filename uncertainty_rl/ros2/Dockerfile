@@ -92,6 +92,14 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
     --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
 
+# Install the uncertainty_rl Python package (base deps only -- no torch/SB3).
+# tf_to_odom imports uncertainty_rl.utils.covariance_utils at node startup.
+# Placed outside /workspace/src so colcon does not find it as a duplicate package.
+COPY pyproject.toml /opt/uncertainty_rl_pkg/pyproject.toml
+COPY uncertainty_rl/__init__.py /opt/uncertainty_rl_pkg/uncertainty_rl/__init__.py
+COPY uncertainty_rl/utils/ /opt/uncertainty_rl_pkg/uncertainty_rl/utils/
+RUN pip install --no-cache-dir --break-system-packages -e "/opt/uncertainty_rl_pkg"
+
 # Copy custom message package (ament_cmake, builds first via dependency order)
 COPY uncertainty_rl/ros2/uncertainty_rl_msgs /workspace/src/uncertainty_rl_msgs
 
