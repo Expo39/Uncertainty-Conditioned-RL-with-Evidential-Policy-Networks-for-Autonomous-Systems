@@ -10,6 +10,7 @@ condition-based sweep driven by eval_config.yaml.
 
 import argparse
 import copy
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union, cast
@@ -25,6 +26,8 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import CARLAParkingEnv
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
+
+logger = logging.getLogger("uncertainty_rl.evaluation")
 
 
 @dataclass
@@ -183,6 +186,9 @@ def make_eval_env(
         include_obstacle_obs = bool(train_config.get("include_obstacle_obs", True))
         sensor_suite = str(train_config.get("sensor_suite", "suite_a"))
 
+    # debug: per-step DebugLogger diagnostics -- off by default, same as training.
+    debug: bool = bool(config.get("debug", False))
+
     def _init() -> CARLAParkingEnv:
         return CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
@@ -195,6 +201,7 @@ def make_eval_env(
             include_covariance=include_covariance,
             include_obstacle_obs=include_obstacle_obs,
             sensor_suite=sensor_suite,
+            debug=debug,
         )
 
     env = DummyVecEnv([_init])
@@ -264,7 +271,8 @@ def evaluate_agent(
             obs = cast(np.ndarray, step_result[0])
             reward = cast(np.ndarray, step_result[1])
             done_arr = cast(np.ndarray, step_result[2])
-            infos = cast(List[Dict[str, Any]], step_result[4])
+            # DummyVecEnv.step() returns (obs, rewards, dones, infos) -- 4 elements.
+            infos = cast(List[Dict[str, Any]], step_result[3])
 
             episode_reward += float(reward[0])
             steps += 1
@@ -285,11 +293,6 @@ def evaluate_agent(
         # Store metrics
         episode_rewards.append(episode_reward)
         episode_steps.append(steps)
-        # Position/orientation errors are not re-computed here; the env's
-        # success flag is the ground-truth termination signal. Placeholder
-        # zeros are appended so the metrics dataclass remains consistent.
-        metrics.position_errors.append(0.0)
-        metrics.orientation_errors.append(0.0)
 
     # Compute aggregate metrics
     metrics.success_rate = (successes / n_episodes) * 100.0
@@ -303,7 +306,7 @@ def evaluate_across_conditions(
     model_path: str,
     eval_config_path: str,
     train_config_path: str,
-    n_episodes: int = 100,
+    n_episodes: int = 0,
     output_dir: str = "./evaluation_results",
 ) -> pd.DataFrame:
     """
@@ -312,7 +315,8 @@ def evaluate_across_conditions(
     @param eval_config_path: Path to evaluation configuration file.
     @param train_config_path: Path to training configuration file
         (for base sensor noise).
-    @param n_episodes: Number of episodes per condition.
+    @param n_episodes: Episodes per condition. 0 means read from eval_config
+        (n_episodes key), falling back to 100.
     @param output_dir: Directory to save results.
     @return DataFrame with evaluation results.
     """
@@ -325,10 +329,18 @@ def evaluate_across_conditions(
 
     base_sensors = train_config.get("carla_sensors", {})
     conditions = eval_config.get("eval_conditions", [])
+    # n_episodes: caller can override; fall back to eval_config, then hard default.
+    n_episodes = n_episodes or int(eval_config.get("n_episodes", 100))
 
     # Load model
-    print(f"Loading model from {model_path}...")
-    model = PPO.load(model_path)
+    logger.info("Loading model from %s...", model_path)
+    # Load model: use EvidentialPPO when train_config specifies policy_type=evidential
+    # so that isinstance(model, EvidentialPPO) is True and uncertainty is collected.
+    policy_type = train_config.get("policy_type", "evidential")
+    if policy_type == "evidential":
+        model: PPO = EvidentialPPO.load(model_path)
+    else:
+        model = PPO.load(model_path)
 
     # Load normalisation statistics if available
     vec_normalize_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
@@ -338,8 +350,7 @@ def evaluate_across_conditions(
     for condition in conditions:
         name = condition.get("name", "unknown")
         description = condition.get("description", "")
-        print(f"\nEvaluating condition: {name}")
-        print(f"  {description}")
+        logger.info("Evaluating condition: %s -- %s", name, description)
 
         # Create environment for this condition
         base_env = make_eval_env(condition, eval_config, base_sensors, train_config)
@@ -350,6 +361,12 @@ def evaluate_across_conditions(
             eval_env = VecNormalize.load(vec_normalize_path, base_env)
             eval_env.training = False
             eval_env.norm_reward = False
+        else:
+            logger.warning(
+                "No VecNormalize stats found at %s. "
+                "Running without observation normalisation.",
+                vec_normalize_path,
+            )
 
         # Evaluate
         metrics = evaluate_agent(
@@ -371,9 +388,8 @@ def evaluate_across_conditions(
         result["bay_occupancy_rate"] = condition.get("bay_occupancy_rate", 0.6)
         results.append(result)
 
-        print(f"  Success rate: {metrics.success_rate:.1f}%")
-        print(f"  Average reward: {metrics.average_reward:.2f}")
-        print(f"  Mean position error: " f"{np.mean(metrics.position_errors):.3f} m")
+        logger.info("  success_rate=%.1f%%  avg_reward=%.2f  avg_steps=%.0f",
+                    metrics.success_rate, metrics.average_reward, metrics.average_steps)
 
         # Clean up
         eval_env.close()
@@ -385,7 +401,7 @@ def evaluate_across_conditions(
     os.makedirs(output_dir, exist_ok=True)
     csv_path = os.path.join(output_dir, "evaluation_results.csv")
     df.to_csv(csv_path, index=False)
-    print(f"\nResults saved to {csv_path}")
+    logger.info("Results saved to %s", csv_path)
 
     return df
 
@@ -422,19 +438,12 @@ def plot_evaluation_results(
     axes[0, 1].set_title("Average Reward vs Condition", fontsize=14)
     axes[0, 1].grid(True, alpha=0.3, axis="y")
 
-    # Plot 3: Position error vs condition
-    axes[1, 0].bar(
-        x_positions,
-        df["mean_position_error"],
-        yerr=df["std_position_error"],
-        color="firebrick",
-        alpha=0.8,
-        capsize=5,
-    )
+    # Plot 3: Average steps to termination vs condition
+    axes[1, 0].bar(x_positions, df["average_steps"], color="firebrick", alpha=0.8)
     axes[1, 0].set_xticks(list(x_positions))
     axes[1, 0].set_xticklabels(conditions, rotation=45, ha="right")
-    axes[1, 0].set_ylabel("Position Error (m)", fontsize=12)
-    axes[1, 0].set_title("Position Error vs Condition", fontsize=14)
+    axes[1, 0].set_ylabel("Average Steps", fontsize=12)
+    axes[1, 0].set_title("Average Steps to Termination vs Condition", fontsize=14)
     axes[1, 0].grid(True, alpha=0.3, axis="y")
 
     # Plot 4: Policy uncertainty estimates
@@ -466,7 +475,7 @@ def plot_evaluation_results(
 
     plot_path = os.path.join(output_dir, "evaluation_plots.png")
     plt.savefig(plot_path, dpi=300, bbox_inches="tight")
-    print(f"Plots saved to {plot_path}")
+    logger.info("Plots saved to %s", plot_path)
 
     plt.close()
 
@@ -499,8 +508,8 @@ def main() -> None:
     parser.add_argument(
         "--n-episodes",
         type=int,
-        default=100,
-        help="Number of episodes per condition",
+        default=0,
+        help="Episodes per condition (0 = read from eval_config.yaml)",
     )
     parser.add_argument(
         "--output-dir",
@@ -510,6 +519,17 @@ def main() -> None:
     )
 
     args = parser.parse_args()
+
+    # Configure logging level: DEBUG when debug:true in eval_config, else INFO.
+    # This also enables the env's DebugLogger per-step output.
+    with open(args.eval_config, "r") as _f:
+        _cfg: Dict[str, Any] = yaml.safe_load(_f)
+    _log_level = logging.DEBUG if _cfg.get("debug", False) else logging.INFO
+    logging.basicConfig(
+        level=_log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     # Run evaluation
     df = evaluate_across_conditions(
@@ -523,7 +543,7 @@ def main() -> None:
     # Create plots
     plot_evaluation_results(df, output_dir=args.output_dir)
 
-    print("\nEvaluation complete!")
+    logger.info("Evaluation complete.")
 
 
 if __name__ == "__main__":
