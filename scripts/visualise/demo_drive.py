@@ -42,10 +42,16 @@ def _parse_args() -> argparse.Namespace:
         help="Path to trained model checkpoint.",
     )
     parser.add_argument(
+        "--env-config",
+        type=str,
+        default="configs/carla/env_config.yaml",
+        help="Path to environment config (CARLA, sensors, parking scenarios).",
+    )
+    parser.add_argument(
         "--train-config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to training config (for env setup).",
+        help="Path to training config (for policy_type used in model loading).",
     )
     parser.add_argument(
         "--episodes",
@@ -61,35 +67,35 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _make_env(train_config: Dict[str, Any]) -> DummyVecEnv:
+def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
     """
-    @brief Create the CARLA parking environment from training config.
-    @param train_config: Parsed training configuration dictionary.
+    @brief Create the CARLA parking environment from environment config.
+    @param env_config: Parsed environment configuration dictionary.
     @return Vectorised environment.
     """
     def _init() -> CARLAParkingEnv:
         # Env vars override config (e.g. CARLA_HOST=carla-server-demo for 3D view)
         carla_host = os.environ.get(
-            "CARLA_HOST", train_config.get("carla_host", "carla-server")
+            "CARLA_HOST", env_config.get("carla_host", "carla-server")
         )
         carla_port = int(os.environ.get(
-            "CARLA_PORT", train_config.get("carla_port", 2000)
+            "CARLA_PORT", env_config.get("carla_port", 2000)
         ))
         return CARLAParkingEnv(
             carla_host=carla_host,
             carla_port=carla_port,
-            town=train_config.get("town", "FlatPlane"),
-            max_steps=train_config.get("max_steps", 500),
-            ros2_config=train_config.get("ros2", {}),
-            carla_sensors_config=train_config.get("carla_sensors", {}),
-            parking_scenarios_config=train_config.get("parking_scenarios", {}),
+            town=env_config.get("town", "FlatPlane"),
+            max_steps=env_config.get("max_steps", 500),
+            ros2_config=env_config.get("ros2", {}),
+            carla_sensors_config=env_config.get("carla_sensors", {}),
+            parking_scenarios_config=env_config.get("parking_scenarios", {}),
             include_covariance=bool(
-                train_config.get("include_covariance", True)
+                env_config.get("include_covariance", True)
             ),
             include_obstacle_obs=bool(
-                train_config.get("include_obstacle_obs", True)
+                env_config.get("include_obstacle_obs", True)
             ),
-            sensor_suite=str(train_config.get("sensor_suite", "suite_a")),
+            sensor_suite=str(env_config.get("sensor_suite", "suite_a")),
         )
 
     return DummyVecEnv([_init])
@@ -101,7 +107,9 @@ def main() -> None:
     """
     args = _parse_args()
 
-    # Load training config
+    # Load configs
+    with open(args.env_config, "r") as f:
+        env_config: Dict[str, Any] = yaml.safe_load(f)
     with open(args.train_config, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
 
@@ -114,7 +122,7 @@ def main() -> None:
         model = PPO.load(args.checkpoint)
 
     # Create environment
-    base_env = _make_env(train_config)
+    base_env = _make_env(env_config)
     env = base_env
 
     # Apply normalisation statistics if available

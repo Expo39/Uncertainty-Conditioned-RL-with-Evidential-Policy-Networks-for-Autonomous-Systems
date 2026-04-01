@@ -255,7 +255,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with open("configs/train_config.yaml", "r") as _f:
+    with open("configs/carla/env_config.yaml", "r") as _f:
         train_cfg = yaml.safe_load(_f)
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")

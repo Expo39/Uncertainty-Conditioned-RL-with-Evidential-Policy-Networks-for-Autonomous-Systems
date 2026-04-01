@@ -97,6 +97,24 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
+def merge_configs(
+    train_config: Dict[str, Any], env_config: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    @brief Merge training and environment configs into a single dict.
+
+    env_config keys take precedence for environment settings. train_config
+    keys take precedence for training hyperparameters. In practice they have
+    no overlapping keys so this is a simple union.
+
+    @param train_config: Training hyperparameters from train_config.yaml.
+    @param env_config: Environment settings from env_config.yaml.
+    @return Merged configuration dictionary.
+    """
+    merged = {**env_config, **train_config}
+    return merged
+
+
 def train(config: Dict[str, Any]) -> None:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
@@ -281,10 +299,16 @@ def main() -> None:
         description="Train uncertainty-conditioned RL agent for autonomous parking"
     )
     parser.add_argument(
-        "--config",
+        "--train-config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to configuration file (single source of truth)",
+        help="Path to training hyperparameter config (PPO, network, evidential settings)",
+    )
+    parser.add_argument(
+        "--env-config",
+        type=str,
+        default="configs/carla/env_config.yaml",
+        help="Path to environment config (CARLA, sensors, parking scenarios)",
     )
     parser.add_argument(
         "--total-timesteps",
@@ -325,8 +349,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Load config, then apply CLI overrides
-    config = load_config(args.config)
+    # Load and merge configs, then apply CLI overrides
+    config = merge_configs(load_config(args.train_config), load_config(args.env_config))
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:

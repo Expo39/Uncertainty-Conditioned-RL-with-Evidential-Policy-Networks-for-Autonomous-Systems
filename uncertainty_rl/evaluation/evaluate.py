@@ -119,14 +119,14 @@ def make_eval_env(
     condition: Dict[str, Any],
     config: Dict[str, Any],
     base_sensors: Dict[str, Any],
-    train_config: Optional[Dict[str, Any]] = None,
+    env_config: Optional[Dict[str, Any]] = None,
 ) -> DummyVecEnv:
     """
     @brief Create evaluation environment for a specific physical condition.
     @param condition: Condition dict with noise multipliers and traffic counts.
     @param config: Evaluation configuration dictionary.
-    @param base_sensors: Base sensor noise config from training.
-    @param train_config: Full training config for parking_scenarios and obs flags.
+    @param base_sensors: Base sensor noise config from env_config.yaml.
+    @param env_config: Environment config for parking_scenarios and obs flags.
     @return Vectorised evaluation environment.
     """
     # Scale sensor noise by condition multipliers
@@ -139,9 +139,9 @@ def make_eval_env(
     # overrides + training defaults. eval_config.yaml uses num_patrol_vehicles
     # (not num_vehicles) to match CARLAParkingEnv's parking_scenarios_config keys.
     base_scenarios: Dict[str, Any] = {}
-    if train_config is not None:
-        base_scenarios = dict(train_config.get("parking_scenarios", {}))
-    # Perimeter cone flag: per-condition > eval_config global > train_config default.
+    if env_config is not None:
+        base_scenarios = dict(env_config.get("parking_scenarios", {}))
+    # Perimeter cone flag: per-condition > eval_config global > env_config default.
     spawn_cones_eval_global: bool = bool(config.get("spawn_perimeter_cones", False))
     spawn_cones: bool = bool(
         condition.get(
@@ -177,14 +177,14 @@ def make_eval_env(
                 floor_plan_name: floor_plans[floor_plan_name]
             }
 
-    # Observation flags from training config (baseline-specific obs dims respected)
+    # Observation flags from env config (baseline-specific obs dims respected)
     include_covariance: bool = True
     include_obstacle_obs: bool = True
     sensor_suite: str = "suite_a"
-    if train_config is not None:
-        include_covariance = bool(train_config.get("include_covariance", True))
-        include_obstacle_obs = bool(train_config.get("include_obstacle_obs", True))
-        sensor_suite = str(train_config.get("sensor_suite", "suite_a"))
+    if env_config is not None:
+        include_covariance = bool(env_config.get("include_covariance", True))
+        include_obstacle_obs = bool(env_config.get("include_obstacle_obs", True))
+        sensor_suite = str(env_config.get("sensor_suite", "suite_a"))
 
     # debug: per-step DebugLogger diagnostics -- off by default, same as training.
     debug: bool = bool(config.get("debug", False))
@@ -305,6 +305,7 @@ def evaluate_agent(
 def evaluate_across_conditions(
     model_path: str,
     eval_config_path: str,
+    env_config_path: str,
     train_config_path: str,
     n_episodes: int = 0,
     output_dir: str = "./evaluation_results",
@@ -313,8 +314,8 @@ def evaluate_across_conditions(
     @brief Evaluate agent across different physical conditions.
     @param model_path: Path to trained model.
     @param eval_config_path: Path to evaluation configuration file.
-    @param train_config_path: Path to training configuration file
-        (for base sensor noise).
+    @param env_config_path: Path to environment config (sensors, parking scenarios).
+    @param train_config_path: Path to training config (policy_type for model loading).
     @param n_episodes: Episodes per condition. 0 means read from eval_config
         (n_episodes key), falling back to 100.
     @param output_dir: Directory to save results.
@@ -324,10 +325,13 @@ def evaluate_across_conditions(
     with open(eval_config_path, "r") as f:
         eval_config: Dict[str, Any] = yaml.safe_load(f)
 
+    with open(env_config_path, "r") as f:
+        env_config: Dict[str, Any] = yaml.safe_load(f)
+
     with open(train_config_path, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
 
-    base_sensors = train_config.get("carla_sensors", {})
+    base_sensors = env_config.get("carla_sensors", {})
     conditions = eval_config.get("eval_conditions", [])
     # n_episodes: caller can override; fall back to eval_config, then hard default.
     n_episodes = n_episodes or int(eval_config.get("n_episodes", 100))
@@ -353,7 +357,7 @@ def evaluate_across_conditions(
         logger.info("Evaluating condition: %s -- %s", name, description)
 
         # Create environment for this condition
-        base_env = make_eval_env(condition, eval_config, base_sensors, train_config)
+        base_env = make_eval_env(condition, eval_config, base_sensors, env_config)
         eval_env: Union[DummyVecEnv, VecNormalize] = base_env
 
         # Apply normalisation if available
@@ -500,10 +504,16 @@ def main() -> None:
         help="Path to evaluation configuration file",
     )
     parser.add_argument(
+        "--env-config",
+        type=str,
+        default="configs/carla/env_config.yaml",
+        help="Path to environment config (sensors, parking scenarios)",
+    )
+    parser.add_argument(
         "--train-config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to training configuration file (for base sensor noise)",
+        help="Path to training config (for policy_type used in model loading)",
     )
     parser.add_argument(
         "--n-episodes",
@@ -535,6 +545,7 @@ def main() -> None:
     df = evaluate_across_conditions(
         model_path=args.model_path,
         eval_config_path=args.eval_config,
+        env_config_path=args.env_config,
         train_config_path=args.train_config,
         n_episodes=args.n_episodes,
         output_dir=args.output_dir,
