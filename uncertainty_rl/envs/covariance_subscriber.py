@@ -18,7 +18,6 @@ convergence at episode reset.
 import json
 import math
 import threading
-import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 
@@ -79,10 +78,13 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         self._lock = threading.Lock()
         self._latest_uncertainty: Optional[np.ndarray] = None
         self._latest_pose: Optional[np.ndarray] = None
-        # Monotonic time after which the file mtime must fall to be considered
-        # fresh.  Set by invalidate() at each episode reset so stale pre-reset
-        # data is never served as a valid current reading.
-        self._valid_after: float = 0.0
+        # Sequence number of the last-seen write from the extractor node.
+        # invalidate() records the current seq; _read_file() only accepts a
+        # file whose `seq` field is strictly greater than _valid_after_seq.
+        # This is clock-skew-proof -- mtime comparisons across Docker container
+        # clocks are unreliable on some host configurations.
+        self._valid_after_seq: int = 0
+        self._last_read_seq: int = 0
 
         # Initialise rclpy Node for /initialpose publisher only
         if _ROS2_AVAILABLE:
@@ -103,15 +105,20 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
 
     def invalidate(self) -> None:
         """
-        @brief Mark cached data as stale at the current wall-clock time.
+        @brief Mark cached data as stale at the current write sequence.
 
-        Call this at episode reset (before publish_initial_pose and before
-        _wait_for_covariance) so that any JSON written before this moment is
-        rejected.  _read_file() will only accept a file whose mtime is strictly
-        after the invalidation timestamp.
+        Records the seq number from the last successfully read JSON write.
+        After this call, _read_file() only accepts a file whose `seq` field
+        is strictly greater than the recorded seq, guaranteeing the next
+        reading is a genuinely post-reset write from the extractor node.
+
+        Call this at episode reset before publish_initial_pose and before
+        _wait_for_covariance.
         """
         with self._lock:
-            self._valid_after = time.time()
+            # Barrier at the last-seen write seq.  Any file with seq <= this
+            # value was written before the reset and will be rejected.
+            self._valid_after_seq = self._last_read_seq
             self._latest_uncertainty = None
             self._latest_pose = None
 
@@ -119,24 +126,29 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         """
         @brief Read the latest EKF state from the shared JSON file.
 
-        Only accepts the file if its modification time is strictly after the
-        last invalidate() call, preventing stale pre-reset data from being
-        returned during the wait period at episode start.
+        Only accepts the file if its `seq` field is strictly greater than
+        the seq recorded at the last invalidate() call, preventing stale
+        pre-reset data from being returned during the wait period at episode
+        start.  This is clock-skew-proof: the seq is written by the extractor
+        node and compared numerically, so Docker container clock differences
+        cannot cause a stale read to pass the guard.
 
         Updates both _latest_pose and _latest_uncertainty atomically under
         the lock so callers never see a partially-updated state.
 
-        @return True if fresh data was read successfully.
+        @return True if fresh (post-invalidation) data was read successfully.
         """
         try:
             if not _EKF_STATE_PATH.exists():
                 return False
-            # Reject files written before the last invalidation.
-            with self._lock:
-                valid_after = self._valid_after
-            if _EKF_STATE_PATH.stat().st_mtime <= valid_after:
-                return False
             data = json.loads(_EKF_STATE_PATH.read_text())
+            # seq field added in extractor v2; fall back to mtime guard for
+            # old extractor images that predate the seq field.
+            seq: int = int(data.get("seq", 0))
+            with self._lock:
+                valid_after_seq = self._valid_after_seq
+            if seq <= valid_after_seq:
+                return False
             cov_3x3 = np.array(data["covariance"]).reshape(3, 3)
             features = extract_2d_covariance_features(cov_3x3)
             pose = np.array(
@@ -149,6 +161,7 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
             with self._lock:
                 self._latest_pose = pose
                 self._latest_uncertainty = features
+                self._last_read_seq = seq
             return True
         except (json.JSONDecodeError, KeyError, ValueError):
             return False
