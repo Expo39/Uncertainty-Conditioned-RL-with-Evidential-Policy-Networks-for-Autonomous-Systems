@@ -17,7 +17,8 @@ ROS_NOISE+='|rcutils_set_error_state|error_handling\.c|serdata\.cpp'
 ROS_NOISE+='|should be called after|.*serdata.*)'
 
 python uncertainty_rl/training/train_ppo.py \
-    --config configs/train_config.yaml \
+    --train-config configs/train_config.yaml \
+    --env-config configs/carla/env_config.yaml \
     --log-dir logs \
     --checkpoint-dir checkpoints \
     "$@" \

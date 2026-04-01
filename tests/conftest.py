@@ -82,7 +82,12 @@ def high_uncertainty_state() -> torch.Tensor:
 @pytest.fixture
 def train_config() -> Dict[str, Any]:
     """
-    @brief Minimal training configuration for tests.
+    @brief Minimal merged configuration for tests (train_config + env_config combined).
+
+    Represents the merged dict that train() and make_env() receive after
+    merge_configs(train_config, env_config) is called in main(). Tests
+    that need only training keys or only env keys can read from this dict
+    as both key sets are present.
     """
     return {
         "carla_host": "localhost",

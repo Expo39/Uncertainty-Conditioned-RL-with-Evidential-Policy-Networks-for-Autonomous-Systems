@@ -128,8 +128,8 @@ def main() -> None:
     """
     args = _parse_args()
 
-    # -- Load train config for sensor settings --
-    with open("configs/train_config.yaml") as f:
+    # -- Load env config for sensor and scenario settings --
+    with open("configs/carla/env_config.yaml") as f:
         config: Dict[str, Any] = yaml.safe_load(f)
 
     # -- Override parking scenarios for mapping: empty lot, cones on, no NPCs --

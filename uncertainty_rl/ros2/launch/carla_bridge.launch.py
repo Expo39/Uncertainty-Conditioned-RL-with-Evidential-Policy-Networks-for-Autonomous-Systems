@@ -127,10 +127,10 @@ def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
       ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu
                                        -> ego_vehicle/lidar_3d (Suite B/C)
 
-    Mount positions are read from train_config.yaml (carla_sensors section).
+    Mount positions are read from env_config.yaml (carla_sensors section).
     On the real car, update mount values to match physical sensor positions.
 
-    @param sensors_config: carla_sensors dict from train_config.yaml.
+    @param sensors_config: carla_sensors dict from env_config.yaml.
     @param is_3d: True if using Suite B/C (3D LiDAR).
     @return List of static TF publisher nodes.
     """
@@ -202,7 +202,7 @@ def generate_launch_description() -> LaunchDescription:
     @return LaunchDescription with all nodes and launch arguments.
     """
     ros2_config = _load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")
-    train_config = _load_yaml("/workspace/configs/train_config.yaml")
+    env_config = _load_yaml("/workspace/configs/carla/env_config.yaml")
 
     # -- Environment variables ---------------------------------------------
 
@@ -231,8 +231,8 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "town",
-            default_value=train_config.get("town", "FlatPlane"),
-            description="CARLA town/map to load (read from train_config.yaml).",
+            default_value=env_config.get("town", "FlatPlane"),
+            description="CARLA town/map to load (read from env_config.yaml).",
         ),
     ]
 
@@ -282,7 +282,7 @@ def generate_launch_description() -> LaunchDescription:
 
     # -- Static TF: sensor mount tree --------------------------------------
 
-    sensors_config = train_config.get("carla_sensors", {})
+    sensors_config = env_config.get("carla_sensors", {})
     static_tf_nodes = _build_sensor_tf_nodes(sensors_config, is_3d)
 
     # All suites feed raw PointCloud2 directly to Cartographer (num_point_clouds=1).
