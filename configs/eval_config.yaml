@@ -10,7 +10,7 @@
 model_path: "checkpoints/final_model"  # Path to trained model
 
 # Environment settings
-carla_host: "localhost"
+carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Special value: loads configs/layouts/flat_plane.xodr via generate_opendrive_world()
 max_steps: 500
@@ -25,6 +25,7 @@ ros2:
 n_episodes: 100  # Episodes per condition
 deterministic: true  # Use deterministic actions
 render: false  # Render episodes (requires display)
+debug: false   # Enable per-step DebugLogger diagnostics (same flag as train_config)
 
 # Evaluation conditions sweep
 # Each condition specifies IMU noise multiplier and traffic density.
@@ -86,17 +87,18 @@ eval_conditions:
     bay_occupancy_rate: 0.8
 
   # OOD floor plan evaluation (calibration experiment)
-  # Uses irregular_a (nine-sided polygon, held out entirely from training).
-  # Tests whether epistemic uncertainty rises on novel lot geometry
-  # without any reward signal indicating novelty -- a calibration check on the
-  # evidential policy's NIG prior.
+  # Whether a layout is OOD is determined by its ood: true/false flag in
+  # train_config.yaml floor_plans -- not hardcoded here. Currently trapezoid
+  # and irregular_a are both ood: true (held out from training). rectangle is
+  # ood: false (training geometry). Tests whether epistemic uncertainty rises
+  # on novel geometry -- a calibration check on the NIG prior.
   - name: "ood_nominal"
-    description: "OOD floor plan (irregular_a), nominal conditions -- calibration check"
+    description: "OOD floor plan (trapezoid), nominal conditions -- calibration check"
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.6
-    floor_plan: "irregular_a"  # Override: use OOD floor plan
+    floor_plan: "trapezoid"  # Held out from training
 
   - name: "ood_degraded"
     description: "OOD floor plan (irregular_a), 2.0x IMU noise -- compound novelty"
@@ -104,7 +106,7 @@ eval_conditions:
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.6
-    floor_plan: "irregular_a"
+    floor_plan: "irregular_a"  # Held out from training
 
   # Worst-case / safety handoff demonstration
   # Familiar training geometry under conditions far beyond the training distribution.

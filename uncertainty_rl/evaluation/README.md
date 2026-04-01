@@ -20,22 +20,22 @@ Three distinct experiment types, all using the same environment code:
 
 **Performance sweep** (ordered from easiest to hardest):
 
-| Condition | Weather | IMU mult | Patrol | Pedestrians | Notes |
-|-----------|---------|----------|--------|-------------|-------|
-| `clear_low_noise` | ClearNoon | 0.5x | 0 | 0 | Best-case LiDAR |
-| `clear_nominal` | ClearNoon | 1.0x | 1 | 2 | Training distribution |
-| `clear_sparse_lot` | ClearNoon | 1.0x | 0 | 0 | Low bay occupancy (0.2) |
-| `clear_busy` | ClearNoon | 1.5x | 3 | 4 | Dense traffic, occlusions |
-| `rain_nominal` | HardRainNoon | 1.0x | 1 | 2 | Rain LiDAR scatter |
-| `rain_degraded` | HardRainNoon | 2.0x | 2 | 3 | Compound degradation |
-| `rain_busy` | HardRainNoon | 3.0x | 3 | 4 | Max training-distribution stress |
+| Condition | IMU mult | Patrol | Ped. prob | Bay occ. | Notes |
+|-----------|----------|--------|-----------|----------|-------|
+| `low_noise` | 0.5x | 0 | 0.0 | 0.6 | Best-case LiDAR |
+| `nominal` | 1.0x | 1 | 1.0 | 0.6 | Training distribution |
+| `sparse_lot` | 1.0x | 0 | 0.0 | 0.3 | Low bay occupancy |
+| `full_traffic` | 1.5x | 1 | 1.0 | 0.8 | Dense + dynamic occlusions |
+| `high_noise_nominal` | 2.0x | 1 | 1.0 | 0.6 | Elevated sensor degradation |
+| `high_noise_degraded` | 2.0x | 1 | 1.0 | 0.3 | Compound degradation |
+| `extreme_noise` | 3.0x | 1 | 1.0 | 0.8 | Max training-distribution stress |
 
 **OOD calibration** (tests whether epistemic uncertainty rises on novel geometry):
 
 | Condition | Floor plan | Purpose |
 |-----------|-----------|---------|
-| `ood_nominal` | `irregular_a` | Novel perimeter, nominal conditions |
-| `ood_degraded` | `irregular_a` | Novel perimeter + heavy rain |
+| `ood_nominal` | `trapezoid` | Novel geometry, nominal conditions (ood: true) |
+| `ood_degraded` | `irregular_a` | Novel geometry + 2.0x noise (ood: true) |
 
 **Safety handoff demonstration** (conditions far beyond training distribution):
 

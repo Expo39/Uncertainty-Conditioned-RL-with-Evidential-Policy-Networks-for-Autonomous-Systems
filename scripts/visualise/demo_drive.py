@@ -105,9 +105,13 @@ def main() -> None:
     with open(args.train_config, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
 
-    # Load model
+    # Load model: match the class used during training so the policy type is correct.
     print(f"Loading model from {args.checkpoint}...")
-    model = PPO.load(args.checkpoint)
+    policy_type = train_config.get("policy_type", "evidential")
+    if policy_type == "evidential":
+        model: PPO = EvidentialPPO.load(args.checkpoint)
+    else:
+        model = PPO.load(args.checkpoint)
 
     # Create environment
     base_env = _make_env(train_config)
@@ -154,7 +158,8 @@ def main() -> None:
                 step_result = env.step(action)
                 obs = cast(np.ndarray, step_result[0])
                 done_arr = cast(np.ndarray, step_result[2])
-                infos = cast(List[Dict[str, Any]], step_result[4])
+                # DummyVecEnv.step() returns (obs, rewards, dones, infos) -- 4 elements.
+                infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
                 if args.render:
