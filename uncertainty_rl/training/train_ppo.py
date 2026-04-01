@@ -19,7 +19,7 @@ import yaml
 from stable_baselines3.common.callbacks import (
     CallbackList,
     CheckpointCallback,
-    EvalCallback,
+    EvalCallback,  # Reserved: re-enable when multi-instance CARLA eval is supported.
 )
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -27,6 +27,8 @@ from stable_baselines3.ppo import PPO
 
 from uncertainty_rl.envs import CARLAParkingEnv
 from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+
+logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 
 # Suppress Gymnasium's float64->float32 precision warning for unbounded obs spaces.
 # spaces.Box with low/high=±inf always triggers this; it is harmless.
@@ -50,13 +52,13 @@ def make_env(
     config: Dict[str, Any],
     rank: int = 0,
     carla_sensors_override: Optional[Dict[str, Any]] = None,
-) -> Callable:
+) -> Callable[[], gym.Env]:
     """
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
-    @return Callable that creates environment.
+    @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
     def _init() -> gym.Env:
@@ -107,6 +109,8 @@ def train(config: Dict[str, Any]) -> None:
     total_timesteps = config.get("total_timesteps", 1000000)
     log_dir = config.get("log_dir", "./logs")
     checkpoint_dir = config.get("checkpoint_dir", "./checkpoints")
+    # eval_freq and n_eval_episodes are read here for when eval_env is re-enabled.
+    # Currently eval_env is always None (see comment below).
     eval_freq = config.get("eval_freq", 10000)
     n_eval_episodes = config.get("n_eval_episodes", 10)
 
@@ -119,7 +123,7 @@ def train(config: Dict[str, Any]) -> None:
     os.makedirs(checkpoint_dir, exist_ok=True)
 
     # Create training environment
-    print("Creating training environment...")
+    logger.info("Creating training environment...")
     train_vec_env = DummyVecEnv([make_env(config)])
 
     # Normalise observations but not rewards - reward components will be
@@ -138,12 +142,21 @@ def train(config: Dict[str, Any]) -> None:
     eval_env: Optional[VecNormalize] = None
 
     # Shared policy kwargs for both standard and evidential policies
+    _activation_map: Dict[str, Any] = {
+        "relu": torch.nn.ReLU,
+        "tanh": torch.nn.Tanh,
+        "elu": torch.nn.ELU,
+        "leaky_relu": torch.nn.LeakyReLU,
+    }
+    activation_fn = _activation_map.get(
+        config.get("activation", "relu").lower(), torch.nn.ReLU
+    )
     policy_kwargs = dict(
         net_arch=dict(
             pi=config.get("net_arch", [256, 256]),
             vf=config.get("net_arch", [256, 256]),
         ),
-        activation_fn=torch.nn.ReLU,
+        activation_fn=activation_fn,
     )
 
     # Shared PPO hyperparameters
@@ -165,14 +178,14 @@ def train(config: Dict[str, Any]) -> None:
         max_grad_norm=config.get("max_grad_norm", 0.5),
         target_kl=config.get("target_kl", 0.02),
         policy_kwargs=policy_kwargs,
-        verbose=1,
+        verbose=config.get("verbose", 1),
         tensorboard_log=log_dir,
         seed=seed,
     )
 
     # Create agent based on policy_type config
     policy_type = config.get("policy_type", "evidential")
-    print(f"Initialising {policy_type} PPO agent...")
+    logger.info("Initialising %s PPO agent...", policy_type)
 
     model: PPO
     if policy_type == "evidential":
@@ -206,9 +219,10 @@ def train(config: Dict[str, Any]) -> None:
             f"Expected 'evidential' or 'standard'."
         )
 
-    # Set up logger
-    logger = configure(log_dir, ["stdout", "tensorboard"])
-    model.set_logger(logger)
+    # Set up SB3 logger (TensorBoard + stdout). Named sb3_logger to avoid
+    # shadowing the module-level Python logger.
+    sb3_logger = configure(log_dir, ["stdout", "tensorboard"])
+    model.set_logger(sb3_logger)
 
     # Create callbacks
     checkpoint_callback = CheckpointCallback(
@@ -234,11 +248,11 @@ def train(config: Dict[str, Any]) -> None:
     callback_list = CallbackList(callbacks)
 
     # Train the agent
-    print(f"Starting training for {total_timesteps} timesteps...")
+    logger.info("Starting training for %d timesteps...", total_timesteps)
     model.learn(
         total_timesteps=total_timesteps,
         callback=callback_list,
-        log_interval=10,
+        log_interval=config.get("log_interval", 10),
         progress_bar=True,
     )
 
@@ -247,7 +261,7 @@ def train(config: Dict[str, Any]) -> None:
     model.save(final_model_path)
     env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
 
-    print(f"Training complete! Model saved to {final_model_path}")
+    logger.info("Training complete. Model saved to %s", final_model_path)
 
     # Clean up
     env.close()
@@ -313,13 +327,6 @@ def main() -> None:
 
     # Load config, then apply CLI overrides
     config = load_config(args.config)
-
-    _log_level = logging.DEBUG if config.get("debug", False) else logging.INFO
-    logging.basicConfig(
-        level=_log_level,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:
@@ -332,6 +339,14 @@ def main() -> None:
         config["n_eval_episodes"] = args.n_eval_episodes
     if args.seed is not None:
         config["seed"] = args.seed
+
+    # Configure logging after all overrides are applied.
+    _log_level = logging.DEBUG if config.get("debug", False) else logging.INFO
+    logging.basicConfig(
+        level=_log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     train(config)
 
