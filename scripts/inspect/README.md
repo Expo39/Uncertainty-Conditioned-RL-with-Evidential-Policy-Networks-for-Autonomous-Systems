@@ -38,7 +38,7 @@ Spawns the ego vehicle and draws static sensor mount dots and FOV arcs:
 | `suite_b` | IMU (yellow) + 3D LiDAR (green) | 360 deg ring at 100 m radius |
 | `suite_c` | IMU (yellow) + 3D LiDAR (green) + RGB camera (orange) | 360 deg ring + 90 deg wedge |
 
-Mount positions and ranges are read from `configs/train_config.yaml`.
+Mount positions and ranges are read from `configs/carla/env_config.yaml`.
 
 ```bash
 make docker-inspect-sensors                            # Default: suite_a, birds-eye
