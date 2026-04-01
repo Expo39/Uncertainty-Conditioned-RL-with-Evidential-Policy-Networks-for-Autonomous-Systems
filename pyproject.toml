@@ -18,17 +18,24 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
 ]
 dependencies = [
-    "gymnasium>=0.29.0",
-    "stable-baselines3>=2.0.0",
+    # Host-installable deps (no torch/CUDA).  Layout tools, visualiser, type stubs.
     "pyyaml>=6.0",
-    "tensorboard>=2.13.0",
     "matplotlib>=3.7.0",
     "pygame>=2.5.0",
     "seaborn>=0.12.0",
     "pandas>=2.0.0",
+    "numpy>=1.24.0",
 ]
 
 [project.optional-dependencies]
+# Training deps -- installed only inside the Docker training container via
+# pip install -e ".[training]".  NOT installed in the local .venv.
+# torch/sb3/gymnasium pull in CUDA and must never run through make install.
+training = [
+    "gymnasium>=0.29.0",
+    "stable-baselines3>=2.0.0",
+    "tensorboard>=2.13.0",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
