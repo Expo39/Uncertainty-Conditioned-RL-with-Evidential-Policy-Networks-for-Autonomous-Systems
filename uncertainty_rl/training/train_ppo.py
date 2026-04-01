@@ -7,6 +7,7 @@ with evidential actor networks for autonomous parking.
 """
 
 import argparse
+import logging
 import os
 import warnings
 from typing import Any, Callable, Dict, Optional
@@ -312,6 +313,13 @@ def main() -> None:
 
     # Load config, then apply CLI overrides
     config = load_config(args.config)
+
+    _log_level = logging.DEBUG if config.get("debug", False) else logging.INFO
+    logging.basicConfig(
+        level=_log_level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:
