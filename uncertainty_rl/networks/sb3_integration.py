@@ -8,8 +8,9 @@ evidential actor head, and a custom PPO subclass that adds evidential
 regularisation loss and uncertainty logging.
 """
 
+import logging
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import numpy as np
 import torch as th
@@ -30,7 +31,7 @@ from uncertainty_rl.networks.evidential_policy import (
 )
 from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM, VEHICLE_STATE_DIM
 
-SelfEvidentialPPO = TypeVar("SelfEvidentialPPO", bound="EvidentialPPO")
+logger = logging.getLogger("uncertainty_rl.networks.sb3_integration")
 
 
 def _insert_layernorm(seq: nn.Sequential) -> nn.Sequential:
@@ -56,7 +57,9 @@ class EvidentialDistribution(Distribution):
 
     The evidential network outputs NIG parameters (gamma, nu, alpha, beta).
     For sampling and log_prob, we approximate with Normal(gamma, std) where
-    std = sqrt(total_uncertainty) and total = epistemic + aleatoric.
+    std = sqrt(aleatoric) = sqrt(beta / (nu * (alpha - 1))), the NIG predictive std.
+    Epistemic uncertainty is not added to the action std -- it characterises
+    model uncertainty over gamma, not per-sample action noise.
     NIG parameters are cached for the evidential regularisation loss.
     """
 
@@ -100,11 +103,11 @@ class EvidentialDistribution(Distribution):
         self._alpha = alpha
         self._beta = beta
 
-        # Gaussian approximation of the NIG predictive distribution
-        epistemic = beta / (alpha - 1)
+        # Gaussian approximation: std = sqrt(beta / (nu*(alpha-1))) = sqrt(aleatoric).
+        # Epistemic uncertainty is not folded into action std -- it quantifies
+        # model uncertainty over gamma, not per-sample noise.
         aleatoric = beta / (nu * (alpha - 1))
-        total = epistemic + aleatoric
-        std = th.sqrt(total)
+        std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
         return self
@@ -293,6 +296,23 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         # Standard value head (critic unchanged)
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
 
+        if self.use_uncertainty_conditioning:
+            logger.info(
+                "EvidentialActorCriticPolicy: dual-encoder actor "
+                "(state_dim=%d, uncertainty_dim=%d, action_dim=%d, hidden_dim=%d)",
+                VEHICLE_STATE_DIM,
+                COVARIANCE_FEATURES_DIM,
+                action_dim,
+                hidden_dim,
+            )
+        else:
+            logger.info(
+                "EvidentialActorCriticPolicy: flat MLP actor "
+                "(latent_dim=%d, action_dim=%d)",
+                self.mlp_extractor.latent_dim_pi,
+                action_dim,
+            )
+
         # Orthogonal initialisation
         if self.ortho_init:
             module_gains: Dict[nn.Module, float] = {
@@ -384,8 +404,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         values = self.value_net(latent_vf)
 
         if self.use_uncertainty_conditioning:
-            raw_obs = cast(th.Tensor, obs)
-            gamma, nu, alpha, beta = self._get_nig_from_obs(raw_obs)
+            # latent_pi not used for the actor here; dual-encoder reads raw obs.
+            gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
             distribution = cast(
                 EvidentialDistribution,
                 self.action_dist.proba_distribution(gamma, nu, alpha, beta),
@@ -415,6 +435,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 EvidentialDistribution,
                 self.action_dist.proba_distribution(gamma, nu, alpha, beta),
             )
+        # Flat MLP path: MLP extractor latent -> EvidentialLayer.
         features = self.extract_features(obs, self.pi_features_extractor)
         if self.share_features_extractor:
             latent_pi, _ = self.mlp_extractor(features)
@@ -456,6 +477,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param actions: Actions to evaluate.
         @return Tuple of (values, log_prob, entropy).
         """
+        # No extractor argument: when share_features_extractor=False, SB3 returns
+        # a (pi_features, vf_features) tuple which we unpack below.
         features = self.extract_features(obs)
         if self.share_features_extractor:
             latent_pi, latent_vf = self.mlp_extractor(features)
@@ -467,8 +490,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         if self.use_uncertainty_conditioning:
             # Dual-encoder: raw obs -> split -> UncertaintyConditionedActor.
             # latent_pi is not used for the actor in this mode.
-            raw_obs = cast(th.Tensor, obs)
-            gamma, nu, alpha, beta = self._get_nig_from_obs(raw_obs)
+            gamma, nu, alpha, beta = self._get_nig_from_obs(cast(th.Tensor, obs))
             distribution = cast(
                 EvidentialDistribution,
                 self.action_dist.proba_distribution(gamma, nu, alpha, beta),
@@ -522,7 +544,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             if deterministic:
                 action = gamma
             else:
-                std = th.sqrt(total)
+                # Consistent with EvidentialDistribution.proba_distribution:
+                # use aleatoric std only, not total.
+                std = th.sqrt(aleatoric)
                 dist = Normal(gamma, std)
                 action = dist.sample()
 
@@ -582,6 +606,11 @@ class EvidentialPPO(PPO):
         """
         self.lambda_reg = lambda_reg
         self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
+        logger.info(
+            "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d",
+            lambda_reg,
+            lambda_reg_warmup_steps,
+        )
         # Pass lambda_reg to policy_kwargs
         policy_kwargs = kwargs.get("policy_kwargs") or {}
         policy_kwargs["lambda_reg"] = lambda_reg
@@ -732,7 +761,7 @@ class EvidentialPPO(PPO):
             self.rollout_buffer.returns.flatten(),
         )
 
-        # Standard PPO logs
+        # Standard PPO logs. `loss` is the last-batch tensor -- SB3 convention.
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
