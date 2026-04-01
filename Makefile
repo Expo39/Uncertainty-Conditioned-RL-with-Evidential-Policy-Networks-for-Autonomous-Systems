@@ -99,9 +99,9 @@ docker-top: ## Show running processes in containers
 
 LAYOUT ?= rectangle
 
-# Read sensor_suite from train_config.yaml (single source of truth).
+# Read sensor_suite from carla/env_config.yaml (single source of truth for env settings).
 # suite_a -> 2d maps, suite_b/suite_c -> 3d maps.
-SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/train_config.yaml | awk '{print $$2}')
+SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/carla/env_config.yaml | awk '{print $$2}')
 MAP_DIM := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
 
 docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle]
@@ -145,6 +145,7 @@ docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT
 	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
+		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		--output-dir evaluation_results
 
@@ -352,6 +353,7 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 	$(LOC_ENV) && $(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
+		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml
 	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON) scripts/visualise/visualiser.py
 
