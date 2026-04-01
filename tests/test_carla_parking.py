@@ -757,7 +757,7 @@ class TestComputeReward:
 
         env = CARLAParkingEnv(max_steps=5)
         env.vehicle = None
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
         assert reward == 0.0
         assert terminated is False
         assert success is False
@@ -770,7 +770,7 @@ class TestComputeReward:
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
         env._sensor_manager.consume_collision.return_value = True
 
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         assert reward == pytest.approx(-10.0)
         assert terminated is True
@@ -784,7 +784,7 @@ class TestComputeReward:
         # Place vehicle near the boundary edge (corners are at x=+-50, half_width=1m)
         _set_vehicle(env, x=49.5, y=0.0, yaw_deg=0.0)
 
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         assert reward == pytest.approx(-5.0)
         assert terminated is True
@@ -810,7 +810,7 @@ class TestComputeReward:
         )
         env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         assert reward == pytest.approx(10.0)
         assert terminated is True
@@ -826,7 +826,7 @@ class TestComputeReward:
         # Current distance is ~5m (vehicle at (5,0))
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         # progress = (10 - 5) / 20 = 0.25; reward = 0.25 - 0.01 = 0.24
         assert reward > 0.0
@@ -843,7 +843,7 @@ class TestComputeReward:
         # Current distance ~10m (vehicle moved away)
         _set_vehicle(env, x=10.0, y=0.0, yaw_deg=0.0)
 
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         assert reward < 0.0
         assert terminated is False
@@ -859,7 +859,7 @@ class TestComputeReward:
         # Vehicle stays at exactly the same distance (no progress)
         _set_vehicle(env, x=dist, y=0.0, yaw_deg=0.0)
 
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         # progress = 0, so reward = 0 - 0.01 = -0.01
         assert reward == pytest.approx(-0.01, abs=1e-4)
@@ -898,6 +898,148 @@ class TestComputeReward:
             yaw_deg=180.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
         )
-        reward, terminated, success = env._compute_reward()
+        reward, terminated, success, diag = env._compute_reward()
 
         assert success is True, "180-deg yaw offset should be treated as valid nose-out"
+
+    def test_diag_keys_present(self) -> None:
+        """
+        @brief diag dict must contain all five expected keys on every code path.
+        """
+        env = _make_env_for_reward()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        for key in ("pos_error", "orientation_error", "speed", "collision",
+                    "progress_reward"):
+            assert key in diag, f"Missing diag key: {key}"
+
+    def test_diag_pos_error_matches_distance(self) -> None:
+        """
+        @brief diag['pos_error'] equals the Euclidean distance to the target.
+        """
+        env = _make_env_for_reward()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["pos_error"] == pytest.approx(5.0, abs=1e-6)
+
+    def test_diag_collision_flag_set_on_collision(self) -> None:
+        """
+        @brief diag['collision'] == 1.0 when a collision is detected.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
+        env._sensor_manager.consume_collision.return_value = True
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["collision"] == pytest.approx(1.0)
+
+    def test_diag_collision_zero_on_normal_step(self) -> None:
+        """
+        @brief diag['collision'] == 0.0 when no collision occurred.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["collision"] == pytest.approx(0.0)
+
+    def test_diag_progress_reward_positive_when_closing(self) -> None:
+        """
+        @brief diag['progress_reward'] is positive when the vehicle closes on target.
+        """
+        env = _make_env_for_reward()
+        env._prev_distance = 10.0
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["progress_reward"] > 0.0
+
+    def test_diag_vehicle_none_returns_zeros(self) -> None:
+        """
+        @brief When vehicle is None, diag is all zeros (no crash on missing vehicle).
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        env.vehicle = None
+        _, _, _, diag = env._compute_reward()
+
+        assert all(v == 0.0 for v in diag.values())
+
+
+# ---------------------------------------------------------------------------
+# Info dict keys (step())
+# ---------------------------------------------------------------------------
+
+
+class TestStepInfoDict:
+    """
+    @class TestStepInfoDict
+    @brief Tests that step() info dict contains all expected keys with correct types.
+    """
+
+    def test_info_contains_required_keys(self) -> None:
+        """
+        @brief info dict must have steps, success, collision, timeout, floor_plan,
+               pos_error, orientation_error, speed, and progress_reward.
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        env.reset()
+        _, _, _, _, info = env.step(env.action_space.sample())
+        env.close()
+
+        for key in ("steps", "success", "collision", "timeout", "floor_plan",
+                    "pos_error", "orientation_error", "speed", "progress_reward"):
+            assert key in info, f"Missing info key: {key}"
+
+    def test_info_timeout_true_at_max_steps(self) -> None:
+        """
+        @brief info['timeout'] is True when the episode is truncated by max_steps.
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=1)
+        env.reset()
+        _, _, _, truncated, info = env.step(env.action_space.sample())
+        env.close()
+
+        if truncated:
+            assert info["timeout"] is True
+
+    def test_info_pos_error_is_nonnegative(self) -> None:
+        """
+        @brief pos_error is always >= 0 (it is a Euclidean distance).
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        env.reset()
+        _, _, _, _, info = env.step(env.action_space.sample())
+        env.close()
+
+        assert info["pos_error"] >= 0.0
+
+    def test_info_speed_is_nonnegative(self) -> None:
+        """
+        @brief speed is always >= 0 (it is a scalar magnitude).
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        env.reset()
+        _, _, _, _, info = env.step(env.action_space.sample())
+        env.close()
+
+        assert info["speed"] >= 0.0
