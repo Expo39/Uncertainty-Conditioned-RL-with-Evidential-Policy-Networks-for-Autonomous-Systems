@@ -6,7 +6,11 @@ This module provides common functions for extracting uncertainty features
 from EKF covariance matrices for use in RL state representations.
 """
 
+from typing import List
+
 import numpy as np
+
+from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM
 
 
 def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
@@ -78,11 +82,11 @@ def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
 def get_covariance_dimension() -> int:
     """
     @brief Get the dimensionality of extracted covariance features.
-    @return: Number of covariance features (9 for 2D case).
+    @return: Number of covariance features (COVARIANCE_FEATURES_DIM = 9 for 2D case).
 
     This is useful for defining observation space dimensions in Gymnasium environments.
     """
-    return 9
+    return COVARIANCE_FEATURES_DIM
 
 
 def validate_covariance_matrix(cov_matrix: np.ndarray) -> bool:
@@ -109,3 +113,21 @@ def validate_covariance_matrix(cov_matrix: np.ndarray) -> bool:
         return False
 
     return True
+
+
+def make_diagonal_covariance(diag: List[float]) -> List[float]:
+    """
+    @brief Build a flat 36-element ROS covariance array from a 6-element diagonal.
+
+    ROS nav_msgs/Odometry pose.covariance is a row-major 6x6 matrix stored as
+    a flat list of 36 floats. This helper constructs that array from the six
+    diagonal variance values, leaving all off-diagonal elements as zero.
+
+    @param diag: Six diagonal variance values [var_x, var_y, var_z,
+                 var_roll, var_pitch, var_yaw].
+    @return Flat list of 36 floats (row-major 6x6, zeros off-diagonal).
+    """
+    cov: List[float] = [0.0] * 36
+    for i, v in enumerate(diag):
+        cov[i * 7] = v
+    return cov
