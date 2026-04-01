@@ -88,8 +88,10 @@ COPY pyproject.toml /workspace/pyproject.toml
 # Install CARLA Python API (system-level dependency, not on PyPI reliably)
 RUN pip install --no-cache-dir carla==0.9.16
 
-# Install all dependencies from pyproject.toml (dev deps included for testing/linting in container)
-RUN pip install --no-cache-dir -e "/workspace[dev]"
+# Install all dependencies from pyproject.toml.
+# [training] brings in gymnasium, stable-baselines3, tensorboard (and their torch/CUDA chain).
+# [dev] brings in pytest, black, flake8, mypy etc. for testing/linting inside the container.
+RUN pip install --no-cache-dir -e "/workspace[training,dev]"
 
 # Create anchor directories so bind-mounts have a target even on first run
 RUN mkdir -p /workspace/logs /workspace/checkpoints
