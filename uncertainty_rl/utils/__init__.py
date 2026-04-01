@@ -29,7 +29,7 @@ from uncertainty_rl.utils.geometry import (
     wrap_angle_symmetric,
     zone_bbox,
 )
-from uncertainty_rl.utils.logging import DebugLogger, MetricsLogger, UncertaintyTracker
+from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.visualisation import (
     plot_training_curves,
     plot_trajectory,
@@ -37,10 +37,8 @@ from uncertainty_rl.utils.visualisation import (
 )
 
 __all__ = [
-    # Logging and metrics
+    # Logging
     "DebugLogger",
-    "MetricsLogger",
-    "UncertaintyTracker",
     # Visualisation
     "plot_uncertainty_evolution",
     "plot_trajectory",
