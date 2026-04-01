@@ -38,31 +38,13 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from tf2_ros import Buffer, TransformListener
 
+from uncertainty_rl.utils.covariance_utils import make_diagonal_covariance
+from uncertainty_rl.utils.geometry import yaw_from_quaternion
 
-def _yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float:
-    """
-    @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
-    @param q_x: Quaternion x component.
-    @param q_y: Quaternion y component.
-    @param q_z: Quaternion z component.
-    @param q_w: Quaternion w component.
-    @return Yaw angle in radians, wrapped to [-pi, pi].
-    """
-    siny_cosp = 2.0 * (q_w * q_z + q_x * q_y)
-    cosy_cosp = 1.0 - 2.0 * (q_y * q_y + q_z * q_z)
-    return math.atan2(siny_cosp, cosy_cosp)
-
-
-def _make_diagonal_covariance(diag: List[float]) -> List[float]:
-    """
-    @brief Build a flat 36-element covariance array from a 6-element diagonal.
-    @param diag: Six diagonal variance values [x, y, z, roll, pitch, yaw].
-    @return Flat list of 36 floats (row-major 6x6 matrix, zeros off-diagonal).
-    """
-    cov = [0.0] * 36
-    for i, v in enumerate(diag):
-        cov[i * 7] = v
-    return cov
+# Module-level aliases preserve the private naming convention used internally
+# and in the test suite without duplicating the implementations.
+_yaw_from_quaternion = yaw_from_quaternion
+_make_diagonal_covariance = make_diagonal_covariance
 
 
 class TfToOdomNode(Node):

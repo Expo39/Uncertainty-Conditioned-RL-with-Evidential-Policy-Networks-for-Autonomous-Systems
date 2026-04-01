@@ -11,13 +11,14 @@ from typing import Any, Dict
 import pytest
 import torch
 
+from uncertainty_rl.utils.constants import ACTION_DIM
+
 # ---------------------------------------------------------------------------
 # Constants for network tests. Network tests use a small arbitrary state dim
-# (not the full 21-dim env obs) for fast unit test execution. Env obs space
+# (not the full 20-dim env obs) for fast unit test execution. Env obs space
 # tests in test_carla_parking.py use _compute_obs_dim() directly.
 # ---------------------------------------------------------------------------
 STATE_DIM = 15
-ACTION_DIM = 3
 BATCH_SIZE = 8
 HIDDEN_DIMS = [64, 64]  # Smaller than production for fast tests
 

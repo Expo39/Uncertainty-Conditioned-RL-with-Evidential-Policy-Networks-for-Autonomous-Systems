@@ -43,7 +43,7 @@ TARGET_POSE_DIM = 3
 # obstacle_type removed: classification relied on privileged CARLA actor list
 # (not replicable on a real robot without a separate tracking system).
 # Appended to the observation when include_obstacle_obs=True. Easily removable:
-# set include_obstacle_obs: false in train_config.yaml to restore 18-dim obs.
+# set include_obstacle_obs: false in carla/env_config.yaml to restore 18-dim obs.
 OBSTACLE_FEATURES_DIM = 2
 
 # Total observation dimension (with uncertainty conditioning and target pose)

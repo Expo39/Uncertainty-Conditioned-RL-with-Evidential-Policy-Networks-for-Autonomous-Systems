@@ -184,8 +184,9 @@ def plot_trajectory(
             pos = positions[idx]
             cov = uncertainties[idx]
 
-            # Eigenvalue decomposition
-            eigenvalues, eigenvectors = np.linalg.eig(cov)
+            # Eigenvalue decomposition (eigvalsh for symmetric matrices -- real,
+            # sorted eigenvalues guaranteed)
+            eigenvalues, eigenvectors = np.linalg.eigh(cov)
             angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))
 
             # 95% confidence ellipse (chi-square with 2 DOF)

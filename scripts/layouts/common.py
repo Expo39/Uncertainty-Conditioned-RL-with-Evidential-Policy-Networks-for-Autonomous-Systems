@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Tuple
 
 import yaml
 
+from uncertainty_rl.utils.geometry import point_in_polygon
+
 # ---------------------------------------------------------------------------
 # Bay dimension constants (German EAR 05)
 # ---------------------------------------------------------------------------
@@ -110,27 +112,6 @@ def _bay_corners(
     ]
 
 
-def _point_in_polygon(px: float, py: float, polygon: List[Tuple[float, float]]) -> bool:
-    """
-    @brief Ray-casting point-in-polygon test (includes boundary).
-    @param px: Point x.
-    @param py: Point y.
-    @param polygon: List of (x, y) vertices in order.
-    @return True if the point is inside or on the polygon boundary.
-    """
-    n = len(polygon)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        if ((yi > py) != (yj > py)) and (
-            px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
-
 
 def validate_bays_in_polygon(
     bays: List[Dict[str, Any]],
@@ -170,7 +151,7 @@ def validate_bays_in_polygon(
             bay["depth"],
         )
         for corner in bay_corners_pts:
-            if not _point_in_polygon(corner[0], corner[1], expanded):
+            if not point_in_polygon(corner[0], corner[1], expanded):
                 raise ValueError(
                     f"[{shape_name}] Bay '{bay.get('bay_type', '?')}' at "
                     f"({bay['local_x']:.2f}, {bay['local_y']:.2f}) has a corner "
