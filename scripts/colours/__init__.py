@@ -15,7 +15,7 @@ The carla import is deferred so this module remains importable on the host (e.g.
 during make generate-layouts) where the carla package is not installed.
 """
 
-from typing import Tuple
+from typing import Dict, Tuple
 
 # ---------------------------------------------------------------------------
 # Bay and lot feature colours (hex, matplotlib-compatible)
@@ -38,7 +38,7 @@ HEX_PATROL_VEHICLE = "#FF3030"  # Red (moving patrol NPC)
 HEX_CONE = "#FF6600"  # Orange-red (perimeter cones)
 
 # Bay type lookup (hex, for matplotlib)
-BAY_HEX: dict = {
+BAY_HEX: Dict[str, str] = {
     "perpendicular": HEX_PERP_BAY,
     "angled": HEX_ANGLED_BAY,
     "parallel": HEX_PARALLEL_BAY,

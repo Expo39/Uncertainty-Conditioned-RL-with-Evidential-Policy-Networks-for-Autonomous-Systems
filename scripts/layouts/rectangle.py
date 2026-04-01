@@ -31,6 +31,9 @@ from typing import Any, Dict, List
 from scripts.layouts.common import (
     BAY_DIMS,
     BAYS_PER_TYPE,
+    PED_STRIP,
+    _PED_MARGIN,
+    _WALL_GAP,
     ang_offset_from_wall,
     validate_bays_in_polygon,
     warn_narrow_corridors,
@@ -43,7 +46,6 @@ ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False
 
-_WALL_GAP = 0.5  # minimum clearance between bay back face and perimeter wall/cones
 
 # Number of perp bays in the bottom-wall left group (extended to fill x=-5..wall).
 _PERP_WALL_BAYS = 12
@@ -361,10 +363,9 @@ def generate() -> Dict[str, Any]:
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face (PED_STRIP = 3.0 m).
+    # Pedestrian zones -- one strip per distinct aisle face.
+    # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
-    PED_STRIP = 3.0
-    _PED_MARGIN = 0.5
 
     centre_x_min = min(perp_cluster_x_min, centre_cluster_x_min)
     centre_x_max = max(perp_cluster_x_max, centre_cluster_x_max)
