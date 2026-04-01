@@ -304,6 +304,7 @@ class LiveVisualiser:
         self._file_offset: int = 0
         self._exit_requested: bool = False
         self._fullscreen: bool = False
+        self._ever_received_frame: bool = False
 
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
         self._signal_file.touch()
@@ -348,10 +349,14 @@ class LiveVisualiser:
 
             frames = self._read_new_frames()
             if frames:
+                self._ever_received_frame = True
                 # Render only the latest frame to avoid falling behind
                 self._draw_frame(frames[-1])
-            else:
+            elif not self._ever_received_frame:
                 self._draw_waiting()
+                time.sleep(_POLL_SLEEP)
+            else:
+                # Data stream temporarily dry -- hold last frame, don't flicker
                 time.sleep(_POLL_SLEEP)
 
             self._clock.tick(_FPS_CAP)
