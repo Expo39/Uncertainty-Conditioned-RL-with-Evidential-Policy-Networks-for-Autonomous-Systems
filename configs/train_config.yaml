@@ -132,9 +132,13 @@ eval_freq: 10000   # Evaluate every N training steps (reserved, eval_env current
 n_eval_episodes: 10  # Episodes per evaluation run (reserved, eval_env currently disabled)
 
 # Parallel execution settings
-# Number of training runs to execute in parallel. Each worker spawns its own
-# CARLA instance on a separate port (base port + 3*worker_index, since CARLA
-# uses 3 consecutive ports per instance). Set to 1 for sequential execution.
-# Constrained by GPU VRAM: each CARLA instance needs ~2-4 GB VRAM.
-# Example: RTX 4090 (24 GB) can run 2-3 instances comfortably.
+# Number of simultaneous CARLA instances. Each worker connects to a separate
+# CARLA server on base_port + rank*1000 (2000, 3000, ...) and reads from its own
+# EKF state file (ekf_state.json, ekf_state_1.json, ...).
+# Workers are brought up by docker-compose.env_workers.yml (one invocation per rank).
+# Set to 1 for single-instance training (default).
+# Set to 2 and run make docker-train-parallel for 2-worker parallel training.
+# Hard ceiling: 2 workers on RTX 4070 Ti Super -- RAM bottleneck (~4 GB/instance,
+# 7 GB free at idle; swap already full so 3 instances would OOM).
+# Expected throughput: 1 worker ~20-25 it/s, 2 workers ~40-50 it/s.
 parallel_workers: 1

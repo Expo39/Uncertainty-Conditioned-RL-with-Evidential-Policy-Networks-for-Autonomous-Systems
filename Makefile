@@ -2,7 +2,7 @@
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration
-.PHONY: lint format typecheck verify clean clean-venv
+.PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
@@ -21,6 +21,20 @@ TESTS_DIR   := tests
 SCRIPTS_DIR := scripts
 DOCKER_COMPOSE         := docker compose
 DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose.inspect.yml
+DOCKER_COMPOSE_WORKERS := docker compose -f docker-compose.env_workers.yml
+
+LAYOUT       ?= rectangle
+SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/carla/env_config.yaml | awk '{print $$2}')
+MAP_DIM      := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
+
+# Shared env vars for localisation mode.
+LOC_ENV = export CARTOGRAPHER_MODE=loc \
+	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
+	SENSOR_SUITE=$(SENSOR_SUITE)
+
+# Scripts that bring up/down N env workers (N read from train_config.yaml by default).
+WORKERS_UP   = bash scripts/multi_workers/workers_up.sh
+WORKERS_DOWN = bash scripts/multi_workers/workers_down.sh
 
 # Ensure the local venv exists and the package is installed.
 # Runs automatically before every local target that needs Python.
@@ -57,19 +71,23 @@ install: ## Create .venv and install package + dev dependencies
 # Docker: Lifecycle
 # ----------------------------------------------------------------------
 SERVICE ?=
-docker-build: ## Build all Docker images (core + inspect stacks). Usage: make docker-build
+docker-build: ## Build all Docker images (core + env-workers + inspect stacks). Usage: make docker-build
 	$(DOCKER_COMPOSE) build $(SERVICE)
+	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml $(SERVICE)
 	$(DOCKER_COMPOSE_INSPECT) build $(SERVICE)
 
 docker-build-no-cache: ## Build images without cache (clean rebuild)
 	$(DOCKER_COMPOSE) build --no-cache
+	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml --no-cache
 	$(DOCKER_COMPOSE_INSPECT) build --no-cache
 
-docker-up: ## Start all containers
+docker-up: ## Start all containers (N env workers from train_config.yaml + training stack)
+	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d
 
-docker-down: ## Stop all containers
+docker-down: ## Stop all containers (training stack + all running env workers)
 	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
 
 docker-inspect-down: ## Stop all inspect containers (all profiles)
 	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-dryrun --profile inspect-sensors --profile inspect-live down
@@ -97,24 +115,18 @@ docker-top: ## Show running processes in containers
 # Then for training use make docker-train-loc LAYOUT=...
 # ----------------------------------------------------------------------
 
-LAYOUT ?= rectangle
-
-# Read sensor_suite from carla/env_config.yaml (single source of truth for env settings).
-# suite_a -> 2d maps, suite_b/suite_c -> 3d maps.
-SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/carla/env_config.yaml | awk '{print $$2}')
-MAP_DIM := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
-
 docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle]
 	mkdir -p outputs/maps/$(MAP_DIM) configs/maps/2d configs/maps/3d
 	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
-	@# Restart the full stack so CARLA has a clean world (no stale actors from
-	@# previous runs) and the bridge starts fresh with Cartographer in SLAM mode.
-	@# --wait blocks until all healthchecks pass (CARLA ~60s, bridge ~30s).
-	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) down
+	@# Mapping uses a single CARLA instance (worker 0) in SLAM mode.
+	@# Tear down all running workers first for a clean world state.
+	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
+	SENSOR_SUITE=$(SENSOR_SUITE) bash scripts/multi_workers/workers_up.sh 1
 	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) up -d --wait
-	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) exec training python -m scripts.mapping.mapping_drive \
+	$(DOCKER_COMPOSE) exec training python -m scripts.mapping.mapping_drive \
 		--layout $(LAYOUT) \
-		--carla-host carla-server \
+		--carla-host uncertainty-rl-carla-0 \
 		--carla-port 2000
 	bash scripts/mapping/save_map.sh $(LAYOUT) $(MAP_DIM)
 
@@ -122,30 +134,36 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-# Shared env vars for localisation mode (used by train/eval targets below).
-# export ensures they persist across chained commands in a single shell recipe.
-LOC_ENV = export CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	SENSOR_SUITE=$(SENSOR_SUITE)
-
 docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
 	@echo "Training (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
-	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
+	$(LOC_ENV) && $(WORKERS_UP)
+	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh
 
 docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]
 	@echo "Training (loc, 10k steps): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
-	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
+	$(LOC_ENV) && $(WORKERS_UP)
+	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
 
 docker-tune: ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle]
 	@echo "Tuning (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
-	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
+	$(LOC_ENV) && $(WORKERS_UP)
+	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
 
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
 	@echo "Evaluation (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
-	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
+	$(LOC_ENV) && bash scripts/multi_workers/workers_up.sh 1
+	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
@@ -162,42 +180,32 @@ docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: m
 # Docker: Testing & Linting
 # ----------------------------------------------------------------------
 
-# Ensure the core training stack is running.
-# Only starts containers if the training service is not already up.
-# Never touches the inspect stack (docker-compose.inspect.yml).
-define ensure-core-stack-running
-	@if ! $(DOCKER_COMPOSE) ps --status running training 2>/dev/null | grep -q training; then \
-		echo "Core stack not running -- starting (this may take up to 90s)..."; \
-		$(DOCKER_COMPOSE) up -d --wait; \
-	fi
-endef
-
 docker-test: ## Run full test suite inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short
 
 docker-test-unit: ## Run unit tests inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "not integration"
 
 docker-test-integration: ## Run integration tests inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
 
 docker-verify: ## Run all checks inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training bash -c "pytest $(TESTS_DIR) -v --tb=short -m 'not integration' && flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503 && isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && mypy $(SRC_DIR) --ignore-missing-imports && python -c 'import uncertainty_rl; print(\"All checks passed.\")'"
 
 docker-lint: ## Run linters inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training make lint
 
 docker-format: ## Format code inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training make format
 
 docker-typecheck: ## Run mypy inside container (auto-starts core stack if needed)
-	$(call ensure-core-stack-running)
+	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training make typecheck
 
 # ----------------------------------------------------------------------
@@ -207,23 +215,24 @@ docker-typecheck: ## Run mypy inside container (auto-starts core stack if needed
 docker-shell: ## Interactive shell in training container
 	$(DOCKER_COMPOSE) exec training /bin/bash
 
-docker-shell-ros2: ## Interactive shell in ROS 2 container
-	$(DOCKER_COMPOSE) exec ros2-bridge /bin/bash
+WORKER ?= 0
+docker-shell-ros2: ## Interactive shell in ROS 2 bridge for a worker. Usage: make docker-shell-ros2 [WORKER=0]
+	docker exec -it uncertainty-rl-ros2-$(WORKER) /bin/bash
 
 docker-shell-ros2-inspect: ## Interactive shell in ROS 2 inspect container (use while docker-inspect-dryrun is running)
 	$(DOCKER_COMPOSE_INSPECT) exec ros2-bridge-inspect /bin/bash
 
-docker-logs: ## Follow logs from all containers
+docker-logs: ## Follow logs from training stack containers (training, tensorboard)
 	$(DOCKER_COMPOSE) logs -f
 
 docker-logs-training: ## Follow logs from training container
 	$(DOCKER_COMPOSE) logs -f training
 
-docker-logs-carla: ## Follow logs from CARLA server
-	$(DOCKER_COMPOSE) logs -f carla-server
+docker-logs-carla: ## Follow logs from CARLA server for a worker. Usage: make docker-logs-carla [WORKER=0]
+	docker logs -f uncertainty-rl-carla-$(WORKER)
 
-docker-logs-ros2: ## Follow logs from ROS 2 bridge
-	$(DOCKER_COMPOSE) logs -f ros2-bridge
+docker-logs-ros2: ## Follow logs from ROS 2 bridge for a worker. Usage: make docker-logs-ros2 [WORKER=0]
+	docker logs -f uncertainty-rl-ros2-$(WORKER)
 
 docker-inspect-dryrun-logs: ## Follow dryrun training container logs (run alongside docker-inspect-dryrun)
 	$(DOCKER_COMPOSE_INSPECT) logs -f training-inspect-dryrun
@@ -235,15 +244,15 @@ docker-logs-ros2-inspect: ## Follow ROS 2 inspect container logs (run alongside 
 # Docker: Cleanup
 # ----------------------------------------------------------------------
 
-docker-clean: ## Stop containers and remove volumes
-	$(DOCKER_COMPOSE) down -v
-	docker volume prune -f
+STACK ?= all
+docker-clean: ## Stop containers and remove volumes. Usage: make docker-clean [STACK=all|training|inspect]
+	bash scripts/cleanup/stack_clean.sh $(STACK)
 
-docker-clean-all: ## Remove all containers, images, and volumes
-	$(DOCKER_COMPOSE) down -v --rmi all
-	docker system prune -af
+docker-clean-all: ## Remove all containers, images, and volumes. Usage: make docker-clean-all [STACK=all|training|inspect]
+	bash scripts/cleanup/stack_clean.sh $(STACK) --rmi
 
-docker-dev: ## Start full stack and drop into training shell (GPU machine workflow)
+docker-dev: ## Start N env workers + training stack and drop into training shell (GPU machine workflow)
+	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(DOCKER_COMPOSE) exec training /bin/bash
 
@@ -346,20 +355,28 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 #   make eval-visualise-2d  -- start checkpoint demo drive + open viewer
 # ----------------------------------------------------------------------
 
-visualise: ## Open 2D bird's-eye viewer (use while training is running). Usage: make visualise
+# WORKER selects which env worker's vis_history file to watch.
+# Worker 0 (default): outputs/vis_history.jsonl
+# Worker N: outputs/vis_history_N.jsonl
+_VIS_FILE = $(if $(filter 0,$(WORKER)),outputs/vis_history.jsonl,outputs/vis_history_$(WORKER).jsonl)
+
+visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
 	$(call ensure-venv)
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON) scripts/visualise/visualiser.py
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) \
+		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
 eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
 	$(call ensure-venv)
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
+	bash scripts/multi_workers/workers_up.sh 1
 	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) $(PYTHON) scripts/visualise/visualiser.py
+	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) \
+		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
 # ----------------------------------------------------------------------
 # Testing
@@ -402,7 +419,21 @@ verify: lint typecheck sanity ## Run all local checks (lint + typecheck + sanity
 # Cleanup
 # ----------------------------------------------------------------------
 
-clean: ## Remove build artefacts, caches, generated outputs, maps, and layouts (preserves .xodr and .venv)
+clean-cache: ## Remove only build caches and .pyc files (preserves checkpoints, logs, outputs, maps)
+	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
+	find . -path ./$(VENV) -prune -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -path ./$(VENV) -prune -o -type f -name "*.pyc" -delete 2>/dev/null || true
+
+clean: ## Remove build artefacts, caches, generated outputs, maps, and layouts (preserves checkpoints, logs, .xodr, .venv)
+	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
+	sudo rm -rf evaluation_results/ experiments/ results/
+	sudo rm -rf outputs/
+	sudo rm -rf configs/maps/
+	find configs/layouts/ -type f ! -name "*.xodr" -delete 2>/dev/null || true
+	find . -path ./$(VENV) -prune -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
+	find . -path ./$(VENV) -prune -o -type f -name "*.pyc" -delete 2>/dev/null || true
+
+clean-all: ## Remove everything including checkpoints and logs (preserves .xodr and .venv)
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
 	sudo rm -rf logs/ checkpoints/ evaluation_results/ experiments/ results/
 	sudo rm -rf outputs/

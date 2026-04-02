@@ -17,6 +17,7 @@ convergence at episode reset.
 
 import json
 import math
+import os
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
@@ -33,7 +34,9 @@ except ImportError:
 
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
-# Shared file path (Docker volume mount: outputs/ is rw in both containers)
+# Default shared file path (Docker volume mount: outputs/ is rw in both containers).
+# Individual _CovarianceSubscriber instances override this via ros2_config["ekf_state_file"]
+# so that parallel CARLA workers each read from their own ros2-bridge's output file.
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
 if TYPE_CHECKING:
@@ -85,10 +88,20 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         self._valid_after_seq: int = 0
         self._last_read_seq: int = 0
 
+        # Per-worker EKF state file path. Priority order:
+        #   1. ros2_config["ekf_state_file"] -- set by make_env() for rank > 0
+        #   2. EKF_STATE_FILE env var -- set by docker-compose.parallel.yml
+        #   3. _EKF_STATE_PATH module constant -- single-instance default
+        config = ros2_config or {}
+        ekf_state_file: str = config.get(
+            "ekf_state_file",
+            os.environ.get("EKF_STATE_FILE", str(_EKF_STATE_PATH)),
+        )
+        self._ekf_state_path: Path = Path(ekf_state_file)
+
         # Initialise rclpy Node for /initialpose publisher only
         if _ROS2_AVAILABLE:
             super().__init__(node_name)
-            config = ros2_config or {}
             initial_pose_topic = config.get("initial_pose_topic", "/initialpose")
             self._initial_pose_pub = self.create_publisher(
                 PoseWithCovarianceStamped,
@@ -96,7 +109,7 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
                 10,
             )
             self.get_logger().info(
-                f"Covariance reader: file={_EKF_STATE_PATH}, "
+                f"Covariance reader: file={self._ekf_state_path}, "
                 f"initialpose={initial_pose_topic}"
             )
 
@@ -136,9 +149,9 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         @return True if fresh (post-invalidation) data was read successfully.
         """
         try:
-            if not _EKF_STATE_PATH.exists():
+            if not self._ekf_state_path.exists():
                 return False
-            data = json.loads(_EKF_STATE_PATH.read_text())
+            data = json.loads(self._ekf_state_path.read_text())
             # seq field added in extractor v2; fall back to mtime guard for
             # old extractor images that predate the seq field.
             seq: int = int(data.get("seq", 0))

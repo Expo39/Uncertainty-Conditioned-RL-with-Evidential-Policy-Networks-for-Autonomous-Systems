@@ -10,7 +10,7 @@
 model_path: "checkpoints/final_model"  # Path to trained model
 
 # Environment settings
-carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
+carla_host: "uncertainty-rl-carla-0"  # Container name for worker 0 (resolved via shared bridge network). Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Special value: loads configs/layouts/flat_plane.xodr via generate_opendrive_world()
 max_steps: 500

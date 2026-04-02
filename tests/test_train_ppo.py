@@ -11,7 +11,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from uncertainty_rl.training.train_ppo import EnvDiagnosticsCallback, linear_schedule
+from uncertainty_rl.training.train_ppo import (
+    EnvDiagnosticsCallback,
+    linear_schedule,
+    make_env,
+)
 
 # ===========================================================================
 # TestLinearSchedule
@@ -242,3 +246,148 @@ class TestEnvDiagnosticsCallback:
         ):
             cb._on_rollout_end()
         mock_logger.record.assert_not_called()
+
+
+# ===========================================================================
+# TestMakeEnvParallel
+# ===========================================================================
+
+
+class TestMakeEnvParallel:
+    """
+    @class TestMakeEnvParallel
+    @brief Tests for make_env() parallel port and EKF path derivation.
+
+    Verifies that each rank gets the correct CARLA port (base + rank*1000) and
+    the correct per-instance EKF state file path. Does not require CARLA or
+    a GPU -- CARLAParkingEnv construction is mocked.
+    """
+
+    _BASE_CONFIG = {
+        "carla_host": "carla-server",
+        "carla_port": 2000,
+        "town": "FlatPlane",
+        "max_steps": 100,
+        "ros2": {"covariance_topic": "/odometry/filtered"},
+        "carla_sensors": {},
+        "parking_scenarios": {},
+        "include_covariance": True,
+        "include_obstacle_obs": True,
+        "sensor_suite": "suite_a",
+        "carla_timestep": 0.05,
+        "debug": False,
+        "map_load_sleep": 0.0,
+        "action_repeat": 1,
+        "no_rendering_mode": False,
+    }
+
+    def test_rank0_uses_base_port(self) -> None:
+        """
+        @brief Rank 0 connects to the base CARLA port (backward compatible).
+        """
+        captured: dict = {}
+
+        def _fake_env(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch(
+            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+        ):
+            make_env(self._BASE_CONFIG, rank=0)()
+
+        assert captured["carla_port"] == 2000
+
+    def test_rank1_uses_port_3000(self) -> None:
+        """
+        @brief Rank 1 connects to base port + 1000 = 3000.
+        """
+        captured: dict = {}
+
+        def _fake_env(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch(
+            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+        ):
+            make_env(self._BASE_CONFIG, rank=1)()
+
+        assert captured["carla_port"] == 3000
+
+    def test_rank2_uses_port_4000(self) -> None:
+        """
+        @brief Rank 2 connects to base port + 2000 = 4000.
+        """
+        captured: dict = {}
+
+        def _fake_env(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch(
+            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+        ):
+            make_env(self._BASE_CONFIG, rank=2)()
+
+        assert captured["carla_port"] == 4000
+
+    def test_rank0_no_ekf_state_file_override(self) -> None:
+        """
+        @brief Rank 0 does not inject ekf_state_file into ros2_config.
+
+        Backward compatible: single-instance deployments should see the same
+        ros2_config they always passed (no extra keys added).
+        """
+        captured: dict = {}
+
+        def _fake_env(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch(
+            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+        ):
+            make_env(self._BASE_CONFIG, rank=0)()
+
+        assert "ekf_state_file" not in captured["ros2_config"]
+
+    def test_rank1_ekf_state_file_is_ekf_state_1(self) -> None:
+        """
+        @brief Rank 1 gets ekf_state_1.json derived from the default path.
+        """
+        captured: dict = {}
+
+        def _fake_env(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch(
+            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+        ):
+            make_env(self._BASE_CONFIG, rank=1)()
+
+        assert (
+            captured["ros2_config"]["ekf_state_file"]
+            == "/workspace/outputs/ekf_state_1.json"
+        )
+
+    def test_rank2_ekf_state_file_is_ekf_state_2(self) -> None:
+        """
+        @brief Rank 2 gets ekf_state_2.json derived from the default path.
+        """
+        captured: dict = {}
+
+        def _fake_env(**kwargs: object) -> MagicMock:
+            captured.update(kwargs)
+            return MagicMock()
+
+        with patch(
+            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+        ):
+            make_env(self._BASE_CONFIG, rank=2)()
+
+        assert (
+            captured["ros2_config"]["ekf_state_file"]
+            == "/workspace/outputs/ekf_state_2.json"
+        )

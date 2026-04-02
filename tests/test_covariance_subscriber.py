@@ -80,14 +80,17 @@ def _make_subscriber(ekf_path: Path):
         sub._latest_pose = None
         sub._valid_after_seq = 0
         sub._last_read_seq = 0
+        # _read_file() now uses self._ekf_state_path (set in __init__).
+        # Bypass __init__ sets it directly so tests remain self-contained.
+        sub._ekf_state_path = ekf_path
     return sub, mod
 
 
 def _patch_read_file_path(sub: object, mod: object, ekf_path: Path) -> None:
     """
-    @brief Monkey-patch _EKF_STATE_PATH on the module so _read_file uses our path.
+    @brief Update the instance EKF path used by _read_file.
     """
-    mod._EKF_STATE_PATH = ekf_path  # type: ignore[attr-defined]
+    sub._ekf_state_path = ekf_path  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------

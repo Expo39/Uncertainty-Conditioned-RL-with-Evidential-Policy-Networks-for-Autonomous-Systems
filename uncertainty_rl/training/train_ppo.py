@@ -12,6 +12,7 @@ import logging
 import os
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
@@ -114,12 +115,40 @@ def make_env(
     """
 
     def _init() -> gym.Env:
+        # Each worker connects to its own CARLA server on a separate port and host.
+        # Port stride is 1000 so worker ports (2000, 3000, ...) never collide
+        # with CARLA's 3-port block (world+streaming+RPC on base, base+1, base+2).
+        # Host: container names uncertainty-rl-carla-0, uncertainty-rl-carla-1, ...
+        # Container names (not service names) are used because each worker is a
+        # separate compose invocation sharing the same bridge network -- Docker DNS
+        # resolves container names across compose projects on a shared network.
+        worker_port = config.get("carla_port", 2000) + rank * 1000
+        worker_host = f"uncertainty-rl-carla-{rank}"
+
+        # Per-worker EKF state file so each worker reads from its own ros2-bridge.
+        # Worker 0 uses the default path (backward compatible with single-instance).
+        # Worker 1+ derive: ekf_state.json -> ekf_state_1.json, ekf_state_2.json, etc.
+        ros2_config = config.get("ros2", {}).copy()
+        if rank > 0:
+            base_ekf = ros2_config.get(
+                "ekf_state_file", "/workspace/outputs/ekf_state.json"
+            )
+            p = Path(base_ekf)
+            ros2_config["ekf_state_file"] = str(p.parent / f"{p.stem}_{rank}{p.suffix}")
+
+        # Per-worker vis_history file so make visualise WORKER=N shows the right env.
+        # Worker 0 uses the CARLAParkingEnv default (outputs/vis_history.jsonl).
+        # Worker N writes to outputs/vis_history_N.jsonl.
+        vis_path: Optional[str] = (
+            None if rank == 0 else f"outputs/vis_history_{rank}.jsonl"
+        )
+
         env = CARLAParkingEnv(
-            carla_host=config.get("carla_host", "localhost"),
-            carla_port=config.get("carla_port", 2000) + rank,
+            carla_host=worker_host,
+            carla_port=worker_port,
             town=config.get("town", "FlatPlane"),
             max_steps=config.get("max_steps", 500),
-            ros2_config=config.get("ros2", {}),
+            ros2_config=ros2_config,
             carla_sensors_config=(
                 carla_sensors_override
                 if carla_sensors_override is not None
@@ -134,6 +163,7 @@ def make_env(
             map_load_sleep=config.get("map_load_sleep", 5.0),
             action_repeat=config.get("action_repeat", 1),
             no_rendering_mode=config.get("no_rendering_mode", False),
+            vis_output_path=vis_path,
         )
         return env
 
@@ -316,9 +346,11 @@ def train(
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # Create training environment
-    logger.info("Creating training environment...")
-    train_vec_env = DummyVecEnv([make_env(config)])
+    # Create training environment -- one worker per CARLA instance.
+    # parallel_workers > 1 requires docker-compose.parallel.yml (see make docker-train-parallel).
+    n_workers: int = config.get("parallel_workers", 1)
+    logger.info(f"Creating training environment ({n_workers} worker(s))...")
+    train_vec_env = DummyVecEnv([make_env(config, rank=i) for i in range(n_workers)])
 
     # Normalise observations but not rewards - reward components will be
     # manually scaled via potential-based shaping (see reward TODO in config)
