@@ -8,14 +8,16 @@ UncertaintyConditionedActor.
 """
 
 import pytest
-import torch
 
-from uncertainty_rl.networks import (
+# Skip entire module if torch is not available (CI without training deps)
+torch = pytest.importorskip("torch")
+
+from uncertainty_rl.networks import (  # noqa: E402
     EvidentialLayer,
     EvidentialPolicyNetwork,
     UncertaintyConditionedActor,
 )
-from uncertainty_rl.utils.constants import ACTION_DIM
+from uncertainty_rl.utils.constants import ACTION_DIM  # noqa: E402
 
 # Use smaller dims for fast tests
 STATE_DIM = 15
