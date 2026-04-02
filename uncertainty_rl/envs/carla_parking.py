@@ -1095,6 +1095,53 @@ class CARLAParkingEnv(gym.Env):
             # instead of a hardcoded layout_origin_z + guess offset.
             self._floor_z = self.vehicle.get_transform().location.z
 
+    def _teleport_vehicle(self) -> None:
+        """
+        @brief Teleport the existing ego vehicle to the chosen spawn point.
+
+        Used instead of destroy+respawn to keep sensors alive across episodes,
+        which prevents the CARLA ROS bridge from accumulating actor-stream
+        registrations and eventually segfaulting (exit code -11) mid-training.
+
+        Zeros linear and angular velocity so the vehicle starts stationary,
+        then ticks until physics settle (same condition as _spawn_vehicle).
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
+        primary = self._current_layout.get("spawn_transform", {})
+        extras: List[Any] = self._current_layout.get("extra_spawn_transforms", [])
+        all_spawns = [primary] + list(extras)
+
+        chosen = random.choice(all_spawns)
+        self._chosen_spawn = chosen
+
+        sx = float(chosen.get("x", 0.0))
+        sy = float(chosen.get("y", 0.0))
+        sz = float(chosen.get("z", default_z))
+        syaw = float(chosen.get("yaw_deg", 0.0))
+
+        spawn_transform = carla.Transform(
+            carla.Location(x=sx, y=sy, z=sz),
+            carla.Rotation(yaw=syaw),
+        )
+        self.vehicle.set_transform(spawn_transform)
+
+        # Zero velocity so the vehicle does not carry momentum from the
+        # previous episode into the new one.
+        zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
+        self.vehicle.set_target_velocity(zero)
+        self.vehicle.set_target_angular_velocity(zero)
+        self.vehicle.apply_control(carla.VehicleControl())
+
+        # Settle under gravity (same loop as _spawn_vehicle).
+        for _ in range(40):
+            self.world.tick(10.0)
+            if abs(self.vehicle.get_velocity().z) < 0.01:
+                break
+        self._floor_z = self.vehicle.get_transform().location.z
+
     def _spawn_sensors(self) -> None:
         """
         @brief Spawn sensors for the configured suite attached to the ego vehicle.
@@ -1303,22 +1350,27 @@ class CARLAParkingEnv(gym.Env):
                 self.world.tick(10.0)
             time.sleep(tick_interval)
 
-    def _cleanup_actors(self) -> None:
+    def _cleanup_actors(self, skip_ego: bool = False) -> None:
         """
-        @brief Destroy all episode actors (sensors, cones, static vehicles, NPCs,
-               pedestrians, ego vehicle).
+        @brief Destroy episode actors.
+
+        @param skip_ego: When True, skip sensor and ego vehicle destruction so
+               they can be reused via _teleport_vehicle() in the next episode.
+               NPCs, cones, and static vehicles are always destroyed.
         """
-        # Delegates lifecycle to the three actor managers
-        self._sensor_manager.cleanup()
+        if not skip_ego:
+            self._sensor_manager.cleanup()
+
         self._npc_controller.cleanup()
         self._lot_spawner.cleanup()
 
         self._all_vehicle_actors.clear()
 
-        if self.vehicle is not None:
-            if self.vehicle.is_alive:
-                self.vehicle.destroy()
-            self.vehicle = None
+        if not skip_ego:
+            if self.vehicle is not None:
+                if self.vehicle.is_alive:
+                    self.vehicle.destroy()
+                self.vehicle = None
 
     # ------------------------------------------------------------------
     # Gymnasium API
@@ -1344,8 +1396,6 @@ class CARLAParkingEnv(gym.Env):
         self.steps = 0
         self._trajectory_buffer.clear()
 
-        self._cleanup_actors()
-
         # Connect to CARLA on first reset
         if self.client is None:
             self._connect_to_carla()
@@ -1353,12 +1403,19 @@ class CARLAParkingEnv(gym.Env):
         if self.world is None:
             return np.zeros(self._compute_obs_dim(), dtype=np.float32), {}
 
-        # Flush pending destroy commands in synchronous mode.  Without this
-        # tick, CARLA queues the destroys from _cleanup_actors() and only
-        # processes them on the next tick, which happens inside LotSpawner.
-        # By then new actors are already spawned, causing ghost collisions and
-        # steadily increasing actor IDs (memory leak).  One explicit tick here
-        # ensures a clean slate before spawning.
+        # Determine whether we can reuse the existing vehicle and sensors.
+        # On the first episode (vehicle is None) or if the actor has gone stale,
+        # do a full spawn.  On all subsequent episodes, teleport instead to avoid
+        # the destroy/respawn cycle that causes the CARLA ROS bridge to accumulate
+        # actor-stream registrations and eventually segfault (exit code -11).
+        vehicle_alive = self.vehicle is not None and self.vehicle.is_alive
+        reuse_vehicle = vehicle_alive
+
+        # Always clean up NPCs, cones, and static vehicles from the previous
+        # episode -- only skip sensor/ego-vehicle destruction when reusing.
+        self._cleanup_actors(skip_ego=reuse_vehicle)
+
+        # Flush pending destroy commands (NPCs/cones/statics) before spawning.
         self.world.tick(10.0)
 
         # When covariance is included in the observation, synchronous mode must
@@ -1366,9 +1423,6 @@ class CARLAParkingEnv(gym.Env):
         # reload (generate_opendrive_world / load_world) resets all CARLA
         # settings to async defaults, so we apply sync mode ourselves rather
         # than relying on the bridge to re-apply it after a reload.
-        # The bridge is configured with synchronous_mode: true in its launch
-        # YAML, which tells it to *expect* sync mode -- it does not re-set it
-        # after a world reload.
         # When include_covariance=False (inspector, ablation baselines) the
         # ROS bridge is not required and this block is skipped entirely.
         if self._include_covariance:
@@ -1397,8 +1451,13 @@ class CARLAParkingEnv(gym.Env):
         # world queries inside each spawn method.
         self._cache_blueprints()
 
-        self._spawn_vehicle()
-        self._spawn_sensors()
+        if reuse_vehicle:
+            # Teleport the existing vehicle; sensors stay attached and alive.
+            self._teleport_vehicle()
+            self._sensor_manager.reset_state()
+        else:
+            self._spawn_vehicle()
+            self._spawn_sensors()
 
         # Invalidate stale pre-reset EKF data so _wait_for_covariance() blocks
         # until a genuinely post-spawn reading arrives from ekf_state.json.

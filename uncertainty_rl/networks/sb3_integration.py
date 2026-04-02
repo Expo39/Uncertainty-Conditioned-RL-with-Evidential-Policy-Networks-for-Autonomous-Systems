@@ -106,7 +106,10 @@ class EvidentialDistribution(Distribution):
         # Gaussian approximation: std = sqrt(beta / (nu*(alpha-1))) = sqrt(aleatoric).
         # Epistemic uncertainty is not folded into action std -- it quantifies
         # model uncertainty over gamma, not per-sample noise.
-        aleatoric = beta / (nu * (alpha - 1))
+        # Clamp aleatoric before sqrt to guard against numerical drift producing
+        # near-zero or negative values under GPU fp32 arithmetic, which would
+        # yield NaN/inf std and trigger a CUDA illegal memory access in Normal().
+        aleatoric = th.clamp(beta / (nu * (alpha - 1)), min=1e-6)
         std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
@@ -538,7 +541,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 gamma, nu, alpha, beta = flat(latent_pi)
 
             epistemic = beta / (alpha - 1)
-            aleatoric = beta / (nu * (alpha - 1))
+            aleatoric = th.clamp(beta / (nu * (alpha - 1)), min=1e-6)
             total = epistemic + aleatoric
 
             if deterministic:

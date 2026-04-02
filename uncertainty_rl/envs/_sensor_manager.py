@@ -220,6 +220,19 @@ class SensorManager:
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
 
+    def reset_state(self) -> None:
+        """
+        @brief Reset per-episode sensor state without touching CARLA actors.
+
+        Used when the ego vehicle is reused across episodes (teleport path).
+        Clears collision flags and stale LiDAR data so the new episode starts
+        clean, without the destroy/respawn cycle that stresses the ROS bridge.
+        """
+        self._collision_detected = False
+        self._collision_impulse = 0.0
+        with self._lidar_scan_lock:
+            self._latest_lidar_scan = None
+
     # ------------------------------------------------------------------
     # Sensor spawn helpers
     # ------------------------------------------------------------------

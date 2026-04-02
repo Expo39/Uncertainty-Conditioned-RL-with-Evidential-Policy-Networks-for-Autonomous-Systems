@@ -31,7 +31,7 @@ clip_range_vf: null  # No VF clipping (SB3 default, avoids loss overshooting)
 
 # ent_coef: Zero for continuous control. Exploration is handled by the
 # Gaussian policy's learned standard deviation.
-ent_coef: 0.0
+ent_coef: 0.005
 
 vf_coef: 0.5        # Standard default
 max_grad_norm: 0.5   # Standard default
