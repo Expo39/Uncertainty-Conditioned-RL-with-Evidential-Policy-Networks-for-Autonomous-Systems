@@ -2,7 +2,7 @@
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration
-.PHONY: lint format typecheck clean clean-venv
+.PHONY: lint format typecheck verify clean clean-venv
 .PHONY: backup-configs restore-configs
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
@@ -391,6 +391,29 @@ typecheck: ## Run mypy type checking
 sanity: ## Quick import check
 	$(call ensure-venv)
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
+
+verify: lint typecheck sanity ## Run all local checks (lint + typecheck + sanity). Does not require torch/gymnasium/sb3.
+
+# Explanation: This target runs the checks that do NOT require optional
+# training dependencies (torch/gymnasium/sb3), matching the GitHub Actions CI
+# environment. If you have those packages installed locally (e.g. via
+# make install with [dev] group), this will also run and pass. The key is
+# that test-unit and verify do NOT import test modules that require torch/gymnasium/sb3,
+# because those modules have try/except guards that allow their imports to fail
+# gracefully during test collection.
+
+# To test WITH torch/gymnasium/sb3 (requires Docker + GPU stack):
+#   make docker-verify
+
+# To test just the unit tests locally (no torch/gymnasium/sb3 needed):
+#   make test-unit
+
+# To test locally WITH torch/gymnasium/sb3 (if installed):
+#   pip install -e ".[training]"
+#   make test-unit
+
+# To test everything in Docker (unit + integration + all checks):
+#   make docker-verify
 
 # ----------------------------------------------------------------------
 # Cleanup
