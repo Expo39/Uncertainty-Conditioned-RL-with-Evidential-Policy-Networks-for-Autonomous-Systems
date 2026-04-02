@@ -122,7 +122,8 @@ class EvidentialDistribution(Distribution):
         @return Log probability summed over action dimensions, shape (batch_size,).
         """
         assert self.distribution is not None
-        log_prob = self.distribution.log_prob(actions)
+        dist = cast(Normal, self.distribution)
+        log_prob = dist.log_prob(actions)
         return sum_independent_dims(log_prob)
 
     def entropy(self) -> Optional[th.Tensor]:
@@ -131,7 +132,8 @@ class EvidentialDistribution(Distribution):
         @return Entropy summed over action dimensions, shape (batch_size,).
         """
         assert self.distribution is not None
-        return sum_independent_dims(self.distribution.entropy())
+        dist = cast(Normal, self.distribution)
+        return sum_independent_dims(dist.entropy())
 
     def sample(self) -> th.Tensor:
         """
@@ -139,7 +141,8 @@ class EvidentialDistribution(Distribution):
         @return Sampled actions of shape (batch_size, action_dim).
         """
         assert self.distribution is not None
-        return cast(th.Tensor, self.distribution.rsample())
+        dist = cast(Normal, self.distribution)
+        return cast(th.Tensor, dist.rsample())
 
     def mode(self) -> th.Tensor:
         """
@@ -147,7 +150,8 @@ class EvidentialDistribution(Distribution):
         @return Mean actions of shape (batch_size, action_dim).
         """
         assert self.distribution is not None
-        return cast(th.Tensor, self.distribution.mean)
+        dist = cast(Normal, self.distribution)
+        return cast(th.Tensor, dist.mean)
 
     def actions_from_params(
         self,
@@ -399,10 +403,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         if self.share_features_extractor:
             latent_pi, latent_vf = self.mlp_extractor(features)
         else:
-            pi_features = features
+            pi_features = cast(th.Tensor, features)
             vf_features = self.extract_features(obs, self.vf_features_extractor)
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
+            latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
 
         values = self.value_net(latent_vf)
 
@@ -418,10 +422,13 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
-        actions = actions.reshape(-1, self.action_space.shape[0])
+        action_shape = cast(Tuple[int, ...], self.action_space.shape)
+        actions = actions.reshape(-1, action_shape[0])
         return actions, values, log_prob
 
-    def get_distribution(self, obs: th.Tensor) -> EvidentialDistribution:
+    def get_distribution(  # type: ignore[override]
+        self, obs: th.Tensor
+    ) -> EvidentialDistribution:
         """
         @brief Get the action distribution for given observations.
 
@@ -443,7 +450,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         if self.share_features_extractor:
             latent_pi, _ = self.mlp_extractor(features)
         else:
-            latent_pi = self.mlp_extractor.forward_actor(features)
+            latent_pi = self.mlp_extractor.forward_actor(cast(th.Tensor, features))
         return self._get_action_dist_from_latent(latent_pi)
 
     def _get_action_dist_from_latent(

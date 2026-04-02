@@ -10,9 +10,9 @@ simulation. The bridge auto-discovers sensors spawned by the training container
 
 Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (passive; publishes sensor data from CARLA to ROS 2 topics)
-2. Static TF publishers (connect ego_vehicle body frame to all sensor frames)
-3. Cartographer (scan-matching on raw PointCloud2; publishes TF odom -> tracking_frame)
-4. TfToOdomNode (converts Cartographer TF to nav_msgs/Odometry on /scan_matched_odometry)
+2. Static TF publishers (sensor frames to vehicle body)
+3. Cartographer (scan-matching; publishes TF odom -> tracking_frame)
+4. TfToOdomNode (converts Cartographer TF to Odometry)
 5. robot_localisation EKF (fuses IMU + scan-matched odometry -> /odometry/filtered)
 6. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
    /ekf_uncertainty/covariance for the training container)
@@ -190,8 +190,7 @@ def _select_cartographer_config(mode: str, is_3d: bool) -> str:
     key = (mode, is_3d)
     if key not in configs:
         raise ValueError(
-            f"Unknown CARTOGRAPHER_MODE '{mode}'. "
-            "Expected 'slam' or 'loc'."
+            f"Unknown CARTOGRAPHER_MODE '{mode}'. " "Expected 'slam' or 'loc'."
         )
     return configs[key]
 
@@ -321,9 +320,7 @@ def generate_launch_description() -> LaunchDescription:
     # All suites feed raw PointCloud2 to Cartographer on the "points2" topic.
     # Suite A: single-channel 2D LiDAR at /carla/ego_vehicle/lidar (360 deg).
     # Suite B/C: 16-channel 3D LiDAR at /carla/ego_vehicle/lidar_3d (360 deg).
-    lidar_topic = (
-        "/carla/ego_vehicle/lidar_3d" if is_3d else "/carla/ego_vehicle/lidar"
-    )
+    lidar_topic = "/carla/ego_vehicle/lidar_3d" if is_3d else "/carla/ego_vehicle/lidar"
     # No odom input remapping: Cartographer uses LiDAR + IMU only.
     # The "odom" remapping would only be needed if feeding an external odometry
     # source into Cartographer, which we do not do.
@@ -352,9 +349,7 @@ def generate_launch_description() -> LaunchDescription:
 
     # tracking_frame depends on sensor suite: Suite A uses the 2D LiDAR frame,
     # Suite B/C use the 3D LiDAR frame (both are Cartographer's published_frame).
-    tf_tracking_frame = (
-        "ego_vehicle/lidar_3d" if is_3d else "ego_vehicle/lidar"
-    )
+    tf_tracking_frame = "ego_vehicle/lidar_3d" if is_3d else "ego_vehicle/lidar"
 
     # Dynamic covariance parameters read from ros2_config.yaml (tf_to_odom section).
     # This allows real-robot tuning without touching Python source.
@@ -422,12 +417,14 @@ def generate_launch_description() -> LaunchDescription:
     # Static TFs before the EKF and Cartographer so the frame tree is complete.
     actions.extend(static_tf_nodes)
 
-    actions.extend([
-        cartographer_node,
-        tf_to_odom_node,
-        ekf_node,
-        covariance_extractor,
-    ])
+    actions.extend(
+        [
+            cartographer_node,
+            tf_to_odom_node,
+            ekf_node,
+            covariance_extractor,
+        ]
+    )
 
     # Occupancy grid node only needed during SLAM mapping, not training.
     if cartographer_mode == "slam":

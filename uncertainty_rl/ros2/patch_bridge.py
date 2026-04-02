@@ -6,6 +6,7 @@ Applied during docker build (see ros2/Dockerfile). Catches RuntimeError when
 the bridge's _update_thread tries to stop/destroy a sensor the env already
 destroyed, which otherwise crashes Thread-1 and hangs world.tick() in sync mode.
 """
+
 import pathlib
 
 BASE = pathlib.Path("/workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge")
@@ -41,22 +42,28 @@ p.write_text(original.replace(_SENSOR_TARGET, _SENSOR_PATCH))
 p = BASE / "actor_factory.py"
 original = p.read_text()
 _FACTORY_TARGET = (
-    '        actor.destroy()\n'
-    '        if carla_actor and delete_actor:\n'
-    '            carla_actor.destroy()\n'
-    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))'
+    "        actor.destroy()\n"
+    "        if carla_actor and delete_actor:\n"
+    "            carla_actor.destroy()\n"
+    '        msg = "Removed {}(id={})".format('
+    "            actor.__class__.__name__, actor.uid"
+    "        )\n"
+    "        self.node.loginfo(msg)"
 )
 _FACTORY_PATCH = (
-    '        try:\n'
-    '            actor.destroy()\n'
-    '        except Exception:\n'
-    '            pass\n'
-    '        if carla_actor and delete_actor:\n'
-    '            try:\n'
-    '                carla_actor.destroy()\n'
-    '            except Exception:\n'
-    '                pass\n'
-    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))'
+    "        try:\n"
+    "            actor.destroy()\n"
+    "        except Exception:\n"
+    "            pass\n"
+    "        if carla_actor and delete_actor:\n"
+    "            try:\n"
+    "                carla_actor.destroy()\n"
+    "            except Exception:\n"
+    "                pass\n"
+    '        msg = "Removed {}(id={})".format('
+    "            actor.__class__.__name__, actor.uid"
+    "        )\n"
+    "        self.node.loginfo(msg)"
 )
 assert _FACTORY_TARGET in original, (
     f"patch_bridge.py: patch target not found in {p}. "

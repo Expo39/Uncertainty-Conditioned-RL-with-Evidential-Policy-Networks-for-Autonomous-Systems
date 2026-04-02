@@ -27,7 +27,6 @@ import collections
 import json
 import logging
 import math
-import os
 import random
 import time
 from pathlib import Path
@@ -55,7 +54,6 @@ from uncertainty_rl.envs._lot_spawner import LotSpawner
 from uncertainty_rl.envs._npc_controller import NPCController
 from uncertainty_rl.envs._sensor_manager import SensorManager
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
-from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
     MAX_PARKING_SPEED,
@@ -71,6 +69,7 @@ from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     wrap_angle_symmetric,
 )
+from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
 
@@ -295,7 +294,11 @@ class CARLAParkingEnv(gym.Env):
         # Used only by the debug drift calculation in step(); the observation
         # path uses odom-frame coordinates directly via _target_bay_odom.
         self._ekf_odom_offset: Tuple[float, float, float, float, float] = (
-            0.0, 0.0, 1.0, 0.0, 0.0
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
         )
 
         # Target bay (world frame, set in reset)
@@ -327,12 +330,11 @@ class CARLAParkingEnv(gym.Env):
 
         # Visualisation state writer (demand-driven via signal file)
         self._vis_history_path: Path = (
-            Path(vis_output_path) if vis_output_path
+            Path(vis_output_path)
+            if vis_output_path
             else Path("outputs/vis_history.jsonl")
         )
-        self._vis_signal_path: Path = (
-            self._vis_history_path.parent / ".vis_active"
-        )
+        self._vis_signal_path: Path = self._vis_history_path.parent / ".vis_active"
         self._carla_timestep: float = carla_timestep
 
         # Episode state
@@ -535,7 +537,9 @@ class CARLAParkingEnv(gym.Env):
         Delegates to LotSpawner.spawn_all().
         """
         self._lot_spawner.spawn_all(
-            self.world, self._current_layout, self._target_bay,
+            self.world,
+            self._current_layout,
+            self._target_bay,
             floor_contact_z=self._floor_z,
             layout_name=self._current_floor_plan_name,
         )
@@ -615,8 +619,11 @@ class CARLAParkingEnv(gym.Env):
         """
         if self.vehicle is None:
             _empty: Dict[str, float] = {
-                "pos_error": 0.0, "orientation_error": 0.0,
-                "speed": 0.0, "collision": 0.0, "progress_reward": 0.0,
+                "pos_error": 0.0,
+                "orientation_error": 0.0,
+                "speed": 0.0,
+                "collision": 0.0,
+                "progress_reward": 0.0,
             }
             return 0.0, False, False, _empty
 
@@ -705,9 +712,7 @@ class CARLAParkingEnv(gym.Env):
         ekf_pose: Optional[np.ndarray] = None
         _prefetched_uncertainty: Optional[np.ndarray] = None
         if self._cov_subscriber is not None:
-            ekf_pose, _prefetched_uncertainty = (
-                self._cov_subscriber.get_latest_state()
-            )
+            ekf_pose, _prefetched_uncertainty = self._cov_subscriber.get_latest_state()
 
         if ekf_pose is not None:
             # Use EKF pose directly in Cartographer odom frame.
@@ -771,7 +776,7 @@ class CARLAParkingEnv(gym.Env):
             self._obs_buffer[5] = dyaw
             if self._include_obstacle_obs:
                 self._obs_buffer[6:11] = obstacle_features
-            return self._obs_buffer.copy()
+            return cast(np.ndarray, self._obs_buffer.copy())
 
         # -- EKF covariance features (indices 3-11) -----------------------
         # Use the uncertainty already fetched alongside the pose above (one
@@ -808,7 +813,7 @@ class CARLAParkingEnv(gym.Env):
         self._obs_buffer[14] = dyaw
         if self._include_obstacle_obs:
             self._obs_buffer[15:20] = obstacle_features
-        return self._obs_buffer.copy()
+        return cast(np.ndarray, self._obs_buffer.copy())
 
     def _get_obstacle_features(self) -> np.ndarray:
         """
@@ -956,10 +961,12 @@ class CARLAParkingEnv(gym.Env):
             "episode_step": self.steps,
             "carla_timestep": self._carla_timestep,
             "ego": {
-                "x": x, "y": y, "yaw": yaw,
+                "x": x,
+                "y": y,
+                "yaw": yaw,
                 "vx": vel.x,
                 "vy": vel.y,
-                "speed": math.sqrt(vel.x ** 2 + vel.y ** 2),
+                "speed": math.sqrt(vel.x**2 + vel.y**2),
             },
             "action": {
                 "steer": float(self._last_action[0]),
@@ -1316,7 +1323,7 @@ class CARLAParkingEnv(gym.Env):
             tx = world_x - rotated_x
             ty = world_y - rotated_y
 
-            ekf_speed = math.sqrt(ekf_vx ** 2 + ekf_vy ** 2)
+            ekf_speed = math.sqrt(ekf_vx**2 + ekf_vy**2)
             if ekf_speed <= _VEL_CONVERGED:
                 self._ekf_odom_offset = (tx, ty, cos_r, sin_r, r)
                 self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
@@ -1580,12 +1587,14 @@ class CARLAParkingEnv(gym.Env):
             _yaw_raw = math.radians(_t.rotation.yaw) - self._target_bay["yaw"]
             _yaw_err = min(
                 abs(math.atan2(math.sin(_yaw_raw), math.cos(_yaw_raw))),
-                abs(math.atan2(
-                    math.sin(_yaw_raw + math.pi),
-                    math.cos(_yaw_raw + math.pi),
-                )),
+                abs(
+                    math.atan2(
+                        math.sin(_yaw_raw + math.pi),
+                        math.cos(_yaw_raw + math.pi),
+                    )
+                ),
             )
-            _speed = math.sqrt(_v.x ** 2 + _v.y ** 2)
+            _speed = math.sqrt(_v.x**2 + _v.y**2)
             _ekf_pose: Optional[np.ndarray] = None
             _unc: Optional[np.ndarray] = None
             if self._cov_subscriber is not None:
@@ -1599,8 +1608,7 @@ class CARLAParkingEnv(gym.Env):
                 _world_ex = _cos_r * _ekf_pose[0] - _sin_r * _ekf_pose[1] + _tx
                 _world_ey = _sin_r * _ekf_pose[0] + _cos_r * _ekf_pose[1] + _ty
                 _ekf_drift = math.sqrt(
-                    (_world_ex - _t.location.x) ** 2
-                    + (_world_ey - _t.location.y) ** 2
+                    (_world_ex - _t.location.x) ** 2 + (_world_ey - _t.location.y) ** 2
                 )
             # Obstacle features are always the last OBSTACLE_FEATURES_DIM dims;
             # index 18 is only correct when include_covariance=True.

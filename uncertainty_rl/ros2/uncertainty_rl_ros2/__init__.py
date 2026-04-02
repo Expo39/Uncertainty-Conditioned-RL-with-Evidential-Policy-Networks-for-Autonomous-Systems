@@ -8,7 +8,7 @@ covariance_extractor.py within this directory.
 """
 
 try:
-    from uncertainty_rl_ros2.covariance_extractor import (
+    from uncertainty_rl_ros2.covariance_extractor import (  # noqa: F401
         CovarianceExtractorNode,
         CovarianceMonitorNode,
     )

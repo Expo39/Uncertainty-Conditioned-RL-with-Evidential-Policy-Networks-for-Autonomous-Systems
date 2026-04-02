@@ -14,7 +14,6 @@ from unittest.mock import MagicMock, patch
 from uncertainty_rl.utils.covariance_utils import make_diagonal_covariance
 from uncertainty_rl.utils.geometry import yaw_from_quaternion
 
-
 # ---------------------------------------------------------------------------
 # Helper -- load TfToOdomNode without a live ROS context (needed for
 # _compute_covariance_scale tests only; pure-math tests use utils directly).
@@ -28,22 +27,27 @@ def _import_tf_to_odom_module():
     """
     mock_rclpy = MagicMock()
     mock_rclpy.node.Node = object  # Node base becomes plain object
-    with patch.dict("sys.modules", {
-        "rclpy": mock_rclpy,
-        "rclpy.node": mock_rclpy.node,
-        "rclpy.qos": MagicMock(),
-        "rclpy.time": MagicMock(),
-        "tf2_ros": MagicMock(),
-        "nav_msgs": MagicMock(),
-        "nav_msgs.msg": MagicMock(),
-        "geometry_msgs": MagicMock(),
-        "geometry_msgs.msg": MagicMock(),
-    }):
+    with patch.dict(
+        "sys.modules",
+        {
+            "rclpy": mock_rclpy,
+            "rclpy.node": mock_rclpy.node,
+            "rclpy.qos": MagicMock(),
+            "rclpy.time": MagicMock(),
+            "tf2_ros": MagicMock(),
+            "nav_msgs": MagicMock(),
+            "nav_msgs.msg": MagicMock(),
+            "geometry_msgs": MagicMock(),
+            "geometry_msgs.msg": MagicMock(),
+        },
+    ):
         import sys
+
         mod_name = "uncertainty_rl.ros2.uncertainty_rl_ros2.tf_to_odom"
         if mod_name in sys.modules:
             del sys.modules[mod_name]
         import uncertainty_rl.ros2.uncertainty_rl_ros2.tf_to_odom as m
+
         return m
 
 
@@ -100,6 +104,7 @@ class TestYawFromQuaternion:
         @brief Output is always in (-pi, pi] for arbitrary unit quaternions.
         """
         import random
+
         random.seed(42)
         for _ in range(50):
             yaw_in = random.uniform(-math.pi, math.pi)
@@ -107,9 +112,9 @@ class TestYawFromQuaternion:
             qz = math.sin(yaw_in / 2.0)
             qw = math.cos(yaw_in / 2.0)
             yaw_out = yaw_from_quaternion(0.0, 0.0, qz, qw)
-            assert -math.pi <= yaw_out <= math.pi, (
-                f"yaw_out={yaw_out:.4f} out of range for yaw_in={yaw_in:.4f}"
-            )
+            assert (
+                -math.pi <= yaw_out <= math.pi
+            ), f"yaw_out={yaw_out:.4f} out of range for yaw_in={yaw_in:.4f}"
 
     def test_45_deg_rotation(self) -> None:
         """
@@ -147,9 +152,9 @@ class TestMakeDiagonalCovariance:
         diag = [0.1, 0.2, 1e6, 1e6, 1e6, 0.05]
         result = make_diagonal_covariance(diag)
         for i, expected in enumerate(diag):
-            assert abs(result[i * 7] - expected) < 1e-12, (
-                f"Diagonal[{i}] expected {expected}, got {result[i * 7]}"
-            )
+            assert (
+                abs(result[i * 7] - expected) < 1e-12
+            ), f"Diagonal[{i}] expected {expected}, got {result[i * 7]}"
 
     def test_off_diagonal_elements_are_zero(self) -> None:
         """
@@ -174,9 +179,9 @@ class TestMakeDiagonalCovariance:
         """
         diag = [0.05, 0.05, 1e6, 1e6, 1e6, 0.05]
         result = make_diagonal_covariance(diag)
-        assert abs(result[14] - 1e6) < 1.0   # z variance at index 14
-        assert abs(result[21] - 1e6) < 1.0   # roll variance at index 21
-        assert abs(result[28] - 1e6) < 1.0   # pitch variance at index 28
+        assert abs(result[14] - 1e6) < 1.0  # z variance at index 14
+        assert abs(result[21] - 1e6) < 1.0  # roll variance at index 21
+        assert abs(result[28] - 1e6) < 1.0  # pitch variance at index 28
 
 
 # ---------------------------------------------------------------------------
@@ -184,12 +189,14 @@ class TestMakeDiagonalCovariance:
 # ---------------------------------------------------------------------------
 
 
-def _make_node_no_ros(stale_threshold: float = 0.15,
-                      staleness_scale: float = 100.0,
-                      stale_max_sec: float = 2.0,
-                      jump_threshold: float = 1.0,
-                      jump_scale: float = 50.0,
-                      jump_decay_steps: int = 10) -> Any:
+def _make_node_no_ros(
+    stale_threshold: float = 0.15,
+    staleness_scale: float = 100.0,
+    stale_max_sec: float = 2.0,
+    jump_threshold: float = 1.0,
+    jump_scale: float = 50.0,
+    jump_decay_steps: int = 10,
+) -> Any:
     """
     @brief Construct a TfToOdomNode-like object without ROS for testing
            _compute_covariance_scale() in isolation.
@@ -215,8 +222,8 @@ def _make_node_no_ros(stale_threshold: float = 0.15,
     node._stale_ramp_range = stale_max_sec - stale_threshold
 
     # Bind the method
-    node._compute_covariance_scale = (
-        mod.TfToOdomNode._compute_covariance_scale.__get__(node)
+    node._compute_covariance_scale = mod.TfToOdomNode._compute_covariance_scale.__get__(
+        node
     )
 
     # Mock get_logger() to suppress output
@@ -315,8 +322,10 @@ class TestComputeCovarianceScale:
         @brief Scale decreases monotonically after a jump as steps are consumed.
         """
         node = _make_node_no_ros(
-            jump_threshold=1.0, jump_scale=50.0,
-            jump_decay_steps=5, stale_threshold=9999.0
+            jump_threshold=1.0,
+            jump_scale=50.0,
+            jump_decay_steps=5,
+            stale_threshold=9999.0,
         )
         now_wall = 500.0
         node._last_tf_wall_sec = now_wall - 0.01
@@ -331,9 +340,9 @@ class TestComputeCovarianceScale:
 
         # Each call should produce a scale <= the previous one
         for i in range(1, len(scales)):
-            assert scales[i] <= scales[i - 1] + 1e-9, (
-                f"Scale not monotonically decreasing: {scales}"
-            )
+            assert (
+                scales[i] <= scales[i - 1] + 1e-9
+            ), f"Scale not monotonically decreasing: {scales}"
 
     def test_scale_returns_to_one_after_decay(self) -> None:
         """
@@ -341,8 +350,10 @@ class TestComputeCovarianceScale:
         """
         decay_steps = 4
         node = _make_node_no_ros(
-            jump_threshold=1.0, jump_scale=50.0,
-            jump_decay_steps=decay_steps, stale_threshold=9999.0
+            jump_threshold=1.0,
+            jump_scale=50.0,
+            jump_decay_steps=decay_steps,
+            stale_threshold=9999.0,
         )
         now_wall = 500.0
         node._last_tf_wall_sec = now_wall - 0.01
@@ -361,8 +372,12 @@ class TestComputeCovarianceScale:
         @brief When staleness > jump inflation, the staleness factor is returned.
         """
         node = _make_node_no_ros(
-            stale_threshold=0.15, staleness_scale=200.0, stale_max_sec=2.0,
-            jump_threshold=1.0, jump_scale=10.0, jump_decay_steps=10
+            stale_threshold=0.15,
+            staleness_scale=200.0,
+            stale_max_sec=2.0,
+            jump_threshold=1.0,
+            jump_scale=10.0,
+            jump_decay_steps=10,
         )
         now_wall = 500.0
         # Age = stale_max_sec: staleness_factor = 200

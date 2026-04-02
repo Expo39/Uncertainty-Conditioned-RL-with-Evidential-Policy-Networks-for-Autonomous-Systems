@@ -29,11 +29,11 @@ import math
 from typing import Any, Dict, List
 
 from scripts.layouts.common import (
+    _PED_MARGIN,
+    _WALL_GAP,
     BAY_DIMS,
     BAYS_PER_TYPE,
     PED_STRIP,
-    _PED_MARGIN,
-    _WALL_GAP,
     ang_offset_from_wall,
     validate_bays_in_polygon,
     warn_narrow_corridors,

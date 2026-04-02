@@ -145,8 +145,9 @@ class DebugLogger:
             return {}
         return dict(self._last_dict)
 
-    def log_reset(self, floor_plan: str, target_bay_id: str, spawn_x: float,
-                  spawn_y: float) -> None:
+    def log_reset(
+        self, floor_plan: str, target_bay_id: str, spawn_x: float, spawn_y: float
+    ) -> None:
         """
         @brief Emit a DEBUG line summarising the episode reset.
 

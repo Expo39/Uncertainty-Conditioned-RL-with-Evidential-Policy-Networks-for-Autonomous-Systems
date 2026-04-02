@@ -42,7 +42,8 @@ class SensorManager:
     # A pedestrian walking into a stationary ego produces near-zero impulse;
     # this threshold filters those out so only ego-at-fault events are penalised.
     _DYNAMIC_COLLISION_IMPULSE_THRESHOLD: float = 500.0
-    # Bytes per LiDAR point in the CARLA raw buffer: 4 float32 fields (x, y, z, intensity)
+    # Bytes per LiDAR point in CARLA raw buffer: 4 float32 fields
+    # (x, y, z, intensity)
     _LIDAR_BYTES_PER_POINT: int = 16
 
     def __init__(
@@ -67,8 +68,9 @@ class SensorManager:
         # Per-episode sensor actor list
         self._spawned_sensors: List[Any] = []
 
-        # Latest LiDAR point cloud in vehicle frame ([N, 3] float32 array).
-        # Updated by _lidar_callback(). Used by CARLAParkingEnv._get_obstacle_features().
+        # Latest LiDAR point cloud in vehicle frame ([N, 3] float32).
+        # Updated by _lidar_callback(). Used by
+        # CARLAParkingEnv._get_obstacle_features().
         self._latest_lidar_scan: Optional[np.ndarray] = None
         self._lidar_scan_lock = threading.Lock()
 
@@ -87,7 +89,10 @@ class SensorManager:
 
     @property
     def collision_detected(self) -> bool:
-        """@brief True if a collision was detected since the last consume_collision()."""
+        """
+        @brief True if a collision was detected since last
+               consume_collision() call.
+        """
         return self._collision_detected
 
     @property
@@ -314,9 +319,7 @@ class SensorManager:
                 z=float(mount.get("z", 0.5)),
             )
         )
-        lidar_sensor = world.spawn_actor(
-            lidar_bp, lidar_transform, attach_to=vehicle
-        )
+        lidar_sensor = world.spawn_actor(lidar_bp, lidar_transform, attach_to=vehicle)
         # Register callback to update the LiDAR scan cache for obstacle features
         lidar_sensor.listen(self._lidar_callback)
         self._spawned_sensors.append(lidar_sensor)
@@ -356,9 +359,7 @@ class SensorManager:
                 z=float(mount.get("z", 1.5)),
             )
         )
-        lidar_sensor = world.spawn_actor(
-            lidar_bp, lidar_transform, attach_to=vehicle
-        )
+        lidar_sensor = world.spawn_actor(lidar_bp, lidar_transform, attach_to=vehicle)
         lidar_sensor.listen(self._lidar_callback)
         self._spawned_sensors.append(lidar_sensor)
 
@@ -447,9 +448,7 @@ class SensorManager:
         """
         other = event.other_actor
         impulse = event.normal_impulse
-        impulse_magnitude = math.sqrt(
-            impulse.x ** 2 + impulse.y ** 2 + impulse.z ** 2
-        )
+        impulse_magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
 
         is_pedestrian = other.type_id.startswith("walker.pedestrian")
         is_patrol = other.id in self._patrol_npc_ids

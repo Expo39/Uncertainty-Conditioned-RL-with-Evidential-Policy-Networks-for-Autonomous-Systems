@@ -9,8 +9,10 @@ spectator view (--render flag).
 
 Usage:
     python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model --render
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model --episodes 5
+    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model \
+        --render
+    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model \
+        --episodes 5
 """
 
 import argparse
@@ -73,14 +75,15 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
     @param env_config: Parsed environment configuration dictionary.
     @return Vectorised environment.
     """
+
     def _init() -> CARLAParkingEnv:
         # Env vars override config (e.g. CARLA_HOST=carla-server-demo for 3D view)
         carla_host = os.environ.get(
             "CARLA_HOST", env_config.get("carla_host", "carla-server")
         )
-        carla_port = int(os.environ.get(
-            "CARLA_PORT", env_config.get("carla_port", 2000)
-        ))
+        carla_port = int(
+            os.environ.get("CARLA_PORT", env_config.get("carla_port", 2000))
+        )
         return CARLAParkingEnv(
             carla_host=carla_host,
             carla_port=carla_port,
@@ -89,12 +92,8 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
             ros2_config=env_config.get("ros2", {}),
             carla_sensors_config=env_config.get("carla_sensors", {}),
             parking_scenarios_config=env_config.get("parking_scenarios", {}),
-            include_covariance=bool(
-                env_config.get("include_covariance", True)
-            ),
-            include_obstacle_obs=bool(
-                env_config.get("include_obstacle_obs", True)
-            ),
+            include_covariance=bool(env_config.get("include_covariance", True)),
+            include_obstacle_obs=bool(env_config.get("include_obstacle_obs", True)),
             sensor_suite=str(env_config.get("sensor_suite", "suite_a")),
         )
 
@@ -153,12 +152,8 @@ def main() -> None:
                 if is_evidential:
                     obs_tensor = th.as_tensor(obs)
                     policy = model.policy
-                    get_action = (
-                        policy.get_action_with_uncertainty
-                    )
-                    action_tensor, _ = get_action(
-                        obs_tensor, deterministic=True
-                    )
+                    get_action = policy.get_action_with_uncertainty
+                    action_tensor, _ = get_action(obs_tensor, deterministic=True)
                     action = action_tensor.cpu().numpy()
                 else:
                     action, _ = model.predict(obs, deterministic=True)

@@ -29,7 +29,7 @@ Covariance model:
 """
 
 import math
-from typing import List, Optional
+from typing import Optional
 
 import rclpy
 from geometry_msgs.msg import TransformStamped
@@ -115,30 +115,20 @@ class TfToOdomNode(Node):
         publish_topic = str(self.get_parameter("publish_topic").value)
         publish_rate = float(self.get_parameter("publish_rate").value)
 
-        self._base_xy_var: float = float(
-            self.get_parameter("base_xy_variance").value
-        )
-        self._base_yaw_var: float = float(
-            self.get_parameter("base_yaw_variance").value
-        )
+        self._base_xy_var: float = float(self.get_parameter("base_xy_variance").value)
+        self._base_yaw_var: float = float(self.get_parameter("base_yaw_variance").value)
         self._stale_threshold: float = float(
             self.get_parameter("stale_threshold_sec").value
         )
         self._staleness_scale: float = float(
             self.get_parameter("staleness_scale").value
         )
-        self._stale_max_sec: float = float(
-            self.get_parameter("stale_max_sec").value
-        )
+        self._stale_max_sec: float = float(self.get_parameter("stale_max_sec").value)
         self._jump_threshold: float = float(
             self.get_parameter("jump_threshold_m").value
         )
-        self._jump_scale: float = float(
-            self.get_parameter("jump_scale").value
-        )
-        self._jump_decay_steps: int = int(
-            self.get_parameter("jump_decay_steps").value
-        )
+        self._jump_scale: float = float(self.get_parameter("jump_scale").value)
+        self._jump_decay_steps: int = int(self.get_parameter("jump_decay_steps").value)
 
         # Precompute the denominator for the staleness ramp to avoid the
         # max(..., 1e-6) guard on every timer tick. Validated once at init.
@@ -281,9 +271,7 @@ class TfToOdomNode(Node):
                 self._prev_transform.transform.rotation.z,
                 self._prev_transform.transform.rotation.w,
             )
-            position_delta = math.sqrt(
-                (curr_x - prev_x) ** 2 + (curr_y - prev_y) ** 2
-            )
+            position_delta = math.sqrt((curr_x - prev_x) ** 2 + (curr_y - prev_y) ** 2)
 
         # -- Dynamic covariance -----------------------------------------------
         scale = self._compute_covariance_scale(position_delta, now_wall)
