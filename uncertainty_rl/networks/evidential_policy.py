@@ -78,6 +78,17 @@ class EvidentialLayer(nn.Module):
         alpha = F.softplus(out[..., 2]) + 1.0  # Shape (> 1 for finite variance)
         beta = F.softplus(out[..., 3]) + 1e-6  # Rate (positive)
 
+        # Clamp NIG parameters to prevent divergence in RL training.
+        # In the RL setting (unlike supervised regression), unbounded growth of nu/alpha/beta
+        # causes the regularisation term |actions - gamma| * (2*nu + alpha) to explode.
+        # Upper bounds are conservative: max=100.0 gives a regularisation term ceiling
+        # of ~300 per sample, which is reasonable for clipping by lambda_reg=0.001.
+        # (Amini et al. 2020 supervised regression assumes a ground-truth target, which
+        # RL policies do not have.)
+        nu = torch.clamp(nu, max=100.0)
+        alpha = torch.clamp(alpha, max=100.0)
+        beta = torch.clamp(beta, max=100.0)
+
         return gamma, nu, alpha, beta
 
 

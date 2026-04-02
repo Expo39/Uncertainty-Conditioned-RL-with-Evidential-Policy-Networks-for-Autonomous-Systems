@@ -10,7 +10,7 @@
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
-.PHONY: docker-map docker-train-loc docker-train-loc-short
+.PHONY: docker-map docker-train-loc docker-train-loc-short docker-tune
 
 VENV        := .venv
 PYTHON      := $(VENV)/bin/python3
@@ -138,6 +138,10 @@ docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode.
 	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
 	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
 
+docker-tune: ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle]
+	@echo "Tuning (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	$(LOC_ENV) && $(DOCKER_COMPOSE) down && $(DOCKER_COMPOSE) up -d --wait
+	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
 
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
 	@echo "Evaluation (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"

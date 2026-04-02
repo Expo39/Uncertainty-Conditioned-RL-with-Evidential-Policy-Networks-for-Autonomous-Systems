@@ -1,0 +1,90 @@
+# Hyperparameter Tuning Configuration
+# Optuna study settings and search space bounds for PPO + evidential policy networks.
+# Consumed by uncertainty_rl.training.tune_hyperparams.run_study().
+
+# ---------------------------------------------------------------------------
+# Optuna Study Settings
+# ---------------------------------------------------------------------------
+
+study_name: "uncertainty_rl_tuning"
+
+# SQLite storage for trial persistence and resume capability
+storage_path: "logs/tuning/optuna_study.db"
+
+# Number of trials to run (recommend 50 for thorough search)
+n_trials: 50
+
+# Timesteps per trial (recommend 150k for quick feedback)
+timesteps_per_trial: 150000
+
+# Random seed for reproducibility
+seed: 42
+
+# ---------------------------------------------------------------------------
+# Objective Metric
+# ---------------------------------------------------------------------------
+
+# Primary metric: env/mean_progress_reward
+# Non-zero even when agent rarely succeeds, giving TPESampler useful signal
+# from trial 1. env/success_rate is logged separately as secondary metric.
+eval_metric: "env/mean_progress_reward"
+
+# ---------------------------------------------------------------------------
+# Search Space Bounds
+# All values in flatten form. Keys are sampled by sample_hyperparams().
+# ---------------------------------------------------------------------------
+
+search_space:
+
+  # Learning rate: 2 orders of magnitude (Eimer et al. 2023)
+  # Default: 3e-4. Search: [1e-5, 2e-3]
+  learning_rate: [1e-5, 2e-3]
+
+  # n_steps: number of environment steps before policy update
+  # Options: 1024, 2048 (default), 4096
+  n_steps: [1024, 2048, 4096]
+
+  # batch_size: gradient step batch size. Constraint: batch_size <= n_steps
+  # Options: 64, 128, 256 (default), 512
+  batch_size: [64, 128, 256, 512]
+
+  # n_epochs: gradient steps per rollout
+  # Options: 3, 5 (default), 10 (Andrychowicz et al. 2021)
+  n_epochs: [3, 5, 10]
+
+  # Discount factor: sample via 1 - (1 - gamma) on log scale
+  # Default: 0.99. Search range: [0.97, 0.999]
+  # (Raffin 2022 trick for precision near 1.0)
+  gamma: [0.97, 0.999]
+
+  # Entropy coefficient: encourages exploration in Gaussian policy
+  # Default: 0.005. Search: [1e-6, 0.01]
+  # (Andrychowicz et al. 2021: 0.0 viable for continuous control)
+  ent_coef: [1e-6, 0.01]
+
+  # Clipping range for policy ratio
+  # Options: 0.1, 0.2 (default, robust), 0.3 (Andrychowicz et al. 2021)
+  clip_range: [0.1, 0.2, 0.3]
+
+  # Max gradient norm (gradient clipping)
+  # Default: 0.5. Search: [0.3, 1.0]
+  max_grad_norm: [0.3, 1.0]
+
+  # KL divergence threshold for early stopping
+  # Default: 0.02. Search: [0.01, 0.05]
+  target_kl: [0.01, 0.05]
+
+  # Network architecture (hidden layer sizes)
+  # Options: [128, 128], [256, 256] (default)
+  # Both for actor and critic (pi and vf)
+  net_arch: [[128, 128], [256, 256]]
+
+  # Evidential regularisation coefficient
+  # Option 1: use_lambda_reg=False => lambda_reg=0.0 (no evidential reg)
+  # Option 2: use_lambda_reg=True => lambda_reg in [1e-5, 0.01] (log scale)
+  # Default: 0.001. Search: [1e-5, 0.01]
+  lambda_reg: [1e-5, 0.01]
+
+  # Warmup steps for evidential lambda_reg annealing
+  # Default: 50000. Search: [10000, 100000] (log scale)
+  lambda_reg_warmup_steps: [10000, 100000]

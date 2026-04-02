@@ -35,6 +35,8 @@ training = [
     "gymnasium>=0.29.0",
     "stable-baselines3>=2.0.0",
     "tensorboard>=2.13.0",
+    "optuna>=3.6.0",
+    "ruamel.yaml>=0.18.0",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -50,6 +52,7 @@ dev = [
 [project.scripts]
 uncertainty-rl-train = "uncertainty_rl.training.train_ppo:main"
 uncertainty-rl-eval = "uncertainty_rl.evaluation.evaluate:main"
+uncertainty-rl-tune = "uncertainty_rl.training.tune_hyperparams:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

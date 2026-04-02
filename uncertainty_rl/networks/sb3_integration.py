@@ -674,12 +674,25 @@ class EvidentialPPO(PPO):
                 )
                 values = values.flatten()
 
-                # Evidential regularisation from cached NIG params
+                # Evidential regularisation from cached NIG params.
+                # Prior-anchoring log-penalty: prevents NIG evidence parameters from
+                # drifting far from their initialisation priors without coupling to
+                # action noise (unlike the Amini et al. 2020 supervised regression term
+                # |target - gamma| * (2*nu + alpha), which is ill-defined in RL where
+                # there is no ground-truth action target).
                 ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
-                error = th.abs(actions - gamma)
-                evidential_reg = (error * (2 * nu + alpha)).mean()
+
+                # NIG hyperprior initialisation targets (from EvidentialLayer.__init__)
+                nu_prior = 1.24  # softplus(0.9) + 1e-6
+                alpha_prior = 2.24  # softplus(0.9) + 1.0
+
+                # Log penalty: bounded, encourages nu/alpha to stay near priors
+                evidential_reg = (
+                    th.mean(th.log(nu / nu_prior + 1.0))
+                    + th.mean(th.log(alpha / alpha_prior + 1.0))
+                )
 
                 # Log uncertainties
                 with th.no_grad():

@@ -11,6 +11,7 @@ __all__ = [
     "train",
     "load_config",
     "merge_configs",
+    "TrainResult",
 ]
 
 
@@ -22,6 +23,7 @@ def __getattr__(name):
     """
     if name in __all__:
         from uncertainty_rl.training.train_ppo import (  # noqa: E402
+            TrainResult,
             load_config,
             merge_configs,
             train,
@@ -31,6 +33,7 @@ def __getattr__(name):
             "train": train,
             "load_config": load_config,
             "merge_configs": merge_configs,
+            "TrainResult": TrainResult,
         }
         return attrs[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

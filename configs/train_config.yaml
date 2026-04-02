@@ -73,8 +73,9 @@ activation: "relu"  # Validated for evidential architectures. Options: relu, tan
 # ---------------------------------------------------------------------------
 evidential:
   # Regularisation coefficient for evidential loss (target value after warmup).
-  # Too low: epistemic uncertainty collapses. Too high: uncertainty is over-inflated.
-  lambda_reg: 0.01
+  # Uses a prior-anchoring log-penalty (not the Amini et al. supervised term).
+  # Reduced from 0.01 to 0.001 for better stability with NIG clamping.
+  lambda_reg: 0.001
 
   # Number of environment steps over which lambda_reg is linearly annealed from 0
   # to lambda_reg. Lets the NLL loss establish good predictions before regularisation.
