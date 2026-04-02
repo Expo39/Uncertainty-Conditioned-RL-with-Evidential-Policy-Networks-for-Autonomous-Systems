@@ -9,19 +9,24 @@ EvidentialPPO classes without requiring CARLA, ROS 2, or a GPU.
 import tempfile
 from typing import Tuple
 
-import gymnasium as gym
 import numpy as np
 import pytest
-import torch
-from gymnasium import spaces
 
-from uncertainty_rl.networks.evidential_policy import UncertaintyConditionedActor
-from uncertainty_rl.networks.sb3_integration import (
+# Skip entire module if torch is not available (CI without training deps)
+torch = pytest.importorskip("torch")
+gym = pytest.importorskip("gymnasium")
+
+from gymnasium import spaces  # noqa: E402
+
+from uncertainty_rl.networks.evidential_policy import (  # noqa: E402
+    UncertaintyConditionedActor,
+)
+from uncertainty_rl.networks.sb3_integration import (  # noqa: E402
     EvidentialActorCriticPolicy,
     EvidentialDistribution,
     EvidentialPPO,
 )
-from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM
+from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Constants
