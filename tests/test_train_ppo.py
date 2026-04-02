@@ -7,14 +7,11 @@ ROS 2, or a GPU. The main training entry point is excluded (requires full
 Docker stack).
 """
 
-from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
 
 from uncertainty_rl.training.train_ppo import EnvDiagnosticsCallback, linear_schedule
-
 
 # ===========================================================================
 # TestLinearSchedule
@@ -98,7 +95,8 @@ class TestEnvDiagnosticsCallback:
         """
         cb = EnvDiagnosticsCallback()
         cb.locals = {"infos": [{"pos_error": 3.0}, {"pos_error": 7.0}]}
-        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: MagicMock())):
+        mock_property = property(lambda self: MagicMock())
+        with patch.object(type(cb), "logger", new_callable=lambda: mock_property):
             cb._on_step()
         assert cb._ep_pos_errors == [3.0, 7.0]
 
@@ -107,14 +105,26 @@ class TestEnvDiagnosticsCallback:
         @brief _on_rollout_end() calls logger.record with the rolling mean pos_error.
         """
         cb = EnvDiagnosticsCallback()
-        cb.locals = {"infos": [
-            {"pos_error": 4.0, "orientation_error": 0.1, "speed": 1.0,
-             "progress_reward": 0.1},
-            {"pos_error": 6.0, "orientation_error": 0.2, "speed": 2.0,
-             "progress_reward": 0.2},
-        ]}
+        cb.locals = {
+            "infos": [
+                {
+                    "pos_error": 4.0,
+                    "orientation_error": 0.1,
+                    "speed": 1.0,
+                    "progress_reward": 0.1,
+                },
+                {
+                    "pos_error": 6.0,
+                    "orientation_error": 0.2,
+                    "speed": 2.0,
+                    "progress_reward": 0.2,
+                },
+            ]
+        }
         mock_logger = MagicMock()
-        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+        with patch.object(  # noqa: E501
+            type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)
+        ):
             cb._on_step()
             cb._on_rollout_end()
 
@@ -129,12 +139,20 @@ class TestEnvDiagnosticsCallback:
         @brief After _on_rollout_end(), all accumulators are empty.
         """
         cb = EnvDiagnosticsCallback()
-        cb.locals = {"infos": [
-            {"pos_error": 1.0, "orientation_error": 0.0, "speed": 0.0,
-             "progress_reward": 0.0},
-        ]}
+        cb.locals = {
+            "infos": [
+                {
+                    "pos_error": 1.0,
+                    "orientation_error": 0.0,
+                    "speed": 0.0,
+                    "progress_reward": 0.0,
+                },
+            ]
+        }
         mock_logger = MagicMock()
-        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+        with patch.object(  # noqa: E501
+            type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)
+        ):
             cb._on_step()
             cb._on_rollout_end()
 
@@ -149,13 +167,23 @@ class TestEnvDiagnosticsCallback:
                episode ends (success, collision, or timeout flag is set).
         """
         cb = EnvDiagnosticsCallback()
-        cb.locals = {"infos": [
-            {"pos_error": 0.1, "orientation_error": 0.0, "speed": 0.0,
-             "progress_reward": 0.0, "success": True, "collision": False,
-             "timeout": False},
-        ]}
+        cb.locals = {
+            "infos": [
+                {
+                    "pos_error": 0.1,
+                    "orientation_error": 0.0,
+                    "speed": 0.0,
+                    "progress_reward": 0.0,
+                    "success": True,
+                    "collision": False,
+                    "timeout": False,
+                },
+            ]
+        }
         mock_logger = MagicMock()
-        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+        with patch.object(  # noqa: E501
+            type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)
+        ):
             cb._on_step()
             cb._on_rollout_end()
 
@@ -169,16 +197,32 @@ class TestEnvDiagnosticsCallback:
         @brief success_rate == 1.0 when every terminal step was a success.
         """
         cb = EnvDiagnosticsCallback()
-        cb.locals = {"infos": [
-            {"pos_error": 0.0, "orientation_error": 0.0, "speed": 0.0,
-             "progress_reward": 0.0, "success": True, "collision": False,
-             "timeout": False},
-            {"pos_error": 0.0, "orientation_error": 0.0, "speed": 0.0,
-             "progress_reward": 0.0, "success": True, "collision": False,
-             "timeout": False},
-        ]}
+        cb.locals = {
+            "infos": [
+                {
+                    "pos_error": 0.0,
+                    "orientation_error": 0.0,
+                    "speed": 0.0,
+                    "progress_reward": 0.0,
+                    "success": True,
+                    "collision": False,
+                    "timeout": False,
+                },
+                {
+                    "pos_error": 0.0,
+                    "orientation_error": 0.0,
+                    "speed": 0.0,
+                    "progress_reward": 0.0,
+                    "success": True,
+                    "collision": False,
+                    "timeout": False,
+                },
+            ]
+        }
         mock_logger = MagicMock()
-        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+        with patch.object(  # noqa: E501
+            type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)
+        ):
             cb._on_step()
             cb._on_rollout_end()
 
@@ -193,6 +237,8 @@ class TestEnvDiagnosticsCallback:
         """
         cb = EnvDiagnosticsCallback()
         mock_logger = MagicMock()
-        with patch.object(type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)):
+        with patch.object(  # noqa: E501
+            type(cb), "logger", new_callable=lambda: property(lambda self: mock_logger)
+        ):
             cb._on_rollout_end()
         mock_logger.record.assert_not_called()

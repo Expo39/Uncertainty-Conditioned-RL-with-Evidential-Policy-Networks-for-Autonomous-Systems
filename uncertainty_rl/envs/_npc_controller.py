@@ -10,7 +10,7 @@ instance and delegates NPC lifecycle calls to it.
 import logging
 import math
 import random
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 try:
     import carla
@@ -40,7 +40,8 @@ class NPCController:
     # Number of sectors to divide each zone into for respawn placement.
     _RESPAWN_N_SECTORS: int = 5
     # Distance threshold: ego_dist >= threshold -> all sectors available.
-    # Each _threshold / n metres closer excludes one more sector (nearest excluded first).
+    # Each _threshold / n metres closer excludes one more sector
+    # (nearest excluded first).
     _RESPAWN_SECTOR_THRESHOLD: float = 8.0
     # Pedestrian avoidance radii (metres) used in update_pedestrians()
     _EGO_AVOID_RADIUS: float = 5.0
@@ -444,7 +445,7 @@ class NPCController:
                     )
             else:
                 vel = npc.get_velocity()
-                speed = math.sqrt(vel.x ** 2 + vel.y ** 2)
+                speed = math.sqrt(vel.x**2 + vel.y**2)
                 speed_ratio = speed / max(self._patrol_max_speed, 0.1)
                 throttle = max(0.1, min(1.0, 1.0 - speed_ratio))
 
@@ -469,9 +470,7 @@ class NPCController:
         @param vehicle: Ego vehicle actor (used for avoidance distance check).
         """
         ego_loc = (
-            vehicle.get_location()
-            if vehicle is not None and vehicle.is_alive
-            else None
+            vehicle.get_location() if vehicle is not None and vehicle.is_alive else None
         )
 
         for i, walker in enumerate(self.pedestrian_actors):
@@ -654,9 +653,7 @@ class NPCController:
         slice_x = x_span >= y_span
 
         ego_loc = (
-            vehicle.get_location()
-            if vehicle is not None and vehicle.is_alive
-            else None
+            vehicle.get_location() if vehicle is not None and vehicle.is_alive else None
         )
 
         # Each sector is a sub-rectangle of the zone.
@@ -711,9 +708,7 @@ class NPCController:
 
         self.pedestrian_actors[idx] = walker
         if walker is None:
-            logger.debug(
-                "[pedestrian] respawn idx=%d FAILED after 5 attempts", idx
-            )
+            logger.debug("[pedestrian] respawn idx=%d FAILED after 5 attempts", idx)
         else:
             logger.debug(
                 "[pedestrian] respawn idx=%d ok  sectors_allowed=%d/%d",

@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
 import numpy as np
 
 try:
-    import rclpy
     from geometry_msgs.msg import PoseWithCovarianceStamped
     from rclpy.node import Node
 
@@ -90,9 +89,7 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         if _ROS2_AVAILABLE:
             super().__init__(node_name)
             config = ros2_config or {}
-            initial_pose_topic = config.get(
-                "initial_pose_topic", "/initialpose"
-            )
+            initial_pose_topic = config.get("initial_pose_topic", "/initialpose")
             self._initial_pose_pub = self.create_publisher(
                 PoseWithCovarianceStamped,
                 initial_pose_topic,
@@ -153,8 +150,12 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
             features = extract_2d_covariance_features(cov_3x3)
             pose = np.array(
                 [
-                    data["x"], data["y"], data["yaw"],
-                    data["vx"], data["vy"], data["vyaw"],
+                    data["x"],
+                    data["y"],
+                    data["yaw"],
+                    data["vx"],
+                    data["vy"],
+                    data["vyaw"],
                 ],
                 dtype=np.float64,
             )
@@ -248,8 +249,8 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         msg.pose.pose.position.y = ros_y
         msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
         msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
-        msg.pose.covariance[0] = 0.1   # xx
-        msg.pose.covariance[7] = 0.1   # yy
+        msg.pose.covariance[0] = 0.1  # xx
+        msg.pose.covariance[7] = 0.1  # yy
         msg.pose.covariance[35] = 0.05  # yaw-yaw
         self._initial_pose_pub.publish(msg)
 

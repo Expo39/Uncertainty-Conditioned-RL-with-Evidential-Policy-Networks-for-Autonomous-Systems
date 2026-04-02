@@ -7,9 +7,9 @@ and render debug overlays:
 
   _Inspector        -- base class: CARLA connection, tick loop, spectator helpers
     LayoutInspector -- lot bay outlines, spawn/patrol/pedestrian overlays
-      SensorInspector -- sensor mount dots + FOV arcs on top of layout
-    LiveInspector   -- real spawned sensors: LiDAR debug dots or camera spectator view
-    DryRunInspector -- full training pipeline (reset+step loop), random actions, no model
+      SensorInspector -- sensor mount dots + FOV arcs on layout
+    LiveInspector   -- real spawned sensors: LiDAR dots or camera view
+    DryRunInspector -- full training pipeline, random actions, no model
 
 Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 
@@ -30,10 +30,7 @@ except ImportError:
     print("ERROR: carla Python package not found.  Run inside the training container.")
     sys.exit(1)
 
-from scripts.inspect._drawing import (
-    _draw_layout_overlays,
-    _draw_sensor_overlays,
-)
+from scripts.inspect._drawing import _draw_layout_overlays, _draw_sensor_overlays
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
 # ===========================================================================
@@ -701,6 +698,7 @@ class LiveInspector(_Inspector):
 # Dry-run inspector -- full training pipeline, random actions, no model
 # ===========================================================================
 
+
 class DryRunInspector(_Inspector):
     """
     @class DryRunInspector
@@ -746,9 +744,11 @@ class DryRunInspector(_Inspector):
             if dryrun_action is not None
             else None
         )
-        self._view: str = initial_view if initial_view in (
-            "third_person", "side", "back", "front", "free"
-        ) else "third_person"
+        self._view: str = (
+            initial_view
+            if initial_view in ("third_person", "side", "back", "front", "free")
+            else "third_person"
+        )
         self._termination_pause = termination_pause
 
     # ------------------------------------------------------------------
@@ -776,7 +776,10 @@ class DryRunInspector(_Inspector):
                     carla.Rotation(pitch=10.0, yaw=look_yaw, roll=0.0),
                 )
             )
-            print("  Free view: spectator at z=0, pitched up. Use CARLA controls to fly.")
+            print(
+                "  Free view: spectator at z=0, pitched up. "
+                "Use CARLA controls to fly."
+            )
             return
         self._update_spectator()
 
@@ -791,41 +794,55 @@ class DryRunInspector(_Inspector):
         spectator = self._env.world.get_spectator()
 
         if self._view == "third_person":
-            spectator.set_transform(carla.Transform(
-                carla.Location(
-                    x=vt.location.x - 20.0 * math.cos(yaw_rad),
-                    y=vt.location.y - 20.0 * math.sin(yaw_rad),
-                    z=vt.location.z + 10.0,
-                ),
-                carla.Rotation(pitch=-25.0, yaw=vt.rotation.yaw),
-            ))
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(
+                        x=vt.location.x - 20.0 * math.cos(yaw_rad),
+                        y=vt.location.y - 20.0 * math.sin(yaw_rad),
+                        z=vt.location.z + 10.0,
+                    ),
+                    carla.Rotation(pitch=-25.0, yaw=vt.rotation.yaw),
+                )
+            )
         elif self._view == "side":
             sx = vt.location.x - 15.0 * math.sin(yaw_rad)
             sy = vt.location.y + 15.0 * math.cos(yaw_rad)
-            spectator.set_transform(carla.Transform(
-                carla.Location(x=sx, y=sy, z=vt.location.z),
-                carla.Rotation(pitch=0.0, yaw=math.degrees(
-                    math.atan2(vt.location.y - sy, vt.location.x - sx)
-                )),
-            ))
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=sx, y=sy, z=vt.location.z),
+                    carla.Rotation(
+                        pitch=0.0,
+                        yaw=math.degrees(
+                            math.atan2(vt.location.y - sy, vt.location.x - sx)
+                        ),
+                    ),
+                )
+            )
         elif self._view == "back":
-            spectator.set_transform(carla.Transform(
-                carla.Location(
-                    x=vt.location.x - 20.0 * math.cos(yaw_rad),
-                    y=vt.location.y - 20.0 * math.sin(yaw_rad),
-                    z=vt.location.z,
-                ),
-                carla.Rotation(pitch=0.0, yaw=vt.rotation.yaw),
-            ))
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(
+                        x=vt.location.x - 20.0 * math.cos(yaw_rad),
+                        y=vt.location.y - 20.0 * math.sin(yaw_rad),
+                        z=vt.location.z,
+                    ),
+                    carla.Rotation(pitch=0.0, yaw=vt.rotation.yaw),
+                )
+            )
         else:  # front
             fx = vt.location.x + 15.0 * math.cos(yaw_rad)
             fy = vt.location.y + 15.0 * math.sin(yaw_rad)
-            spectator.set_transform(carla.Transform(
-                carla.Location(x=fx, y=fy, z=vt.location.z),
-                carla.Rotation(pitch=0.0, yaw=math.degrees(
-                    math.atan2(vt.location.y - fy, vt.location.x - fx)
-                )),
-            ))
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=fx, y=fy, z=vt.location.z),
+                    carla.Rotation(
+                        pitch=0.0,
+                        yaw=math.degrees(
+                            math.atan2(vt.location.y - fy, vt.location.x - fx)
+                        ),
+                    ),
+                )
+            )
 
     # ------------------------------------------------------------------
     # Observation logging
@@ -853,12 +870,10 @@ class DryRunInspector(_Inspector):
         if self._env.vehicle is not None:
             t = self._env.vehicle.get_transform()
             v = self._env.vehicle.get_velocity()
-            spd = math.sqrt(v.x ** 2 + v.y ** 2)
+            spd = math.sqrt(v.x**2 + v.y**2)
             parts.append(
-                _YELLOW
-                + f"[CARLA gt] pos=({t.location.x:7.2f},{t.location.y:7.2f})"
-                f"  yaw={t.rotation.yaw:+6.1f}deg  spd={spd:.2f}m/s"
-                + _RESET
+                _YELLOW + f"[CARLA gt] pos=({t.location.x:7.2f},{t.location.y:7.2f})"
+                f"  yaw={t.rotation.yaw:+6.1f}deg  spd={spd:.2f}m/s" + _RESET
             )
         # EKF covariance (indices 3-11)
         if len(obs) >= 12:
@@ -877,12 +892,10 @@ class DryRunInspector(_Inspector):
         gt = self._env._target_bay
         odom_t = self._env._target_bay_odom
         gt_line = (
-            _YELLOW
-            + f"[GT target] world=({gt['x']:.2f},{gt['y']:.2f})"
+            _YELLOW + f"[GT target] world=({gt['x']:.2f},{gt['y']:.2f})"
             f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
             f"  |  odom=({odom_t['x']:.2f},{odom_t['y']:.2f})"
-            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg"
-            + _RESET
+            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg" + _RESET
         )
         tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
         recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
@@ -894,10 +907,12 @@ class DryRunInspector(_Inspector):
         )
         world_yaw_wrapped = math.atan2(math.sin(gt["yaw"]), math.cos(gt["yaw"]))
         yaw_err_deg = math.degrees(
-            abs(math.atan2(
-                math.sin(recon_world_yaw - world_yaw_wrapped),
-                math.cos(recon_world_yaw - world_yaw_wrapped),
-            ))
+            abs(
+                math.atan2(
+                    math.sin(recon_world_yaw - world_yaw_wrapped),
+                    math.cos(recon_world_yaw - world_yaw_wrapped),
+                )
+            )
         )
         gt_line += (
             f"  [recon_err={err_m:.3f}m"
@@ -939,14 +954,19 @@ class DryRunInspector(_Inspector):
             f"Dry-run: random actions for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
-        print("  Model inputs per step (20-dim obs):"
-              "\n    [0-2]   Velocity:     vx  vy  vyaw"
-              "\n    [3-11]  EKF cov:      std(x,y,yaw)  cov_diag(xx,yy,yawyaw)"
-              "  cov_off(xy,xyaw,yyaw)  [log1p-transformed]"
-              "\n    [12-14] Target bay:   dx  dy  dyaw (odom-frame, ego body relative)"
-              "\n    [15-19] Clearance:    left(dist,bearing)  right(dist,bearing)  fwd_dist"
-              "\n  [GT target] world + odom coordinates logged per step (yellow) + recon_err"
-              "\n  recon_err should be < 0.05 m (transform self-consistency check)")
+        print(
+            "  Model inputs per step (20-dim obs):"
+            "\n    [0-2]   Velocity:     vx  vy  vyaw"
+            "\n    [3-11]  EKF cov:      std(x,y,yaw)  "
+            "cov_diag(xx,yy,yawyaw)  cov_off(xy,xyaw,yyaw)  "
+            "[log1p-transformed]"
+            "\n    [12-14] Target bay:   dx  dy  dyaw (ego-relative)"
+            "\n    [15-19] Clearance:    left(dist,bearing)  "
+            "right(dist,bearing)  fwd_dist"
+            "\n  [GT target] world + odom coords logged per step "
+            "(yellow) + recon_err"
+            "\n  recon_err should be < 0.05 m (transform check)"
+        )
 
         try:
             while time.monotonic() < deadline:
@@ -976,7 +996,10 @@ class DryRunInspector(_Inspector):
                     if step % self._LOG_INTERVAL == 0:
                         self._print_obs(obs, step, episode)
 
-                reason = info.get("termination_reason", "truncated" if truncated else "terminated")
+                reason = info.get(
+                    "termination_reason",
+                    "truncated" if truncated else "terminated",
+                )
                 print(
                     f"  Episode {episode} ended: {reason}"
                     f"  steps={step}  total_steps={total_steps}"

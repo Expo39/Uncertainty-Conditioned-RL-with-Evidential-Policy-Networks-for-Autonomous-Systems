@@ -107,12 +107,14 @@ def _rot_corners(
     """
     yaw = math.radians(yaw_deg)
     cos_y, sin_y = math.cos(yaw), math.sin(yaw)
-    local = np.array([
-        [ half_l,  half_w],
-        [-half_l,  half_w],
-        [-half_l, -half_w],
-        [ half_l, -half_w],
-    ])
+    local = np.array(
+        [
+            [half_l, half_w],
+            [-half_l, half_w],
+            [-half_l, -half_w],
+            [half_l, -half_w],
+        ]
+    )
     R = np.array([[cos_y, -sin_y], [sin_y, cos_y]])
     return (R @ local.T).T + np.array([cx, cy])
 
@@ -191,7 +193,9 @@ def _build_static_surface(
         half_d = float(bay.get("depth", 5.0)) / 2.0
         half_w = float(bay.get("width", 2.5)) / 2.0
         yaw_deg = float(bay.get("yaw_deg", bay.get("yaw", 0.0)))
-        corners = _rot_corners(float(bay["x"]), float(bay["y"]), half_d, half_w, yaw_deg)
+        corners = _rot_corners(  # noqa: E501
+            float(bay["x"]), float(bay["y"]), half_d, half_w, yaw_deg
+        )
         spts = _world_to_screen(corners, origin, scale)
         if len(spts) >= 3:
             pygame.draw.polygon(surf, colour, spts, lw)
@@ -201,8 +205,10 @@ def _build_static_surface(
             bx, by = float(bay["x"]), float(bay["y"])
             arrow_len = half_d * 0.8
             for yaw_r in (math.radians(yaw_deg), math.radians(yaw_deg + 180.0)):
-                tip = (bx + arrow_len * math.cos(yaw_r),
-                       by + arrow_len * math.sin(yaw_r))
+                tip = (
+                    bx + arrow_len * math.cos(yaw_r),
+                    by + arrow_len * math.sin(yaw_r),
+                )
                 s0 = _w2s(bx, by, origin, scale)
                 s1 = _w2s(tip[0], tip[1], origin, scale)
                 pygame.draw.line(surf, _C_TARGET_BAY, s0, s1, 2)
@@ -217,7 +223,10 @@ def _build_static_surface(
     for actor in state.get("actors", []):
         if actor.get("type", "static") != "npc":
             corners = _rot_corners(
-                actor["x"], actor["y"], _NPC_HALF_L, _NPC_HALF_W,
+                actor["x"],
+                actor["y"],
+                _NPC_HALF_L,
+                _NPC_HALF_W,
                 actor.get("yaw", 0.0),
             )
             spts = _world_to_screen(corners, origin, scale)
@@ -235,18 +244,22 @@ def _draw_legend(screen: pygame.Surface) -> None:
     font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE)
     title_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE, bold=True)
 
-    pygame.draw.rect(screen, (235, 235, 235), pygame.Rect(_MAP_W, 0, _LEGEND_W, _WINDOW_H))
+    pygame.draw.rect(
+        screen,
+        (235, 235, 235),
+        pygame.Rect(_MAP_W, 0, _LEGEND_W, _WINDOW_H),
+    )
     pygame.draw.line(screen, (180, 180, 180), (_MAP_W, 0), (_MAP_W, _WINDOW_H), 2)
 
     entries = [
-        (_C_TARGET_BAY,     "Target bay"),
-        (_C_PERP_BAY,       "Perpendicular"),
-        (_C_ANGLED_BAY,     "Angled"),
-        (_C_PARALLEL_BAY,   "Parallel"),
-        (_C_EGO,            "Ego"),
+        (_C_TARGET_BAY, "Target bay"),
+        (_C_PERP_BAY, "Perpendicular"),
+        (_C_ANGLED_BAY, "Angled"),
+        (_C_PARALLEL_BAY, "Parallel"),
+        (_C_EGO, "Ego"),
         (_C_PATROL_VEHICLE, "Patrol NPC"),
         (_C_STATIC_VEHICLE, "Parked"),
-        (_C_PEDESTRIAN,     "Pedestrian"),
+        (_C_PEDESTRIAN, "Pedestrian"),
     ]
 
     x0, y0 = _MAP_W + 10, 16
@@ -376,7 +389,9 @@ class LiveVisualiser:
                 elif event.key == pygame.K_f:
                     self._fullscreen = not self._fullscreen
                     flags = pygame.FULLSCREEN if self._fullscreen else 0
-                    self._screen = pygame.display.set_mode((_WINDOW_W, _WINDOW_H), flags)
+                    self._screen = pygame.display.set_mode(
+                        (_WINDOW_W, _WINDOW_H), flags
+                    )
                     self._static_episode_id = None  # Force static surface rebuild
 
     # ------------------------------------------------------------------
@@ -489,9 +504,15 @@ class LiveVisualiser:
         for actor in state.get("actors", []):
             if actor.get("type", "static") == "npc":
                 spts = _world_to_screen(
-                    _rot_corners(actor["x"], actor["y"],
-                                 _NPC_HALF_L, _NPC_HALF_W, actor.get("yaw", 0.0)),
-                    origin, scale,
+                    _rot_corners(
+                        actor["x"],
+                        actor["y"],
+                        _NPC_HALF_L,
+                        _NPC_HALF_W,
+                        actor.get("yaw", 0.0),
+                    ),
+                    origin,
+                    scale,
                 )
                 if len(spts) >= 3:
                     pygame.draw.polygon(self._screen, _C_PATROL_VEHICLE, spts)
@@ -499,7 +520,12 @@ class LiveVisualiser:
         # Pedestrians
         for ped in state.get("pedestrians", []):
             sx, sy = _w2s(ped["x"], ped["y"], origin, scale)
-            pygame.draw.circle(self._screen, _C_PEDESTRIAN, (sx, sy), max(2, int(0.4 * scale)))
+            pygame.draw.circle(
+                self._screen,
+                _C_PEDESTRIAN,
+                (sx, sy),
+                max(2, int(0.4 * scale)),
+            )
 
         # Ego vehicle
         ego = state.get("ego", {})

@@ -21,9 +21,7 @@ try:
 except ImportError:
     carla = None  # Running without CARLA (CI or tests)
 
-from uncertainty_rl.utils.geometry import (
-    _interpolate_cone_positions,
-)
+from uncertainty_rl.utils.geometry import _interpolate_cone_positions
 
 logger = logging.getLogger(__name__)
 
@@ -243,8 +241,11 @@ class LotSpawner:
             # Reuse existing cone actors; rebuild static_obstacle_positions
             # from the cached positions so vehicle positions can be appended.
             self.static_obstacle_positions = list(self._cached_cone_positions)
-            logger.debug("Reusing %d cached cone actors for layout '%s'.",
-                         len(self.spawned_cones), layout_name)
+            logger.debug(
+                "Reusing %d cached cone actors for layout '%s'.",
+                len(self.spawned_cones),
+                layout_name,
+            )
         else:
             # Destroy any stale cones from a previous layout then re-spawn.
             for cone in self.spawned_cones:
@@ -278,8 +279,11 @@ class LotSpawner:
 
             self._cached_cones_layout = layout_name
             self._cached_cone_positions = list(self.static_obstacle_positions)
-            logger.debug("Spawned and cached %d cone actors for layout '%s'.",
-                         len(self.spawned_cones), layout_name)
+            logger.debug(
+                "Spawned and cached %d cone actors for layout '%s'.",
+                len(self.spawned_cones),
+                layout_name,
+            )
 
         # --- Parked vehicles (re-randomised every episode) ---
         vehicle_pending = self._spawn_static_vehicles(
@@ -394,7 +398,10 @@ class LotSpawner:
         for cx, cy, yaw_deg in cone_positions:
             cone = world.try_spawn_actor(
                 self._cone_bp,
-                carla.Transform(carla.Location(x=cx, y=cy, z=z), carla.Rotation(yaw=yaw_deg)),
+                carla.Transform(
+                    carla.Location(x=cx, y=cy, z=z),
+                    carla.Rotation(yaw=yaw_deg),
+                ),
             )
             if cone is not None:
                 cone.set_simulate_physics(True)
@@ -448,7 +455,10 @@ class LotSpawner:
             for px, py, yaw_deg in cone_positions:
                 cone = world.try_spawn_actor(
                     self._cone_bp,
-                    carla.Transform(carla.Location(x=px, y=py, z=z), carla.Rotation(yaw=yaw_deg)),
+                    carla.Transform(
+                        carla.Location(x=px, y=py, z=z),
+                        carla.Rotation(yaw=yaw_deg),
+                    ),
                 )
                 if cone is not None:
                     cone.set_simulate_physics(True)
@@ -475,12 +485,15 @@ class LotSpawner:
 
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict with 'bays' key.
-        @param target_bay: Dict with 'bay_id' key for the selected target bay.
+        @param target_bay: Dict with 'bay_id' key for the selected target
+                           bay.
         @param floor_contact_z: Ego CoM z -- used as spawn height reference.
         @return List of (actor, x, y, yaw) for each successfully spawned vehicle.
         """
         if not self._car_blueprints:
-            logger.warning("No car blueprints cached -- call refresh_blueprints() first.")
+            logger.warning(
+                "No car blueprints cached -- call refresh_blueprints() first."
+            )
             return []
 
         bays = current_layout.get("bays", [])
