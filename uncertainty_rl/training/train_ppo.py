@@ -7,6 +7,7 @@ with evidential actor networks for autonomous parking.
 """
 
 import argparse
+import dataclasses
 import logging
 import os
 import warnings
@@ -64,6 +65,26 @@ warnings.filterwarnings(
     message=".*Box.*precision lowered.*",
     category=UserWarning,
 )
+
+
+@dataclasses.dataclass
+class TrainResult:
+    """
+    @class TrainResult
+    @brief Encapsulates the results of a training run.
+
+    Returned by train() to allow programmatic access to final metrics and paths
+    for integration with external optimisation frameworks (e.g. Optuna).
+    """
+
+    final_metrics: Dict[str, float]
+    """Final metrics from model.logger.name_to_value (e.g. env/success_rate)."""
+
+    model_path: str
+    """Absolute path to the saved final model."""
+
+    log_dir: str
+    """Absolute path to the TensorBoard logs directory."""
 
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
@@ -242,12 +263,18 @@ class EnvDiagnosticsCallback(BaseCallback):
         self._ep_timeouts.clear()
 
 
-def train(config: Dict[str, Any]) -> None:
+def train(
+    config: Dict[str, Any],
+    extra_callbacks: Optional[List[BaseCallback]] = None,
+) -> TrainResult:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
     @param config: Fully-resolved configuration dictionary. All operational
            settings (seed, log_dir, etc.) and hyperparameters are read from
            this dict. CLI arguments override YAML values before this is called.
+    @param extra_callbacks: Optional list of additional callbacks to append to
+           the training callback list (e.g. for Optuna trial evaluation).
+    @return TrainResult containing final metrics, model path, and log directory.
     """
     # Resolve operational settings from config
     seed = config.get("seed", 42)
@@ -410,28 +437,43 @@ def train(config: Dict[str, Any]) -> None:
         )
         callbacks.append(eval_callback)
 
+    # Append extra callbacks (e.g. for Optuna trial evaluation)
+    if extra_callbacks is not None:
+        callbacks.extend(extra_callbacks)
+
     callback_list = CallbackList(callbacks)
 
-    # Train the agent
-    logger.info("Starting training for %d timesteps...", total_timesteps)
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=callback_list,
-        log_interval=config.get("log_interval", 10),
-        progress_bar=True,
+    # Train the agent (wrapped in try/finally for CARLA crash safety)
+    try:
+        logger.info("Starting training for %d timesteps...", total_timesteps)
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=callback_list,
+            log_interval=config.get("log_interval", 10),
+            progress_bar=True,
+        )
+
+        # Save final model
+        final_model_path = os.path.join(checkpoint_dir, "final_model")
+        model.save(final_model_path)
+        env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
+
+        logger.info("Training complete. Model saved to %s", final_model_path)
+
+    finally:
+        # Clean up (always runs, even if CARLA crashes during training)
+        env.close()
+        if eval_env is not None:
+            eval_env.close()
+
+    # Collect final metrics from logger
+    final_metrics = dict(model.logger.name_to_value)
+
+    return TrainResult(
+        final_metrics=final_metrics,
+        model_path=final_model_path,
+        log_dir=log_dir,
     )
-
-    # Save final model
-    final_model_path = os.path.join(checkpoint_dir, "final_model")
-    model.save(final_model_path)
-    env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
-
-    logger.info("Training complete. Model saved to %s", final_model_path)
-
-    # Clean up
-    env.close()
-    if eval_env is not None:
-        eval_env.close()
 
 
 def main() -> None:
