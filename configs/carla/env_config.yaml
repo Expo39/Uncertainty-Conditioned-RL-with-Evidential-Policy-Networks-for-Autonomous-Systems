@@ -19,7 +19,7 @@ inspect:
 # ---------------------------------------------------------------------------
 # CARLA connection and simulation settings
 # ---------------------------------------------------------------------------
-carla_host: "carla-server"  # Docker container hostname. Use "localhost" for local dev.
+carla_host: "uncertainty-rl-carla-0"  # Container name for worker 0 (resolved via shared bridge network). Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 1000  # Episode length in agent decisions. With action_repeat=4, each decision spans 4 sim-steps (0.2s), so 1000 decisions = 4000 sim-steps = 200 seconds sim-time.
