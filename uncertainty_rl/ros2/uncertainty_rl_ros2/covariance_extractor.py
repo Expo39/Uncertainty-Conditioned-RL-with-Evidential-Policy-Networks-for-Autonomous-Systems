@@ -36,9 +36,11 @@ class CovarianceExtractorNode(Node):
     # Full order: [x, y, z, roll, pitch, yaw] -> indices 0, 1, 5.
     _COV_INDICES: List[int] = [0, 1, 5]
 
-    # Shared file paths (constant; set as class-level strings for clarity).
-    _SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
-    _TMP_PATH: str = "/workspace/outputs/ekf_state.json.tmp"
+    # Default shared file paths. Overridden at runtime by the EKF_STATE_FILE
+    # environment variable so that multiple ros2-bridge instances (parallel
+    # CARLA workers) each write to a separate file without race conditions.
+    # Worker 0: ekf_state.json (default), Worker 1: ekf_state_1.json, etc.
+    _DEFAULT_SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
 
     # Log every N odometry callbacks (~100 at 20 Hz = every 5 s).
     _LOG_EVERY_N: int = 100
@@ -60,6 +62,13 @@ class CovarianceExtractorNode(Node):
         # Only false if robot_localisation is explicitly configured with
         # twist_in_robot_frame: true. Set via ros2_config.yaml.
         self.declare_parameter("twist_in_odom_frame", True)
+        # Per-instance EKF state file path. Defaults to EKF_STATE_FILE env var
+        # (set by docker-compose.parallel.yml for worker 1+), then falls back to
+        # _DEFAULT_SHARED_PATH for worker 0 / single-instance deployment.
+        self.declare_parameter(
+            "ekf_state_file",
+            os.environ.get("EKF_STATE_FILE", self._DEFAULT_SHARED_PATH),
+        )
 
         # Get parameters
         odom_topic: str = str(self.get_parameter("odom_topic").value)
@@ -68,6 +77,10 @@ class CovarianceExtractorNode(Node):
         self._twist_in_odom_frame: bool = bool(
             self.get_parameter("twist_in_odom_frame").value
         )
+        # Instance-specific file paths derived from the ekf_state_file parameter.
+        ekf_path: str = str(self.get_parameter("ekf_state_file").value)
+        self._SHARED_PATH: str = ekf_path
+        self._TMP_PATH: str = ekf_path + ".tmp"
 
         # Set up QoS profile for reliable communication
         qos_profile = QoSProfile(
@@ -99,10 +112,16 @@ class CovarianceExtractorNode(Node):
         # file mtime (which is unreliable across Docker container clocks).
         self._write_seq: int = 0
 
-        # Ensure the shared outputs directory exists before the first file write.
+        # Ensure the outputs directory exists before the first file write.
         # The Dockerfile creates /workspace/configs/maps but not /workspace/outputs;
         # this guard prevents a FileNotFoundError on the first odom_callback.
-        os.makedirs(os.path.dirname(self._SHARED_PATH), exist_ok=True)
+        # Uses the instance-specific path so parallel workers each create their
+        # own output directory if it differs from the default.
+        os.makedirs(os.path.dirname(os.path.abspath(self._SHARED_PATH)), exist_ok=True)
+
+        self.get_logger().info(
+            f"CovarianceExtractor: writing EKF state to {self._SHARED_PATH}"
+        )
 
         # Create timer for publishing
         timer_period = 1.0 / publish_rate

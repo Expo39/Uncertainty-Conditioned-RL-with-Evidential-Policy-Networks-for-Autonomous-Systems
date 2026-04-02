@@ -2,109 +2,18 @@
 # @file docker-compose.yml
 # @brief Core training stack for uncertainty-conditioned RL research.
 #
-# Orchestrates the three-tier training stack:
-# - CARLA Server (headless simulation with GPU passthrough)
-# - ROS 2 Jazzy + CARLA bridge + robot_localisation EKF
-# - Training/evaluation container (PyTorch + SB3 + evidential networks)
-# - TensorBoard for monitoring
+# Defines the training container, demo container, and TensorBoard.
+# CARLA servers and ros2-bridge instances are managed separately via
+# docker-compose.env_workers.yml. Start N env workers first, then start
+# this stack -- always through Make targets, never docker compose directly.
 #
 # Visual inspection and demo services live in docker-compose.inspect.yml.
-# Use Make targets to bring up either stack - never call docker compose directly.
 #
 # @author Antonio Galdes
 
 name: ucrl
 
 services:
-  # CARLA simulation server - headless with GPU passthrough
-  carla-server:
-    image: carlasim/carla:0.9.16
-    container_name: uncertainty-rl-carla
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - DISPLAY=${DISPLAY}
-    # Headless mode: -RenderOffScreen for no display requirement
-    command: /bin/bash CarlaUE4.sh -RenderOffScreen -world-port=2000 -resx=800 -resy=600 -quality-level=Low
-    ports:
-      - "2000-2002:2000-2002"  # CARLA world, streaming, RPC
-    networks:
-      - uncertainty-rl-network
-    volumes:
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
-      # Mount host Vulkan ICD so CARLA can find the NVIDIA Vulkan driver inside the container
-      - /usr/share/vulkan/icd.d:/usr/share/vulkan/icd.d:ro
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD-SHELL", "timeout 5 bash -c '</dev/tcp/localhost/2000' || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 60s
-
-  # ROS 2 Jazzy bridge with robot_localisation EKF
-  ros2-bridge:
-    build:
-      context: .
-      dockerfile: uncertainty_rl/ros2/Dockerfile
-      args:
-        ROS_DISTRO: jazzy
-    container_name: uncertainty-rl-ros2
-    restart: on-failure
-    runtime: nvidia
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - ROS_DOMAIN_ID=42
-      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
-      - CARLA_HOST=carla-server
-      - CARLA_PORT=2000
-      # Selects Cartographer config: suite_a (default), suite_b, or suite_c.
-      # suite_b/c: cartographer_config_3d.lua (PointCloud2, 16-channel 3D LiDAR)
-      - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
-      # Cartographer operating mode: slam (default) or loc (pure localisation).
-      # loc mode requires CARTOGRAPHER_MAP pointing to a .pbstream file.
-      # Use make docker-train-loc LAYOUT=<name> to set both automatically.
-      - CARTOGRAPHER_MODE=${CARTOGRAPHER_MODE:-slam}
-      - CARTOGRAPHER_MAP=${CARTOGRAPHER_MAP:-}
-    depends_on:
-      carla-server:
-        condition: service_healthy
-    networks:
-      - uncertainty-rl-network
-    volumes:
-      - ./configs:/workspace/configs:ro
-      # configs/maps is rw so make docker-save-map can write .pbstream files into it.
-      # The more-specific mount shadows the ro configs mount for this subdirectory only.
-      - ./configs/maps:/workspace/configs/maps:rw
-      - ./logs/ros2:/workspace/logs:rw
-      - ./outputs:/workspace/outputs:rw  # Shared with training for ekf_state.json
-      - ./uncertainty_rl/ros2:/workspace/src/uncertainty_rl_ros2:ro
-    command: >
-      bash -c "
-        source /opt/ros/jazzy/setup.bash &&
-        source /workspace/install/setup.bash &&
-        ros2 launch uncertainty_rl_ros2 carla_bridge.launch.py
-      "
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep -f 'ros2 launch' > /dev/null || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-
   # Training and evaluation container
   training:
     build:
@@ -119,13 +28,6 @@ services:
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
-      - CARLA_HOST=carla-server
-      - CARLA_PORT=2000
-    depends_on:
-      carla-server:
-        condition: service_healthy
-      ros2-bridge:
-        condition: service_started
     networks:
       - uncertainty-rl-network
     volumes:
@@ -164,16 +66,11 @@ services:
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
-      - CARLA_HOST=carla-server
+      - CARLA_HOST=carla-server-0
       - CARLA_PORT=2000
       - CARTOGRAPHER_MODE=${CARTOGRAPHER_MODE:-loc}
       - CARTOGRAPHER_MAP=${CARTOGRAPHER_MAP:-}
       - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
-    depends_on:
-      carla-server:
-        condition: service_healthy
-      ros2-bridge:
-        condition: service_healthy
     networks:
       - uncertainty-rl-network
     volumes:
