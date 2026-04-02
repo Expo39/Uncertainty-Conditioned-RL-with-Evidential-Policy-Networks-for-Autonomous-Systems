@@ -19,13 +19,27 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import torch as th
 import yaml
-from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.networks.sb3_integration import EvidentialPPO
+try:
+    import torch as th
+except ImportError:
+    th = None  # type: ignore[assignment,misc]
+
+try:
+    from stable_baselines3 import PPO
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+except ImportError:
+    PPO = None  # type: ignore[assignment,misc]
+    DummyVecEnv = None  # type: ignore[assignment,misc]
+    VecNormalize = None  # type: ignore[assignment,misc]
+
+try:
+    from uncertainty_rl.envs import CARLAParkingEnv
+    from uncertainty_rl.networks.sb3_integration import EvidentialPPO
+except ImportError:
+    CARLAParkingEnv = None  # type: ignore[assignment,misc]
+    EvidentialPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
 

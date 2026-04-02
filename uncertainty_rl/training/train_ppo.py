@@ -13,24 +13,47 @@ import warnings
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
-import gymnasium as gym
 import numpy as np
-import torch
 import yaml
 
-# Reserved: re-enable when multi-instance CARLA eval is supported.
-from stable_baselines3.common.callbacks import EvalCallback  # noqa: F401
-from stable_baselines3.common.callbacks import (
-    BaseCallback,
-    CallbackList,
-    CheckpointCallback,
-)
-from stable_baselines3.common.logger import configure
-from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
-from stable_baselines3.ppo import PPO
+try:
+    import gymnasium as gym
+except ImportError:
+    gym = None  # type: ignore[assignment,misc]
 
-from uncertainty_rl.envs import CARLAParkingEnv
-from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+try:
+    import torch
+except ImportError:
+    torch = None  # type: ignore[assignment,misc]
+
+try:
+    # Reserved: re-enable when multi-instance CARLA eval is supported.
+    from stable_baselines3.common.callbacks import EvalCallback  # noqa: F401
+    from stable_baselines3.common.callbacks import (
+        BaseCallback,
+        CallbackList,
+        CheckpointCallback,
+    )
+    from stable_baselines3.common.logger import configure
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+    from stable_baselines3.ppo import PPO
+except ImportError:
+    BaseCallback = None  # type: ignore[assignment,misc]
+    CallbackList = None  # type: ignore[assignment,misc]
+    CheckpointCallback = None  # type: ignore[assignment,misc]
+    configure = None  # type: ignore[assignment,misc]
+    DummyVecEnv = None  # type: ignore[assignment,misc]
+    VecNormalize = None  # type: ignore[assignment,misc]
+    PPO = None  # type: ignore[assignment,misc]
+    EvalCallback = None  # type: ignore[assignment,misc]
+
+try:
+    from uncertainty_rl.envs import CARLAParkingEnv
+    from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+except ImportError:
+    CARLAParkingEnv = None  # type: ignore[assignment,misc]
+    EvidentialActorCriticPolicy = None  # type: ignore[assignment,misc]
+    EvidentialPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 
