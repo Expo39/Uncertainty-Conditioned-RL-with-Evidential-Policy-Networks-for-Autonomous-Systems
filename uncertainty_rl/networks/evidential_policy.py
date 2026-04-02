@@ -192,7 +192,7 @@ class EvidentialPolicyNetwork(nn.Module):
             # Using total_uncertainty would double-count: epistemic uncertainty is
             # already captured by the spread of gamma across the posterior, not by
             # inflating the per-sample action noise.
-            std = torch.sqrt(aleatoric_uncertainty)
+            std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
             dist = Normal(gamma, std)
             action = dist.sample()
 
