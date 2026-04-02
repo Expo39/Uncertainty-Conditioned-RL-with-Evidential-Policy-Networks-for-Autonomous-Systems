@@ -29,8 +29,11 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # State Space Dimensions
 # ============================================================================
 
-# Core vehicle state: [x, y, yaw, vx, vy, vyaw]
-VEHICLE_STATE_DIM = 6
+# Core vehicle state: [vx, vy, vyaw]
+# x, y, yaw removed: absolute odom position accumulates across episodes and
+# carries no consistent signal for the policy. Navigation intent is fully
+# encoded by dx/dy/dyaw (relative target pose).
+VEHICLE_STATE_DIM = 3
 
 # EKF localisation uncertainty features: [std_x, std_y, std_yaw, cov_xx, cov_yy,
 # cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
@@ -39,23 +42,24 @@ COVARIANCE_FEATURES_DIM = 9
 # Relative target pose features: [dx, dy, dyaw] in ego body frame
 TARGET_POSE_DIM = 3
 
-# Obstacle awareness features: [nearest_dist_m, nearest_bearing_rad, obstacle_type]
-# obstacle_type: 0.0 = static (parked car/cone/wall), 1.0 = dynamic (pedestrian/patrol)
-# Appended to the observation when include_obstacle_obs=True. Easily removable:
-# set include_obstacle_obs: false in train_config.yaml to restore 18-dim obs.
-OBSTACLE_FEATURES_DIM = 3
+# Hemispheric obstacle clearance features:
+# [left_dist, left_bearing, right_dist, right_bearing, forward_dist]
+# Replaces the old 2-dim nearest-only features with symmetrical left/right
+# clearance for bay entry guidance.
+# Appended to the observation when include_obstacle_obs=True.
+OBSTACLE_FEATURES_DIM = 5
 
-# Total observation dimension (with uncertainty conditioning and target pose)
-# Indices  0-5:  EKF vehicle state (x, y, yaw, vx, vy, vyaw)
-# Indices  6-14: EKF covariance features
-# Indices 15-17: relative target pose
-# Indices 18-20: obstacle awareness (nearest dist, bearing, type)
+# Total observation dimension (with uncertainty conditioning and obstacle obs)
+# Indices  0-2:  velocity (vx, vy, vyaw)
+# Indices  3-11: EKF covariance features (when include_covariance=True)
+# Indices 12-14: relative target pose (dx, dy, dyaw)
+# Indices 15-19: hemispheric obstacle clearance (when include_obstacle_obs=True)
 TOTAL_OBS_DIM = (
     VEHICLE_STATE_DIM
     + COVARIANCE_FEATURES_DIM
     + TARGET_POSE_DIM
     + OBSTACLE_FEATURES_DIM
-)  # 21
+)  # 20
 
 # ============================================================================
 # Action Space Dimensions
@@ -67,6 +71,12 @@ ACTION_DIM = 3
 # ============================================================================
 # Environment Safety and Termination Thresholds
 # ============================================================================
+
+# Maximum physically plausible vehicle speed in a parking lot (m/s).
+# Used to clamp EKF velocity observations during the IMU initialisation
+# transient at episode reset, where integrated IMU noise can produce
+# unrealistic velocity spikes before the first scan-match correction.
+MAX_PARKING_SPEED = 15.0
 
 # Minimum clearance to any obstacle before episode terminates (metres)
 CLEARANCE_THRESHOLD = 0.8

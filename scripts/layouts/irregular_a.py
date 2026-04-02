@@ -31,10 +31,10 @@ the training layouts:
   - Right-wall parallel group: 3 bays against the right wall (x=80),
                     depth along Y (yaw=90).
 
-Three spawn transforms:
-  - Primary   (S1): left wall mid-height (x=0, y=25), facing +X into lot.
-  - Secondary (S2): diagonal top wall at x=70, facing inward perpendicular to slope.
-  - Tertiary  (S3): bottom wall right section (x=70, y=0), facing +Y.
+Three spawn transforms (3 m inside the perimeter along each heading):
+  - Primary   (S1): left wall entry (x=3, y=25), facing +X into lot.
+  - Secondary (S2): diagonal top wall at x=70, 3 m inward perpendicular to slope.
+  - Tertiary  (S3): bottom wall right section (x=70, y=3), facing +Y.
 
 Used as an OOD evaluation layout (OOD=True).
 """
@@ -43,7 +43,10 @@ import math
 from typing import Any, Dict, List
 
 from scripts.layouts.common import (
+    _PED_MARGIN,
+    _WALL_GAP,
     BAY_DIMS,
+    PED_STRIP,
     ang_offset_from_wall,
     ang_x_margin,
     angled_bays_along_wall,
@@ -51,14 +54,12 @@ from scripts.layouts.common import (
     warn_narrow_corridors,
 )
 
-# World-frame origin used in multi-layout generation (Town05_Opt flat area).
+# World-frame origin in multi-layout generation (FlatPlane generated OpenDRIVE world).
 ORIGIN_X = 100.0
 ORIGIN_Y = 0.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = True
-
-_WALL_GAP = 0.5  # minimum clearance between bay back face and perimeter wall/cones
 
 
 def generate() -> Dict[str, Any]:
@@ -337,20 +338,23 @@ def generate() -> Dict[str, Any]:
     warn_narrow_corridors(all_bays, "irregular_a")
 
     # ------------------------------------------------------------------
-    # Spawn transforms.
-    # S1: left wall mid-height, facing +X into lot.
-    # S2: diagonal top wall at local x=70, facing inward perpendicular to the slope.
+    # Spawn transforms (3 m inside the perimeter along each heading).
+    # S1: left wall entry, 3 m inward along +X from x=0.
+    # S2: diagonal top wall at local x=70, 3 m inward along the inward normal.
     #     y interpolated along P6(80,37)->P7(20,50).
     #     Inward normal: wall vec (-60,13)/len, CCW normal = (-13/len, -60/len).
-    # S3: bottom wall right section (right of notch), facing +Y.
+    # S3: bottom wall right section (right of notch), 3 m inward along +Y.
     # ------------------------------------------------------------------
     _s2_y = 37.0 + (50.0 - 37.0) / (20.0 - 80.0) * (70.0 - 80.0)
     _top_wlen = math.hypot(60.0, 13.0)
     _s2_yaw = math.degrees(math.atan2(-60.0 / _top_wlen, -13.0 / _top_wlen)) % 360.0
 
-    spawn = {"x": 0.0, "y": 25.0, "yaw_deg": 0.0}
-    spawn2 = {"x": 70.0, "y": round(_s2_y, 2), "yaw_deg": round(_s2_yaw, 1)}
-    spawn3 = {"x": 70.0, "y": 0.0, "yaw_deg": 90.0}
+    _s2_x_nudged = round(70.0 + math.cos(math.radians(_s2_yaw)) * 3.0, 1)
+    _s2_y_nudged = round(_s2_y + math.sin(math.radians(_s2_yaw)) * 3.0, 1)
+
+    spawn = {"x": 3.0, "y": 25.0, "yaw_deg": 0.0}
+    spawn2 = {"x": _s2_x_nudged, "y": _s2_y_nudged, "yaw_deg": round(_s2_yaw, 1)}
+    spawn3 = {"x": 70.0, "y": 3.0, "yaw_deg": 90.0}
 
     # ------------------------------------------------------------------
     # Patrol path: CCW orbit around the central obstacle (5 waypoints).
@@ -394,10 +398,9 @@ def generate() -> Dict[str, Any]:
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face (PED_STRIP = 3.0 m).
+    # Pedestrian zones -- one strip per distinct aisle face.
+    # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
-    PED_STRIP = 3.0
-    _PED_MARGIN = 0.5
 
     obs_tb_cx_end = obs_tb_cx_start + (PERP_OBS_TB - 1) * dims_perp["width"]
     obs_row_c_nose_y = obs_row_c_cy - dims_perp["depth"] / 2.0  # 11.5

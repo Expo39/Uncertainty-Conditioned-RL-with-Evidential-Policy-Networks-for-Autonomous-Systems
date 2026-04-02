@@ -4,7 +4,7 @@
 
 An autonomous parking system that knows when it doesn't know where it is and drives more carefully in response. It feeds EKF localisation uncertainty directly into an RL policy, and the policy uses evidential deep learning to quantify its own action uncertainty. Two layers of uncertainty awareness: "how sure am I about where I am?" (EKF covariance) and "how sure am I about what to do?" (evidential policy output).
 
-MSc dissertation codebase - trains in CARLA simulation, evaluates across uncertainty levels, designed to transfer to a real instrumented parking lot at Lemonworx LTD.
+MSc dissertation codebase - trains in CARLA simulation, evaluates across uncertainty levels, designed to transfer to a real instrumented parking lot.
 
 ### Three-Container Architecture
 
@@ -93,7 +93,7 @@ Use `-> None` for void functions. Import from `typing`. Use `Optional[X]` not `X
 ## Technical Context
 
 - **Evidential deep learning** on the **actor only** (not critic). Outputs NIG distribution: (gamma, nu, alpha, beta).
-- **State space**: 18-dim - `[x, y, yaw, vx, vy, vyaw, std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw, dx, dy, dyaw]`. Indices 0-14 from EKF via ROS 2; indices 15-17 are relative target pose. 2D only, no z-axis.
+- **State space**: 20-dim default - `[vx, vy, vyaw, std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw, dx, dy, dyaw, left_dist, left_bearing, right_dist, right_bearing, forward_dist]`. Indices 0-2 EKF velocity; 3-11 EKF covariance; 12-14 relative target pose (ego body frame); 15-19 hemispheric LiDAR clearance. 2D only, no z-axis. Ablation: 15-dim (no obstacle), 11-dim (no covariance), 6-dim (neither).
 - **Localisation**: EKF via `robot_localization`. Covariance extracted from 6x6 at indices [0,1,5] for [x, y, yaw].
 - **RL**: PPO via Stable-Baselines3.
 - **Simulator**: CARLA 0.9.16 with ROS 2 Jazzy bridge.
@@ -137,7 +137,7 @@ Consult these when modifying Dockerfiles, docker-compose.yml, or debugging conta
 Core novel component. `EvidentialLayer` outputs 4 NIG params per action dim. `EvidentialPolicyNetwork` is the full actor. `UncertaintyConditionedActor` has dual encoders (state + uncertainty). `LayerNorm` used, not `BatchNorm`. Softplus + offset constraints on nu, alpha, beta are mandatory. `get_action()` must always return `(action, uncertainty_dict)` with keys: `epistemic`, `aleatoric`, `total`, `gamma`, `nu`, `alpha`, `beta`.
 
 ### `uncertainty_rl/envs/`
-Gymnasium-compatible CARLA parking env. 18-dim state (indices 0-14 from EKF, 15-17 relative target pose), 3-dim action `[steering, throttle, brake]`. EKF uncertainty comes from real `robot_localisation` covariance via ROS 2 (Docker required). No standalone fallback for training. Reward: `-distance - 0.5*orientation_error - 0.1*velocity + 100*success`. Success: <0.5m, <10deg, <0.1 m/s.
+Gymnasium-compatible CARLA parking env. 20-dim state (0-2 velocity, 3-11 EKF covariance, 12-14 relative target pose, 15-19 hemispheric LiDAR clearance), 3-dim action `[steering, throttle, brake]`. EKF uncertainty comes from real `robot_localisation` covariance via ROS 2 (Docker required). No standalone fallback for training. Reward: potential-based shaping (progress / OUT_OF_BOUNDS_THRESHOLD - 0.01/step). Terminal: collision -10, success +10, out-of-bounds -5. Success: <0.5m, <10deg, <0.1 m/s.
 
 ### `uncertainty_rl/training/`
 `train_ppo.py` implements SB3 PPO training with config-driven hyperparameters. `VecNormalize` wraps envs. Eval env uses `training=False`. Currently uses standard `MlpPolicy` - the evidential policy is not yet integrated as a custom SB3 policy class.
@@ -230,7 +230,7 @@ max_steps = config.get("max_steps", 500)
 3. **robot_localization EKF** fuses sensors, outputs `/odometry/filtered` with 6x6 covariance
 4. **CovarianceExtractorNode** (`uncertainty_rl/ros2/`) subscribes to `/odometry/filtered`, extracts 3x3 [x,y,yaw] submatrix, publishes `CovarianceEstimate` custom message
 5. **CARLAParkingEnv** (`uncertainty_rl/envs/carla_parking.py`) runs a daemon thread with `_CovarianceSubscriber` (rclpy node), caches latest 9-element uncertainty vector via `extract_2d_covariance_features()`
-6. **Gymnasium `step()`** concatenates vehicle state (6D) + uncertainty features (9D) -> 15D observation
+6. **Gymnasium `step()`** concatenates velocity (3D) + uncertainty features (9D) + relative target (3D) + hemispheric clearance (5D) -> 20D observation
 7. **Evidential policy** receives 15D state, outputs NIG params (gamma, nu, alpha, beta), decomposes into epistemic/aleatoric uncertainty
 
 **Critical**: Training container must subscribe to ROS 2 topics via DDS. Set `ROS_DOMAIN_ID=42` in all containers (already in `docker-compose.yml`).

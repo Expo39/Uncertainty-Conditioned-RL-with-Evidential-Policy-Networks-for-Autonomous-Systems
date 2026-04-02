@@ -6,9 +6,14 @@ This module implements a ROS 2 node that subscribes to odometry messages from
 robot_localization and extracts the covariance matrix for use in RL training.
 Publishes a custom CovarianceEstimate message with semantic fields per Henki
 ROS 2 best practices.
+
+@author Antonio Galdes
 """
 
-from typing import Optional, Tuple
+import json
+import math
+import os
+from typing import List, Optional, Tuple
 
 import numpy as np
 import rclpy
@@ -27,6 +32,17 @@ class CovarianceExtractorNode(Node):
     a CovarianceEstimate message for consumption by the RL agent.
     """
 
+    # Indices into the 6x6 EKF pose covariance for [x, y, yaw].
+    # Full order: [x, y, z, roll, pitch, yaw] -> indices 0, 1, 5.
+    _COV_INDICES: List[int] = [0, 1, 5]
+
+    # Shared file paths (constant; set as class-level strings for clarity).
+    _SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
+    _TMP_PATH: str = "/workspace/outputs/ekf_state.json.tmp"
+
+    # Log every N odometry callbacks (~100 at 20 Hz = every 5 s).
+    _LOG_EVERY_N: int = 100
+
     def __init__(self, node_name: str = "covariance_extractor") -> None:
         """
         @brief Constructor for CovarianceExtractorNode.
@@ -38,11 +54,20 @@ class CovarianceExtractorNode(Node):
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
         self.declare_parameter("publish_rate", 10.0)  # Hz
+        # When world_frame=odom in robot_localisation, twist is in the odom
+        # (world-aligned) frame and must be rotated into the vehicle body frame.
+        # Applies to both simulation and real robot when using the same EKF config.
+        # Only false if robot_localisation is explicitly configured with
+        # twist_in_robot_frame: true. Set via ros2_config.yaml.
+        self.declare_parameter("twist_in_odom_frame", True)
 
         # Get parameters
-        odom_topic = self.get_parameter("odom_topic").value
-        covariance_topic = self.get_parameter("covariance_topic").value
-        publish_rate = self.get_parameter("publish_rate").value
+        odom_topic: str = str(self.get_parameter("odom_topic").value)
+        covariance_topic: str = str(self.get_parameter("covariance_topic").value)
+        publish_rate: float = float(self.get_parameter("publish_rate").value)
+        self._twist_in_odom_frame: bool = bool(
+            self.get_parameter("twist_in_odom_frame").value
+        )
 
         # Set up QoS profile for reliable communication
         qos_profile = QoSProfile(
@@ -61,20 +86,33 @@ class CovarianceExtractorNode(Node):
             CovarianceEstimate, covariance_topic, qos_profile
         )
 
-        # Store latest covariance
-        self.latest_covariance: Optional[np.ndarray] = None
-        self.latest_pose: Optional[Tuple[float, float, float, float, float, float]] = (
+        # Latest extracted state: pose tuple + pre-serialised covariance list.
+        # Both updated atomically at the end of odom_callback so publish_covariance
+        # never sees a partially-updated state.
+        self._latest_pose: Optional[Tuple[float, float, float, float, float, float]] = (
             None
         )
+        self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
+        # Monotonically increasing counter written into ekf_state.json so the
+        # training container can detect genuinely new writes without relying on
+        # file mtime (which is unreliable across Docker container clocks).
+        self._write_seq: int = 0
+
+        # Ensure the shared outputs directory exists before the first file write.
+        # The Dockerfile creates /workspace/configs/maps but not /workspace/outputs;
+        # this guard prevents a FileNotFoundError on the first odom_callback.
+        os.makedirs(os.path.dirname(self._SHARED_PATH), exist_ok=True)
 
         # Create timer for publishing
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
-        self.get_logger().info("Covariance extractor node initialised")
-        self.get_logger().info(f"  Subscribing to: {odom_topic}")
-        self.get_logger().info(f"  Publishing to: {covariance_topic}")
+        self.get_logger().info(
+            f"CovarianceExtractor: {odom_topic} -> {covariance_topic} "
+            f"at {publish_rate} Hz "
+            f"(twist_in_odom_frame={self._twist_in_odom_frame})"
+        )
 
     def odom_callback(self, msg: Odometry) -> None:
         """
@@ -85,49 +123,96 @@ class CovarianceExtractorNode(Node):
         populates with EKF-filtered linear and angular velocity estimates.
         @param msg: Odometry message from robot_localization.
         """
-        # Extract pose
+        # -- Pose ---------------------------------------------------------------
         x = msg.pose.pose.position.x
-        y = msg.pose.pose.position.y
+        # Negate y: CARLA uses a left-handed coordinate system (y increases
+        # rightward / southward) while ROS/Cartographer uses right-handed
+        # (y increases leftward / northward). Negating here ensures all
+        # downstream consumers (training container, calibration, _get_state)
+        # work in CARLA world-frame convention consistently.
+        y = -msg.pose.pose.position.y
 
-        # Extract yaw from quaternion
+        # Convert quaternion to yaw. Negate because the y-axis flip mirrors
+        # the rotation direction (left-hand vs right-hand convention).
+        # Wrap explicitly to [-pi, pi]: robot_localization's EKF yaw state
+        # can drift past +/-pi when two_d_mode=true accumulates yaw without
+        # normalisation, producing values like -270 deg = -4.71 rad.
+        # Re-deriving yaw from the published quaternion (which IS normalised)
+        # rather than reading the EKF state directly avoids this.
         qx = msg.pose.pose.orientation.x
         qy = msg.pose.pose.orientation.y
         qz = msg.pose.pose.orientation.z
         qw = msg.pose.pose.orientation.w
-
-        # Convert quaternion to yaw
         siny_cosp = 2.0 * (qw * qz + qx * qy)
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        yaw = np.arctan2(siny_cosp, cosy_cosp)
+        yaw = -math.atan2(siny_cosp, cosy_cosp)
 
-        # Extract EKF-filtered velocity from twist
-        vx = msg.twist.twist.linear.x
-        vy = msg.twist.twist.linear.y
-        vyaw = msg.twist.twist.angular.z
+        # -- Velocity -----------------------------------------------------------
+        # Negate vy_raw and vyaw: y-axis flip applies to lateral velocity and
+        # yaw rate too.
+        vx_raw = msg.twist.twist.linear.x
+        vy_raw = -msg.twist.twist.linear.y
+        vyaw = -msg.twist.twist.angular.z
 
-        self.latest_pose = (x, y, yaw, vx, vy, vyaw)
+        if self._twist_in_odom_frame:
+            # When world_frame=odom, robot_localisation publishes twist in the
+            # odom (world-aligned) frame. Rotate into vehicle body frame so the
+            # policy sees forward/lateral speed consistently.
+            cos_yaw = math.cos(yaw)
+            sin_yaw = math.sin(yaw)
+            vx = cos_yaw * vx_raw + sin_yaw * vy_raw
+            vy = -sin_yaw * vx_raw + cos_yaw * vy_raw
+        else:
+            vx = vx_raw
+            vy = vy_raw
 
-        # Extract covariance matrix (6x6) for pose
-        # Format: [x, y, z, roll, pitch, yaw]
-        # We extract: [x, y, yaw] which are at indices [0, 1, 5]
-        covariance_full = np.array(msg.pose.covariance).reshape(6, 6)
+        # -- Covariance ---------------------------------------------------------
+        # Extract 3x3 [x, y, yaw] submatrix from the 6x6 pose covariance.
+        # Full order: [x, y, z, roll, pitch, yaw] -> indices _COV_INDICES = [0,1,5].
+        covariance_3x3 = np.array(msg.pose.covariance).reshape(6, 6)[
+            np.ix_(self._COV_INDICES, self._COV_INDICES)
+        ]
+        cov_flat: List[float] = covariance_3x3.flatten().tolist()
 
-        # Extract 3x3 submatrix for [x, y, yaw]
-        indices = [0, 1, 5]
-        covariance_3x3 = covariance_full[np.ix_(indices, indices)]
+        # -- Atomic shared-file write ------------------------------------------
+        # Cross-distro access: training container (Humble) reads this file since
+        # DDS wire protocol is incompatible between Jazzy and Humble containers.
+        # Atomic rename prevents partial reads by the training container.
+        # `seq` is a monotonically increasing counter; the training container
+        # tracks the last-seen seq and only accepts a read whose seq is strictly
+        # greater than the seq at the time of the last invalidate() call.
+        # This is clock-skew-proof -- mtime comparisons across Docker container
+        # clocks are unreliable on some host configurations.
+        self._write_seq += 1
+        data = {
+            "seq": self._write_seq,
+            "x": float(x),
+            "y": float(y),
+            "yaw": float(yaw),
+            "vx": float(vx),
+            "vy": float(vy),
+            "vyaw": float(vyaw),
+            "covariance": cov_flat,
+        }
+        with open(self._TMP_PATH, "w") as f:
+            json.dump(data, f)
+        os.replace(self._TMP_PATH, self._SHARED_PATH)
 
-        self.latest_covariance = covariance_3x3
+        # -- Update state atomically -------------------------------------------
+        # Both attributes are written here; publish_covariance only reads them.
+        self._latest_pose = (x, y, yaw, vx, vy, vyaw)
+        self._latest_cov_flat = cov_flat
 
-        # Log uncertainty statistics periodically
+        # -- Periodic log -------------------------------------------------------
         self._log_counter += 1
-
-        if self._log_counter % 100 == 0:
-            std_x = np.sqrt(covariance_3x3[0, 0])
-            std_y = np.sqrt(covariance_3x3[1, 1])
-            std_yaw = np.sqrt(covariance_3x3[2, 2])
+        if self._log_counter >= self._LOG_EVERY_N:
+            self._log_counter = 0
+            std_x = math.sqrt(covariance_3x3[0, 0])
+            std_y = math.sqrt(covariance_3x3[1, 1])
+            std_yaw = math.sqrt(covariance_3x3[2, 2])
             self.get_logger().info(
                 f"Uncertainty - X: {std_x:.4f}m, "
-                f"Y: {std_y:.4f}m, Yaw: {np.rad2deg(std_yaw):.2f}deg"
+                f"Y: {std_y:.4f}m, Yaw: {math.degrees(std_yaw):.2f}deg"
             )
 
     def publish_covariance(self) -> None:
@@ -136,64 +221,26 @@ class CovarianceExtractorNode(Node):
 
         Uses semantic fields (x, y, yaw, vx, vy, vyaw, covariance) instead of
         a flat array. Includes a timestamped header for latency measurement and
-        ordering.
+        ordering. The covariance flat list is pre-computed in odom_callback to
+        avoid redundant numpy serialisation on every publish tick.
         """
-        if self.latest_covariance is None or self.latest_pose is None:
+        if self._latest_pose is None or self._latest_cov_flat is None:
             return
+
+        x, y, yaw, vx, vy, vyaw = self._latest_pose
 
         msg = CovarianceEstimate()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = "odom"
-        msg.x = self.latest_pose[0]
-        msg.y = self.latest_pose[1]
-        msg.yaw = self.latest_pose[2]
-        msg.vx = self.latest_pose[3]
-        msg.vy = self.latest_pose[4]
-        msg.vyaw = self.latest_pose[5]
-        msg.covariance = self.latest_covariance.flatten().tolist()
+        msg.x = x
+        msg.y = y
+        msg.yaw = yaw
+        msg.vx = vx
+        msg.vy = vy
+        msg.vyaw = vyaw
+        msg.covariance = self._latest_cov_flat
 
         self.covariance_publisher.publish(msg)
-
-    def get_uncertainty_state(self) -> Optional[np.ndarray]:
-        """
-        @brief Get the current uncertainty state vector.
-        @return Uncertainty state vector: [std_x, std_y, std_yaw,
-                                          cov_xx, cov_yy, cov_yawyaw,
-                                          cov_xy, cov_xyaw, cov_yyaw]
-                or None if no covariance data is available.
-        """
-        if self.latest_covariance is None:
-            return None
-
-        # Extract standard deviations
-        std_x = np.sqrt(self.latest_covariance[0, 0])
-        std_y = np.sqrt(self.latest_covariance[1, 1])
-        std_yaw = np.sqrt(self.latest_covariance[2, 2])
-
-        # Extract covariance elements
-        cov_xx = self.latest_covariance[0, 0]
-        cov_yy = self.latest_covariance[1, 1]
-        cov_yawyaw = self.latest_covariance[2, 2]
-        cov_xy = self.latest_covariance[0, 1]
-        cov_xyaw = self.latest_covariance[0, 2]
-        cov_yyaw = self.latest_covariance[1, 2]
-
-        # Construct uncertainty state vector
-        uncertainty_state = np.array(
-            [
-                std_x,
-                std_y,
-                std_yaw,
-                cov_xx,
-                cov_yy,
-                cov_yawyaw,
-                cov_xy,
-                cov_xyaw,
-                cov_yyaw,
-            ]
-        )
-
-        return uncertainty_state
 
 
 class CovarianceMonitorNode(Node):
@@ -201,8 +248,12 @@ class CovarianceMonitorNode(Node):
     @class CovarianceMonitorNode
     @brief ROS 2 node for monitoring and visualising covariance.
 
-    Provides additional monitoring capabilities for debugging and analysis.
+    Subscribes to CovarianceEstimate and logs pose, velocity, and uncertainty
+    statistics. Rate-limited to avoid flooding the terminal at 10 Hz.
     """
+
+    # Log every N messages (~10 Hz publish rate -> every 2 s at N=20).
+    _LOG_EVERY_N: int = 20
 
     def __init__(self, node_name: str = "covariance_monitor") -> None:
         """
@@ -211,12 +262,9 @@ class CovarianceMonitorNode(Node):
         """
         super().__init__(node_name)
 
-        # Declare parameters
         self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
+        covariance_topic = str(self.get_parameter("covariance_topic").value)
 
-        covariance_topic = self.get_parameter("covariance_topic").value
-
-        # Subscribe to covariance
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
@@ -226,28 +274,33 @@ class CovarianceMonitorNode(Node):
         self.covariance_subscriber = self.create_subscription(
             CovarianceEstimate,
             covariance_topic,
-            self.covariance_callback,
+            self._covariance_callback,
             qos_profile,
         )
 
-        self.get_logger().info("Covariance monitor initialised")
+        self._log_counter: int = 0
+        self.get_logger().info(f"Covariance monitor initialised on {covariance_topic}")
 
-    def covariance_callback(self, msg: CovarianceEstimate) -> None:
+    def _covariance_callback(self, msg: CovarianceEstimate) -> None:
         """
         @brief Callback for covariance messages.
         @param msg: CovarianceEstimate containing pose and covariance data.
         """
-        covariance = np.array(msg.covariance).reshape(3, 3)
+        self._log_counter += 1
+        if self._log_counter < self._LOG_EVERY_N:
+            return
+        self._log_counter = 0
 
-        std_x = np.sqrt(covariance[0, 0])
-        std_y = np.sqrt(covariance[1, 1])
-        std_yaw = np.sqrt(covariance[2, 2])
+        # Index directly to avoid a full reshape for just the diagonal.
+        std_x = math.sqrt(msg.covariance[0])
+        std_y = math.sqrt(msg.covariance[4])
+        std_yaw = math.sqrt(msg.covariance[8])
 
         self.get_logger().info(
-            f"Pose: ({msg.x:.2f}, {msg.y:.2f}, {np.rad2deg(msg.yaw):.1f}deg) | "
-            f"Vel: ({msg.vx:.2f}, {msg.vy:.2f}, {np.rad2deg(msg.vyaw):.2f}deg/s) | "
+            f"Pose: ({msg.x:.2f}, {msg.y:.2f}, {math.degrees(msg.yaw):.1f}deg) | "
+            f"Vel: ({msg.vx:.2f}, {msg.vy:.2f}, {math.degrees(msg.vyaw):.2f}deg/s) | "
             f"Uncertainty: std_x={std_x:.4f}m, "
-            f"std_y={std_y:.4f}m, std_yaw={np.rad2deg(std_yaw):.2f}deg"
+            f"std_y={std_y:.4f}m, std_yaw={math.degrees(std_yaw):.2f}deg"
         )
 
 

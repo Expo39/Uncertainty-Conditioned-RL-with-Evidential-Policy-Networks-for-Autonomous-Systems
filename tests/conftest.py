@@ -11,11 +11,14 @@ from typing import Any, Dict
 import pytest
 import torch
 
+from uncertainty_rl.utils.constants import ACTION_DIM
+
 # ---------------------------------------------------------------------------
-# Constants matching the project's 15-dim state / 3-dim action convention
+# Constants for network tests. Network tests use a small arbitrary state dim
+# (not the full 20-dim env obs) for fast unit test execution. Env obs space
+# tests in test_carla_parking.py use _compute_obs_dim() directly.
 # ---------------------------------------------------------------------------
 STATE_DIM = 15
-ACTION_DIM = 3
 BATCH_SIZE = 8
 HIDDEN_DIMS = [64, 64]  # Smaller than production for fast tests
 
@@ -80,12 +83,17 @@ def high_uncertainty_state() -> torch.Tensor:
 @pytest.fixture
 def train_config() -> Dict[str, Any]:
     """
-    @brief Minimal training configuration for tests.
+    @brief Minimal merged configuration for tests (train_config + env_config combined).
+
+    Represents the merged dict that train() and make_env() receive after
+    merge_configs(train_config, env_config) is called in main(). Tests
+    that need only training keys or only env keys can read from this dict
+    as both key sets are present.
     """
     return {
         "carla_host": "localhost",
         "carla_port": 2000,
-        "town": "Town01",
+        "town": "FlatPlane",
         "max_steps": 50,
         "learning_rate": 3e-4,
         "n_steps": 128,
@@ -113,19 +121,15 @@ def train_config() -> Dict[str, Any]:
                 "noise_gyro_stddev_z": 0.01,
                 "sensor_tick": 0.05,
             },
-            "gnss": {
-                "noise_alt_stddev": 0.5,
-                "noise_lat_stddev": 0.00001,
-                "noise_lon_stddev": 0.00001,
-                "sensor_tick": 0.1,
-            },
         },
         "carla_conditions": {
-            "weather_presets": ["ClearNoon"],
-            "fog_density_range": [0.0, 0.0],
-            "fog_distance_range": [50.0, 50.0],
-            "num_vehicles": 0,
-            "num_pedestrians": 0,
+            "weather_presets": ["ClearNoon", "HardRainNoon"],
+        },
+        "parking_scenarios": {
+            "bay_occupancy_min": 0.3,
+            "bay_occupancy_max": 0.8,
+            "num_patrol_vehicles_max": 1,
+            "pedestrian_spawn_probability": 0.8,
         },
     }
 
@@ -138,7 +142,7 @@ def eval_config() -> Dict[str, Any]:
     return {
         "carla_host": "localhost",
         "carla_port": 2000,
-        "town": "Town01",
+        "town": "FlatPlane",
         "max_steps": 50,
         "n_episodes": 3,
         "ros2": {
@@ -148,23 +152,21 @@ def eval_config() -> Dict[str, Any]:
         "eval_conditions": [
             {
                 "name": "clear_low_noise",
-                "description": "Clear weather, low sensor noise",
+                "description": "Clear weather, low IMU noise, no traffic",
                 "weather_preset": "ClearNoon",
-                "fog_density": 0.0,
                 "imu_noise_multiplier": 0.5,
-                "gnss_noise_multiplier": 0.5,
-                "num_vehicles": 0,
-                "num_pedestrians": 0,
+                "num_patrol_vehicles": 0,
+                "pedestrian_spawn_probability": 0.0,
+                "bay_occupancy_rate": 0.6,
             },
             {
-                "name": "fog_moderate",
-                "description": "Moderate fog, moderate noise",
-                "weather_preset": "CloudyNoon",
-                "fog_density": 50.0,
+                "name": "rain_degraded",
+                "description": "Heavy rain, 2x IMU noise, 1 patrol, all zones",
+                "weather_preset": "HardRainNoon",
                 "imu_noise_multiplier": 2.0,
-                "gnss_noise_multiplier": 5.0,
-                "num_vehicles": 10,
-                "num_pedestrians": 5,
+                "num_patrol_vehicles": 1,
+                "pedestrian_spawn_probability": 1.0,
+                "bay_occupancy_rate": 0.6,
             },
         ],
     }

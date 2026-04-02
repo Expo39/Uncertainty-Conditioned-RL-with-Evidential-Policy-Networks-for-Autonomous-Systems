@@ -16,20 +16,22 @@ import math
 import tempfile
 from pathlib import Path
 from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 
-from uncertainty_rl.envs.carla_parking import (
-    _compute_relative_target_pose,
-    _interpolate_cone_positions,
-)
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
+)
+from uncertainty_rl.utils.geometry import (
+    _compute_relative_target_pose,
+    _interpolate_cone_positions,
+    zone_bbox,
 )
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
@@ -62,7 +64,7 @@ class TestInterpolateConePositions:
         positions = _interpolate_cone_positions(corners, spacing=spacing)
 
         # Check distances between consecutive positions on first edge (y ~ 0)
-        edge_pts = [(x, y) for x, y in positions if abs(y) < 0.01]
+        edge_pts = [(x, y) for x, y, _ in positions if abs(y) < 0.01]
         for i in range(len(edge_pts) - 1):
             dx = edge_pts[i + 1][0] - edge_pts[i][0]
             dy = edge_pts[i + 1][1] - edge_pts[i][1]
@@ -197,19 +199,20 @@ class TestObservationSpaceShape:
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 21
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 20
         env.close()
 
-    def test_12_dim_without_covariance(self) -> None:
+    def test_11_dim_without_covariance(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=True (default) -> 12-dim.
+        @brief include_covariance=False, include_obstacle_obs=True (default) -> 11-dim.
 
-        Without covariance but with obstacle obs: pose(6) + target(3) + obstacle(3) = 12.
+        Without covariance but with obstacle obs:
+        pose(6) + target(3) + obstacle(2) = 11.
         """
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 12
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 11
         assert env.observation_space.shape == (expected,)
         env.close()
 
@@ -249,14 +252,15 @@ class TestObservationSpaceShape:
 
 
 # ---------------------------------------------------------------------------
-# Gymnasium API contract (no CARLA)
+# Gymnasium API contract (requires live CARLA server -- integration only)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.integration
 class TestGymnasiumAPIContract:
     """
     @class TestGymnasiumAPIContract
-    @brief Verify reset() and step() return correct types without CARLA.
+    @brief Verify reset() and step() return correct types with a live CARLA server.
     """
 
     def test_reset_returns_tuple_of_obs_and_info(self) -> None:
@@ -513,3 +517,528 @@ class TestVisStateWriter:
             )
 
             assert out.exists()
+
+
+# ---------------------------------------------------------------------------
+# log1p covariance transform
+# ---------------------------------------------------------------------------
+
+
+class TestLog1pCovarianceTransform:
+    """
+    @class TestLog1pCovarianceTransform
+    @brief Verify covariance features are log1p-transformed in _get_state().
+
+    In simulation (no CARLA), _get_state() returns zeros because the vehicle
+    is None.  We test the transform by injecting a mock _cov_subscriber and
+    constructing the obs buffer directly via the env internals.
+    """
+
+    def test_log1p_applied_to_nonzero_covariance(self) -> None:
+        """
+        @brief Covariance features in obs[6:15] equal log1p(raw_uncertainty).
+        """
+        from unittest.mock import MagicMock
+
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM
+
+        env = CARLAParkingEnv(max_steps=5, include_covariance=True)
+
+        # Inject a mock subscriber that returns known covariance values
+        raw = np.array([1.0, 4.0, 9.0, 0.5, 2.5, 0.1, 0.0, 0.3, 7.0], dtype=np.float32)
+        assert len(raw) == COVARIANCE_FEATURES_DIM
+
+        mock_sub = MagicMock()
+        # _get_state() calls get_latest_state() once for both pose and uncertainty.
+        mock_sub.get_latest_state.return_value = (None, raw.copy())
+        env._cov_subscriber = mock_sub
+
+        # Simulate a minimal vehicle mock so _get_state() doesn't early-return
+        mock_vehicle = MagicMock()
+        mock_vehicle.get_transform.return_value = MagicMock(
+            location=MagicMock(x=0.0, y=0.0),
+            rotation=MagicMock(yaw=0.0),
+        )
+        mock_vehicle.get_velocity.return_value = MagicMock(x=0.0, y=0.0)
+        mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
+        env.vehicle = mock_vehicle
+        env.world = MagicMock()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay_odom = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        obs = env._get_state()
+
+        # Code uses signed log1p to preserve sign of off-diagonal covariance terms.
+        expected_cov = np.sign(raw) * np.log1p(np.abs(raw))
+        np.testing.assert_allclose(
+            obs[3:12],
+            expected_cov,
+            rtol=1e-5,
+            err_msg="Covariance features must be signed log1p-transformed",
+        )
+
+    def test_log1p_zero_uncertainty_stays_zero(self) -> None:
+        """
+        @brief log1p(0) == 0: zero uncertainty should remain zero in obs.
+        """
+        from unittest.mock import MagicMock
+
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5, include_covariance=True)
+
+        zero_cov = np.zeros(9, dtype=np.float32)
+        mock_sub = MagicMock()
+        mock_sub.get_latest_state.return_value = (None, zero_cov.copy())
+        env._cov_subscriber = mock_sub
+
+        mock_vehicle = MagicMock()
+        mock_vehicle.get_transform.return_value = MagicMock(
+            location=MagicMock(x=0.0, y=0.0),
+            rotation=MagicMock(yaw=0.0),
+        )
+        mock_vehicle.get_velocity.return_value = MagicMock(x=0.0, y=0.0)
+        mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
+        env.vehicle = mock_vehicle
+        env.world = MagicMock()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay_odom = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        obs = env._get_state()
+        np.testing.assert_array_equal(obs[6:15], np.zeros(9))
+
+
+# ---------------------------------------------------------------------------
+# zone_bbox
+# ---------------------------------------------------------------------------
+
+
+class TestZoneBbox:
+    """
+    @class TestZoneBbox
+    @brief Tests for the zone_bbox() bounding-box converter.
+    """
+
+    def test_format_a_explicit_extents(self) -> None:
+        """
+        @brief Format A (x_min/x_max/y_min/y_max) is returned unchanged.
+        """
+        zone = {"x_min": -5.0, "x_max": 10.0, "y_min": -3.0, "y_max": 7.0}
+        result = zone_bbox(zone)
+        assert result == (-5.0, 10.0, -3.0, 7.0)
+
+    def test_format_b_centre_half_extents(self) -> None:
+        """
+        @brief Format B (centre + half-extents) expands to correct bounds.
+        """
+        zone = {"centre_x": 4.0, "centre_y": 2.0, "half_width": 3.0, "half_height": 1.0}
+        x_min, x_max, y_min, y_max = zone_bbox(zone)
+        assert x_min == pytest.approx(1.0)
+        assert x_max == pytest.approx(7.0)
+        assert y_min == pytest.approx(1.0)
+        assert y_max == pytest.approx(3.0)
+
+    def test_returns_four_tuple(self) -> None:
+        """
+        @brief Return value is always a 4-tuple.
+        """
+        zone = {"x_min": 0.0, "x_max": 1.0, "y_min": 0.0, "y_max": 1.0}
+        result = zone_bbox(zone)
+        assert isinstance(result, tuple)
+        assert len(result) == 4
+
+    def test_all_values_are_floats(self) -> None:
+        """
+        @brief All four returned values are Python floats.
+        """
+        zone = {"x_min": 1, "x_max": 3, "y_min": 2, "y_max": 5}
+        result = zone_bbox(zone)
+        for val in result:
+            assert isinstance(val, float)
+
+    def test_format_a_takes_priority_when_x_min_present(self) -> None:
+        """
+        @brief If x_min is in the dict, Format A is used regardless of
+               centre_x/half_width keys being present.
+        """
+        zone = {
+            "x_min": 0.0,
+            "x_max": 8.0,
+            "y_min": 0.0,
+            "y_max": 4.0,
+            "centre_x": 999.0,
+            "centre_y": 999.0,
+            "half_width": 999.0,
+            "half_height": 999.0,
+        }
+        result = zone_bbox(zone)
+        assert result == (0.0, 8.0, 0.0, 4.0)
+
+    def test_zero_extent_zone(self) -> None:
+        """
+        @brief Zero half-extents (Format B) produce a degenerate box where
+               x_min == x_max and y_min == y_max.
+        """
+        zone = {"centre_x": 5.0, "centre_y": 3.0, "half_width": 0.0, "half_height": 0.0}
+        x_min, x_max, y_min, y_max = zone_bbox(zone)
+        assert x_min == pytest.approx(5.0)
+        assert x_max == pytest.approx(5.0)
+        assert y_min == pytest.approx(3.0)
+        assert y_max == pytest.approx(3.0)
+
+
+# ---------------------------------------------------------------------------
+# _compute_reward
+# ---------------------------------------------------------------------------
+
+
+def _make_env_for_reward() -> Any:
+    """
+    @brief Build a minimal CARLAParkingEnv with mocked CARLA objects suitable
+           for exercising _compute_reward() without a real CARLA server.
+    @return Configured env instance with mock vehicle and sensor manager.
+    """
+    from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+    env = CARLAParkingEnv(max_steps=100)
+
+    # Mock sensor manager -- no collision by default
+    mock_sm = MagicMock()
+    mock_sm.consume_collision.return_value = False
+    env._sensor_manager = mock_sm
+
+    # Default target bay at origin
+    env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+    env._prev_distance = 5.0
+
+    # Layout with generous corners so OOB check doesn't fire unless intended
+    env._current_layout = {
+        "corners": [
+            {"x": -50.0, "y": -50.0},
+            {"x": 50.0, "y": -50.0},
+            {"x": 50.0, "y": 50.0},
+            {"x": -50.0, "y": 50.0},
+        ]
+    }
+    return env
+
+
+def _set_vehicle(
+    env: Any, x: float, y: float, yaw_deg: float, vx: float = 0.0, vy: float = 0.0
+) -> None:
+    """
+    @brief Attach a mock CARLA vehicle to env with the given position and velocity.
+    @param env: CARLAParkingEnv instance.
+    @param x: Vehicle x position (metres).
+    @param y: Vehicle y position (metres).
+    @param yaw_deg: Vehicle heading (degrees, CARLA convention).
+    @param vx: Velocity x component (m/s).
+    @param vy: Velocity y component (m/s).
+    """
+    mock_vehicle = MagicMock()
+    mock_vehicle.get_transform.return_value = MagicMock(
+        location=MagicMock(x=x, y=y),
+        rotation=MagicMock(yaw=yaw_deg),
+    )
+    mock_vehicle.get_velocity.return_value = MagicMock(x=vx, y=vy)
+    env.vehicle = mock_vehicle
+
+
+class TestComputeReward:
+    """
+    @class TestComputeReward
+    @brief Tests for CARLAParkingEnv._compute_reward().
+    """
+
+    def test_vehicle_none_returns_zero_no_termination(self) -> None:
+        """
+        @brief When vehicle is None (CARLA not connected), reward is 0 and not
+               terminated.
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        env.vehicle = None
+        reward, terminated, success, diag = env._compute_reward()
+        assert reward == 0.0
+        assert terminated is False
+        assert success is False
+
+    def test_collision_returns_minus_ten_and_terminates(self) -> None:
+        """
+        @brief Collision flag -> reward = -10.0, terminated = True, success = False.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
+        env._sensor_manager.consume_collision.return_value = True
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert reward == pytest.approx(-10.0)
+        assert terminated is True
+        assert success is False
+
+    def test_success_returns_plus_ten_and_terminates(self) -> None:
+        """
+        @brief Reaching target within all thresholds: reward = +10.0, success = True.
+        """
+        from uncertainty_rl.utils.constants import (
+            SUCCESS_THRESHOLD_POSITION,
+            SUCCESS_THRESHOLD_VELOCITY,
+        )
+
+        env = _make_env_for_reward()
+        # Position just inside threshold
+        _set_vehicle(
+            env,
+            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            y=0.0,
+            yaw_deg=0.0,
+            vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
+        )
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert reward == pytest.approx(10.0)
+        assert terminated is True
+        assert success is True
+
+    def test_progress_reward_positive_when_closing_in(self) -> None:
+        """
+        @brief Moving toward target gives positive progress minus the time penalty.
+        """
+        env = _make_env_for_reward()
+        env._prev_distance = 10.0
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        # Current distance is ~5m (vehicle at (5,0))
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        # progress = (10 - 5) / 20 = 0.25; reward = 0.25 - 0.01 = 0.24
+        assert reward > 0.0
+        assert terminated is False
+        assert success is False
+
+    def test_progress_reward_negative_when_moving_away(self) -> None:
+        """
+        @brief Moving away from target gives a negative reward.
+        """
+        env = _make_env_for_reward()
+        env._prev_distance = 2.0
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        # Current distance ~10m (vehicle moved away)
+        _set_vehicle(env, x=10.0, y=0.0, yaw_deg=0.0)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert reward < 0.0
+        assert terminated is False
+
+    def test_time_penalty_always_applied(self) -> None:
+        """
+        @brief Even when making zero progress, reward includes the -0.01 time penalty.
+        """
+        env = _make_env_for_reward()
+        dist = 5.0
+        env._prev_distance = dist
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        # Vehicle stays at exactly the same distance (no progress)
+        _set_vehicle(env, x=dist, y=0.0, yaw_deg=0.0)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        # progress = 0, so reward = 0 - 0.01 = -0.01
+        assert reward == pytest.approx(-0.01, abs=1e-4)
+
+    def test_prev_distance_updated_after_step(self) -> None:
+        """
+        @brief _prev_distance is updated to the current position error after each call.
+        """
+        env = _make_env_for_reward()
+        env._prev_distance = 10.0
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
+
+        env._compute_reward()
+
+        assert env._prev_distance == pytest.approx(5.0)
+
+    def test_yaw_symmetry_nose_in_nose_out(self) -> None:
+        """
+        @brief A 180-deg yaw offset is equivalent to 0-deg (nose-out = nose-in).
+        Both should trigger success if position and speed thresholds are also met.
+        """
+        from uncertainty_rl.utils.constants import (
+            SUCCESS_THRESHOLD_POSITION,
+            SUCCESS_THRESHOLD_VELOCITY,
+        )
+
+        env = _make_env_for_reward()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        # Nose-out: vehicle yaw = 180 deg
+        _set_vehicle(
+            env,
+            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            y=0.0,
+            yaw_deg=180.0,
+            vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
+        )
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert success is True, "180-deg yaw offset should be treated as valid nose-out"
+
+    def test_diag_keys_present(self) -> None:
+        """
+        @brief diag dict must contain all five expected keys on every code path.
+        """
+        env = _make_env_for_reward()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        for key in (
+            "pos_error",
+            "orientation_error",
+            "speed",
+            "collision",
+            "progress_reward",
+        ):
+            assert key in diag, f"Missing diag key: {key}"
+
+    def test_diag_pos_error_matches_distance(self) -> None:
+        """
+        @brief diag['pos_error'] equals the Euclidean distance to the target.
+        """
+        env = _make_env_for_reward()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["pos_error"] == pytest.approx(5.0, abs=1e-6)
+
+    def test_diag_collision_flag_set_on_collision(self) -> None:
+        """
+        @brief diag['collision'] == 1.0 when a collision is detected.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
+        env._sensor_manager.consume_collision.return_value = True
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["collision"] == pytest.approx(1.0)
+
+    def test_diag_collision_zero_on_normal_step(self) -> None:
+        """
+        @brief diag['collision'] == 0.0 when no collision occurred.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["collision"] == pytest.approx(0.0)
+
+    def test_diag_progress_reward_positive_when_closing(self) -> None:
+        """
+        @brief diag['progress_reward'] is positive when the vehicle closes on target.
+        """
+        env = _make_env_for_reward()
+        env._prev_distance = 10.0
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["progress_reward"] > 0.0
+
+    def test_diag_vehicle_none_returns_zeros(self) -> None:
+        """
+        @brief When vehicle is None, diag is all zeros (no crash on missing vehicle).
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        env.vehicle = None
+        _, _, _, diag = env._compute_reward()
+
+        assert all(v == 0.0 for v in diag.values())
+
+
+# ---------------------------------------------------------------------------
+# Info dict keys (step())
+# ---------------------------------------------------------------------------
+
+
+class TestStepInfoDict:
+    """
+    @class TestStepInfoDict
+    @brief Tests that step() info dict contains all expected keys with correct types.
+
+    Uses vehicle=None (no CARLA connection) -- step() still builds the full info
+    dict and returns sensible zero-values when the vehicle is absent.
+    """
+
+    def test_info_contains_required_keys(self) -> None:
+        """
+        @brief info dict must have steps, success, collision, timeout, floor_plan,
+               pos_error, orientation_error, speed, and progress_reward.
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5)
+        # vehicle=None: step() skips CARLA calls but still builds the full info dict.
+        env.vehicle = None
+        _, _, _, _, info = env.step(env.action_space.sample())
+
+        for key in (
+            "steps",
+            "success",
+            "collision",
+            "timeout",
+            "floor_plan",
+            "pos_error",
+            "orientation_error",
+            "speed",
+            "progress_reward",
+        ):
+            assert key in info, f"Missing info key: {key}"
+
+    def test_info_timeout_true_at_max_steps(self) -> None:
+        """
+        @brief info['timeout'] is True when the episode is truncated by max_steps.
+        """
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=1)
+        env.vehicle = None
+        _, _, _, truncated, info = env.step(env.action_space.sample())
+
+        assert truncated is True
+        assert info["timeout"] is True
+
+    def test_info_pos_error_is_nonnegative(self) -> None:
+        """
+        @brief pos_error is always >= 0 (it is a Euclidean distance).
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)
+        _, _, _, _, info = env.step(env.action_space.sample())
+
+        assert info["pos_error"] >= 0.0
+
+    def test_info_speed_is_nonnegative(self) -> None:
+        """
+        @brief speed is always >= 0 (it is a scalar magnitude).
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0, vx=-2.0, vy=-1.0)
+        _, _, _, _, info = env.step(env.action_space.sample())
+
+        assert info["speed"] >= 0.0
