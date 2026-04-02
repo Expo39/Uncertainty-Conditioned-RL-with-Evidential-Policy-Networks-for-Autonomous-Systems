@@ -6,7 +6,9 @@ RL training scripts for uncertainty-conditioned parking using Stable-Baselines3.
 
 `Dockerfile` builds the **training** container: NVIDIA NGC PyTorch base (Ubuntu 22.04) with Stable-Baselines3, evidential networks, rclpy (ROS 2 Humble), and all Python dependencies from `pyproject.toml`. Orchestrated via `docker-compose.yml` at the project root. ROS 2 Humble matches the NGC Ubuntu 22.04 base; DDS wire protocol is distro-agnostic so the training container communicates with the Jazzy ros2-bridge container seamlessly.
 
-## Module: `train_ppo.py`
+## Modules
+
+### `train_ppo.py`
 
 Config-driven PPO training loop with:
 
@@ -15,6 +17,19 @@ Config-driven PPO training loop with:
 - **Checkpointing** saves model and VecNormalize statistics together
 - **TensorBoard** logging for training metrics (including evidential reg loss and uncertainty estimates)
 - All hyperparameters loaded from `configs/train_config.yaml`
+- **Returns `TrainResult`** dataclass with final metrics, model path, and log directory (enables Optuna integration)
+- **Accepts `extra_callbacks`** for external callback integration (e.g., trial evaluation during Optuna studies)
+
+### `tune_hyperparams.py`
+
+Optuna hyperparameter tuning orchestrator with:
+
+- **`sample_hyperparams()`**: Samples from YAML-driven search space (12 PPO + evidential parameters, all bounds configured in `configs/training/tuning_config.yaml`)
+- **`TrialEvalCallback`**: SB3 callback that reads training metrics from `EnvDiagnosticsCallback` and reports to Optuna for pruning decisions
+- **`objective()`**: Optuna objective function that runs a short training trial (150k steps default), evaluates `env/mean_progress_reward`, and handles CARLA crashes gracefully
+- **`apply_best_params()`**: Writes best trial hyperparameters back to `configs/train_config.yaml`. Creates timestamped backup in `configs/backups/`
+- **`run_study()`**: Creates and executes the Optuna study using `TPESampler` + `MedianPruner`, persists in SQLite for resumable tuning. Saves best params to `logs/tuning/results/best_params.yaml`
+- **`main()`**: CLI entry point (run via `make docker-tune` or `uncertainty-rl-tune` console script)
 
 ### Usage
 
@@ -53,6 +68,62 @@ The `include_covariance` and `include_obstacle_obs` flags (from baseline YAML) c
 | `parking_scenarios.*` | see YAML | Floor plan files, bay occupancy, cone spacing, NPC counts |
 
 See `configs/train_config.yaml` for the full parameter list with per-parameter justifications.
+
+## Hyperparameter Tuning (Optuna)
+
+Optuna-based systematic search of 12 hyperparameters (PPO + evidential settings). Tuning bounds and study settings live in `configs/training/tuning_config.yaml`; best params are written back to `configs/train_config.yaml` after the study completes.
+
+```bash
+# 1. Edit tuning settings (optional): n_trials, timesteps_per_trial, seed
+vim configs/training/tuning_config.yaml
+
+# 2. Run tuning (typically 15-18 hours for 50 trials on RTX 4070 Ti Super)
+make docker-tune
+
+# 3. Best params are now in configs/train_config.yaml
+# 4. Normal training uses tuned hyperparameters
+make docker-train-loc
+```
+
+### Search Space
+
+All bounds and options are defined in `configs/training/tuning_config.yaml` (YAML-driven, no hardcoded ranges):
+
+| Parameter | Range | Type |
+|-----------|-------|------|
+| `learning_rate` | [1e-5, 2e-3] | log scale |
+| `n_steps` | {1024, 2048, 4096} | categorical |
+| `batch_size` | {64, 128, 256, 512} | categorical (constrained ≤ n_steps) |
+| `n_epochs` | {3, 5, 10} | categorical |
+| `gamma` | [0.97, 0.999] | log scale (via 1 - (1-gamma)) |
+| `ent_coef` | [1e-6, 0.01] | log scale |
+| `clip_range` | {0.1, 0.2, 0.3} | categorical |
+| `max_grad_norm` | [0.3, 1.0] | uniform |
+| `target_kl` | [0.01, 0.05] | uniform |
+| `net_arch` | {[128,128], [256,256]} | categorical |
+| `evidential.lambda_reg` | 0.0 or [1e-5, 0.01] | log scale + zero option |
+| `evidential.lambda_reg_warmup_steps` | [10000, 100000] | log scale |
+
+### Study Configuration
+
+Edit `configs/training/tuning_config.yaml`:
+
+```yaml
+study_name: "uncertainty_rl_tuning"
+storage_path: "logs/tuning/optuna_study.db"
+n_trials: 50                          # Number of trials to run
+timesteps_per_trial: 150000          # Training steps per trial
+seed: 42                              # Reproducibility
+```
+
+### Resume Interrupted Tuning
+
+The SQLite storage (`logs/tuning/optuna_study.db`) persists across runs. To resume a paused study:
+
+```bash
+# Just re-run docker-tune — it will continue from the last completed trial
+make docker-tune
+```
 
 ## Ablation Study
 

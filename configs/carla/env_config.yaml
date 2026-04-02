@@ -28,6 +28,7 @@ max_steps: 1000  # Maximum episode length (1000 steps at 20Hz = 50 seconds).
                  # 50s gives headroom for course corrections during early training.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
 map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
+use_synchronous_mode: true  # Synchronous mode (true): realistic 20Hz timing, slow training. Asynchronous (false): ~100 it/s, faster but loses real-time fidelity. Use false for hyperparameter tuning, true for sim-to-real validation.
 
 # ---------------------------------------------------------------------------
 # ROS 2 covariance subscription settings

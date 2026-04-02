@@ -84,5 +84,9 @@ project_configs.tar.gz
 configs/layouts/*.yaml
 configs/maps/**/*.pbstream
 
+# Optuna tuning backups and results
+logs/tuning/backups/
+logs/tuning/results/
+
 # Generated layout artefacts and visualiser state
 outputs/
