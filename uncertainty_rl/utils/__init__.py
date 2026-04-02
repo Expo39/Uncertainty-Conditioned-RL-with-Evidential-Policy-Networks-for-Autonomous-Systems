@@ -5,10 +5,15 @@
 
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
+    CLEARANCE_THRESHOLD,
     COVARIANCE_FEATURES_DIM,
+    MAX_PARKING_SPEED,
+    OBSTACLE_FEATURES_DIM,
+    OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
     SUCCESS_THRESHOLD_VELOCITY,
+    TARGET_POSE_DIM,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
@@ -20,9 +25,11 @@ from uncertainty_rl.utils.covariance_utils import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    point_in_polygon,
+    wrap_angle_symmetric,
     zone_bbox,
 )
-from uncertainty_rl.utils.logging import MetricsLogger, UncertaintyTracker
+from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.visualisation import (
     plot_training_curves,
     plot_trajectory,
@@ -30,27 +37,33 @@ from uncertainty_rl.utils.visualisation import (
 )
 
 __all__ = [
-    # Logging and metrics
-    "MetricsLogger",
-    "UncertaintyTracker",
+    # Logging
+    "DebugLogger",
     # Visualisation
     "plot_uncertainty_evolution",
     "plot_trajectory",
     "plot_training_curves",
     # Constants
-    "SUCCESS_THRESHOLD_POSITION",
-    "SUCCESS_THRESHOLD_ORIENTATION",
-    "SUCCESS_THRESHOLD_VELOCITY",
-    "VEHICLE_STATE_DIM",
-    "COVARIANCE_FEATURES_DIM",
-    "TOTAL_OBS_DIM",
     "ACTION_DIM",
+    "CLEARANCE_THRESHOLD",
+    "COVARIANCE_FEATURES_DIM",
+    "MAX_PARKING_SPEED",
+    "OBSTACLE_FEATURES_DIM",
+    "OUT_OF_BOUNDS_THRESHOLD",
+    "SUCCESS_THRESHOLD_ORIENTATION",
+    "SUCCESS_THRESHOLD_POSITION",
+    "SUCCESS_THRESHOLD_VELOCITY",
+    "TARGET_POSE_DIM",
+    "TOTAL_OBS_DIM",
+    "VEHICLE_STATE_DIM",
     # Covariance utilities
     "extract_2d_covariance_features",
     "get_covariance_dimension",
     "validate_covariance_matrix",
-    # Geometry utilities
+    # Geometry utilities (private helpers re-exported for internal package use)
     "zone_bbox",
+    "point_in_polygon",
+    "wrap_angle_symmetric",
     "_interpolate_cone_positions",
     "_compute_relative_target_pose",
 ]

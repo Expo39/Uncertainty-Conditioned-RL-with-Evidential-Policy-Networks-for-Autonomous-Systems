@@ -9,14 +9,14 @@
 std_msgs/Header header
 
 # EKF-filtered 2D pose estimate
-float64 x
-float64 y
-float64 yaw
+float64 x        # Position X (metres, CARLA world frame)
+float64 y        # Position Y (metres, CARLA world frame)
+float64 yaw      # Heading (rad, wrapped to [-pi, pi])
 
 # EKF-filtered 2D velocity estimate (from msg.twist.twist)
 float64 vx       # Longitudinal velocity (m/s)
 float64 vy       # Lateral velocity (m/s)
-float64 vyaw     # Yaw rate (rad/s)
+float64 vyaw     # Yaw rate (rad/s), body frame
 
 # 3x3 covariance submatrix for [x, y, yaw], row-major order.
 # Extracted from the EKF's 6x6 pose covariance at indices [0, 1, 5].

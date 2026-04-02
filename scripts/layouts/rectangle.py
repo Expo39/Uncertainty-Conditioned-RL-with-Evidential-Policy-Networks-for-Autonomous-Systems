@@ -16,10 +16,10 @@ Mixed bay layout to maximise training diversity across all three bay types:
     inward from the right-wall group, forming a back-to-back parallel pair.
   - Motorcycle bays: 2 narrow slots in the top-right corner (always_empty=True).
 
-Three spawn transforms:
-  - Primary   (S1): left wall centre (x=0, y=22.5), facing +X into the lot.
-  - Secondary (S2): bottom wall at x=30 (centre of gap), facing +Y.
-  - Tertiary  (S3): top wall at local x=45, facing -Y into the lot.
+Three spawn transforms (3 m inside the perimeter along each heading):
+  - Primary   (S1): left wall entry (x=3, y=22.5), facing +X into the lot.
+  - Secondary (S2): bottom wall entry at x=30, y=3, facing +Y.
+  - Tertiary  (S3): top wall entry at local x=45, facing -Y into the lot.
 
 Bay dimensions follow German EAR 05 / EU harmonised practice (FGSV 2005).
 Used as a training layout (OOD=False).
@@ -29,24 +29,26 @@ import math
 from typing import Any, Dict, List
 
 from scripts.layouts.common import (
+    _PED_MARGIN,
+    _WALL_GAP,
     BAY_DIMS,
     BAYS_PER_TYPE,
+    PED_STRIP,
     ang_offset_from_wall,
     validate_bays_in_polygon,
     warn_narrow_corridors,
 )
 
-# World-frame origin used in multi-layout generation (Town05_Opt flat area).
+# World-frame origin in multi-layout generation (FlatPlane generated OpenDRIVE world).
 ORIGIN_X = -200.0
 ORIGIN_Y = 0.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False
 
-_WALL_GAP = 0.5  # minimum clearance between bay back face and perimeter wall/cones
 
-# Number of perp bays in the bottom-wall left group.
-_PERP_WALL_BAYS = 10
+# Number of perp bays in the bottom-wall left group (extended to fill x=-5..wall).
+_PERP_WALL_BAYS = 12
 # Number of angled bays in the bottom-wall right group (7 fills the gap x~33..60).
 _ANG_WALL_BAYS = 7
 
@@ -61,10 +63,10 @@ def generate() -> Dict[str, Any]:
     depth = 60.0
 
     corners = [
-        {"x": 0.0, "y": 0.0},
+        {"x": -5.0, "y": 0.0},
         {"x": depth, "y": 0.0},
         {"x": depth, "y": width},
-        {"x": 0.0, "y": width},
+        {"x": -5.0, "y": width},
     ]
 
     dims_perp = BAY_DIMS["perpendicular"]  # width=2.5, depth=5.0
@@ -139,7 +141,8 @@ def generate() -> Dict[str, Any]:
     #               flush against x=depth; leftmost bay clears the gap.
     # ------------------------------------------------------------------
     perp_cy = dims_perp["depth"] / 2.0 + _WALL_GAP
-    perp_left_x_start = dims_perp["width"] / 2.0 + 1.0
+    # Start from the new left wall (x=-5 local) with standard clearance.
+    perp_left_x_start = -5.0 + _WALL_GAP + dims_perp["width"] / 2.0
 
     perp_bays: List[Dict] = []
     for i in range(_PERP_WALL_BAYS):
@@ -285,17 +288,15 @@ def generate() -> Dict[str, Any]:
     warn_narrow_corridors(all_bays, "rectangle")
 
     # ------------------------------------------------------------------
-    # Spawn transforms.
-    # S1: left wall (x=0), centred vertically (y=22.5), facing +X.
-    # S2: bottom wall at x=30 (centre of the gap between bay groups), facing +Y.
-    # S3: top wall at local x=45, facing -Y into lot.
+    # Spawn transforms (3 m inside the perimeter along each heading).
+    # S1: left wall entry, 3 m inward along +X from x=-5 (wall at x=-5).
+    # S2: bottom wall entry at x=30, 3 m inward along +Y from y=0.
     # ------------------------------------------------------------------
-    spawn = {"x": 0.0, "y": width / 2.0, "yaw_deg": 0.0}
-    spawn2 = {"x": depth / 2.0, "y": 0.0, "yaw_deg": 90.0}
-    spawn3 = {"x": 45.0, "y": width, "yaw_deg": 270.0}
+    spawn = {"x": -2.0, "y": width / 2.0, "yaw_deg": 0.0}
+    spawn2 = {"x": depth / 2.0, "y": 3.0, "yaw_deg": 90.0}
 
     # ------------------------------------------------------------------
-    # Patrol path: 7-waypoint CCW loop tracing the driving aisles.
+    # Patrol path: 6-waypoint CCW loop tracing the driving aisles.
     #
     # Corridor positions derived as midpoints between facing bay surfaces:
     #   patrol_x_left      : midpoint between left wall (x=0) and left edge of
@@ -357,14 +358,14 @@ def generate() -> Dict[str, Any]:
         },  # WP4: top aisle to diagonal start
         {"x": patrol_diag_end_x, "y": patrol_y_upper},  # WP5: 45-deg diagonal down-left
         {"x": patrol_x_left, "y": patrol_y_upper},  # WP6: upper aisle to left
-        {"x": patrol_x_left, "y": patrol_y_lower},  # WP7: drop to close loop
+        # WP1 is not repeated here: the cyclic modulo wrap in _spawn_npc_patrol /
+        # _update_patrol_npcs closes the loop automatically.
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face (PED_STRIP = 3.0 m).
+    # Pedestrian zones -- one strip per distinct aisle face.
+    # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
-    PED_STRIP = 3.0
-    _PED_MARGIN = 0.5
 
     centre_x_min = min(perp_cluster_x_min, centre_cluster_x_min)
     centre_x_max = max(perp_cluster_x_max, centre_cluster_x_max)
@@ -423,7 +424,7 @@ def generate() -> Dict[str, Any]:
         "corners": corners,
         "bays": all_bays,
         "spawn": spawn,
-        "extra_spawns": [spawn2, spawn3],
+        "extra_spawns": [spawn2],
         "patrol_waypoints": patrol,
         "pedestrian_zones": ped_zones,
     }

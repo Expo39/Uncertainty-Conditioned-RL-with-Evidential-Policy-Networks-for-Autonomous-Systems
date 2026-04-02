@@ -15,10 +15,10 @@ from uncertainty_rl.networks import (
     EvidentialPolicyNetwork,
     UncertaintyConditionedActor,
 )
+from uncertainty_rl.utils.constants import ACTION_DIM
 
 # Use smaller dims for fast tests
 STATE_DIM = 15
-ACTION_DIM = 3
 HIDDEN_DIMS = [64, 64]
 BATCH_SIZE = 8
 

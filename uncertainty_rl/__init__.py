@@ -1,23 +1,14 @@
-"""Uncertainty-Conditioned RL with Evidential Policy Networks for Autonomous Vehicles.
+"""
+@file __init__.py
+@brief Uncertainty-Conditioned RL with Evidential Policy Networks.
 
-This package implements uncertainty-aware reinforcement learning for autonomous parking
-using CARLA simulator with EKF localisation uncertainty propagation through
-evidential deep learning policies.
+Package marker only -- no eager imports of environment or network modules.
+Those require gymnasium/torch which are not installed in the local .venv.
+Import directly from sub-modules where needed:
+
+    from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+    from uncertainty_rl.networks.evidential_policy import EvidentialPolicyNetwork
 """
 
 __version__ = "0.1.0"
-__author__ = "Uncertainty-Conditioned RL Team"
-
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
-from uncertainty_rl.networks.evidential_policy import (
-    EvidentialLayer,
-    EvidentialPolicyNetwork,
-    UncertaintyConditionedActor,
-)
-
-__all__ = [
-    "EvidentialPolicyNetwork",
-    "EvidentialLayer",
-    "UncertaintyConditionedActor",
-    "CARLAParkingEnv",
-]
+__author__ = "Antonio Galdes"

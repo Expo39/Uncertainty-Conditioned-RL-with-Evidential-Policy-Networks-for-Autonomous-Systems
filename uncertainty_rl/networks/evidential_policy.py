@@ -7,13 +7,15 @@ both epistemic (model) uncertainty and aleatoric (data) uncertainty using
 evidential distributions.
 """
 
-from typing import Dict, Optional, Tuple
+import logging
+from typing import Dict, List, Optional, Tuple
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
+
+logger = logging.getLogger("uncertainty_rl.networks.evidential_policy")
 
 
 class EvidentialLayer(nn.Module):
@@ -37,6 +39,22 @@ class EvidentialLayer(nn.Module):
 
         # Output 4 parameters per action: gamma, nu, alpha, beta
         self.linear = nn.Linear(input_dim, output_dim * 4)
+
+        # NIG hyperprior initialisation: start near a stable prior rather than
+        # random Kaiming init, which can give near-zero nu (undefined precision)
+        # or alpha near 1 (infinite variance) at step 0.
+        # Bias layout (contiguous blocks of output_dim): [gamma | nu | alpha | beta]
+        # softplus(0.9) + 1e-6 ~ 0.97  => nu ~ 0.97 (reasonable initial precision)
+        # softplus(0.9) + 1.0  ~ 1.97  => alpha ~ 1.97 (well-defined finite variance)
+        # softplus(0.0) + 1e-6 ~ 0.69  => beta ~ 0.69 (moderate scale)
+        # Weights scaled by 0.01 so outputs are dominated by biases at init.
+        with torch.no_grad():
+            self.linear.weight.mul_(0.01)
+            n = self.output_dim
+            self.linear.bias[0 * n : 1 * n].fill_(0.0)  # gamma: zero mean
+            self.linear.bias[1 * n : 2 * n].fill_(0.9)  # nu
+            self.linear.bias[2 * n : 3 * n].fill_(0.9)  # alpha
+            self.linear.bias[3 * n : 4 * n].fill_(0.0)  # beta
 
     def forward(
         self, x: torch.Tensor
@@ -66,17 +84,22 @@ class EvidentialLayer(nn.Module):
 class EvidentialPolicyNetwork(nn.Module):
     """
     @class EvidentialPolicyNetwork
-    @brief Evidential policy network for actor-critic RL.
+    @brief Standalone evidential policy network for testing and experiments.
 
-    This network outputs action distributions with epistemic and aleatoric uncertainty
-    estimates using evidential deep learning.
+    Full MLP backbone + EvidentialLayer in a single self-contained module.
+    Used in unit tests and standalone experiments. NOT used in the RL training
+    pipeline -- the SB3 integration (EvidentialActorCriticPolicy) wires
+    EvidentialLayer and UncertaintyConditionedActor directly into SB3's
+    ActorCriticPolicy to keep the PPO surrogate objective intact.
+
+    @see EvidentialActorCriticPolicy in sb3_integration.py for the RL path.
     """
 
     def __init__(
         self,
         state_dim: int,
         action_dim: int,
-        hidden_dims: Optional[list] = None,
+        hidden_dims: Optional[List[int]] = None,
         activation: str = "relu",
     ) -> None:
         """
@@ -84,7 +107,7 @@ class EvidentialPolicyNetwork(nn.Module):
         @param state_dim: Dimension of state space (including uncertainty features).
         @param action_dim: Dimension of action space.
         @param hidden_dims: List of hidden layer dimensions.
-        @param activation: Activation function to use.
+        @param activation: Activation function ('relu', 'tanh', 'elu', 'leaky_relu').
         """
         super().__init__()
 
@@ -95,23 +118,23 @@ class EvidentialPolicyNetwork(nn.Module):
         self.action_dim = action_dim
         self.hidden_dims = hidden_dims
 
-        # Select activation function
+        # Factory so each layer gets its own activation module instance.
         activation_map = {
             "relu": nn.ReLU,
             "tanh": nn.Tanh,
             "elu": nn.ELU,
             "leaky_relu": nn.LeakyReLU,
         }
-        self.activation = activation_map.get(activation.lower(), nn.ReLU)()
+        act_cls = activation_map.get(activation.lower(), nn.ReLU)
 
         # Build feature extraction layers
-        layers = []
+        layers: List[nn.Module] = []
         prev_dim = state_dim
         for hidden_dim in hidden_dims:
             layers.extend(
                 [
                     nn.Linear(prev_dim, hidden_dim),
-                    self.activation,
+                    act_cls(),
                     nn.LayerNorm(hidden_dim),  # Normalisation for stability
                 ]
             )
@@ -121,6 +144,13 @@ class EvidentialPolicyNetwork(nn.Module):
 
         # Evidential output layer
         self.evidential_layer = EvidentialLayer(prev_dim, action_dim)
+
+        logger.debug(
+            "EvidentialPolicyNetwork: state_dim=%d, action_dim=%d, hidden_dims=%s",
+            state_dim,
+            action_dim,
+            hidden_dims,
+        )
 
     def forward(
         self, state: torch.Tensor
@@ -157,9 +187,12 @@ class EvidentialPolicyNetwork(nn.Module):
         if deterministic:
             action = gamma
         else:
-            # Sample from Student-t distribution (predictive distribution)
-            # Approximate with Gaussian for simplicity
-            std = torch.sqrt(total_uncertainty)
+            # Gaussian approximation of the NIG Student-t predictive distribution.
+            # Predictive std = sqrt(beta / (nu * (alpha - 1))) = sqrt(aleatoric).
+            # Using total_uncertainty would double-count: epistemic uncertainty is
+            # already captured by the spread of gamma across the posterior, not by
+            # inflating the per-sample action noise.
+            std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
             dist = Normal(gamma, std)
             action = dist.sample()
 
@@ -185,7 +218,7 @@ class EvidentialPolicyNetwork(nn.Module):
         lambda_reg: float = 0.01,
     ) -> Dict[str, torch.Tensor]:
         """
-        @brief Compute evidential regression loss.
+        @brief Compute the full evidential regression loss (NLL + regularisation).
         @param gamma: Mean parameter.
         @param nu: Precision parameter.
         @param alpha: Shape parameter.
@@ -193,13 +226,21 @@ class EvidentialPolicyNetwork(nn.Module):
         @param target: Target values.
         @param lambda_reg: Regularisation coefficient.
         @return Dictionary containing loss components.
+
+        @note This is a standalone supervised regression loss used in unit tests
+              and standalone experiments. It is NOT used during RL training.
+              In the RL pipeline (EvidentialPPO), the NLL is handled by
+              EvidentialDistribution.log_prob() and the regularisation term is
+              computed inline in EvidentialPPO.train() -- keeping them separate
+              so PPO's clipped surrogate objective controls the NLL contribution.
         """
-        # NLL term
-        two_beta_lambda = 2 * beta * (1 + nu)
+        # NIG-NLL (Amini et al. 2020, eq. 9).
+        # Omega = 2*beta*(1 + nu) is the scale term that appears in both log terms.
+        omega = 2 * beta * (1 + nu)
         nll = (
-            0.5 * torch.log(np.pi / nu)
-            - alpha * torch.log(two_beta_lambda)
-            + (alpha + 0.5) * torch.log(nu * (target - gamma) ** 2 + two_beta_lambda)
+            0.5 * torch.log(torch.pi / nu)
+            - alpha * torch.log(omega)
+            + (alpha + 0.5) * torch.log(nu * (target - gamma) ** 2 + omega)
             + torch.lgamma(alpha)
             - torch.lgamma(alpha + 0.5)
         )
@@ -231,7 +272,7 @@ class UncertaintyConditionedActor(nn.Module):
         state_dim: int,
         uncertainty_dim: int,
         action_dim: int,
-        hidden_dims: Optional[list] = None,
+        hidden_dims: Optional[List[int]] = None,
     ) -> None:
         """
         @brief Constructor for UncertaintyConditionedActor.
@@ -275,6 +316,15 @@ class UncertaintyConditionedActor(nn.Module):
 
         # Evidential output
         self.evidential_layer = EvidentialLayer(prev_dim, action_dim)
+
+        logger.debug(
+            "UncertaintyConditionedActor: state_dim=%d, uncertainty_dim=%d, "
+            "action_dim=%d, hidden_dims=%s",
+            state_dim,
+            uncertainty_dim,
+            action_dim,
+            hidden_dims,
+        )
 
     def forward(
         self, state: torch.Tensor, uncertainty: torch.Tensor

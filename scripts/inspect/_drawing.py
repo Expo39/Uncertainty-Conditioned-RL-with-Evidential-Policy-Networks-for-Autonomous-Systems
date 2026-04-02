@@ -29,6 +29,7 @@ except ImportError:
 
 from scripts.colours import (
     BAY_HEX,
+    HEX_LOT,
     HEX_PATROL_PATH,
     HEX_PEDESTRIAN_ZONE,
     HEX_SENSOR_CAMERA,
@@ -63,6 +64,7 @@ _COL_FOV_BLIND = hex_to_carla_color(HEX_SENSOR_FOV_BLIND)
 _COL_TARGET = hex_to_carla_color(HEX_TARGET_BAY)
 _COL_PED = hex_to_carla_color(HEX_PEDESTRIAN_ZONE)
 _COL_PATROL = hex_to_carla_color(HEX_PATROL_PATH)
+_COL_LOT = hex_to_carla_color(HEX_LOT)
 
 
 # ===========================================================================
@@ -167,6 +169,22 @@ def _draw_layout_overlays(
             color=colour,
             life_time=life_time,
         )
+
+    # --- Lot perimeter boundary ---
+    # Always drawn as a dotted line so lot geometry is visible in the inspector
+    # regardless of whether spawn_perimeter_cones is true or false.
+    lot_corners_raw = layout.get("corners", [])
+    if lot_corners_raw:
+        lot_corners: List[Tuple[float, float]] = [
+            (float(c["x"]), float(c["y"])) for c in lot_corners_raw
+        ]
+        n_corners = len(lot_corners)
+        for j in range(n_corners):
+            ax, ay = lot_corners[j]
+            bxc, byc = lot_corners[(j + 1) % n_corners]
+            _draw_dotted_segment(
+                debug, ax, ay, bxc, byc, z + 0.1, _COL_LOT, 0.06, life_time
+            )
 
     # --- Spawn point ---
     spawn = layout.get("spawn_transform", {})
@@ -421,7 +439,7 @@ def _draw_sensor_overlays(
         lid_m = sensors_cfg.get("lidar", {}).get("mount", {})
         lx = float(lid_m.get("x", 2.4))
         ly = float(lid_m.get("y", 0.0))
-        lz = float(lid_m.get("z", 0.3))
+        lz = float(lid_m.get("z", 0.5))
         lidar_loc = _to_world(lx, ly, lz)
         _draw_sensor_dot(
             debug,
@@ -501,7 +519,7 @@ def _draw_sensor_overlays(
         cam_m = sensors_cfg.get("camera_rgb", {}).get("mount", {})
         cx = float(cam_m.get("x", 2.0))
         cy_l = float(cam_m.get("y", 0.0))
-        cz = float(cam_m.get("z", 1.2))
+        cz = float(cam_m.get("z", 1.4))
         cam_loc = _to_world(cx, cy_l, cz)
         _draw_sensor_dot(
             debug,

@@ -58,7 +58,7 @@ def _interpolate_cone_positions(
     entrance_point: Optional[Tuple[float, float]] = None,
     entrance_half_width: float = 4.0,
     extra_entrance_points: Optional[List[Tuple[float, float]]] = None,
-) -> List[Tuple[float, float]]:
+) -> List[Tuple[float, float, float]]:
     """
     @brief Interpolate evenly spaced positions along a closed polygon perimeter.
     @param corners: List of (x, y) polygon vertices in order (last edge closes
@@ -70,7 +70,8 @@ def _interpolate_cone_positions(
     @param extra_entrance_points: Optional list of additional (x, y) entrance centres
                                   (e.g. extra spawn transforms). Each receives the same
                                   entrance_half_width gap as the primary entrance.
-    @return List of (x, y) positions for cone placement.
+    @return List of (x, y, yaw_deg) tuples. yaw_deg is the edge direction in degrees
+            so markers align with the perimeter wall.
 
     @note Uses adaptive spacing so the last cone on each edge aligns exactly
           with the corner rather than leaving a gap.
@@ -82,7 +83,7 @@ def _interpolate_cone_positions(
     if extra_entrance_points:
         all_entrances.extend(extra_entrance_points)
 
-    positions: List[Tuple[float, float]] = []
+    positions: List[Tuple[float, float, float]] = []
     n = len(corners)
 
     for i in range(n):
@@ -92,6 +93,9 @@ def _interpolate_cone_positions(
         edge_len = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
         if edge_len < 1e-6:
             continue
+
+        # Edge direction in degrees for marker alignment
+        edge_yaw_deg = math.degrees(math.atan2(y1 - y0, x1 - x0))
 
         num_intervals = max(1, int(round(edge_len / spacing)))
         dx = (x1 - x0) / num_intervals
@@ -105,9 +109,77 @@ def _interpolate_cone_positions(
                 for ex, ey in all_entrances
             )
             if not in_gap:
-                positions.append((cx, cy))
+                positions.append((cx, cy, edge_yaw_deg))
 
     return positions
+
+
+def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> bool:
+    """
+    @brief Ray-casting point-in-polygon test.
+
+    Returns True when (x, y) is strictly inside the polygon defined by
+    corners.  Used for OOB detection against the actual lot boundary rather
+    than its axis-aligned bounding box, which over-extends at non-rectangular
+    corners (trapezoid, irregular_a layouts).
+
+    @param x: Query point x coordinate.
+    @param y: Query point y coordinate.
+    @param corners: Ordered polygon vertices as (x, y) pairs (closed automatically).
+    @return True if the point is inside the polygon.
+
+    @note 1e-12 division guard prevents zero-division when the query point lies
+          exactly on a horizontal edge (yj == yi).
+    """
+    n = len(corners)
+    inside = False
+    j = n - 1
+    for i in range(n):
+        xi, yi = corners[i]
+        xj, yj = corners[j]
+        if ((yi > y) != (yj > y)) and (
+            x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+        ):
+            inside = not inside
+        j = i
+    return inside
+
+
+def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float:
+    """
+    @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
+
+    Uses the standard ZYX Euler decomposition. Only valid for 2D operation
+    (z-axis rotation only -- roll and pitch are assumed zero).
+
+    @param q_x: Quaternion x component.
+    @param q_y: Quaternion y component.
+    @param q_z: Quaternion z component.
+    @param q_w: Quaternion w component.
+    @return Yaw angle in radians, wrapped to [-pi, pi].
+    """
+    siny_cosp = 2.0 * (q_w * q_z + q_x * q_y)
+    cosy_cosp = 1.0 - 2.0 * (q_y * q_y + q_z * q_z)
+    return math.atan2(siny_cosp, cosy_cosp)
+
+
+def wrap_angle_symmetric(angle: float) -> float:
+    """
+    @brief Wrap an angle to (-pi, pi] with 180-degree parking symmetry.
+
+    Both nose-in and nose-out are valid parking orientations. This function
+    returns whichever of ``angle`` or ``angle + pi`` has the smaller absolute
+    value, wrapped to (-pi, pi].
+
+    Used wherever a heading error should be invariant to the vehicle entering
+    a bay forwards or in reverse (e.g. reward computation, target pose).
+
+    @param angle: Raw heading error in radians.
+    @return Heading error in (-pi, pi] with 180-deg symmetry applied.
+    """
+    wrapped = math.atan2(math.sin(angle), math.cos(angle))
+    wrapped_flip = math.atan2(math.sin(angle + math.pi), math.cos(angle + math.pi))
+    return wrapped_flip if abs(wrapped_flip) < abs(wrapped) else wrapped
 
 
 def _compute_relative_target_pose(
@@ -140,7 +212,5 @@ def _compute_relative_target_pose(
     dx = cos_yaw * dx_world + sin_yaw * dy_world
     dy = -sin_yaw * dx_world + cos_yaw * dy_world
 
-    raw_dyaw = yaw_target - yaw_ego
-    dyaw = math.atan2(math.sin(raw_dyaw), math.cos(raw_dyaw))
-
+    dyaw = wrap_angle_symmetric(yaw_target - yaw_ego)
     return dx, dy, dyaw

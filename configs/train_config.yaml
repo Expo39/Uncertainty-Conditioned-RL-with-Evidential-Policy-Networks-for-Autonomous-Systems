@@ -1,147 +1,11 @@
 # Training Configuration for Uncertainty-Conditioned RL
-# This configuration file contains parameters for training the PPO agent
-# with evidential actor networks for autonomous parking in CARLA.
-#
-# Hyperparameters are calibrated for a SINGLE CARLA environment (sequential
-# data collection) with 21-dim vector observations and 3-dim continuous
-# actions. See the references below each parameter for justification.
-
-# Environment settings
-carla_host: "localhost"
-carla_port: 2000
-town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
-max_steps: 500  # Maximum episode length (500 steps at 20Hz = 25 seconds)
-carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz
-
-# ROS 2 covariance subscription settings
-# The training container subscribes to real EKF covariance via DDS
-ros2:
-  covariance_topic: "/ekf_uncertainty/covariance"  # Float64MultiArray from CovarianceExtractorNode
-  covariance_timeout: 10.0  # Seconds to wait for first covariance message per episode
-
-# CARLA sensor noise configuration
-# Sensor suites (selected by sensor_suite key below):
-#   suite_a: 2D LiDAR (front bumper) + IMU -- primary configuration
-#   suite_b: 3D LiDAR (roof) + IMU -- upgrade if suite_a covariance variation insufficient
-#   suite_c: 3D LiDAR (roof) + RGB camera (windscreen) + IMU -- visual odometry future work
-#
-# Mount positions are in vehicle body frame (BMW Grand Tourer):
-#   x = longitudinal (positive = forward), y = lateral (positive = left), z = vertical
-carla_sensors:
-  imu:
-    noise_accel_stddev_x: 0.1   # Accelerometer noise (m/s^2)
-    noise_accel_stddev_y: 0.1
-    noise_accel_stddev_z: 0.1
-    noise_gyro_stddev_x: 0.01   # Gyroscope noise (rad/s)
-    noise_gyro_stddev_y: 0.01
-    noise_gyro_stddev_z: 0.01
-    sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
-    mount:
-      x: 0.0    # Centre of mass (longitudinal)
-      y: 0.0
-      z: 0.3    # Centre-of-mass height (metres)
-
-  lidar:        # Suite A: 2D LiDAR (SICK TiM 5xx / Hokuyo style)
-    channels: 1                 # Single-channel horizontal scan
-    range: 30.0                 # Maximum range (metres)
-    points_per_second: 56000    # Horizontal resolution proxy for scan density
-    rotation_frequency: 10.0   # Scans per second
-    upper_fov: 0.0              # Horizontal plane scan (both FOV limits at 0 = 2D)
-    lower_fov: 0.0
-    sensor_tick: 0.05           # Matches carla_timestep (20 Hz)
-    # @note CARLA sensor.lidar.ray_cast always scans 360 deg (no FOV restriction).
-    # Real SICK TiM 5xx scans 270 deg. The ROS bridge laser_filter pipeline clips
-    # the rear 90 deg before Cartographer (see carla_bridge.launch.py).
-    mount:
-      x: 2.4    # Front bumper centre (longitudinal)
-      y: 0.0
-      z: 0.5    # Above bumper lip so scan plane clears ego mesh and hits car sides
-
-  lidar_3d:     # Suite B/C: 3D LiDAR (Velodyne VLP-16 style)
-    channels: 16
-    range: 100.0                # Maximum range (metres)
-    points_per_second: 300000
-    rotation_frequency: 10.0
-    upper_fov: 15.0             # +15 deg elevation (VLP-16 half-FOV)
-    lower_fov: -15.0            # -15 deg elevation
-    sensor_tick: 0.05
-    mount:
-      x: -0.5   # Roof mast, slightly behind centre (longitudinal)
-      y: 0.0
-      z: 1.9    # ~30 cm above roofline so downward beams clear the car body
-
-  camera_rgb:   # Suite C: forward-facing RGB camera
-    image_size_x: 640
-    image_size_y: 480
-    fov: 90.0                   # Horizontal field of view (degrees)
-    sensor_tick: 0.05
-    mount:
-      x: 0.2    # Top of windshield (longitudinal)
-      y: 0.0
-      z: 1.4    # Top of windshield height (metres)
-      pitch: -5.0               # Slight downward tilt for near-field coverage
-
-# CARLA environmental conditions
-# Randomised per episode during training to expose the agent to varied uncertainty
-carla_conditions:
-  weather_presets:               # Randomly sampled each episode
-    - "ClearNoon"
-    - "CloudyNoon"
-    - "WetNoon"
-    - "SoftRainNoon"
-    - "HardRainNoon"
-    - "ClearSunset"
-    - "CloudySunset"
-  fog_density_range: [0.0, 50.0]     # Uniform random range per episode (0-100 scale)
-  fog_distance_range: [20.0, 100.0]  # Minimum fog distance (metres)
-
-# ---------------------------------------------------------------------------
-# Parking lot scenario configuration
-# Floor plan geometry is pre-computed offline (make generate-layouts) and
-# stored in configs/layouts/. The env reads from these YAML files directly.
-# ---------------------------------------------------------------------------
-parking_scenarios:
-  perimeter_cone_spacing: 2.0          # Metres between perimeter cones
-  entrance_half_width: 4.0             # Half-width of entrance gap cut in perimeter cone wall (metres)
-  bay_occupancy_rate: 0.60             # Fraction of non-target bays filled
-  num_patrol_vehicles_max: 1           # Max NPC patrol vehicles per episode (min 1 always spawned)
-  patrol_obstacle_stop_distance: 5.2  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego)
-  patrol_pedestrian_stop_distance: 1.5  # Metres ahead - patrol brakes if any pedestrian within range
-  patrol_max_speed_ms: 3.0            # Max patrol speed in m/s (~11 km/h, typical car park speed)
-  patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
-  patrol_stuck_speed_threshold: 0.3   # m/s below which NPC is considered stuck (while throttle applied)
-  patrol_stuck_steps_max: 30          # Steps below threshold before teleporting NPC to next waypoint
-  num_pedestrians_max: 5               # Max random-walk pedestrians per episode (one per zone)
-  pedestrian_heading_resample_steps: 30  # Steps between pedestrian direction changes
-  pedestrian_max_lifetime_steps: 200  # Steps before a pedestrian despawns and respawns in its zone
-  floor_plans:
-    rectangle:
-      layout_file: configs/layouts/rectangle.yaml
-      ood: false   # Used during training
-    trapezoid:
-      layout_file: configs/layouts/trapezoid.yaml
-      ood: false   # Used during training
-    irregular_a:
-      layout_file: configs/layouts/irregular_a.yaml
-      ood: true    # Never sampled during training; held out for OOD evaluation
-
-# Sensor suite selection - controls which sensors are spawned in _spawn_sensors()
-# suite_a: 2D LiDAR + IMU (primary)
-# suite_b: 3D LiDAR + IMU (upgrade if Suite A covariance variation is insufficient)
-# suite_c: 3D LiDAR + camera + IMU (last resort, adds visual odometry)
-sensor_suite: suite_a
-
-# Observation space flags
-# include_covariance: when true, EKF covariance features (indices 6-14) are included
-# include_obstacle_obs: when true, 3 obstacle awareness dims are appended (21-dim total)
-#   Set include_obstacle_obs: false to revert to 18-dim obs with no other changes.
-include_covariance: true
-include_obstacle_obs: true  # Adds nearest_dist_m, nearest_bearing_rad, obstacle_type
+# PPO hyperparameters, network architecture, evidential settings, and training
+# schedule. Environment and sensor settings live in carla/env_config.yaml.
 
 # ---------------------------------------------------------------------------
 # PPO hyperparameters
 # Calibrated for single-CARLA-env parking (sequential data collection,
-# 18-dim state, 3-dim action, 500-step episodes, weather randomisation).
+# 20-dim state, 3-dim action, 1000-step episodes, sparse bay + traffic randomisation).
 # ---------------------------------------------------------------------------
 
 # Learning rate: 3e-4, linear decay to 0 applied in train_ppo.py.
@@ -167,53 +31,104 @@ clip_range_vf: null  # No VF clipping (SB3 default, avoids loss overshooting)
 
 # ent_coef: Zero for continuous control. Exploration is handled by the
 # Gaussian policy's learned standard deviation.
-ent_coef: 0.0
+ent_coef: 0.005
 
 vf_coef: 0.5        # Standard default
 max_grad_norm: 0.5   # Standard default
 
 # target_kl: Early-stop epochs when KL divergence exceeds threshold.
-# Set slightly higher than the typical 0.015 because weather randomisation
-# creates noisy reward landscapes. Acts as a safety valve against policy
-# collapse during aggressive gradient steps.
+# Set slightly higher than the typical 0.015 because sparse bay and traffic
+# randomisation creates noisy reward landscapes. Acts as a safety valve against
+# policy collapse during aggressive gradient steps.
 target_kl: 0.02
 
+# ---------------------------------------------------------------------------
 # Network architecture
+# ---------------------------------------------------------------------------
 # [256,256] for both actor and critic. The evidential actor head outputs
 # 4 x 3 = 12 NIG parameters. [256,256] gives enough capacity for the
-# 21-dim state with its covariance, target pose, and obstacle features.
+# 20-dim state with its covariance, target pose, and obstacle features.
 net_arch: [256, 256]
-activation: "relu"  # Validated for evidential architectures
+activation: "relu"  # Validated for evidential architectures. Options: relu, tanh, elu, leaky_relu
 
-# @todo(AG) Add LayerNorm after each hidden layer in EvidentialActorCriticPolicy
-# to preserve network plasticity under non-stationary training (weather randomisation).
+# LayerNorm is inserted after each hidden Linear in EvidentialActorCriticPolicy
+# via _build_mlp_extractor() override. Preserves plasticity under non-stationary
+# training (bay occupancy + traffic randomisation). Implemented in sb3_integration.py.
 
 # ---------------------------------------------------------------------------
 # Observation normalisation
 # ---------------------------------------------------------------------------
-# VecNormalize with norm_obs=True is essential for the mixed-scale 21-dim
+# VecNormalize with norm_obs=True is essential for the mixed-scale 20-dim
 # state (metres, radians, covariance values 1e-6 to 100+, obstacle distance).
 #
-# @todo(AG) Apply log1p transform to covariance features (indices 6-14) in
-# _get_state() before VecNormalize sees them. Compresses heavy tails from
-# high-uncertainty conditions (fog, rain) that would distort running stats.
+# Covariance features (indices 6-14) are log1p-transformed in _get_state()
+# before VecNormalize sees them. Compresses heavy tails from high-uncertainty
+# conditions (rain, sensor noise). Implemented in carla_parking.py.
 #
-# norm_reward=False: reward components in the planned potential-based design
-# are already on similar scales; auto-normalisation can obscure the success
-# signal when reward distributions shift during training.
+# norm_reward=False: potential-based reward components are already on similar
+# scales; auto-normalisation can obscure the success signal.
+
+# ---------------------------------------------------------------------------
+# Evidential network settings
+# ---------------------------------------------------------------------------
+evidential:
+  # Regularisation coefficient for evidential loss (target value after warmup).
+  # Too low: epistemic uncertainty collapses. Too high: uncertainty is over-inflated.
+  lambda_reg: 0.01
+
+  # Number of environment steps over which lambda_reg is linearly annealed from 0
+  # to lambda_reg. Lets the NLL loss establish good predictions before regularisation.
+  lambda_reg_warmup_steps: 50000
+
+  # NIG hyperprior initialisation is implemented in EvidentialLayer.__init__():
+  #   nu bias ~ 0.9   -> softplus(0.9)+1e-6 ~ 0.97
+  #   alpha bias ~ 0.9 -> softplus(0.9)+1.0 ~ 1.97
+  #   beta bias ~ 0.0  -> softplus(0)+1e-6 ~ 0.69
+  #   output weights scaled by 0.01 (start near bias-determined values)
+  # Biases re-applied after ortho_init in EvidentialActorCriticPolicy._build().
+
+  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty
+
+# Uncertainty weights (reserved -- not yet consumed by training code).
+uncertainty:
+  epistemic_weight: 1.0
+  aleatoric_weight: 1.0
+
+# ---------------------------------------------------------------------------
+# Policy type
+# ---------------------------------------------------------------------------
+# evidential: EvidentialPPO + EvidentialActorCriticPolicy (NIG actor, standard critic)
+# standard:   PPO + MlpPolicy (standard Gaussian policy, no evidential loss)
+policy_type: "evidential"
+
+# ---------------------------------------------------------------------------
+# Reward function
+# ---------------------------------------------------------------------------
+# Reward function: potential-based shaping (Ng et al. 1999).
+#   R = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD - 0.01/step
+#   + collision: -10.0 + termination
+#   + success:   +10.0 + termination
+#   + out-of-bounds: -5.0 + termination
+# Implemented in CARLAParkingEnv._compute_reward().
 
 # ---------------------------------------------------------------------------
 # Logging and checkpointing
 # ---------------------------------------------------------------------------
 checkpoint_freq: 50000  # Save checkpoint every N steps
 log_interval: 10        # Log every N episodes
+verbose: 1              # SB3 verbosity: 0=silent, 1=training info, 2=debug
+enable_visualiser: true  # Write vis_state.json for the 2D bird's-eye visualiser (make visualise)
+log_dir: "./logs"
+checkpoint_dir: "./checkpoints"
 
-# Training settings
+# ---------------------------------------------------------------------------
+# Training schedule
+# ---------------------------------------------------------------------------
 total_timesteps: 1000000
 seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for final ablation
-eval_freq: 10000   # Evaluate every N training steps
-n_eval_episodes: 10  # Episodes per evaluation run (used by EvalCallback)
+eval_freq: 10000   # Evaluate every N training steps (reserved, eval_env currently disabled)
+n_eval_episodes: 10  # Episodes per evaluation run (reserved, eval_env currently disabled)
 
 # Parallel execution settings
 # Number of training runs to execute in parallel. Each worker spawns its own
@@ -222,40 +137,3 @@ n_eval_episodes: 10  # Episodes per evaluation run (used by EvalCallback)
 # Constrained by GPU VRAM: each CARLA instance needs ~2-4 GB VRAM.
 # Example: RTX 4090 (24 GB) can run 2-3 instances comfortably.
 parallel_workers: 1
-
-# ---------------------------------------------------------------------------
-# Evidential network settings
-# ---------------------------------------------------------------------------
-evidential:
-  # Regularisation coefficient for evidential loss.
-  # Too low: epistemic uncertainty collapses. Too high: uncertainty is over-inflated.
-  lambda_reg: 0.01
-
-  # @todo(AG) Implement lambda_reg annealing from 0 to 0.01 over first
-  # 50K steps. Lets NLL establish good predictions before regularisation.
-
-  # @todo(AG) Implement NIG hyperprior initialisation in EvidentialLayer:
-  #   nu bias ~ 0.5   -> softplus(0.5) ~ 0.97 (high initial epistemic)
-  #   alpha bias ~ 0.5 -> softplus(0.5)+1 ~ 1.97 (well-defined variance)
-  #   beta bias ~ 0.0  -> softplus(0) ~ 0.69 (moderate scale)
-  #   output weights scaled by 0.01 (start near bias-determined values)
-
-  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty
-
-# Uncertainty settings
-uncertainty:
-  epistemic_weight: 1.0  # Weight for epistemic uncertainty in loss
-  aleatoric_weight: 1.0  # Weight for aleatoric uncertainty in loss
-
-# ---------------------------------------------------------------------------
-# Reward function
-# ---------------------------------------------------------------------------
-# @todo(AG) CRITICAL: Fix reward scale imbalance. Current reward:
-#   R = -distance - 0.5*orientation - 0.1*velocity + 100*success
-# Over 500 steps at ~5m avg distance, cumulative penalty ~ -2500, dwarfing
-# the +100 success bonus. Agent learns to fail fast rather than succeed.
-# Switch to potential-based shaping:
-#   R_distance = (prev_distance - curr_distance) / max_distance  (rewards progress)
-#   + collision penalty (-5 to -10, early termination)
-#   + action smoothness (-0.05 * ||a_t - a_{t-1}||^2)
-#   + time penalty (-0.01 per step)

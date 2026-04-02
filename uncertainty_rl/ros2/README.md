@@ -24,15 +24,19 @@ This directory is both an ament_python package (built by colcon in the ros2-brid
 
 `launch/carla_bridge.launch.py` orchestrates the full pipeline:
 
-1. **CARLA ROS bridge** -publishes sensor topics from CARLA simulator
-2. **robot_localisation EKF** -fuses odometry + IMU (optionally GNSS), outputs `/odometry/filtered`
-3. **CovarianceExtractorNode** -extracts 3x3 covariance, publishes to `/ekf_uncertainty/covariance`
+1. **CARLA ROS bridge** -- publishes sensor topics from CARLA simulator
+2. **Static TF publishers** -- connect sensor frames to the `ego_vehicle` body frame
+3. **Cartographer** -- scan-matches PointCloud2 data, publishes TF (`odom -> tracking_frame`)
+4. **TfToOdomNode** -- converts Cartographer TF to `nav_msgs/Odometry` with dynamic covariance on `/scan_matched_odometry`
+5. **robot_localisation EKF** -- fuses scan-matched odometry + IMU, outputs `/odometry/filtered`
+6. **CovarianceExtractorNode** -- extracts 3x3 covariance, publishes to `/ekf_uncertainty/covariance`
 
 ## Nodes
 
 | Node | Purpose |
 |------|---------|
-| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes `CovarianceEstimate` (semantic fields: header, x, y, yaw, covariance[9]) |
+| `TfToOdomNode` | Converts Cartographer TF (`odom -> tracking_frame`) to `nav_msgs/Odometry` with dynamic covariance (inflated on stale TF or position jump); publishes `/scan_matched_odometry` |
+| `CovarianceExtractorNode` | Subscribes to `/odometry/filtered`, extracts 3x3 [x, y, yaw] submatrix, publishes `CovarianceEstimate` (semantic fields: header, x, y, yaw, vx, vy, vyaw, covariance[9]) |
 | `CovarianceMonitorNode` | Debug/visualisation node for monitoring covariance values (subscribes to `CovarianceEstimate`) |
 
 ## EKF Sensor Fusion

@@ -11,7 +11,7 @@ RL training scripts for uncertainty-conditioned parking using Stable-Baselines3.
 Config-driven PPO training loop with:
 
 - **Policy switching**: reads `policy_type` from config -`"evidential"` uses `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` uses SB3 `PPO` + `MlpPolicy`
-- **VecNormalize** wraps the environment for observation and reward normalisation
+- **VecNormalize** wraps the environment for observation normalisation only (`norm_reward=False`)
 - **Checkpointing** saves model and VecNormalize statistics together
 - **TensorBoard** logging for training metrics (including evidential reg loss and uncertainty estimates)
 - All hyperparameters loaded from `configs/train_config.yaml`
@@ -21,7 +21,8 @@ Config-driven PPO training loop with:
 ```bash
 # Inside the training container (make docker-shell):
 python uncertainty_rl/training/train_ppo.py \
-    --config configs/train_config.yaml \
+    --train-config configs/train_config.yaml \
+    --env-config configs/carla/env_config.yaml \
     --total-timesteps 1000000
 ```
 
@@ -31,10 +32,10 @@ python uncertainty_rl/training/train_ppo.py \
 
 | `policy_type` | Agent | Policy | Observation |
 |---------------|-------|--------|-------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 18-dim (full method) or 9-dim (output\_uncertainty) |
-| `"standard"` | `PPO` | `MlpPolicy` | 18-dim (input\_uncertainty) or 9-dim (vanilla\_ppo) |
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 20-dim (full method) or 11-dim (output\_uncertainty) |
+| `"standard"` | `PPO` | `MlpPolicy` | 20-dim (input\_uncertainty) or 11-dim (vanilla\_ppo) |
 
-The `include_covariance` flag (from baseline YAML) controls observation dimensionality.
+The `include_covariance` and `include_obstacle_obs` flags (from baseline YAML) control observation dimensionality. `include_obstacle_obs: true` in all 4 baselines so obstacle dims are not the experimental variable.
 
 ### Key Config Parameters (from `configs/train_config.yaml`)
 
@@ -53,11 +54,10 @@ The `include_covariance` flag (from baseline YAML) controls observation dimensio
 
 See `configs/train_config.yaml` for the full parameter list with per-parameter justifications.
 
-## Ablation Study Orchestration: `scripts/run_experiment.py`
+## Ablation Study
 
-Runs the full 2x2 ablation study (4 baselines x 10 seeds). Each baseline config in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` -all baselines share identical PPO hyperparameters.
+The 2x2 ablation (4 baselines x N seeds) runs `train_ppo.py` once per baseline config. Each baseline YAML in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` -- all baselines share identical PPO hyperparameters.
 
 ```bash
-make experiment-dry       # Plan runs without training (no Docker needed)
-make docker-experiment    # Full ablation inside container
+make docker-train    # Single training run
 ```

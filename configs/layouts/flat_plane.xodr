@@ -1,28 +1,30 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   @file flat_plane.xodr
-  @brief Minimal OpenDRIVE map: a single flat 900x400 m ground plane with no roads,
-         buildings, or traffic infrastructure. Used by CARLAParkingEnv instead of
-         Town05_Opt so all 3 parking lot floor plans can be placed on clean flat ground.
+  @brief Minimal OpenDRIVE map: a single flat ground plane covering all three
+         parking lot floor plans with no roads, buildings, or traffic infrastructure.
+         Used by CARLAParkingEnv via generate_opendrive_world().
 
   World-frame footprint of all lots combined:
-    x: -200 to +500  (rectangle at x=-200..-165, trapezoid at x=0..44, irregular_a at x=~200+)
-    y: -90  to +50
+    x: -220 to +250  (rectangle at x=-200..-165, trapezoid at x=0..44, irregular_a at x=~200+)
+    y: -100 to +50
 
-  Road geometry: road centre line runs east at y=+200 for 900 m starting at x=-300.
-  The single right lane (id=-1) has width 400 m, which extends from y=+200 down to
-  y=-200, covering all lot y-coordinates. The spectator default position (0,0,z)
-  sits inside this footprint so the ground is visible on first load.
+  Road geometry: road centre line runs east at y=+25 for 480 m starting at x=-230.
+  The single right lane (id=-1) has width 130 m, which extends from y=+25 down to
+  y=-105, covering all lot y-coordinates.
+
+  Reduced from 900x400 m to 480x130 m to keep the CARLA nav mesh tile count low
+  (was 144 tiles -> OOM segfault during saving; now ~18 tiles -> stable).
 
   Loaded via client.generate_opendrive_world() not client.load_world().
 -->
 <OpenDRIVE>
   <header revMajor="1" revMinor="4" name="FlatPlane" version="1.0"
-          north="200.0" south="-200.0" east="600.0" west="-300.0"/>
-  <road name="FlatGround" length="900.0" id="0" junction="-1">
+          north="50.0" south="-110.0" east="260.0" west="-230.0"/>
+  <road name="FlatGround" length="480.0" id="0" junction="-1">
     <link/>
     <planView>
-      <geometry s="0.0" x="-300.0" y="200.0" hdg="0.0" length="900.0">
+      <geometry s="0.0" x="-230.0" y="25.0" hdg="0.0" length="480.0">
         <line/>
       </geometry>
     </planView>
@@ -39,7 +41,7 @@
         </center>
         <right>
           <lane id="-1" type="driving" level="false">
-            <width sOffset="0.0" a="400.0" b="0.0" c="0.0" d="0.0"/>
+            <width sOffset="0.0" a="130.0" b="0.0" c="0.0" d="0.0"/>
             <roadMark sOffset="0.0" type="none"/>
           </lane>
         </right>
