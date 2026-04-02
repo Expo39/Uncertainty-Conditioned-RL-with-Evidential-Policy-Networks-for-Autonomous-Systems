@@ -2,13 +2,14 @@
 @file _inspectors.py
 @brief Internal inspector class hierarchy for the CARLA lot inspector.
 
-Defines the four inspector classes that drive CARLA synchronous tick loops
+Defines the inspector classes that drive CARLA synchronous tick loops
 and render debug overlays:
 
   _Inspector        -- base class: CARLA connection, tick loop, spectator helpers
     LayoutInspector -- lot bay outlines, spawn/patrol/pedestrian overlays
-      SensorInspector -- sensor mount dots + FOV arcs on top of layout
-    LiveInspector   -- real spawned sensors: LiDAR debug dots or camera spectator view
+      SensorInspector -- sensor mount dots + FOV arcs on layout
+    LiveInspector   -- real spawned sensors: LiDAR dots or camera view
+    DryRunInspector -- full training pipeline, random actions, no model
 
 Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 
@@ -19,7 +20,9 @@ Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 import math
 import sys
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
+
+import numpy as np
 
 try:
     import carla
@@ -27,10 +30,7 @@ except ImportError:
     print("ERROR: carla Python package not found.  Run inside the training container.")
     sys.exit(1)
 
-from scripts.inspect._drawing import (
-    _draw_layout_overlays,
-    _draw_sensor_overlays,
-)
+from scripts.inspect._drawing import _draw_layout_overlays, _draw_sensor_overlays
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
 # ===========================================================================
@@ -100,12 +100,17 @@ class _Inspector:
     def _place_spectator_side(self, vt: Any) -> None:
         """
         @brief Position spectator to the left of the vehicle (side profile).
+
+        Placed 11 m to the side and 2 m above the vehicle origin, pitched
+        slightly down (-8 deg) so the full vehicle body is visible without
+        clipping into it.
+
         @param vt: Vehicle carla.Transform.
         """
         if self._env.world is None:
             return
         yaw_rad = math.radians(vt.rotation.yaw)
-        offset = 8.0
+        offset = 11.0
         side_x = vt.location.x - offset * math.sin(yaw_rad)
         side_y = vt.location.y + offset * math.cos(yaw_rad)
         look_yaw = math.degrees(
@@ -114,8 +119,8 @@ class _Inspector:
         spectator = self._env.world.get_spectator()
         spectator.set_transform(
             carla.Transform(
-                carla.Location(x=side_x, y=side_y, z=vt.location.z + 1.0),
-                carla.Rotation(pitch=0.0, yaw=look_yaw, roll=0.0),
+                carla.Location(x=side_x, y=side_y, z=vt.location.z + 2.0),
+                carla.Rotation(pitch=-8.0, yaw=look_yaw, roll=0.0),
             )
         )
 
@@ -687,3 +692,332 @@ class LiveInspector(_Inspector):
                 if sensor.is_alive:
                     sensor.destroy()
             self._sensors.clear()
+
+
+# ===========================================================================
+# Dry-run inspector -- full training pipeline, random actions, no model
+# ===========================================================================
+
+
+class DryRunInspector(_Inspector):
+    """
+    @class DryRunInspector
+    @brief Runs the full training environment (reset + step loop) with random
+           actions, no model.  Spectator follows the ego vehicle.
+
+    Views (set via --inspect-view):
+      third_person -- 20 m behind + 10 m above, follows vehicle heading
+      side         -- 15 m to the left, at ego z, level
+      back         -- 20 m behind, at ego z, level
+      front        -- 15 m ahead, at ego z, looking back
+      free         -- placed once at z=0, not updated; CARLA's own controls work
+
+    @note Requires the full Docker stack: carla-server + ros2-bridge + training.
+    @note include_covariance must be True on the env for covariance to appear.
+    """
+
+    _LOG_INTERVAL: int = 50  # steps between console obs prints
+
+    def __init__(
+        self,
+        env: CARLAParkingEnv,
+        duration: int,
+        n_episodes: Optional[int] = None,
+        dryrun_action: Optional[List[float]] = None,
+        initial_view: str = "third_person",
+        termination_pause: float = 3.0,
+    ) -> None:
+        """
+        @brief Construct the dry-run inspector.
+        @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
+        @param duration: Maximum wall-clock seconds to run (across all episodes).
+        @param n_episodes: Stop after this many episodes; None = run until duration.
+        @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
+               None = action_space.sample(). Set via inspect.dryrun_action in YAML.
+        @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
+        @param termination_pause: Seconds to hold scene after episode ends.
+        """
+        super().__init__(env, duration)
+        self._n_episodes = n_episodes
+        self._dryrun_action: Optional[np.ndarray] = (
+            np.array(dryrun_action, dtype=np.float32)
+            if dryrun_action is not None
+            else None
+        )
+        self._view: str = (
+            initial_view
+            if initial_view in ("third_person", "side", "back", "front", "free")
+            else "third_person"
+        )
+        self._termination_pause = termination_pause
+
+    # ------------------------------------------------------------------
+    # Spectator placement
+    # ------------------------------------------------------------------
+
+    def place_spectator(self) -> None:
+        """
+        @brief Position spectator for the active view.
+
+        'free' mode: placed once at z=0 beside the vehicle, not touched again.
+        All other views: delegates to _update_spectator().
+        """
+        if self._env.vehicle is None or self._env.world is None:
+            return
+        if self._view == "free":
+            vt = self._env.vehicle.get_transform()
+            yaw_rad = math.radians(vt.rotation.yaw)
+            sx = vt.location.x - 20.0 * math.sin(yaw_rad)
+            sy = vt.location.y + 20.0 * math.cos(yaw_rad)
+            look_yaw = math.degrees(math.atan2(vt.location.y - sy, vt.location.x - sx))
+            self._env.world.get_spectator().set_transform(
+                carla.Transform(
+                    carla.Location(x=sx, y=sy, z=0.0),
+                    carla.Rotation(pitch=10.0, yaw=look_yaw, roll=0.0),
+                )
+            )
+            print(
+                "  Free view: spectator at z=0, pitched up. "
+                "Use CARLA controls to fly."
+            )
+            return
+        self._update_spectator()
+
+    def _update_spectator(self) -> None:
+        """
+        @brief Move spectator to follow the ego vehicle.  No-op in 'free' mode.
+        """
+        if self._env.vehicle is None or self._env.world is None or self._view == "free":
+            return
+        vt = self._env.vehicle.get_transform()
+        yaw_rad = math.radians(vt.rotation.yaw)
+        spectator = self._env.world.get_spectator()
+
+        if self._view == "third_person":
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(
+                        x=vt.location.x - 20.0 * math.cos(yaw_rad),
+                        y=vt.location.y - 20.0 * math.sin(yaw_rad),
+                        z=vt.location.z + 10.0,
+                    ),
+                    carla.Rotation(pitch=-25.0, yaw=vt.rotation.yaw),
+                )
+            )
+        elif self._view == "side":
+            sx = vt.location.x - 15.0 * math.sin(yaw_rad)
+            sy = vt.location.y + 15.0 * math.cos(yaw_rad)
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=sx, y=sy, z=vt.location.z),
+                    carla.Rotation(
+                        pitch=0.0,
+                        yaw=math.degrees(
+                            math.atan2(vt.location.y - sy, vt.location.x - sx)
+                        ),
+                    ),
+                )
+            )
+        elif self._view == "back":
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(
+                        x=vt.location.x - 20.0 * math.cos(yaw_rad),
+                        y=vt.location.y - 20.0 * math.sin(yaw_rad),
+                        z=vt.location.z,
+                    ),
+                    carla.Rotation(pitch=0.0, yaw=vt.rotation.yaw),
+                )
+            )
+        else:  # front
+            fx = vt.location.x + 15.0 * math.cos(yaw_rad)
+            fy = vt.location.y + 15.0 * math.sin(yaw_rad)
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=fx, y=fy, z=vt.location.z),
+                    carla.Rotation(
+                        pitch=0.0,
+                        yaw=math.degrees(
+                            math.atan2(vt.location.y - fy, vt.location.x - fx)
+                        ),
+                    ),
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # Observation logging
+    # ------------------------------------------------------------------
+
+    def _print_obs(self, obs: Any, step: int, episode: int) -> None:
+        """
+        @brief Print key observation values to the console for diagnosis.
+        @param obs: Observation array from env.step() or env.reset().
+        @param step: Current step within the episode.
+        @param episode: Current episode index.
+        """
+        _YELLOW = "\033[33m"
+        _RESET = "\033[0m"
+
+        if obs is None or len(obs) < 3:
+            return
+        # Velocity (indices 0-2)
+        parts = [
+            f"ep={episode:3d}  step={step:4d}",
+            f"vel=({obs[0]:.2f},{obs[1]:.2f})m/s"
+            f"  vyaw={math.degrees(obs[2]):+.1f}deg/s",
+        ]
+        # CARLA ground truth (diagnostic only -- not fed to model)
+        if self._env.vehicle is not None:
+            t = self._env.vehicle.get_transform()
+            v = self._env.vehicle.get_velocity()
+            spd = math.sqrt(v.x**2 + v.y**2)
+            parts.append(
+                _YELLOW + f"[CARLA gt] pos=({t.location.x:7.2f},{t.location.y:7.2f})"
+                f"  yaw={t.rotation.yaw:+6.1f}deg  spd={spd:.2f}m/s" + _RESET
+            )
+        # EKF covariance (indices 3-11)
+        if len(obs) >= 12:
+            parts.append(
+                f"std=({obs[3]:.4f},{obs[4]:.4f},{obs[5]:.4f})"
+                f"  cov_diag=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})"
+                f"  cov_off=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})"
+            )
+        # Target bay in ego body frame (indices 12-14) -- odom-frame relative
+        if len(obs) >= 15:
+            parts.append(
+                f"target(odom): dx={obs[12]:.2f}m  dy={obs[13]:.2f}m"
+                f"  dyaw={math.degrees(obs[14]):+.1f}deg"
+            )
+        # GT target cross-check
+        gt = self._env._target_bay
+        odom_t = self._env._target_bay_odom
+        gt_line = (
+            _YELLOW + f"[GT target] world=({gt['x']:.2f},{gt['y']:.2f})"
+            f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
+            f"  |  odom=({odom_t['x']:.2f},{odom_t['y']:.2f})"
+            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg" + _RESET
+        )
+        tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
+        recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
+        recon_wy = sin_r * odom_t["x"] + cos_r * odom_t["y"] + ty
+        err_m = math.sqrt((recon_wx - gt["x"]) ** 2 + (recon_wy - gt["y"]) ** 2)
+        recon_world_yaw = math.atan2(
+            math.sin(odom_t["yaw"] + r),
+            math.cos(odom_t["yaw"] + r),
+        )
+        world_yaw_wrapped = math.atan2(math.sin(gt["yaw"]), math.cos(gt["yaw"]))
+        yaw_err_deg = math.degrees(
+            abs(
+                math.atan2(
+                    math.sin(recon_world_yaw - world_yaw_wrapped),
+                    math.cos(recon_world_yaw - world_yaw_wrapped),
+                )
+            )
+        )
+        gt_line += (
+            f"  [recon_err={err_m:.3f}m"
+            f"  yaw_err={yaw_err_deg:.1f}deg"
+            f"  r={math.degrees(r):+.1f}deg]"
+        )
+        parts.append(gt_line)
+        # Hemispheric obstacle clearance (indices 15-19)
+        if len(obs) >= 20:
+            parts.append(
+                f"left: {obs[15]:.2f}m  {math.degrees(obs[16]):+.1f}deg"
+                f"  |  right: {obs[17]:.2f}m  {math.degrees(obs[18]):+.1f}deg"
+                f"  |  fwd: {obs[19]:.2f}m"
+            )
+        print("  " + "\n    ".join(parts))
+
+    # ------------------------------------------------------------------
+    # Run loop
+    # ------------------------------------------------------------------
+
+    def run(self) -> None:
+        """
+        @brief Run the dry-run episode loop.
+
+        Each episode: reset() -> step loop -> on termination hold for
+        termination_pause seconds so the final state is visible in CARLA.
+        Spectator follows the ego every step.  Key obs printed every
+        _LOG_INTERVAL steps.
+        """
+        if self._env.world is None:
+            print("ERROR: CARLA world not available.  Aborting.")
+            return
+
+        deadline = time.monotonic() + self._duration
+        episode = 0
+        total_steps = 0
+
+        print(
+            f"Dry-run: random actions for up to {self._duration}s"
+            + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
+        )
+        print(
+            "  Model inputs per step (20-dim obs):"
+            "\n    [0-2]   Velocity:     vx  vy  vyaw"
+            "\n    [3-11]  EKF cov:      std(x,y,yaw)  "
+            "cov_diag(xx,yy,yawyaw)  cov_off(xy,xyaw,yyaw)  "
+            "[log1p-transformed]"
+            "\n    [12-14] Target bay:   dx  dy  dyaw (ego-relative)"
+            "\n    [15-19] Clearance:    left(dist,bearing)  "
+            "right(dist,bearing)  fwd_dist"
+            "\n  [GT target] world + odom coords logged per step "
+            "(yellow) + recon_err"
+            "\n  recon_err should be < 0.05 m (transform check)"
+        )
+
+        try:
+            while time.monotonic() < deadline:
+                if self._n_episodes is not None and episode >= self._n_episodes:
+                    break
+
+                obs, _ = self._env.reset()
+                episode += 1
+                step = 0
+                print(f"\n--- Episode {episode}  [view: {self._view}] ---")
+                self._update_spectator()
+                self._print_obs(obs, step, episode)
+
+                terminated = truncated = False
+                while not (terminated or truncated):
+                    if time.monotonic() >= deadline:
+                        break
+                    action = (
+                        self._dryrun_action
+                        if self._dryrun_action is not None
+                        else self._env.action_space.sample()
+                    )
+                    obs, reward, terminated, truncated, info = self._env.step(action)
+                    step += 1
+                    total_steps += 1
+                    self._update_spectator()
+                    if step % self._LOG_INTERVAL == 0:
+                        self._print_obs(obs, step, episode)
+
+                reason = info.get(
+                    "termination_reason",
+                    "truncated" if truncated else "terminated",
+                )
+                print(
+                    f"  Episode {episode} ended: {reason}"
+                    f"  steps={step}  total_steps={total_steps}"
+                )
+
+                # Hold the scene so the final state can be inspected in CARLA.
+                if self._termination_pause > 0:
+                    print(
+                        f"  Pausing {self._termination_pause:.1f}s "
+                        "(Ctrl+C to skip) ..."
+                    )
+                    pause_end = time.monotonic() + self._termination_pause
+                    while time.monotonic() < pause_end:
+                        self._env.world.tick()
+                        self._update_spectator()
+                        time.sleep(1.0 / self._TICK_HZ)
+
+        except KeyboardInterrupt:
+            print("Interrupted.")
+
+        print(f"\nDry-run complete: {episode} episodes, {total_steps} steps.")

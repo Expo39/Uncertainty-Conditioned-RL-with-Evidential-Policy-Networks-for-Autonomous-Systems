@@ -13,6 +13,8 @@ from typing import Any, Dict, List, Tuple
 
 import yaml
 
+from uncertainty_rl.utils.geometry import point_in_polygon
+
 # ---------------------------------------------------------------------------
 # Bay dimension constants (German EAR 05)
 # ---------------------------------------------------------------------------
@@ -24,6 +26,15 @@ BAY_DIMS: Dict[str, Dict[str, float]] = {
 }
 
 BAYS_PER_TYPE = 5  # Exactly 5 bays per type per floor plan
+
+# Shared spacing constants used by all layout modules.
+# _WALL_GAP: minimum clearance between a bay's back face and the perimeter wall/cones.
+# PED_STRIP: width of a pedestrian zone strip alongside an aisle face (m).
+# _PED_MARGIN: inset applied to both ends of a pedestrian zone so it does not
+#              overlap the perimeter cone boundary.
+_WALL_GAP: float = 0.5
+PED_STRIP: float = 3.0
+_PED_MARGIN: float = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -110,28 +121,6 @@ def _bay_corners(
     ]
 
 
-def _point_in_polygon(px: float, py: float, polygon: List[Tuple[float, float]]) -> bool:
-    """
-    @brief Ray-casting point-in-polygon test (includes boundary).
-    @param px: Point x.
-    @param py: Point y.
-    @param polygon: List of (x, y) vertices in order.
-    @return True if the point is inside or on the polygon boundary.
-    """
-    n = len(polygon)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = polygon[i]
-        xj, yj = polygon[j]
-        if ((yi > py) != (yj > py)) and (
-            px < (xj - xi) * (py - yi) / (yj - yi + 1e-12) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
-
-
 def validate_bays_in_polygon(
     bays: List[Dict[str, Any]],
     corners: List[Dict[str, float]],
@@ -170,7 +159,7 @@ def validate_bays_in_polygon(
             bay["depth"],
         )
         for corner in bay_corners_pts:
-            if not _point_in_polygon(corner[0], corner[1], expanded):
+            if not point_in_polygon(corner[0], corner[1], expanded):
                 raise ValueError(
                     f"[{shape_name}] Bay '{bay.get('bay_type', '?')}' at "
                     f"({bay['local_x']:.2f}, {bay['local_y']:.2f}) has a corner "
@@ -502,7 +491,6 @@ def plot_layout(
     try:
         import matplotlib.patches as mpatches
         import matplotlib.pyplot as plt
-        from matplotlib.patches import FancyArrowPatch, Polygon  # noqa: F401
     except ImportError:
         print("  WARNING: matplotlib not available, skipping plot.")
         return
@@ -521,66 +509,18 @@ def plot_layout(
     )
     ax.add_patch(lot_patch)
 
-    all_spawns = [world_layout["spawn_transform"]] + world_layout.get(
-        "extra_spawn_transforms", []
-    )
-    gap_half = 2.5
-
-    def _draw_perimeter_with_gaps(
-        axes: "plt.Axes",  # type: ignore[name-defined]
-        corners: List[Tuple[float, float]],
-        spawns: List[Dict[str, Any]],
-        g: float,
-    ) -> None:
-        """Draw lot perimeter as thick black lines, leaving a gap around each spawn."""
-        n = len(corners)
-        for i in range(n):
-            p0 = corners[i]
-            p1 = corners[(i + 1) % n]
-            seg_dx = p1[0] - p0[0]
-            seg_dy = p1[1] - p0[1]
-            seg_len = math.hypot(seg_dx, seg_dy)
-            if seg_len < 1e-6:
-                continue
-            udx = seg_dx / seg_len
-            udy = seg_dy / seg_len
-
-            gaps: List[Tuple[float, float]] = []
-            for sp in spawns:
-                t = (sp["x"] - p0[0]) * udx + (sp["y"] - p0[1]) * udy
-                perp = abs((sp["x"] - p0[0]) * udy - (sp["y"] - p0[1]) * udx)
-                if 0.0 <= t <= seg_len and perp < g + 0.5:
-                    gaps.append((t - g, t + g))
-
-            gaps.sort()
-            merged: List[Tuple[float, float]] = []
-            for lo, hi in gaps:
-                if merged and lo <= merged[-1][1]:
-                    merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
-                else:
-                    merged.append([lo, hi])  # type: ignore[arg-type]
-
-            draw_intervals = []
-            prev = 0.0
-            for lo, hi in merged:
-                if prev < lo:
-                    draw_intervals.append((max(prev, 0.0), min(lo, seg_len)))
-                prev = hi
-            if prev < seg_len:
-                draw_intervals.append((max(prev, 0.0), seg_len))
-
-            for t0, t1 in draw_intervals:
-                if t1 - t0 < 1e-3:
-                    continue
-                axes.plot(
-                    [p0[0] + udx * t0, p0[0] + udx * t1],
-                    [p0[1] + udy * t0, p0[1] + udy * t1],
-                    color="black",
-                    linewidth=2,
-                    solid_capstyle="butt",
-                )
-
-    _draw_perimeter_with_gaps(ax, corner_pts, all_spawns, gap_half)
+    # Draw full perimeter -- no gaps (spawns are inside the lot, not on the wall).
+    n = len(corner_pts)
+    for i in range(n):
+        p0 = corner_pts[i]
+        p1 = corner_pts[(i + 1) % n]
+        ax.plot(
+            [p0[0], p1[0]],
+            [p0[1], p1[1]],
+            color="black",
+            linewidth=2,
+            solid_capstyle="butt",
+        )
 
     from scripts.colours import (
         BAY_HEX,

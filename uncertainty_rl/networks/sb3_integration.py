@@ -8,8 +8,9 @@ evidential actor head, and a custom PPO subclass that adds evidential
 regularisation loss and uncertainty logging.
 """
 
+import logging
 from functools import partial
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import numpy as np
 import torch as th
@@ -24,9 +25,29 @@ from torch import nn
 from torch.distributions import Normal
 from torch.nn import functional as F
 
-from uncertainty_rl.networks.evidential_policy import EvidentialLayer
+from uncertainty_rl.networks.evidential_policy import (
+    EvidentialLayer,
+    UncertaintyConditionedActor,
+)
+from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM, VEHICLE_STATE_DIM
 
-SelfEvidentialPPO = TypeVar("SelfEvidentialPPO", bound="EvidentialPPO")
+logger = logging.getLogger("uncertainty_rl.networks.sb3_integration")
+
+
+def _insert_layernorm(seq: nn.Sequential) -> nn.Sequential:
+    """
+    @brief Rebuild an nn.Sequential, inserting LayerNorm after each Linear layer.
+    @param seq: Original sequential module from MlpExtractor.
+    @return New sequential with LayerNorm inserted after every nn.Linear.
+    @note Used by EvidentialActorCriticPolicy._build_mlp_extractor() to match
+          the LayerNorm-equipped EvidentialPolicyNetwork architecture.
+    """
+    layers: List[nn.Module] = []
+    for layer in seq:
+        layers.append(layer)
+        if isinstance(layer, nn.Linear):
+            layers.append(nn.LayerNorm(layer.out_features))
+    return nn.Sequential(*layers)
 
 
 class EvidentialDistribution(Distribution):
@@ -36,7 +57,9 @@ class EvidentialDistribution(Distribution):
 
     The evidential network outputs NIG parameters (gamma, nu, alpha, beta).
     For sampling and log_prob, we approximate with Normal(gamma, std) where
-    std = sqrt(total_uncertainty) and total = epistemic + aleatoric.
+    std = sqrt(aleatoric) = sqrt(beta / (nu * (alpha - 1))), the NIG predictive std.
+    Epistemic uncertainty is not added to the action std -- it characterises
+    model uncertainty over gamma, not per-sample action noise.
     NIG parameters are cached for the evidential regularisation loss.
     """
 
@@ -80,11 +103,14 @@ class EvidentialDistribution(Distribution):
         self._alpha = alpha
         self._beta = beta
 
-        # Gaussian approximation of the NIG predictive distribution
-        epistemic = beta / (alpha - 1)
-        aleatoric = beta / (nu * (alpha - 1))
-        total = epistemic + aleatoric
-        std = th.sqrt(total)
+        # Gaussian approximation: std = sqrt(beta / (nu*(alpha-1))) = sqrt(aleatoric).
+        # Epistemic uncertainty is not folded into action std -- it quantifies
+        # model uncertainty over gamma, not per-sample noise.
+        # Clamp aleatoric before sqrt to guard against numerical drift producing
+        # near-zero or negative values under GPU fp32 arithmetic, which would
+        # yield NaN/inf std and trigger a CUDA illegal memory access in Normal().
+        aleatoric = th.clamp(beta / (nu * (alpha - 1)), min=1e-6)
+        std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
         return self
@@ -96,7 +122,8 @@ class EvidentialDistribution(Distribution):
         @return Log probability summed over action dimensions, shape (batch_size,).
         """
         assert self.distribution is not None
-        log_prob = self.distribution.log_prob(actions)
+        dist = cast(Normal, self.distribution)
+        log_prob = dist.log_prob(actions)
         return sum_independent_dims(log_prob)
 
     def entropy(self) -> Optional[th.Tensor]:
@@ -105,7 +132,8 @@ class EvidentialDistribution(Distribution):
         @return Entropy summed over action dimensions, shape (batch_size,).
         """
         assert self.distribution is not None
-        return sum_independent_dims(self.distribution.entropy())
+        dist = cast(Normal, self.distribution)
+        return sum_independent_dims(dist.entropy())
 
     def sample(self) -> th.Tensor:
         """
@@ -113,7 +141,8 @@ class EvidentialDistribution(Distribution):
         @return Sampled actions of shape (batch_size, action_dim).
         """
         assert self.distribution is not None
-        return cast(th.Tensor, self.distribution.rsample())
+        dist = cast(Normal, self.distribution)
+        return cast(th.Tensor, dist.rsample())
 
     def mode(self) -> th.Tensor:
         """
@@ -121,7 +150,8 @@ class EvidentialDistribution(Distribution):
         @return Mean actions of shape (batch_size, action_dim).
         """
         assert self.distribution is not None
-        return cast(th.Tensor, self.distribution.mean)
+        dist = cast(Normal, self.distribution)
+        return cast(th.Tensor, dist.mean)
 
     def actions_from_params(
         self,
@@ -194,6 +224,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         action_space: spaces.Space,
         lr_schedule: Schedule,
         lambda_reg: float = 0.01,
+        use_uncertainty_conditioning: bool = False,
         **kwargs: Any,
     ) -> None:
         """
@@ -202,8 +233,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param action_space: Action space.
         @param lr_schedule: Learning rate schedule.
         @param lambda_reg: Evidential regularisation weight.
+        @param use_uncertainty_conditioning: If True, replace the flat MLP actor
+               with UncertaintyConditionedActor (dual-encoder). The observation
+               is split into vehicle state (indices 0-5) and covariance features
+               (indices 6-14) and processed through separate encoder branches
+               before fusion. Requires include_covariance=True in the env config.
         """
         self.lambda_reg = lambda_reg
+        self.use_uncertainty_conditioning = use_uncertainty_conditioning
         # Evidential distribution is incompatible with SDE
         kwargs["use_sde"] = False
         # Cache for NIG params set during evaluate_actions()
@@ -217,23 +254,71 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             **kwargs,
         )
 
+    def _build_mlp_extractor(self) -> None:
+        """
+        @brief Build MLP extractor with LayerNorm after each hidden Linear layer.
+
+        Calls the parent implementation then injects nn.LayerNorm into the
+        policy and value MLP sequences. This matches the LayerNorm architecture
+        used in EvidentialPolicyNetwork for RL training stability (Dohare et al. 2024).
+        """
+        super()._build_mlp_extractor()
+        self.mlp_extractor.policy_net = _insert_layernorm(self.mlp_extractor.policy_net)
+        self.mlp_extractor.value_net = _insert_layernorm(self.mlp_extractor.value_net)
+
     def _build(self, lr_schedule: Schedule) -> None:
         """
         @brief Build networks with evidential actor head and standard critic.
+
+        When use_uncertainty_conditioning=True, wires UncertaintyConditionedActor
+        as the action network. The MLP extractor's policy_net is bypassed; the
+        dual-encoder receives the raw observation split into vehicle state and
+        covariance features. When False, uses the standard flat MLP + EvidentialLayer.
+
         @param lr_schedule: Learning rate schedule.
         """
         self._build_mlp_extractor()
 
-        latent_dim_pi = self.mlp_extractor.latent_dim_pi
+        action_dim = get_action_dim(self.action_space)
+        self.action_dist = EvidentialDistribution(action_dim)
 
-        # Evidential distribution and action network
-        self.action_dist = EvidentialDistribution(get_action_dim(self.action_space))
-        self.action_net = self.action_dist.proba_distribution_net(
-            latent_dim=latent_dim_pi
-        )
+        if self.use_uncertainty_conditioning:
+            # Dual-encoder actor: separate pathways for state and covariance.
+            # net_arch hidden dims are taken from the MLP extractor latent dim as
+            # a proxy for the configured hidden size.
+            hidden_dim = self.mlp_extractor.latent_dim_pi
+            self.action_net: nn.Module = UncertaintyConditionedActor(
+                state_dim=VEHICLE_STATE_DIM,
+                uncertainty_dim=COVARIANCE_FEATURES_DIM,
+                action_dim=action_dim,
+                hidden_dims=[hidden_dim, hidden_dim],
+            )
+        else:
+            # Flat MLP actor: EvidentialLayer on top of MLP extractor latent.
+            latent_dim_pi = self.mlp_extractor.latent_dim_pi
+            self.action_net = self.action_dist.proba_distribution_net(
+                latent_dim=latent_dim_pi
+            )
 
         # Standard value head (critic unchanged)
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
+
+        if self.use_uncertainty_conditioning:
+            logger.info(
+                "EvidentialActorCriticPolicy: dual-encoder actor "
+                "(state_dim=%d, uncertainty_dim=%d, action_dim=%d, hidden_dim=%d)",
+                VEHICLE_STATE_DIM,
+                COVARIANCE_FEATURES_DIM,
+                action_dim,
+                hidden_dim,
+            )
+        else:
+            logger.info(
+                "EvidentialActorCriticPolicy: flat MLP actor "
+                "(latent_dim=%d, action_dim=%d)",
+                self.mlp_extractor.latent_dim_pi,
+                action_dim,
+            )
 
         # Orthogonal initialisation
         if self.ortho_init:
@@ -251,19 +336,137 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
 
+            # Re-apply NIG hyperprior biases: ortho_init zeroes all biases,
+            # overwriting the values set in EvidentialLayer.__init__.
+            # Must come AFTER the init_weights loop above.
+            # For dual-encoder, the EvidentialLayer lives inside action_net.
+            with th.no_grad():
+                n = action_dim
+                if self.use_uncertainty_conditioning:
+                    evid = cast(UncertaintyConditionedActor, self.action_net)
+                    evid.evidential_layer.linear.bias[0 * n : 1 * n].fill_(0.0)
+                    evid.evidential_layer.linear.bias[1 * n : 2 * n].fill_(0.9)
+                    evid.evidential_layer.linear.bias[2 * n : 3 * n].fill_(0.9)
+                    evid.evidential_layer.linear.bias[3 * n : 4 * n].fill_(0.0)
+                else:
+                    flat = cast(EvidentialLayer, self.action_net)
+                    flat.linear.bias[0 * n : 1 * n].fill_(0.0)
+                    flat.linear.bias[1 * n : 2 * n].fill_(0.9)
+                    flat.linear.bias[2 * n : 3 * n].fill_(0.9)
+                    flat.linear.bias[3 * n : 4 * n].fill_(0.0)
+
         # Set up optimiser
         optimizer_kwargs = dict(lr=cast(float, lr_schedule(1)), **self.optimizer_kwargs)
         self.optimizer = self.optimizer_class(self.parameters(), **optimizer_kwargs)
+
+    def _get_nig_from_obs(
+        self, obs: th.Tensor
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
+        """
+        @brief Run the dual-encoder actor on raw observations.
+
+        Splits the observation into vehicle state (indices 0 to VEHICLE_STATE_DIM-1)
+        and covariance features (indices VEHICLE_STATE_DIM to
+        VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM-1) and passes them through
+        the UncertaintyConditionedActor.
+
+        @param obs: Observation tensor of shape (batch, obs_dim).
+        @return Tuple (gamma, nu, alpha, beta) of NIG parameters.
+        @warning Only valid when use_uncertainty_conditioning=True.
+        """
+        state = obs[:, :VEHICLE_STATE_DIM]
+        uncertainty = obs[
+            :, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM
+        ]
+        dual = cast(UncertaintyConditionedActor, self.action_net)
+        result = dual(state, uncertainty)
+        return cast(Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor], result)
+
+    def forward(
+        self,
+        obs: th.Tensor,
+        deterministic: bool = False,
+    ) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
+        """
+        @brief Forward pass for rollout collection.
+
+        SB3's default forward() calls _get_action_dist_from_latent(latent_pi),
+        which only works for the flat MLP path. For the dual-encoder path,
+        we split the observation into state and covariance features and pass
+        them through UncertaintyConditionedActor directly.
+
+        @param obs: Observation tensor.
+        @param deterministic: Whether to use deterministic actions.
+        @return Tuple of (actions, values, log_prob).
+        """
+        features = self.extract_features(obs, self.pi_features_extractor)
+        if self.share_features_extractor:
+            latent_pi, latent_vf = self.mlp_extractor(features)
+        else:
+            pi_features = cast(th.Tensor, features)
+            vf_features = self.extract_features(obs, self.vf_features_extractor)
+            latent_pi = self.mlp_extractor.forward_actor(pi_features)
+            latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
+
+        values = self.value_net(latent_vf)
+
+        if self.use_uncertainty_conditioning:
+            # latent_pi not used for the actor here; dual-encoder reads raw obs.
+            gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
+            distribution = cast(
+                EvidentialDistribution,
+                self.action_dist.proba_distribution(gamma, nu, alpha, beta),
+            )
+        else:
+            distribution = self._get_action_dist_from_latent(latent_pi)
+
+        actions = distribution.get_actions(deterministic=deterministic)
+        log_prob = distribution.log_prob(actions)
+        action_shape = cast(Tuple[int, ...], self.action_space.shape)
+        actions = actions.reshape(-1, action_shape[0])
+        return actions, values, log_prob
+
+    def get_distribution(  # type: ignore[override]
+        self, obs: th.Tensor
+    ) -> EvidentialDistribution:
+        """
+        @brief Get the action distribution for given observations.
+
+        Overrides SB3's default which calls _get_action_dist_from_latent().
+        For the dual-encoder path, splits observations and passes them
+        through UncertaintyConditionedActor directly.
+
+        @param obs: Observation tensor.
+        @return Evidential distribution.
+        """
+        if self.use_uncertainty_conditioning:
+            gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
+            return cast(
+                EvidentialDistribution,
+                self.action_dist.proba_distribution(gamma, nu, alpha, beta),
+            )
+        # Flat MLP path: MLP extractor latent -> EvidentialLayer.
+        features = self.extract_features(obs, self.pi_features_extractor)
+        if self.share_features_extractor:
+            latent_pi, _ = self.mlp_extractor(features)
+        else:
+            latent_pi = self.mlp_extractor.forward_actor(cast(th.Tensor, features))
+        return self._get_action_dist_from_latent(latent_pi)
 
     def _get_action_dist_from_latent(
         self, latent_pi: th.Tensor
     ) -> EvidentialDistribution:
         """
-        @brief Get evidential distribution from latent actor features.
+        @brief Get evidential distribution from latent actor features (flat MLP path).
+
+        Only called when use_uncertainty_conditioning=False. For the dual-encoder
+        path, _get_nig_from_obs() is used directly.
+
         @param latent_pi: Latent features from the actor MLP.
         @return Evidential distribution with NIG parameters set.
         """
-        gamma, nu, alpha, beta = self.action_net(latent_pi)
+        flat = cast(EvidentialLayer, self.action_net)
+        gamma, nu, alpha, beta = flat(latent_pi)
         return cast(
             EvidentialDistribution,
             self.action_dist.proba_distribution(gamma, nu, alpha, beta),
@@ -274,10 +477,18 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     ) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
         """
         @brief Evaluate actions and cache NIG params for evidential loss.
+
+        For the dual-encoder path (use_uncertainty_conditioning=True), the
+        UncertaintyConditionedActor receives the raw observation split into
+        vehicle state and covariance features, bypassing the MLP extractor's
+        policy_net. The critic path is unchanged regardless of mode.
+
         @param obs: Observations.
         @param actions: Actions to evaluate.
         @return Tuple of (values, log_prob, entropy).
         """
+        # No extractor argument: when share_features_extractor=False, SB3 returns
+        # a (pi_features, vf_features) tuple which we unpack below.
         features = self.extract_features(obs)
         if self.share_features_extractor:
             latent_pi, latent_vf = self.mlp_extractor(features)
@@ -286,7 +497,17 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             latent_pi = self.mlp_extractor.forward_actor(pi_features)
             latent_vf = self.mlp_extractor.forward_critic(vf_features)
 
-        distribution = self._get_action_dist_from_latent(latent_pi)
+        if self.use_uncertainty_conditioning:
+            # Dual-encoder: raw obs -> split -> UncertaintyConditionedActor.
+            # latent_pi is not used for the actor in this mode.
+            gamma, nu, alpha, beta = self._get_nig_from_obs(cast(th.Tensor, obs))
+            distribution = cast(
+                EvidentialDistribution,
+                self.action_dist.proba_distribution(gamma, nu, alpha, beta),
+            )
+        else:
+            distribution = self._get_action_dist_from_latent(latent_pi)
+
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
@@ -314,23 +535,28 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         """
         self.set_training_mode(False)
         with th.no_grad():
-            features = self.extract_features(obs)
-            if self.share_features_extractor:
-                latent_pi, _ = self.mlp_extractor(features)
+            if self.use_uncertainty_conditioning:
+                gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
             else:
-                pi_features, _ = features
-                latent_pi = self.mlp_extractor.forward_actor(pi_features)
-
-            gamma, nu, alpha, beta = self.action_net(latent_pi)
+                features = self.extract_features(obs)
+                if self.share_features_extractor:
+                    latent_pi, _ = self.mlp_extractor(features)
+                else:
+                    pi_features, _ = features
+                    latent_pi = self.mlp_extractor.forward_actor(pi_features)
+                flat = cast(EvidentialLayer, self.action_net)
+                gamma, nu, alpha, beta = flat(latent_pi)
 
             epistemic = beta / (alpha - 1)
-            aleatoric = beta / (nu * (alpha - 1))
+            aleatoric = th.clamp(beta / (nu * (alpha - 1)), min=1e-6)
             total = epistemic + aleatoric
 
             if deterministic:
                 action = gamma
             else:
-                std = th.sqrt(total)
+                # Consistent with EvidentialDistribution.proba_distribution:
+                # use aleatoric std only, not total.
+                std = th.sqrt(aleatoric)
                 dist = Normal(gamma, std)
                 action = dist.sample()
 
@@ -346,11 +572,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         """
-        @brief Include lambda_reg in saved constructor parameters.
+        @brief Include lambda_reg and use_uncertainty_conditioning in saved parameters.
         @return Dictionary of constructor parameters for save/load.
         """
-        data = super()._get_constructor_parameters()
+        data: Dict[str, Any] = cast(
+            Dict[str, Any], super()._get_constructor_parameters()
+        )
         data["lambda_reg"] = self.lambda_reg
+        data["use_uncertainty_conditioning"] = self.use_uncertainty_conditioning
         return data
 
 
@@ -373,15 +602,25 @@ class EvidentialPPO(PPO):
         policy: Union[str, type],
         env: Union[GymEnv, str],
         lambda_reg: float = 0.01,
+        lambda_reg_warmup_steps: int = 50000,
         **kwargs: Any,
     ) -> None:
         """
         @brief Initialise EvidentialPPO.
         @param policy: Policy class or string.
         @param env: Environment.
-        @param lambda_reg: Evidential regularisation weight.
+        @param lambda_reg: Evidential regularisation weight (target value after warmup).
+        @param lambda_reg_warmup_steps: Number of environment steps over which
+               lambda_reg is linearly annealed from 0 to lambda_reg. Allows the NLL to
+               establish good predictions before the regularisation term fires.
         """
         self.lambda_reg = lambda_reg
+        self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
+        logger.info(
+            "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d",
+            lambda_reg,
+            lambda_reg_warmup_steps,
+        )
         # Pass lambda_reg to policy_kwargs
         policy_kwargs = kwargs.get("policy_kwargs") or {}
         policy_kwargs["lambda_reg"] = lambda_reg
@@ -398,6 +637,13 @@ class EvidentialPPO(PPO):
         """
         self.policy.set_training_mode(True)
         self._update_learning_rate(self.policy.optimizer)
+
+        # Linearly anneal lambda_reg from 0 to self.lambda_reg over the first
+        # lambda_reg_warmup_steps environment steps. This lets the NLL loss
+        # establish good predictions before the evidential regularisation fires.
+        ramp = min(1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps))
+        current_lambda_reg = self.lambda_reg * ramp
+
         clip_range_fn = cast(Schedule, self.clip_range)
         clip_range = clip_range_fn(self._current_progress_remaining)
         clip_range_vf: Optional[float] = None
@@ -480,12 +726,12 @@ class EvidentialPPO(PPO):
                     entropy_loss = -th.mean(entropy)
                 entropy_losses.append(entropy_loss.item())
 
-                # Combined loss with evidential regularisation
+                # Combined loss with annealed evidential regularisation
                 loss = (
                     policy_loss
                     + self.ent_coef * entropy_loss
                     + self.vf_coef * value_loss
-                    + self.lambda_reg * evidential_reg
+                    + current_lambda_reg * evidential_reg
                 )
                 evidential_reg_losses.append(evidential_reg.item())
 
@@ -525,7 +771,7 @@ class EvidentialPPO(PPO):
             self.rollout_buffer.returns.flatten(),
         )
 
-        # Standard PPO logs
+        # Standard PPO logs. `loss` is the last-batch tensor -- SB3 convention.
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))
@@ -555,3 +801,4 @@ class EvidentialPPO(PPO):
             "train/aleatoric_uncertainty",
             np.mean(aleatoric_uncertainties),
         )
+        self.logger.record("train/lambda_reg", current_lambda_reg)

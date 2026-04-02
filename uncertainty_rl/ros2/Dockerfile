@@ -32,29 +32,42 @@ RUN apt-get update && apt-get install -y \
 # Install ROS 2 packages:
 # - robot-localization: EKF node (fuses IMU + odometry, outputs /odometry/filtered)
 # - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
-# - pointcloud-to-laserscan: converts LiDAR PointCloud2 to LaserScan for the filter pipeline
-# - laser-filters: clips the 360 deg CARLA scan to 270 deg (rear 90 deg blocked by vehicle)
-# - cartographer-ros: 2D SLAM / scan-matching; publishes /scan_matched_odometry for EKF correction
+# - cartographer-ros: 2D SLAM / scan-matching on raw PointCloud2; publishes TF for EKF
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-cv-bridge \
     ros-${ROS_DISTRO}-derived-object-msgs \
-    ros-${ROS_DISTRO}-pointcloud-to-laserscan \
-    ros-${ROS_DISTRO}-laser-filters \
     ros-${ROS_DISTRO}-cartographer-ros \
+    ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
+
+# Use CycloneDDS for cross-distro compatibility (Humble <-> Jazzy)
+ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
 # Create workspace
 WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
 # Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
-# Patch CARLA_VERSION to 0.9.16: the bridge hardcodes 0.9.13 but is compatible with 0.9.16
+# Three patches applied to the cloned ros-bridge source:
+#   1. CARLA_VERSION: bridge hardcodes 0.9.13 but is wire-compatible with 0.9.16.
+#   2. generate_opendrive_world: add OpendriveGenerationParameters to disable nav
+#      mesh (crashes on headless GPU) and match our FlatPlane world setup.
+#   3. on_tick_id guard: AttributeError when shutdown() is called before on_tick_id
+#      is assigned during rapid restart. getattr fallback makes it a no-op.
+#   4. patch_bridge.py: catches RuntimeError on destroy() of already-gone actors
+#      (sensor.py + actor_factory.py) to prevent hang in world.tick() sync mode.
+COPY uncertainty_rl/ros2/patch_bridge.py /tmp/patch_bridge.py
 RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
-    echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION
+    echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION && \
+    sed -i 's|carla_world = carla_client.generate_opendrive_world(str(data))|carla_world = carla_client.generate_opendrive_world(str(data), carla.OpendriveGenerationParameters(vertex_distance=2.0, max_road_length=600.0, wall_height=0.0, additional_width=300.0, smooth_junctions=False, enable_mesh_visibility=True, enable_pedestrian_navigation=False))|' \
+    /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
+    sed -i 's|if self.on_tick_id:|if getattr(self, "on_tick_id", None):|' \
+    /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
+    python3 /tmp/patch_bridge.py
 
 # Install Python dependencies for CARLA
 # --break-system-packages needed on Ubuntu 24.04 (PEP 668); safe in a container
@@ -70,11 +83,22 @@ RUN rosdep update && \
     qtbase5-dev libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
     ackermann_msgs" || true
 
-# Build only the CARLA bridge packages we need (no rviz, rqt, PCL, manual control)
+# Build only the CARLA bridge packages needed at runtime.
+# carla_manual_control is included because carla_ros_bridge depends on it at
+# build time (looks for carla_manual_control/package.sh during colcon build).
+# It is never launched at runtime. rviz2/rqt packages are excluded (GUI only).
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
     --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
+
+# Install the uncertainty_rl Python package (base deps only -- no torch/SB3).
+# tf_to_odom imports uncertainty_rl.utils.covariance_utils at node startup.
+# Placed outside /workspace/src so colcon does not find it as a duplicate package.
+COPY pyproject.toml /opt/uncertainty_rl_pkg/pyproject.toml
+COPY uncertainty_rl/__init__.py /opt/uncertainty_rl_pkg/uncertainty_rl/__init__.py
+COPY uncertainty_rl/utils/ /opt/uncertainty_rl_pkg/uncertainty_rl/utils/
+RUN pip install --no-cache-dir --break-system-packages -e "/opt/uncertainty_rl_pkg"
 
 # Copy custom message package (ament_cmake, builds first via dependency order)
 COPY uncertainty_rl/ros2/uncertainty_rl_msgs /workspace/src/uncertainty_rl_msgs
@@ -87,11 +111,11 @@ COPY uncertainty_rl/ros2/setup.cfg /workspace/src/uncertainty_rl_ros2/setup.cfg
 COPY uncertainty_rl/ros2/resource /workspace/src/uncertainty_rl_ros2/resource
 COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
-# Copy ROS 2 config (loaded at launch time)
-COPY configs/ros2_config.yaml /workspace/configs/ros2_config.yaml
-
-# Copy Cartographer configs (Suite A: 2D LiDAR; Suite B/C: 3D LiDAR)
-COPY configs/cartographer /workspace/configs/cartographer
+# Create the maps directory as an anchor for the configs/maps:rw bind-mount.
+# .pbstream files are generated at runtime via make docker-map; never baked in.
+# All configs (ros2_config.yaml, train_config.yaml, cartographer/) are provided
+# at runtime via the ./configs:/workspace/configs:ro bind-mount.
+RUN mkdir -p /workspace/configs/maps
 
 # Build custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
@@ -104,9 +128,11 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
 RUN echo "source /opt/ros/${ROS_DISTRO}/setup.bash" >> ~/.bashrc && \
     echo "source /workspace/install/setup.bash" >> ~/.bashrc
 
-# Health check for ROS 2 daemon
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD ros2 topic list || exit 1
+# Health check: verify the colcon install is intact and ROS 2 can be sourced.
+# ros2 topic list hangs with CycloneDDS when no DDS participant is present,
+# so check the install directory instead of querying the live graph.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD test -f /workspace/install/setup.bash || exit 1
 
 WORKDIR /workspace
 CMD ["/bin/bash"]
