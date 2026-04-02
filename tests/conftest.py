@@ -9,7 +9,13 @@ environment configuration, and logging setup.
 from typing import Any, Dict
 
 import pytest
-import torch
+
+try:
+    import torch
+except ImportError:
+    # torch not installed (CI or no training deps). Network fixtures will not
+    # be available; tests that need them should be skipped via pytest.importorskip.
+    torch = None  # type: ignore[assignment]
 
 from uncertainty_rl.utils.constants import ACTION_DIM
 
@@ -24,39 +30,43 @@ HIDDEN_DIMS = [64, 64]  # Smaller than production for fast tests
 
 
 # ---------------------------------------------------------------------------
-# Tensor fixtures
+# Tensor fixtures (skipped if torch not available)
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def state_batch() -> torch.Tensor:
+def state_batch():
     """
     @brief Random state batch shaped (BATCH_SIZE, STATE_DIM).
     """
+    pytest.importorskip("torch")
     return torch.randn(BATCH_SIZE, STATE_DIM)
 
 
 @pytest.fixture
-def single_state() -> torch.Tensor:
+def single_state():
     """
     @brief Single random state shaped (1, STATE_DIM).
     """
+    pytest.importorskip("torch")
     return torch.randn(1, STATE_DIM)
 
 
 @pytest.fixture
-def action_batch() -> torch.Tensor:
+def action_batch():
     """
     @brief Random action batch shaped (BATCH_SIZE, ACTION_DIM).
     """
+    pytest.importorskip("torch")
     return torch.randn(BATCH_SIZE, ACTION_DIM)
 
 
 @pytest.fixture
-def low_uncertainty_state() -> torch.Tensor:
+def low_uncertainty_state():
     """
     @brief State with very low EKF localisation uncertainty (indices 6-8 near zero).
     """
+    pytest.importorskip("torch")
     state = torch.randn(1, STATE_DIM)
     state[0, 6:9] = 0.01
     state[0, 9:15] = 0.0001
@@ -64,10 +74,11 @@ def low_uncertainty_state() -> torch.Tensor:
 
 
 @pytest.fixture
-def high_uncertainty_state() -> torch.Tensor:
+def high_uncertainty_state():
     """
     @brief State with high EKF localisation uncertainty (indices 6-8 large).
     """
+    pytest.importorskip("torch")
     state = torch.randn(1, STATE_DIM)
     state[0, 6:9] = 1.0
     state[0, 9:12] = 1.0
