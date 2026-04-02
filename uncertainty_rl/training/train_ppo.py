@@ -132,6 +132,8 @@ def make_env(
             carla_timestep=config.get("carla_timestep", 0.05),
             debug=config.get("debug", False),
             map_load_sleep=config.get("map_load_sleep", 5.0),
+            action_repeat=config.get("action_repeat", 1),
+            no_rendering_mode=config.get("no_rendering_mode", False),
         )
         return env
 
