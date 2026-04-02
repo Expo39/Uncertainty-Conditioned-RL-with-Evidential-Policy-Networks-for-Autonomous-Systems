@@ -17,11 +17,13 @@ import gymnasium as gym
 import numpy as np
 import torch
 import yaml
+
+# Reserved: re-enable when multi-instance CARLA eval is supported.
+from stable_baselines3.common.callbacks import EvalCallback  # noqa: F401
 from stable_baselines3.common.callbacks import (
     BaseCallback,
     CallbackList,
     CheckpointCallback,
-    EvalCallback,  # Reserved: re-enable when multi-instance CARLA eval is supported.
 )
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -32,9 +34,13 @@ from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 
-# Suppress Gymnasium's float64->float32 precision warning for unbounded obs spaces.
+# Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
 # spaces.Box with low/high=±inf always triggers this; it is harmless.
-warnings.filterwarnings("ignore", message=".*Box.*precision lowered.*", category=UserWarning)
+warnings.filterwarnings(
+    "ignore",
+    message=".*Box.*precision lowered.*",
+    category=UserWarning,
+)
 
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
@@ -155,11 +161,14 @@ class EnvDiagnosticsCallback(BaseCallback):
                 float(info.get("orientation_error", 0.0))
             )
             self._ep_speeds.append(float(info.get("speed", 0.0)))
-            self._ep_progress_rewards.append(
-                float(info.get("progress_reward", 0.0))
+            self._ep_progress_rewards.append(float(info.get("progress_reward", 0.0)))
+            # Episode-terminal flags -- count when episode ended.
+            is_terminal = (
+                info.get("success", False)
+                or info.get("collision", False)
+                or info.get("timeout", False)
             )
-            # Episode-terminal flags -- only count when the episode actually ended.
-            if info.get("success", False) or info.get("collision", False) or info.get("timeout", False):
+            if is_terminal:
                 self._ep_successes.append(1.0 if info.get("success", False) else 0.0)
                 self._ep_collisions.append(1.0 if info.get("collision", False) else 0.0)
                 self._ep_timeouts.append(1.0 if info.get("timeout", False) else 0.0)
@@ -411,13 +420,16 @@ def main() -> None:
     per-run settings (e.g. --seed 7 for a specific ablation run).
     """
     parser = argparse.ArgumentParser(
-        description="Train uncertainty-conditioned RL agent for autonomous parking"
+        description=("Train uncertainty-conditioned RL agent for autonomous parking")
     )
     parser.add_argument(
         "--train-config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to training hyperparameter config (PPO, network, evidential settings)",
+        help=(
+            "Path to training hyperparameter config "
+            "(PPO, network, evidential settings)"
+        ),
     )
     parser.add_argument(
         "--env-config",

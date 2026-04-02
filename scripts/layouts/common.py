@@ -121,7 +121,6 @@ def _bay_corners(
     ]
 
 
-
 def validate_bays_in_polygon(
     bays: List[Dict[str, Any]],
     corners: List[Dict[str, float]],

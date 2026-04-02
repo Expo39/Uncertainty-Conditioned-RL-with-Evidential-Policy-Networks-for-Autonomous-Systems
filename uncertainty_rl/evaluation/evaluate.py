@@ -392,8 +392,12 @@ def evaluate_across_conditions(
         result["bay_occupancy_rate"] = condition.get("bay_occupancy_rate", 0.6)
         results.append(result)
 
-        logger.info("  success_rate=%.1f%%  avg_reward=%.2f  avg_steps=%.0f",
-                    metrics.success_rate, metrics.average_reward, metrics.average_steps)
+        logger.info(
+            "  success_rate=%.1f%%  avg_reward=%.2f  avg_steps=%.0f",
+            metrics.success_rate,
+            metrics.average_reward,
+            metrics.average_steps,
+        )
 
         # Clean up
         eval_env.close()

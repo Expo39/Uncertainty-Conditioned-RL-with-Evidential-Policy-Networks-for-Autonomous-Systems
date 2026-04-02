@@ -186,8 +186,12 @@ class CovarianceExtractorNode(Node):
         self._write_seq += 1
         data = {
             "seq": self._write_seq,
-            "x": float(x), "y": float(y), "yaw": float(yaw),
-            "vx": float(vx), "vy": float(vy), "vyaw": float(vyaw),
+            "x": float(x),
+            "y": float(y),
+            "yaw": float(yaw),
+            "vx": float(vx),
+            "vy": float(vy),
+            "vyaw": float(vyaw),
             "covariance": cov_flat,
         }
         with open(self._TMP_PATH, "w") as f:
@@ -275,9 +279,7 @@ class CovarianceMonitorNode(Node):
         )
 
         self._log_counter: int = 0
-        self.get_logger().info(
-            f"Covariance monitor initialised on {covariance_topic}"
-        )
+        self.get_logger().info(f"Covariance monitor initialised on {covariance_topic}")
 
     def _covariance_callback(self, msg: CovarianceEstimate) -> None:
         """

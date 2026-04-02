@@ -21,17 +21,17 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from uncertainty_rl.utils.geometry import (
-    _compute_relative_target_pose,
-    _interpolate_cone_positions,
-    zone_bbox,
-)
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
+)
+from uncertainty_rl.utils.geometry import (
+    _compute_relative_target_pose,
+    _interpolate_cone_positions,
+    zone_bbox,
 )
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
@@ -572,7 +572,7 @@ class TestLog1pCovarianceTransform:
         # Code uses signed log1p to preserve sign of off-diagonal covariance terms.
         expected_cov = np.sign(raw) * np.log1p(np.abs(raw))
         np.testing.assert_allclose(
-            obs[6:15],
+            obs[3:12],
             expected_cov,
             rtol=1e-5,
             err_msg="Covariance features must be signed log1p-transformed",
@@ -724,8 +724,9 @@ def _make_env_for_reward() -> Any:
     return env
 
 
-def _set_vehicle(env: Any, x: float, y: float, yaw_deg: float,
-                 vx: float = 0.0, vy: float = 0.0) -> None:
+def _set_vehicle(
+    env: Any, x: float, y: float, yaw_deg: float, vx: float = 0.0, vy: float = 0.0
+) -> None:
     """
     @brief Attach a mock CARLA vehicle to env with the given position and velocity.
     @param env: CARLAParkingEnv instance.
@@ -900,8 +901,13 @@ class TestComputeReward:
 
         _, _, _, diag = env._compute_reward()
 
-        for key in ("pos_error", "orientation_error", "speed", "collision",
-                    "progress_reward"):
+        for key in (
+            "pos_error",
+            "orientation_error",
+            "speed",
+            "collision",
+            "progress_reward",
+        ):
             assert key in diag, f"Missing diag key: {key}"
 
     def test_diag_pos_error_matches_distance(self) -> None:
@@ -991,8 +997,17 @@ class TestStepInfoDict:
         env.vehicle = None
         _, _, _, _, info = env.step(env.action_space.sample())
 
-        for key in ("steps", "success", "collision", "timeout", "floor_plan",
-                    "pos_error", "orientation_error", "speed", "progress_reward"):
+        for key in (
+            "steps",
+            "success",
+            "collision",
+            "timeout",
+            "floor_plan",
+            "pos_error",
+            "orientation_error",
+            "speed",
+            "progress_reward",
+        ):
             assert key in info, f"Missing info key: {key}"
 
     def test_info_timeout_true_at_max_steps(self) -> None:

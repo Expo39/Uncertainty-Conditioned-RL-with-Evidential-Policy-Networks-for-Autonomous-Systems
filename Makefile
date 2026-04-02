@@ -1,7 +1,7 @@
 # Makefile - Uncertainty-Conditioned RL
 # Development commands for training, evaluation, testing, and linting.
 
-.PHONY: help install test test-unit test-integration verify
+.PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck clean clean-venv
 .PHONY: backup-configs restore-configs
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
@@ -182,7 +182,7 @@ docker-test-integration: ## Run integration tests inside container (auto-starts 
 
 docker-verify: ## Run all checks inside container (auto-starts core stack if needed)
 	$(call ensure-core-stack-running)
-	$(DOCKER_COMPOSE) exec training make verify
+	$(DOCKER_COMPOSE) exec training bash -c "pytest $(TESTS_DIR) -v --tb=short -m 'not integration' && flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503 && isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && mypy $(SRC_DIR) --ignore-missing-imports && python -c 'import uncertainty_rl; print(\"All checks passed.\")'"
 
 docker-lint: ## Run linters inside container (auto-starts core stack if needed)
 	$(call ensure-core-stack-running)
@@ -361,26 +361,9 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 # Testing
 # ----------------------------------------------------------------------
 
-test: ## Run full test suite (unit + integration)
-	$(call ensure-venv)
-	$(PYTEST) $(TESTS_DIR) -v --tb=short
-
 test-unit: ## Run unit tests only (no GPU, no CARLA, no ROS 2)
 	$(call ensure-venv)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
-
-test-integration: ## Run integration tests (requires CARLA + ROS 2 + GPU)
-	$(call ensure-venv)
-	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "integration"
-
-verify: ## Run all CPU-only checks (tests + lint + typecheck + import sanity)
-	$(call ensure-venv)
-	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
-	$(VENV)/bin/flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
-	$(VENV)/bin/isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
-	$(VENV)/bin/black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
-	$(VENV)/bin/mypy $(SRC_DIR) --ignore-missing-imports
-	$(PYTHON) -c "import uncertainty_rl; print('All checks passed.')"
 
 # ----------------------------------------------------------------------
 # Linting & Formatting

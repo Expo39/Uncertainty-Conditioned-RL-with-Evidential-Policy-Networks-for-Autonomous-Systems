@@ -8,9 +8,9 @@ to the appropriate inspector class from :mod:`scripts.inspect._inspectors`.
 Class hierarchy (defined in ``_inspectors.py``):
   _Inspector          -- CARLA connection, world tick loop, spectator placement
     LayoutInspector   -- lot bay outlines, spawn/patrol/pedestrian overlays
-      SensorInspector -- sensor mount dots + LiDAR/camera FOV arcs on top of layout
-    LiveInspector     -- real spawned sensors: LiDAR debug dots or camera spectator view
-    DryRunInspector   -- full training pipeline (reset+step loop), random actions, no model
+      SensorInspector -- sensor mount dots + LiDAR/camera FOV arcs
+    LiveInspector     -- real spawned sensors: LiDAR dots or camera view
+    DryRunInspector   -- full training pipeline, random actions, no model
 
 
 Drawing helpers (free functions) are in :mod:`scripts.inspect._drawing`.
@@ -33,16 +33,18 @@ Or directly:
 
 Arguments:
   --mode               layout | sensors | live | dryrun (default: sensors)
-  --layout             rectangle | trapezoid | irregular_a (default: rectangle)
-  --suite              suite_a | suite_b | suite_c (default: suite_a, sensors/live modes only)
-  --view               birds_eye | side | front (default: birds_eye, sensors mode only)
-  --sensor             lidar | camera (live mode, suite_c only; suite_c defaults to camera)
+  --layout             rectangle | trapezoid | irregular_a
+                       (default: rectangle)
+  --suite              suite_a | suite_b | suite_c (default: suite_a)
+  --view               birds_eye | side | front
+                       (default: birds_eye, sensors mode)
+  --sensor             lidar | camera (live mode, suite_c only)
   --host               CARLA server hostname (default: carla-server-demo)
   --port               CARLA server port (default: 2100)
   --duration           Seconds to run (default: 300)
-  --episodes           Max episodes for dryrun mode (default: unlimited)
-  --inspect-view       View for dryrun: third_person|side|back|front|free (default: third_person)
-  --termination-pause  Seconds to hold scene after episode ends (default: 3.0, dryrun only)
+  --episodes           Max episodes for dryrun (default: unlimited)
+  --inspect-view       View for dryrun: third_person|side|back|front|free
+  --termination-pause  Seconds to hold after episode (default: 3.0)
 
 @note Runs in synchronous CARLA mode.  Requires the full Docker stack.
 @note CARLA 0.9.16 draw_line ignores colour -- overlays use draw_point at small
@@ -71,8 +73,12 @@ from scripts.inspect._inspectors import (
 )
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
-# Suppress Gymnasium's float64->float32 precision warning for unbounded obs spaces.
-warnings.filterwarnings("ignore", message=".*Box.*precision lowered.*", category=UserWarning)
+# Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
+warnings.filterwarnings(
+    "ignore",
+    message=".*Box.*precision lowered.*",
+    category=UserWarning,
+)
 
 # ===========================================================================
 # Entry point
@@ -366,7 +372,9 @@ def main() -> None:
         inspector.place_spectator()  # type: ignore[attr-defined]
         action_desc = str(dryrun_action) if dryrun_action is not None else "random"
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
-        print(f"  View: {args.inspect_view}  |  termination pause: {args.termination_pause:.1f}s")
+        print(
+            f"  View: {args.inspect_view}  |  " f"pause: {args.termination_pause:.1f}s"
+        )
         print("  Press Ctrl+C to stop.")
 
     else:  # live

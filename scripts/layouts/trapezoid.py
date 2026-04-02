@@ -30,11 +30,11 @@ import math
 from typing import Any, Dict
 
 from scripts.layouts.common import (
+    _PED_MARGIN,
+    _WALL_GAP,
     BAY_DIMS,
     BAYS_PER_TYPE,
     PED_STRIP,
-    _PED_MARGIN,
-    _WALL_GAP,
     ang_offset_from_wall,
     ang_x_margin,
     angled_bays_along_wall,
