@@ -10,6 +10,7 @@ import argparse
 import logging
 import os
 import warnings
+from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
 import gymnasium as gym
@@ -219,8 +220,28 @@ def train(config: Dict[str, Any]) -> None:
     # Resolve operational settings from config
     seed = config.get("seed", 42)
     total_timesteps = config.get("total_timesteps", 1000000)
-    log_dir = config.get("log_dir", "./logs")
-    checkpoint_dir = config.get("checkpoint_dir", "./checkpoints")
+
+    # Build a run name that uniquely identifies this configuration so each
+    # training run gets its own TensorBoard subdirectory under logs/.
+    # Format: <baseline_name>_seed<N>_<DDMMYYYY-HHMM>
+    # baseline_name is set explicitly in baseline override configs; for ad-hoc
+    # runs it is derived from policy_type and observation flags.
+    policy_type = config.get("policy_type", "evidential")
+    include_cov = config.get("include_covariance", True)
+    include_obs = config.get("include_obstacle_obs", True)
+    _default_run_name = (
+        f"{policy_type}"
+        f"_cov{'on' if include_cov else 'off'}"
+        f"_obs{'on' if include_obs else 'off'}"
+    )
+    baseline_name = config.get("baseline_name", _default_run_name)
+    _timestamp = datetime.now().strftime("%d%m%Y-%H%M")
+    run_name = f"{baseline_name}_seed{seed}_{_timestamp}"
+
+    _base_log_dir = config.get("log_dir", "./logs")
+    _base_checkpoint_dir = config.get("checkpoint_dir", "./checkpoints")
+    log_dir = os.path.join(_base_log_dir, run_name)
+    checkpoint_dir = os.path.join(_base_checkpoint_dir, run_name)
     # eval_freq and n_eval_episodes are read here for when eval_env is re-enabled.
     # Currently eval_env is always None (see comment below).
     eval_freq = config.get("eval_freq", 10000)

@@ -35,7 +35,7 @@ map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before cont
 # ---------------------------------------------------------------------------
 ros2:
   covariance_topic: "/odometry/filtered"  # nav_msgs/Odometry from robot_localisation EKF
-  covariance_timeout: 60.0  # Seconds to wait for first covariance message per episode
+  covariance_timeout: 120.0  # Seconds to wait for first covariance message per episode (120s allows ros2-bridge to auto-restart on crash)
   # Total seconds to keep waiting for EKF velocity to drop below 0.5 m/s
   # (the convergence signal) before falling back to best available offset.
   # Cartographer pure localisation typically converges within 1-3 s after

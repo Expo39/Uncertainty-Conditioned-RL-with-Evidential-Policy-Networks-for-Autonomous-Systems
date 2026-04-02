@@ -75,6 +75,7 @@ meeting_agendas/
 references/
 claude_plans/
 ENVIRONMENT_DESIGN.md
+documentation/tmux_guide.txt
 
 # Project config archive (local portability)
 project_configs.tar.gz
