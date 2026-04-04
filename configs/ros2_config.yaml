@@ -4,7 +4,7 @@
 #
 #   /carla/ego_vehicle/lidar  (PointCloud2)
 #       -> Cartographer (loc mode, matching against frozen .pbstream)
-#       -> TF: odom -> ego_vehicle/lidar
+#       -> TF: odom -> ego_vehicle/lidar  (Cartographer; provide_odom_frame=true)
 #       -> tf_to_odom node  -> /scan_matched_odometry  (Odometry, dynamic covariance)
 #
 #   /carla/ego_vehicle/imu  (sensor_msgs/Imu)
@@ -33,7 +33,9 @@ carla_topics:
 ekf:
   frequency: 20.0        # EKF update rate (Hz) -- matches CARLA timestep
   two_d_mode: true       # Constrain to 2D: suppress z, roll, pitch states
-  world_frame: "odom"    # EKF output expressed in the Cartographer odom frame
+  world_frame: "odom"    # EKF output expressed in the Cartographer odom frame.
+                         # Cartographer (provide_odom_frame=true) publishes odom -> ego_vehicle/lidar;
+                         # tf_to_odom looks this up and feeds the EKF as odom0.
   odom_frame: "odom"
   base_link_frame: "ego_vehicle"  # Central body frame for all sensors.
   # The CARLA bridge (passive mode) publishes TF frames directly under "map"
@@ -108,6 +110,13 @@ publish_rate: 10.0                           # Hz (file write rate)
 # it into body frame before writing to ekf_state.json.
 # Set false only if robot_localisation is configured with twist_in_robot_frame: true.
 twist_in_odom_frame: true
+
+# Time source for ROS 2 nodes (excluding Cartographer -- see cartographer_use_sim_time).
+# The CARLA bridge node itself runs with use_sim_time=true and publishes /clock from
+# CARLA's internal simulation time (UNIX epoch scale, ~1.77e9 s).
+# All nodes that need consistent TF lookups must use the same time source as the bridge.
+use_sim_time: true
+
 
 # QoS settings for ROS 2 subscribers/publishers
 qos:

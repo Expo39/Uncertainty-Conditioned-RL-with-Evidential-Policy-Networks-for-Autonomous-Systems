@@ -36,16 +36,12 @@ def tuning_config() -> Dict[str, Any]:
     """
     return {
         "search_space": {
-            "learning_rate": [1e-5, 2e-3],
+            "learning_rate": [1e-5, 1e-3],
             "n_steps": [1024, 2048, 4096],
-            "batch_size": [64, 128, 256, 512],
+            "batch_size": [64, 128, 256],
             "n_epochs": [3, 5, 10],
-            "gamma": [0.97, 0.999],
+            "gamma": [0.98, 0.999],
             "ent_coef": [1e-6, 0.01],
-            "clip_range": [0.1, 0.2, 0.3],
-            "max_grad_norm": [0.3, 1.0],
-            "target_kl": [0.01, 0.05],
-            "net_arch": [[128, 128], [256, 256]],
             "lambda_reg": [1e-5, 0.01],
             "lambda_reg_warmup_steps": [10000, 100000],
         },
@@ -106,10 +102,6 @@ class TestSampleHyperparams:
             "n_epochs",
             "gamma",
             "ent_coef",
-            "clip_range",
-            "max_grad_norm",
-            "target_kl",
-            "net_arch",
             "evidential",
         }
         assert expected_keys.issubset(params.keys()), (
@@ -152,18 +144,17 @@ class TestSampleHyperparams:
         trial = study.ask()
         params = sample_hyperparams(trial, tuning_config)
 
-        assert 0.97 <= params["gamma"] <= 0.999, (
-            f"Gamma {params['gamma']} outside [0.97, 0.999]"
+        assert 0.98 <= params["gamma"] <= 0.999, (
+            f"Gamma {params['gamma']} outside [0.98, 0.999]"
         )
 
-    def test_sample_hyperparams_lambda_reg_zero_allowed(
+    def test_sample_hyperparams_lambda_reg_always_positive(
         self, tuning_config: Dict[str, Any]
     ) -> None:
         """
-        @brief When use_lambda_reg=False, lambda_reg is exactly 0.0.
+        @brief lambda_reg is always positive (never disabled).
         """
-        # Run multiple samples to find one with use_lambda_reg=False
-        for seed in range(50):
+        for seed in range(20):
             study = optuna.create_study(
                 sampler=optuna.samplers.TPESampler(seed=seed),
                 pruner=optuna.pruners.MedianPruner(),
@@ -174,12 +165,9 @@ class TestSampleHyperparams:
 
             params = sample_hyperparams(trial, tuning_config)
 
-            # If we get a sample with use_lambda_reg=False, check that lambda_reg=0.0
-            # (Note: we can't directly control use_lambda_reg, so we just verify
-            # the relationship when it occurs)
-            if params["evidential"]["lambda_reg"] == 0.0:
-                assert params["evidential"]["lambda_reg"] == 0.0
-                break
+            assert params["evidential"]["lambda_reg"] > 0.0, (
+                f"lambda_reg should always be positive, got {params['evidential']['lambda_reg']}"
+            )
 
 
 # ===========================================================================

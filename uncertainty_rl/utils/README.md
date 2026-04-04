@@ -15,7 +15,7 @@ Structural constants fixed by system architecture. **Not tuneable** -changing th
 | `TARGET_POSE_DIM` | 3 | Relative target bay pose: [dx, dy, dyaw] in ego body frame |
 | `OBSTACLE_FEATURES_DIM` | 5 | Hemispheric clearance: [left\_dist, left\_bearing, right\_dist, right\_bearing, forward\_dist] |
 | `TOTAL_OBS_DIM` | 20 | Full observation: velocity + covariance + target + clearance (3 + 9 + 3 + 5) |
-| `ACTION_DIM` | 3 | [steering, throttle, brake] |
+| `ACTION_DIM` | 2 | [steering, longitudinal] — longitudinal in [-1,1]: positive=throttle, negative=brake |
 | `SUCCESS_THRESHOLD_POSITION` | 0.5 m | Parking success position threshold |
 | `SUCCESS_THRESHOLD_ORIENTATION` | ~0.175 rad | Parking success orientation threshold (10 deg) |
 | `SUCCESS_THRESHOLD_VELOCITY` | 0.1 m/s | Parking success velocity threshold |

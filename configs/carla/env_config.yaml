@@ -11,10 +11,9 @@ debug: false
 # not consumed during training).
 inspect:
   # Action applied every step in dryrun mode.
-  # [steer, throttle, brake] -- must stay within action_space bounds [-1,1],[0,1],[0,1].
-  # throttle >= 0.5 is required to overcome static friction on the FlatPlane world.
-  # Use random to fall back to action_space.sample() (useful for stress-testing).
-  dryrun_action: [0.0, 0.5, 0.0]
+  # [steer, longitudinal] -- positive longitudinal = throttle, negative = brake.
+  # 0.5 throttle is sufficient to overcome static friction on the FlatPlane world.
+  dryrun_action: [0.0, 0.5]
 
 # ---------------------------------------------------------------------------
 # CARLA connection and simulation settings

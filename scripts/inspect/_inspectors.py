@@ -19,6 +19,7 @@ Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 
 import math
 import sys
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -695,6 +696,121 @@ class LiveInspector(_Inspector):
 
 
 # ===========================================================================
+# Keyboard controller for manual dryrun mode
+# ===========================================================================
+
+
+class KeyboardController:
+    """
+    @class KeyboardController
+    @brief Latching TTY keyboard input for manual dryrun control.
+
+    Reads raw keypresses from stdin in a background daemon thread using
+    Python's tty/termios modules -- no X11 interaction, no display dependency.
+
+    TTY terminals have no key-up events, so a timeout-based approach breaks
+    when holding two keys simultaneously (the idle axis times out). Instead
+    each key latches its axis on until the opposite key or a neutral press
+    cancels it:
+
+      Up    -- throttle on  (longitudinal = +1.0); cancels brake
+      Down  -- brake on     (longitudinal = -1.0); cancels throttle
+      Left  -- steer left   (steer = -1.0);  cancels right steer
+      Right -- steer right  (steer = +1.0);  cancels left steer
+      Space -- zero both axes (full stop + straight)
+
+    Steer and longitudinal are independent so steering while driving works.
+
+    @note Requires the container to be run with -it. The Makefile
+          docker-inspect-dryrun MANUAL=true target handles this automatically.
+    """
+
+    def __init__(self) -> None:
+        """@brief Initialise controller with zeroed latched state."""
+        import tty  # noqa: F401 -- verify stdlib available before starting thread
+        import termios  # noqa: F401
+
+        self._steer: float = 0.0
+        self._longitudinal: float = 0.0
+        self._lock = threading.Lock()
+        self._running = False
+        self._thread: Optional[threading.Thread] = None
+
+    def start(self) -> None:
+        """@brief Start background stdin reader thread."""
+        self._running = True
+        self._thread = threading.Thread(target=self._read_loop, daemon=True)
+        self._thread.start()
+        print(
+            "  Keyboard control (latching): Up=throttle  Down=brake"
+            "  Left/Right=steer  Space=stop  Ctrl+C=quit"
+        )
+
+    def stop(self) -> None:
+        """@brief Signal the reader thread to stop."""
+        self._running = False
+
+    def get_action(self) -> np.ndarray:
+        """
+        @brief Return the current latched [steer, longitudinal] action.
+        @return numpy array of shape (2,) with values in [-1.0, 1.0].
+        """
+        with self._lock:
+            return np.array([self._steer, self._longitudinal], dtype=np.float32)
+
+    def _read_loop(self) -> None:
+        """@brief Read raw escape sequences from stdin and update latched state."""
+        import os
+        import select
+        import signal
+        import sys
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        try:
+            old = termios.tcgetattr(fd)
+        except termios.error:
+            print(
+                "  WARNING: stdin is not a TTY -- keyboard control disabled. "
+                "Run with MANUAL=true so the container gets an interactive stdin."
+            )
+            return
+
+        try:
+            tty.setraw(fd)
+            while self._running:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if not ready:
+                    continue
+                ch = sys.stdin.read(1)
+                if ch == "\x03":
+                    # Ctrl+C -- propagate SIGINT to the main thread
+                    os.kill(os.getpid(), signal.SIGINT)
+                    break
+                if ch == " ":
+                    with self._lock:
+                        self._steer = 0.0
+                        self._longitudinal = 0.0
+                elif ch == "\x1b":
+                    rest = sys.stdin.read(2)
+                    seq = ch + rest
+                    with self._lock:
+                        if seq == "\x1b[A":    # Up -- latch throttle, cancel brake
+                            self._longitudinal = 1.0
+                        elif seq == "\x1b[B":  # Down -- latch brake, cancel throttle
+                            self._longitudinal = -1.0
+                        elif seq == "\x1b[D":  # Left -- latch left, cancel right
+                            self._steer = -1.0
+                        elif seq == "\x1b[C":  # Right -- latch right, cancel left
+                            self._steer = 1.0
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except termios.error:
+                pass
+
+
 # Dry-run inspector -- full training pipeline, random actions, no model
 # ===========================================================================
 
@@ -702,8 +818,8 @@ class LiveInspector(_Inspector):
 class DryRunInspector(_Inspector):
     """
     @class DryRunInspector
-    @brief Runs the full training environment (reset + step loop) with random
-           actions, no model.  Spectator follows the ego vehicle.
+    @brief Runs the full training environment (reset + step loop) with a constant
+           forward action or keyboard control, no model.  Spectator follows the ego.
 
     Views (set via --inspect-view):
       third_person -- 20 m behind + 10 m above, follows vehicle heading
@@ -726,16 +842,19 @@ class DryRunInspector(_Inspector):
         dryrun_action: Optional[List[float]] = None,
         initial_view: str = "third_person",
         termination_pause: float = 3.0,
+        manual: bool = False,
     ) -> None:
         """
         @brief Construct the dry-run inspector.
         @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
         @param duration: Maximum wall-clock seconds to run (across all episodes).
         @param n_episodes: Stop after this many episodes; None = run until duration.
-        @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
-               None = action_space.sample(). Set via inspect.dryrun_action in YAML.
+        @param dryrun_action: Fixed [steer, longitudinal] to apply each step.
+               None = action_space.sample(). Ignored when manual=True.
+               Set via inspect.dryrun_action in YAML.
         @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
         @param termination_pause: Seconds to hold scene after episode ends.
+        @param manual: If True, use keyboard arrow keys instead of random/fixed action.
         """
         super().__init__(env, duration)
         self._n_episodes = n_episodes
@@ -750,6 +869,9 @@ class DryRunInspector(_Inspector):
             else "third_person"
         )
         self._termination_pause = termination_pause
+        self._keyboard: Optional[KeyboardController] = (
+            KeyboardController() if manual else None
+        )
 
     # ------------------------------------------------------------------
     # Spectator placement
@@ -851,52 +973,78 @@ class DryRunInspector(_Inspector):
     def _print_obs(self, obs: Any, step: int, episode: int) -> None:
         """
         @brief Print key observation values to the console for diagnosis.
+
+        Colour scheme:
+          WHITE  -- values that enter the model (obs indices 0-19)
+          YELLOW -- ground truth (CARLA pose, GT target bay world coords)
+          RED    -- derived/diagnostic values not fed to the model
+                    (raw EKF odom pose, odom-frame target, recon check)
+
         @param obs: Observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
         """
+        _WHITE = "\033[97m"
         _YELLOW = "\033[33m"
+        _RED = "\033[31m"
         _RESET = "\033[0m"
 
         if obs is None or len(obs) < 3:
             return
-        # Velocity (indices 0-2)
-        parts = [
-            f"ep={episode:3d}  step={step:4d}",
-            f"vel=({obs[0]:.2f},{obs[1]:.2f})m/s"
-            f"  vyaw={math.degrees(obs[2]):+.1f}deg/s",
-        ]
-        # CARLA ground truth (diagnostic only -- not fed to model)
+
+        W = _WHITE
+        Y = _YELLOW
+        R = _RED
+        X = _RESET
+        lines = []
+
+        # Header
+        lines.append(f"--- ep={episode}  step={step} " + "-" * 40)
+
+        # WHITE -- velocity (indices 0-2)
+        lines.append(
+            W + f"vel  vx={obs[0]:+.2f}  vy={obs[1]:+.2f}  vyaw={math.degrees(obs[2]):+.1f}deg/s" + X
+        )
+
+        # YELLOW -- CARLA ground truth
         if self._env.vehicle is not None:
             t = self._env.vehicle.get_transform()
             v = self._env.vehicle.get_velocity()
             spd = math.sqrt(v.x**2 + v.y**2)
-            parts.append(
-                _YELLOW + f"[CARLA gt] pos=({t.location.x:7.2f},{t.location.y:7.2f})"
-                f"  yaw={t.rotation.yaw:+6.1f}deg  spd={spd:.2f}m/s" + _RESET
+            lines.append(
+                Y + f"GT   pos=({t.location.x:.2f},{t.location.y:.2f})"
+                f"  yaw={t.rotation.yaw:+.1f}deg  spd={spd:.2f}m/s" + X
             )
-        # EKF covariance (indices 3-11)
+
+        # RED -- raw EKF odom pose
+        if self._env._cov_subscriber is not None:
+            ekf_pose = self._env._cov_subscriber.get_latest_pose()
+            if ekf_pose is not None:
+                lines.append(
+                    R + f"EKF  x={float(ekf_pose[0]):.2f}  y={float(ekf_pose[1]):.2f}"
+                    f"  yaw={math.degrees(float(ekf_pose[2])):+.1f}deg" + X
+                )
+
+        # WHITE -- EKF covariance split over two lines (indices 3-11)
         if len(obs) >= 12:
-            parts.append(
-                f"std=({obs[3]:.4f},{obs[4]:.4f},{obs[5]:.4f})"
-                f"  cov_diag=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})"
-                f"  cov_off=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})"
+            lines.append(
+                W + f"cov  std=({obs[3]:.3f},{obs[4]:.3f},{obs[5]:.3f})"
+                f"  diag=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})" + X
             )
-        # Target bay in ego body frame (indices 12-14) -- odom-frame relative
+            lines.append(
+                W + f"     off=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})" + X
+            )
+
+        # WHITE -- target in ego body frame (indices 12-14)
         if len(obs) >= 15:
-            parts.append(
-                f"target(odom): dx={obs[12]:.2f}m  dy={obs[13]:.2f}m"
-                f"  dyaw={math.degrees(obs[14]):+.1f}deg"
+            lines.append(
+                W + f"tgt  dx={obs[12]:+.2f}m  dy={obs[13]:+.2f}m"
+                f"  dyaw={math.degrees(obs[14]):+.1f}deg" + X
             )
-        # GT target cross-check
+
+        # YELLOW -- GT target world; RED -- odom projection + recon
         gt = self._env._target_bay
         odom_t = self._env._target_bay_odom
-        gt_line = (
-            _YELLOW + f"[GT target] world=({gt['x']:.2f},{gt['y']:.2f})"
-            f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
-            f"  |  odom=({odom_t['x']:.2f},{odom_t['y']:.2f})"
-            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg" + _RESET
-        )
         tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
         recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
         recon_wy = sin_r * odom_t["x"] + cos_r * odom_t["y"] + ty
@@ -914,20 +1062,47 @@ class DryRunInspector(_Inspector):
                 )
             )
         )
-        gt_line += (
-            f"  [recon_err={err_m:.3f}m"
-            f"  yaw_err={yaw_err_deg:.1f}deg"
-            f"  r={math.degrees(r):+.1f}deg]"
+        lines.append(
+            Y + f"bay  world=({gt['x']:.2f},{gt['y']:.2f})"
+            f"  yaw={math.degrees(gt['yaw']):+.1f}deg" + X
         )
-        parts.append(gt_line)
-        # Hemispheric obstacle clearance (indices 15-19)
+        lines.append(
+            R + f"     odom=({odom_t['x']:.2f},{odom_t['y']:.2f})"
+            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg"
+            f"  recon_err={err_m:.3f}m  r={math.degrees(r):+.1f}deg" + X
+        )
+
+        # WHITE -- obstacle clearance (indices 15-19)
         if len(obs) >= 20:
-            parts.append(
-                f"left: {obs[15]:.2f}m  {math.degrees(obs[16]):+.1f}deg"
-                f"  |  right: {obs[17]:.2f}m  {math.degrees(obs[18]):+.1f}deg"
-                f"  |  fwd: {obs[19]:.2f}m"
+            lines.append(
+                W + f"obs  L={obs[15]:.2f}m({math.degrees(obs[16]):+.1f}deg)"
+                f"  R={obs[17]:.2f}m({math.degrees(obs[18]):+.1f}deg)"
+                f"  F={obs[19]:.2f}m" + X
             )
-        print("  " + "\n    ".join(parts))
+
+        print("\n" + "\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Overlay drawing
+    # ------------------------------------------------------------------
+
+    def _draw_overlays(self, life_time: float) -> None:
+        """
+        @brief Draw target bay highlight and lot geometry in the CARLA window.
+
+        Reuses _draw_layout_overlays so the target bay appears in bright green
+        with a "TARGET" label, matching the layout inspector style.
+
+        @param life_time: Primitive lifetime in seconds.
+        """
+        if self._env.world is None or not self._env._current_layout:
+            return
+        _draw_layout_overlays(
+            self._env.world,
+            self._env._current_layout,
+            self._env._target_bay.get("bay_id", ""),
+            life_time,
+        )
 
     # ------------------------------------------------------------------
     # Run loop
@@ -946,26 +1121,31 @@ class DryRunInspector(_Inspector):
             print("ERROR: CARLA world not available.  Aborting.")
             return
 
+        if self._keyboard is not None:
+            self._keyboard.start()
+
         deadline = time.monotonic() + self._duration
         episode = 0
         total_steps = 0
+        _latest_obs = None
 
+        mode_desc = (
+            "keyboard control"
+            if self._keyboard is not None
+            else f"constant action {self._dryrun_action.tolist()}"
+        )
         print(
-            f"Dry-run: random actions for up to {self._duration}s"
+            f"Dry-run: {mode_desc} for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
         print(
-            "  Model inputs per step (20-dim obs):"
-            "\n    [0-2]   Velocity:     vx  vy  vyaw"
-            "\n    [3-11]  EKF cov:      std(x,y,yaw)  "
-            "cov_diag(xx,yy,yawyaw)  cov_off(xy,xyaw,yyaw)  "
-            "[log1p-transformed]"
-            "\n    [12-14] Target bay:   dx  dy  dyaw (ego-relative)"
-            "\n    [15-19] Clearance:    left(dist,bearing)  "
-            "right(dist,bearing)  fwd_dist"
-            "\n  [GT target] world + odom coords logged per step "
-            "(yellow) + recon_err"
-            "\n  recon_err should be < 0.05 m (transform check)"
+            "\nModel inputs per step (20-dim obs):"
+            "\n  [0-2]   vel: vx vy vyaw"
+            "\n  [3-11]  cov: std(x,y,yaw)  diag(xx,yy,yawyaw)  off(xy,xyaw,yyaw)"
+            "\n  [12-14] tgt: dx dy dyaw (ego-relative)"
+            "\n  [15-19] obs: L(dist,bear)  R(dist,bear)  F(dist)"
+            "\n  bay/EKF lines are diagnostic only (not fed to model)"
+            "\n  recon_err should be < 0.05m"
         )
 
         try:
@@ -978,32 +1158,61 @@ class DryRunInspector(_Inspector):
                 step = 0
                 print(f"\n--- Episode {episode}  [view: {self._view}] ---")
                 self._update_spectator()
+                self._draw_overlays(life_time=self._OVERLAY_LIFE)
                 self._print_obs(obs, step, episode)
 
                 terminated = truncated = False
                 while not (terminated or truncated):
                     if time.monotonic() >= deadline:
                         break
-                    action = (
-                        self._dryrun_action
-                        if self._dryrun_action is not None
-                        else self._env.action_space.sample()
-                    )
+                    if self._keyboard is not None:
+                        action = self._keyboard.get_action()
+                    else:
+                        action = self._dryrun_action
                     obs, reward, terminated, truncated, info = self._env.step(action)
                     step += 1
                     total_steps += 1
                     self._update_spectator()
-                    if step % self._LOG_INTERVAL == 0:
-                        self._print_obs(obs, step, episode)
 
-                reason = info.get(
-                    "termination_reason",
-                    "truncated" if truncated else "terminated",
+                    # Inspector-level GT proximity check: end episode the moment
+                    # CARLA GT position is within 5 m of the GT target bay.
+                    _gt_done = False
+                    if self._env.vehicle is not None:
+                        _vt = self._env.vehicle.get_transform()
+                        _tgt = self._env._target_bay
+                        _gt_dist = math.sqrt(
+                            (_vt.location.x - _tgt["x"]) ** 2
+                            + (_vt.location.y - _tgt["y"]) ** 2
+                        )
+                        if _gt_dist <= 0.5:
+                            print(
+                                f"\n  [GT proximity] {_gt_dist:.2f}m from target "
+                                f"-- ending episode early"
+                            )
+                            self._print_obs(obs, step, episode)
+                            _gt_done = True
+                            terminated = True
+
+                    if not _gt_done and step % self._LOG_INTERVAL == 0:
+                        self._draw_overlays(life_time=self._OVERLAY_LIFE)
+                        self._print_obs(obs, step, episode)
+                    _latest_obs = obs
+
+                reason = (
+                    "gt_proximity"
+                    if _gt_done
+                    else info.get(
+                        "termination_reason",
+                        "truncated" if truncated else "terminated",
+                    )
                 )
                 print(
                     f"  Episode {episode} ended: {reason}"
                     f"  steps={step}  total_steps={total_steps}"
                 )
+                if not _gt_done:
+                    print("--- Final observation ---")
+                    self._print_obs(obs, step, episode)
 
                 # Hold the scene so the final state can be inspected in CARLA.
                 if self._termination_pause > 0:
@@ -1018,6 +1227,12 @@ class DryRunInspector(_Inspector):
                         time.sleep(1.0 / self._TICK_HZ)
 
         except KeyboardInterrupt:
-            print("Interrupted.")
+            print("\nInterrupted.")
+            if _latest_obs is not None:
+                print("--- Final observation at interruption ---")
+                self._print_obs(_latest_obs, step, episode)
+        finally:
+            if self._keyboard is not None:
+                self._keyboard.stop()
 
         print(f"\nDry-run complete: {episode} episodes, {total_steps} steps.")

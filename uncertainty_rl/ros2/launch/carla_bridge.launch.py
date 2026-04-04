@@ -81,6 +81,7 @@ def _static_tf(
     x: float,
     y: float,
     z: float,
+    use_sim_time: bool = True,
 ) -> Node:
     """
     @brief Create a static_transform_publisher node with zero rotation.
@@ -90,13 +91,20 @@ def _static_tf(
     @param x: Translation X (metres).
     @param y: Translation Y (metres).
     @param z: Translation Z (metres).
+    @param use_sim_time: Whether to use sim time (from ros2_config.yaml).
     @return Node for the static transform publisher.
     """
     return Node(
         package="tf2_ros",
         executable="static_transform_publisher",
         name=name,
-        parameters=[{"use_sim_time": True}],
+        # Static TFs must use wall clock (use_sim_time=False) so they publish
+        # with timestamp=0 (valid at all times in TF2). With use_sim_time=True
+        # they would publish at the current sim time (~8s) which the EKF
+        # (also on sim time) would accept -- but only after /clock arrives.
+        # Using False ensures the static TF is available immediately at startup
+        # before /clock is published, and TF2 treats timestamp=0 as eternal.
+        parameters=[{"use_sim_time": False}],
         arguments=[
             "--x",
             str(x),
@@ -118,7 +126,9 @@ def _static_tf(
     )
 
 
-def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
+def _build_sensor_tf_nodes(
+    sensors_config: Dict, is_3d: bool, use_sim_time: bool = True
+) -> List[Node]:
     """
     @brief Build static TF nodes connecting sensor frames to the ego_vehicle body frame.
 
@@ -132,6 +142,7 @@ def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
 
     @param sensors_config: carla_sensors dict from env_config.yaml.
     @param is_3d: True if using Suite B/C (3D LiDAR).
+    @param use_sim_time: Whether to use sim time (from ros2_config.yaml).
     @return List of static TF publisher nodes.
     """
     lidar_mount = sensors_config.get("lidar", {}).get("mount", {})
@@ -146,6 +157,7 @@ def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
             -float(lidar_mount.get("x", 2.4)),
             -float(lidar_mount.get("y", 0.0)),
             -float(lidar_mount.get("z", 0.5)),
+            use_sim_time=use_sim_time,
         ),
         # ego_vehicle -> ego_vehicle/imu
         _static_tf(
@@ -155,6 +167,7 @@ def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
             float(imu_mount.get("x", 0.0)),
             float(imu_mount.get("y", 0.0)),
             float(imu_mount.get("z", 0.3)),
+            use_sim_time=use_sim_time,
         ),
     ]
 
@@ -168,6 +181,7 @@ def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
                 float(lidar3d_mount.get("x", -0.5)),
                 float(lidar3d_mount.get("y", 0.0)),
                 float(lidar3d_mount.get("z", 1.9)),
+                use_sim_time=use_sim_time,
             )
         )
 
@@ -202,6 +216,13 @@ def generate_launch_description() -> LaunchDescription:
     """
     ros2_config = _load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")
     env_config = _load_yaml("/workspace/configs/carla/env_config.yaml")
+
+    # Time source for all ROS 2 nodes. Read from ros2_config.yaml so it can be
+    # changed without modifying Python source. Default true: CARLA bridge runs
+    # with use_sim_time=true and publishes /clock, so all nodes that do TF
+    # lookups against bridge-published transforms must use the same time source.
+    use_sim_time: bool = ros2_config.get("use_sim_time", True)
+
 
     # -- Environment variables ---------------------------------------------
 
@@ -262,6 +283,10 @@ def generate_launch_description() -> LaunchDescription:
                 # Sensor publishing is unaffected: register_all_sensors=True
                 # discovers all sensors regardless of actor role_name.
                 "ego_vehicle_role_name": "hero",
+                # Publish CARLA sim time on /clock so all ROS nodes using
+                # use_sim_time=true have a consistent time source. Without this
+                # the EKF waits forever for /clock and never starts.
+                "publish_clock": "true",
             }.items(),
         )
     except Exception:
@@ -270,7 +295,10 @@ def generate_launch_description() -> LaunchDescription:
     # -- EKF node ----------------------------------------------------------
 
     # Spread into a new dict to avoid mutating the live ros2_config object.
-    ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": True}
+    # use_sim_time is read from ros2_config.yaml (default true). CARLA bridge
+    # publishes sensor data and TF with CARLA sim timestamps, so all nodes must
+    # use the same time source to avoid TF_OLD_DATA lookup failures.
+    ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": use_sim_time}
 
     ekf_node = Node(
         package="robot_localization",
@@ -282,7 +310,7 @@ def generate_launch_description() -> LaunchDescription:
     # -- Static TF: sensor mount tree --------------------------------------
 
     sensors_config = env_config.get("carla_sensors", {})
-    static_tf_nodes = _build_sensor_tf_nodes(sensors_config, is_3d)
+    static_tf_nodes = _build_sensor_tf_nodes(sensors_config, is_3d, use_sim_time)
 
     # All suites feed raw PointCloud2 directly to Cartographer (num_point_clouds=1).
     # CARLA's ray_cast does not collide with the parent actor, so 360 deg is used
@@ -333,7 +361,19 @@ def generate_launch_description() -> LaunchDescription:
         package="cartographer_ros",
         executable="cartographer_node",
         name="cartographer_node",
-        parameters=[{"use_sim_time": True}],
+        # Cartographer uses sim time so that:
+        #  1. Its TF buffer accepts the CARLA bridge's TF frames (stamped at
+        #     CARLA counter time, ~100-200s), resolving TF_OLD_DATA rejection.
+        #  2. It gets a valid initial pose from map->ego_vehicle/lidar at startup,
+        #     placing the trajectory at the correct CARLA world position instead
+        #     of defaulting to (0,0) and failing to match the pbstream.
+        #  3. Sensor data (PointCloud2, IMU) arrives stamped at counter time and
+        #     is accepted by Cartographer's RangeDataCollator without scan drops.
+        #
+        # The /clock topic is published by the CARLA bridge at counter time
+        # (~100-200s at run time). All nodes using use_sim_time=true share this
+        # clock, so TF lookups and sensor timestamps are mutually consistent.
+        parameters=[{"use_sim_time": use_sim_time}],
         arguments=carto_args,
         remappings=carto_remappings,
     )
@@ -360,7 +400,18 @@ def generate_launch_description() -> LaunchDescription:
         name="tf_to_odom",
         parameters=[
             {
-                "use_sim_time": True,
+                # use_sim_time matches the EKF so /scan_matched_odometry timestamps
+                # are consistent. Cartographer's TF is stamped at CARLA counter time
+                # (~100s) rather than UNIX epoch (~1.77e9s); tf_to_odom's TF2 buffer
+                # uses a 2e9s cache_time (set in tf_to_odom.py) so these transforms
+                # are accepted despite the apparent age. Lookup uses rclpy.time.Time()
+                # (latest available) so the counter-time stamp does not affect results.
+                "use_sim_time": use_sim_time,
+                # Cartographer (provide_odom_frame=true in both loc and slam configs)
+                # publishes odom -> ego_vehicle/lidar. The CARLA bridge publishes
+                # map -> ego_vehicle/lidar -- using "odom" here avoids the TF
+                # conflict that would arise if tf_to_odom looked up map -> ego_vehicle/lidar
+                # (two publishers for the same TF edge = garbage transform values).
                 "odom_frame": ros2_config.get("ekf", {}).get("odom_frame", "odom"),
                 "tracking_frame": tf_tracking_frame,
                 # Must match ekf.base_link_frame so robot_localisation correctly
@@ -390,7 +441,7 @@ def generate_launch_description() -> LaunchDescription:
         name="covariance_extractor",
         parameters=[
             {
-                "use_sim_time": True,
+                "use_sim_time": use_sim_time,
                 "odom_topic": ros2_config.get("odom_topic", "/odometry/filtered"),
                 "covariance_topic": ros2_config.get(
                     "covariance_topic", "/ekf_uncertainty/covariance"
@@ -433,7 +484,9 @@ def generate_launch_description() -> LaunchDescription:
                 package="cartographer_ros",
                 executable="cartographer_occupancy_grid_node",
                 name="cartographer_occupancy_grid_node",
-                parameters=[{"use_sim_time": True, "resolution": 0.05}],
+                # Must match Cartographer's use_sim_time so the occupancy
+                # grid node's clock is consistent with the cartographer_node TF output.
+                parameters=[{"use_sim_time": use_sim_time, "resolution": 0.05}],
             )
         )
 

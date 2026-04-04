@@ -31,17 +31,24 @@ options = {
   map_builder = MAP_BUILDER,
   trajectory_builder = TRAJECTORY_BUILDER,
 
-  -- TF frame names: tracking ego_vehicle/lidar avoids a TF conflict where the
-  -- CARLA bridge publishes map -> ego_vehicle/imu directly (37 Hz), which
-  -- prevents Cartographer from publishing odom -> ego_vehicle/imu (two parents).
-  -- ego_vehicle/lidar is the primary moving frame published by the bridge and
-  -- has no Cartographer conflict. IMU data is still fused via the static TF
-  -- ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu in the launch file.
+  -- TF frame names.
+  -- tracking_frame = ego_vehicle/lidar: Cartographer tracks the LiDAR frame.
+  -- published_frame = ego_vehicle/lidar: Cartographer publishes
+  --   odom -> ego_vehicle/lidar (when provide_odom_frame = true).
+  --
+  -- IMPORTANT: The CARLA bridge (passive mode) also publishes
+  -- map -> ego_vehicle/lidar at 37 Hz. If Cartographer were to publish
+  -- map -> ego_vehicle/lidar (i.e. provide_odom_frame = false), two nodes
+  -- would own the same TF edge, causing TF2 to return garbage transforms.
+  -- provide_odom_frame = true makes Cartographer publish odom -> ego_vehicle/lidar
+  -- only, which the bridge does not conflict with.
+  --
+  -- tf_to_odom looks up odom -> ego_vehicle/lidar and republishes as Odometry.
+  -- The EKF uses world_frame = odom (set in ros2_config.yaml).
   map_frame = "map",
   tracking_frame = "ego_vehicle/lidar",
   published_frame = "ego_vehicle/lidar",
   odom_frame = "odom",
-
   provide_odom_frame = true,
   publish_frame_projected_to_2d = true,
 
@@ -71,9 +78,11 @@ options = {
 -- The loaded .pbstream contains the frozen submap; no new submaps are created.
 MAP_BUILDER.use_trajectory_builder_2d = true
 
--- Pure localisation: trim old submaps to keep only the frozen reference.
--- pure_localization_trimmer is required when using num_point_clouds=1
--- (TRAJECTORY_BUILDER.pure_localization only works with num_laser_scans).
+-- Pure localisation via trimmer: keeps only the most recent submaps, matching
+-- new scans against the frozen .pbstream reference.
+-- TRAJECTORY_BUILDER_2D.pure_localization is NOT supported in the Jazzy
+-- Cartographer build (crashes with "Key 'pure_localization' was used the wrong
+-- number of times"). The trimmer is the correct API for this build.
 TRAJECTORY_BUILDER.pure_localization_trimmer = {
   max_submaps_to_keep = 3,
 }
@@ -82,21 +91,31 @@ TRAJECTORY_BUILDER.pure_localization_trimmer = {
 -- 2D trajectory builder settings (same as SLAM except num_range_data)
 -- ---------------------------------------------------------------------------
 
-TRAJECTORY_BUILDER_2D.min_range = 0.1
+TRAJECTORY_BUILDER_2D.min_range = 0.5
 TRAJECTORY_BUILDER_2D.max_range = 25.0
-TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = false  -- IMU disabled: tracking_frame=ego_vehicle/lidar has non-zero offset to IMU, violating Cartographer's colocation requirement
+-- Set missing_data_ray_length to max_range so phantom short rays do not
+-- pollute the submap with fake obstacles.
+TRAJECTORY_BUILDER_2D.missing_data_ray_length = 25.0
+-- IMU disabled: tracking_frame=ego_vehicle/lidar has non-zero offset to IMU,
+-- violating Cartographer's colocation requirement.
+TRAJECTORY_BUILDER_2D.use_imu_data = false
 
+-- min_num_points must be below the actual scan size (64 pts from CARLA 2D
+-- LiDAR at 20 Hz / 2M pts_per_second).  200 causes the filter to discard
+-- nearly every scan.  Set to 20 so all scans pass through.
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 200
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 50.0
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 20
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 25.0
 
+-- Wider search window to handle the larger pose uncertainty that comes from
+-- IMU-free operation between scan matches.
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.2
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(20.0)
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.5
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.0)
 
+-- Increase rotation weight: yaw drift is the dominant error source without IMU.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 40.0
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 100.0
 
 -- Small submap window: in pure localisation, submaps are never finalised.
 -- 10 scans (~0.5 s at 20 Hz) gives fast per-episode convergence.
@@ -108,8 +127,10 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 -- ---------------------------------------------------------------------------
 
 POSE_GRAPH.optimize_every_n_nodes = 0
-POSE_GRAPH.constraint_builder.min_score = 0.50
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.55
+-- Raised from 0.50: accepting scores below 0.60 with only 64-point scans
+-- introduces false constraints that corrupt the pose estimate.
+POSE_GRAPH.constraint_builder.min_score = 0.60
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.65
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 
 return options

@@ -5,7 +5,7 @@
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
-.PHONY: docker-build docker-build-no-cache docker-up docker-down docker-restart docker-ps docker-watch docker-top
+.PHONY: docker-build docker-build-no-cache docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
@@ -81,6 +81,10 @@ docker-build-no-cache: ## Build images without cache (clean rebuild)
 	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml --no-cache
 	$(DOCKER_COMPOSE_INSPECT) build --no-cache
 
+docker-build-ros2: ## Rebuild only the ros2-bridge images without cache (fast: use after editing carla_bridge.launch.py or ros2 node code)
+	$(DOCKER_COMPOSE_WORKERS) build --no-cache ros2-bridge
+	$(DOCKER_COMPOSE_INSPECT) build --no-cache ros2-bridge-inspect
+
 docker-up: ## Start all containers (N env workers from train_config.yaml + training stack)
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d
@@ -120,10 +124,12 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	@# Mapping uses a single CARLA instance (worker 0) in SLAM mode.
 	@# Tear down all running workers first for a clean world state.
-	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	SENSOR_SUITE=$(SENSOR_SUITE) bash scripts/multi_workers/workers_up.sh 1
+	$(DOCKER_COMPOSE) down
+	@# docker-compose.yml owns the network definition; bring it up first so the
+	@# network exists with correct compose labels before workers_up.sh attaches.
 	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) up -d --wait
+	SENSOR_SUITE=$(SENSOR_SUITE) bash scripts/multi_workers/workers_up.sh 1
 	$(DOCKER_COMPOSE) exec training python -m scripts.mapping.mapping_drive \
 		--layout $(LAYOUT) \
 		--carla-host uncertainty-rl-carla-0 \
@@ -276,29 +282,27 @@ INSPECT_LAYOUT   ?= rectangle
 INSPECT_EPISODES ?=
 INSPECT_VIEW     ?= third_person
 INSPECT_PAUSE    ?= 3.0
-docker-inspect-dryrun: ## Full training pipeline with random actions in windowed CARLA. Usage: make docker-inspect-dryrun [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free] [INSPECT_PAUSE=3.0]
+docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: constant forward drive. Usage: make docker-inspect-dryrun [MANUAL=true] [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free] [INSPECT_PAUSE=3.0]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	$(eval LAYOUT := $(INSPECT_LAYOUT))
-	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(LAYOUT)  VIEW=$(INSPECT_VIEW)  PAUSE=$(INSPECT_PAUSE)  EPISODES=$(INSPECT_EPISODES)"
+	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(LAYOUT)  VIEW=$(INSPECT_VIEW)  PAUSE=$(INSPECT_PAUSE)  EPISODES=$(INSPECT_EPISODES)  MANUAL=$(MANUAL)"
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
+		INSPECT_MANUAL=$(MANUAL) \
 		CARTOGRAPHER_MODE=loc \
 		CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
 		SENSOR_SUITE=$(SENSOR_SUITE) \
-		$(DOCKER_COMPOSE_INSPECT) --profile inspect-dryrun up \
-		--force-recreate --detach \
-		carla-server-demo ros2-bridge-inspect training-inspect-dryrun
-	bash scripts/inspect/dryrun.sh
+		bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
 	@echo "Using DISPLAY=$(_DISPLAY)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
-	$(DOCKER_COMPOSE) down 2>/dev/null || true
+	$(DOC.KER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE_INSPECT) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect

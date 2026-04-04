@@ -145,6 +145,10 @@ def main() -> None:
     scenarios["floor_plans"] = {args.layout: {"layout_file": layout_file, "ood": False}}
 
     # -- Create env (no covariance subscription -- Cartographer needs scans first) --
+    # include_covariance=False skips EKF subscription and sync-mode setup in the
+    # env constructor. We re-enable sync mode below because CARLA ray_cast sensors
+    # only produce non-empty PointCloud2 data when world.tick() drives physics
+    # (async mode returns 0-point scans regardless of real-time physics activity).
     env = CARLAParkingEnv(
         carla_host=args.carla_host,
         carla_port=args.carla_port,
@@ -162,6 +166,23 @@ def main() -> None:
     # -- Reset env (spawns ego, sensors, cones) --
     _obs, info = env.reset()
     print(f"Environment reset. Floor plan: {info.get('floor_plan', args.layout)}")
+
+    # -- Enable synchronous mode so world.tick() drives LiDAR ray casting --
+    # CARLA ray_cast sensors produce 0-point scans in async mode because the
+    # rendering engine does not fire between ticks without an explicit tick call.
+    # Synchronous mode ensures each env.step() -> world.tick() triggers a full
+    # physics + sensor step, giving Cartographer dense (>20k point) scans.
+    carla_timestep: float = float(config.get("carla_timestep", 0.05))
+    if env.world is not None:
+        _map_settings = env.world.get_settings()
+        if not _map_settings.synchronous_mode:
+            print(
+                f"Enabling synchronous mode for mapping (fixed_delta={carla_timestep}s) ..."
+            )
+            _map_settings.synchronous_mode = True
+            _map_settings.fixed_delta_seconds = carla_timestep
+            env.world.apply_settings(_map_settings)
+            print("Synchronous mode enabled. LiDAR will produce dense scans.")
 
     # -- Load patrol waypoints from layout YAML --
     with open(layout_file) as f:

@@ -65,8 +65,13 @@ TOTAL_OBS_DIM = (
 # Action Space Dimensions
 # ============================================================================
 
-# Continuous action: [steering, throttle, brake]
-ACTION_DIM = 3
+# Continuous action: [steering, longitudinal]
+# steering     : [-1, 1]  left to right
+# longitudinal : [-1, 1]  negative = brake, positive = throttle
+# The env maps longitudinal to CARLA throttle/brake internally.
+# Real-world deployment: drive-by-wire controllers accept the same signed
+# longitudinal command and handle the throttle/brake split in hardware.
+ACTION_DIM = 2
 
 # ============================================================================
 # Environment Safety and Termination Thresholds
