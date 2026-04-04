@@ -39,9 +39,11 @@ class SensorManager:
     """
 
     # Impulse threshold (N*s) below which a dynamic-actor collision is ignored.
-    # A pedestrian walking into a stationary ego produces near-zero impulse;
-    # this threshold filters those out so only ego-at-fault events are penalised.
-    _DYNAMIC_COLLISION_IMPULSE_THRESHOLD: float = 500.0
+    # A pedestrian walking into a stationary ego produces ~1-10 N*s impulse;
+    # the ego driving into a pedestrian at parking speeds (~1-3 m/s) produces
+    # ~50-200 N*s. Threshold set to 50.0 to catch ego-at-fault impacts while
+    # filtering incidental contact from a pedestrian bumping a stopped vehicle.
+    _DYNAMIC_COLLISION_IMPULSE_THRESHOLD: float = 50.0
     # Bytes per LiDAR point in CARLA raw buffer: 4 float32 fields
     # (x, y, z, intensity)
     _LIDAR_BYTES_PER_POINT: int = 16

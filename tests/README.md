@@ -44,6 +44,6 @@ make docker-test               # Full suite (unit + integration)
 
 - `STATE_DIM_FULL = 20` (pose 6 + covariance 9 + target 3 + obstacle 2)
 - `STATE_DIM_NO_COV = 11` (pose 6 + target 3 + obstacle 2, when `include_covariance=False`)
-- `ACTION_DIM = 3`
+- `ACTION_DIM = 2`
 - `BATCH_SIZE = 8`
 - `HIDDEN_DIMS = [64, 64]`
