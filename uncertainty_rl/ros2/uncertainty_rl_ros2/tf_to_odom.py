@@ -141,7 +141,16 @@ class TfToOdomNode(Node):
         self._stale_ramp_range: float = ramp_range
 
         # -- TF listener -------------------------------------------------------
-        self._tf_buffer = Buffer()
+        # Large cache_time is required because Cartographer stamps its TF output
+        # at CARLA internal counter time (~seconds since server start, e.g. ~111s)
+        # rather than UNIX epoch time (~1.77e9s). The default TF2 cache of 10s
+        # causes TF_OLD_DATA rejection for any transform older than 10s relative
+        # to the node clock. With 2e9s cache, transforms at counter time (~111s)
+        # are accepted even when this node's clock is at UNIX epoch (~1.77e9s).
+        # The lookup uses rclpy.time.Time() (latest available) so the actual
+        # timestamp of the buffered transform does not matter for the lookup.
+        import rclpy.duration
+        self._tf_buffer = Buffer(cache_time=rclpy.duration.Duration(seconds=int(2e9)))
         self._tf_listener = TransformListener(self._tf_buffer, self)
 
         # -- Publisher ---------------------------------------------------------
@@ -245,7 +254,10 @@ class TfToOdomNode(Node):
         self._last_tf_wall_sec = now_wall
 
         # -- Pose from TF -----------------------------------------------------
-        curr_time_sec = tf.header.stamp.sec + tf.header.stamp.nanosec * 1e-9
+        # Use wall-clock time for dt (finite-diff velocity) rather than the TF
+        # header stamp, which is Cartographer's internal time and may differ from
+        # the node clock used for the odometry header stamp above.
+        curr_time_sec = now_wall
         curr_x = tf.transform.translation.x
         curr_y = tf.transform.translation.y
         curr_yaw = _yaw_from_quaternion(
@@ -288,7 +300,12 @@ class TfToOdomNode(Node):
 
         # -- Build Odometry message -------------------------------------------
         odom = Odometry()
-        odom.header.stamp = tf.header.stamp
+        # Stamp with the node's current clock time, not the TF header stamp.
+        # Cartographer (use_sim_time=false) stamps TF at wall-clock ~0s relative
+        # to its startup, but the EKF (use_sim_time=true) expects sim-time stamps.
+        # Using self.get_clock().now() gives the correct time for whichever
+        # time source this node is configured to use.
+        odom.header.stamp = self.get_clock().now().to_msg()
         odom.header.frame_id = self._odom_frame
         # child_frame_id must be the body frame (ego_vehicle), not the sensor
         # frame (ego_vehicle/lidar). robot_localisation matches this against

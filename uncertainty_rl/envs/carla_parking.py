@@ -361,8 +361,8 @@ class CARLAParkingEnv(gym.Env):
         )
 
         self.action_space = spaces.Box(
-            low=np.array([-1.0, 0.0, 0.0]),
-            high=np.array([1.0, 1.0, 1.0]),
+            low=np.array([-1.0, -1.0]),
+            high=np.array([1.0, 1.0]),
             dtype=np.float32,
         )
 
@@ -977,8 +977,7 @@ class CARLAParkingEnv(gym.Env):
             },
             "action": {
                 "steer": float(self._last_action[0]),
-                "throttle": float(self._last_action[1]),
-                "brake": float(self._last_action[2]),
+                "longitudinal": float(self._last_action[1]),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -1253,6 +1252,38 @@ class CARLAParkingEnv(gym.Env):
             ),
         }
 
+    def _odom_transform_stale(self) -> bool:
+        """
+        @brief Check whether the cached odom->world transform is still valid.
+
+        Applies the cached transform to the current EKF pose and compares
+        against the CARLA ground-truth spawn position. If the reconstruction
+        error exceeds 2 m the transform is considered stale (Cartographer
+        restarted and reset its odom frame origin).
+
+        @return True if the transform should be recomputed.
+        """
+        if self._cov_subscriber is None or self.vehicle is None:
+            return False
+        ekf_pose = self._cov_subscriber.get_latest_pose()
+        if ekf_pose is None:
+            return False
+        tx, ty, cos_r, sin_r, _ = self._ekf_odom_offset
+        world_ex = cos_r * float(ekf_pose[0]) - sin_r * float(ekf_pose[1]) + tx
+        world_ey = sin_r * float(ekf_pose[0]) + cos_r * float(ekf_pose[1]) + ty
+        carla_t = self.vehicle.get_transform()
+        err = math.sqrt(
+            (world_ex - carla_t.location.x) ** 2
+            + (world_ey - carla_t.location.y) ** 2
+        )
+        if err > 2.0:
+            logger.warning(
+                f"Odom transform stale (recon_err={err:.2f}m > 2.0m) -- "
+                "Cartographer may have restarted. Recalibrating."
+            )
+            return True
+        return False
+
     def _calibrate_ekf_frame_offset(self) -> None:
         """
         @brief Compute the full 2D rigid body transform from Cartographer odom
@@ -1514,7 +1545,25 @@ class CARLAParkingEnv(gym.Env):
 
         if self._include_covariance:
             self._wait_for_covariance()
-            self._calibrate_ekf_frame_offset()
+            if self._episode_id == 1 or self._odom_transform_stale():
+                # First episode, or Cartographer restarted (odom frame reset):
+                # full calibration -- wait for EKF to converge and recompute
+                # the odom->world rigid body transform.
+                self._calibrate_ekf_frame_offset()
+            else:
+                # Subsequent episodes: odom frame is stable across resets
+                # (CARLA world is not reloaded -- vehicle is teleported -- so the
+                # sim clock is monotonic and Cartographer never resets its origin).
+                # The rigid body transform R,t is unchanged regardless of spawn
+                # point -- only the target bay projection needs recomputing.
+                tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
+                self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
+                logger.debug(
+                    "Reusing odom->world transform "
+                    f"(r={math.degrees(r):.1f}deg tx={tx:.2f} ty={ty:.2f}). "
+                    f"target_odom=({self._target_bay_odom['x']:.2f},"
+                    f"{self._target_bay_odom['y']:.2f})"
+                )
 
         # Initialise prev_distance for potential-based reward shaping
         if self.vehicle is not None:
@@ -1571,7 +1620,10 @@ class CARLAParkingEnv(gym.Env):
         This provides 4x speedup with action_repeat=4 whilst keeping total sim-time
         constant (episode still runs 50 seconds, just with 5 Hz decision frequency).
 
-        @param action: 3-dim action vector [steering, throttle, brake].
+        @param action: 2-dim action vector [steering, longitudinal].
+                steering     in [-1, 1]: left to right.
+                longitudinal in [-1, 1]: negative = brake, positive = throttle.
+                Mapped to CARLA throttle/brake internally.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
         # On a new action (or first call), reset the repeat counter
@@ -1583,10 +1635,13 @@ class CARLAParkingEnv(gym.Env):
         self._action_repeat_counter += 1
 
         if self.vehicle is not None:
+            # Split longitudinal action into CARLA throttle/brake.
+            # Positive longitudinal -> throttle, negative -> brake.
+            longitudinal = float(np.clip(action[1], -1.0, 1.0))
             control = carla.VehicleControl()
             control.steer = float(np.clip(action[0], -1.0, 1.0))
-            control.throttle = float(np.clip(action[1], 0.0, 1.0))
-            control.brake = float(np.clip(action[2], 0.0, 1.0))
+            control.throttle = float(max(longitudinal, 0.0))
+            control.brake = float(max(-longitudinal, 0.0))
 
             self.vehicle.apply_control(control)
 

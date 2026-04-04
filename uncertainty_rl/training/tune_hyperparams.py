@@ -2,11 +2,17 @@
 @file tune_hyperparams.py
 @brief Optuna hyperparameter tuning for PPO + evidential policy networks.
 
-Uses TPESampler and MedianPruner to systematically search PPO + evidential
-hyperparameters across multiple trials. Each trial runs a short training session
-(150k steps default) and evaluates env/mean_progress_reward. Best trial params
-are written back to configs/train_config.yaml for seamless integration with
-the normal training workflow.
+Uses TPESampler (multivariate) and MedianPruner to systematically search PPO +
+evidential hyperparameters across multiple trials. Each trial runs a short
+training session (100k steps default) and evaluates env/mean_progress_reward.
+Best trial params are written back to configs/train_config.yaml for seamless
+integration with the normal training workflow.
+
+Search space design references:
+  [1] Andrychowicz et al. 2021, "What Matters In On-Policy RL?" (ICLR 2021)
+  [2] Eimer et al. 2023, "Hyperparameters in RL and How To Tune Them" (ICML 2023)
+  [3] Watanabe 2023, "Tree-Structured Parzen Estimator" (arXiv:2304.11127)
+  [4] Raffin 2022, "Automatic Hyperparameter Tuning In Practice" (ICRA tutorial)
 """
 
 import argparse
@@ -47,7 +53,7 @@ logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
 
 # ===========================================================================
-# sample_hyperparams: Tuning search space
+# sample_hyperparams: Tuning search space (8 active parameters)
 # ===========================================================================
 
 
@@ -58,6 +64,11 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     Bounds come from tuning_config.yaml, not hardcoded. Returns a flat dict
     of hyperparameters to be merged into the training config.
 
+    8 active parameters [1][2]: learning_rate, n_steps, batch_size, n_epochs,
+    gamma, ent_coef, lambda_reg, lambda_reg_warmup_steps. Fixed parameters
+    (clip_range, max_grad_norm, target_kl, net_arch) retain their defaults
+    from train_config.yaml.
+
     @param trial: Optuna trial object.
     @param tuning_config: Tuning configuration with search space bounds.
     @return Dictionary of sampled hyperparameters.
@@ -67,8 +78,8 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     # PPO Hyperparameters
     learning_rate = trial.suggest_float(
         "learning_rate",
-        float(space.get("learning_rate", [1e-5, 2e-3])[0]),
-        float(space.get("learning_rate", [1e-5, 2e-3])[1]),
+        float(space.get("learning_rate", [1e-5, 1e-3])[0]),
+        float(space.get("learning_rate", [1e-5, 1e-3])[1]),
         log=True,
     )
 
@@ -79,7 +90,7 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
 
     batch_size = trial.suggest_categorical(
         "batch_size",
-        space.get("batch_size", [64, 128, 256, 512]),
+        space.get("batch_size", [64, 128, 256]),
     )
     # Constraint: batch_size must be <= n_steps
     if batch_size > n_steps:
@@ -90,12 +101,11 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
         space.get("n_epochs", [3, 5, 10]),
     )
 
-    # Gamma: sample 1 - (1 - gamma) on log scale for precision near 1.0
-    # (Raffin 2022 recommendation)
+    # Gamma: sample 1 - (1 - gamma) on log scale for precision near 1.0 [4]
     one_minus_gamma = trial.suggest_float(
         "one_minus_gamma",
-        1 - float(space.get("gamma", [0.97, 0.999])[1]),
-        1 - float(space.get("gamma", [0.97, 0.999])[0]),
+        1 - float(space.get("gamma", [0.98, 0.999])[1]),
+        1 - float(space.get("gamma", [0.98, 0.999])[0]),
         log=True,
     )
     gamma = 1.0 - one_minus_gamma
@@ -107,43 +117,14 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
         log=True,
     )
 
-    clip_range = trial.suggest_categorical(
-        "clip_range",
-        space.get("clip_range", [0.1, 0.2, 0.3]),
+    # Evidential parameters -- always enabled (lambda_reg > 0).
+    # Disabling evidential regularisation defeats the architecture's purpose.
+    lambda_reg = trial.suggest_float(
+        "lambda_reg",
+        float(space.get("lambda_reg", [1e-5, 0.01])[0]),
+        float(space.get("lambda_reg", [1e-5, 0.01])[1]),
+        log=True,
     )
-
-    max_grad_norm = trial.suggest_float(
-        "max_grad_norm",
-        float(space.get("max_grad_norm", [0.3, 1.0])[0]),
-        float(space.get("max_grad_norm", [0.3, 1.0])[1]),
-    )
-
-    target_kl = trial.suggest_float(
-        "target_kl",
-        float(space.get("target_kl", [0.01, 0.05])[0]),
-        float(space.get("target_kl", [0.01, 0.05])[1]),
-    )
-
-    # Network architecture (use JSON strings for Optuna persistence)
-    net_arch_list = space.get("net_arch", [[128, 128], [256, 256]])
-    net_arch_strings = [json.dumps(x) for x in net_arch_list]
-    net_arch_selected = trial.suggest_categorical(
-        "net_arch",
-        net_arch_strings,
-    )
-    net_arch = json.loads(net_arch_selected)  # Parse back to list
-
-    # Evidential parameters
-    lambda_reg_use = trial.suggest_categorical("use_lambda_reg", [True, False])
-    if lambda_reg_use:
-        lambda_reg = trial.suggest_float(
-            "lambda_reg",
-            float(space.get("lambda_reg", [1e-5, 0.01])[0]),
-            float(space.get("lambda_reg", [1e-5, 0.01])[1]),
-            log=True,
-        )
-    else:
-        lambda_reg = 0.0
 
     lambda_reg_warmup_steps = trial.suggest_float(
         "lambda_reg_warmup_steps",
@@ -159,10 +140,6 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
         "n_epochs": n_epochs,
         "gamma": gamma,
         "ent_coef": ent_coef,
-        "clip_range": clip_range,
-        "max_grad_norm": max_grad_norm,
-        "target_kl": target_kl,
-        "net_arch": list(net_arch),
         "evidential": {
             "lambda_reg": lambda_reg,
             "lambda_reg_warmup_steps": int(lambda_reg_warmup_steps),
@@ -330,7 +307,7 @@ def objective(
         trial_config.update(sampled_params)
 
         # Set trial-specific training budget and directories
-        trial_config["total_timesteps"] = tuning_config.get("timesteps_per_trial", 150000)
+        trial_config["total_timesteps"] = tuning_config.get("timesteps_per_trial", 100000)
         trial_config["log_dir"] = os.path.join(
             "logs/tuning",
             f"trial_{trial.number}",
@@ -386,9 +363,17 @@ def run_study(
     """
     @brief Run the Optuna hyperparameter tuning study.
 
-    Uses TPESampler + MedianPruner. Results are stored in SQLite for
-    persistence and resume capability. Best params are written back to
-    train_config.yaml after the study completes.
+    Uses TPESampler (multivariate) + MedianPruner. Results are stored in
+    SQLite for persistence and resume capability. Best params are written
+    back to train_config.yaml after the study completes.
+
+    Sampler: multivariate TPE captures parameter interactions (e.g.
+    learning_rate vs batch_size) [3]. n_startup_trials=10 gives pure random
+    exploration before TPE builds its density model.
+
+    Pruner: MedianPruner over HyperbandPruner -- Hyperband creates multiple
+    brackets requiring ~10 startup trials each, exhausting most of our budget
+    on random search [4].
 
     @param tuning_config: Tuning configuration with study settings.
     @param base_config: Base training config (merged train + env configs).
@@ -403,14 +388,21 @@ def run_study(
     storage_path = Path(tuning_config.get("storage_path", "logs/tuning/optuna_study.db"))
     storage_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Sampler and pruner settings from tuning_config.yaml
+    sampler_cfg = tuning_config.get("sampler", {})
+    pruner_cfg = tuning_config.get("pruner", {})
+
     # Create study
     study_name = tuning_config.get("study_name", "uncertainty_rl_tuning")
     sampler = optuna.samplers.TPESampler(
         seed=tuning_config.get("seed", 42),
+        multivariate=sampler_cfg.get("multivariate", True),
+        n_startup_trials=sampler_cfg.get("n_startup_trials", 10),
     )
     pruner = optuna.pruners.MedianPruner(
-        n_startup_trials=5,
-        n_warmup_steps=3,
+        n_startup_trials=pruner_cfg.get("n_startup_trials", 8),
+        n_warmup_steps=pruner_cfg.get("n_warmup_steps", 5),
+        n_min_trials=pruner_cfg.get("n_min_trials", 5),
     )
 
     storage = optuna.storages.RDBStorage(f"sqlite:///{storage_path}")
@@ -424,8 +416,9 @@ def run_study(
     )
 
     # Run optimisation
-    n_trials = tuning_config.get("n_trials", 50)
-    logger.info("Starting Optuna study with %d trials", n_trials)
+    n_trials = tuning_config.get("n_trials", 35)
+    logger.info("Starting Optuna study: %d trials, %dk steps/trial, 8 params",
+                n_trials, tuning_config.get("timesteps_per_trial", 100000) // 1000)
 
     study.optimize(
         lambda trial: objective(

@@ -311,6 +311,8 @@ services:
       args:
         PYTORCH_VERSION: 24.10-py3
     container_name: uncertainty-rl-training-inspect-dryrun
+    stdin_open: true
+    tty: true
     runtime: nvidia
     profiles:
       - inspect-dryrun
@@ -325,6 +327,7 @@ services:
       - CARLA_PORT=2100
       - INSPECT_VIEW=${INSPECT_VIEW:-third_person}
       - INSPECT_PAUSE=${INSPECT_PAUSE:-3.0}
+      - INSPECT_MANUAL=${INSPECT_MANUAL:-false}
     depends_on:
       carla-server-demo:
         condition: service_healthy
@@ -350,6 +353,7 @@ services:
       --port 2100
       --inspect-view ${INSPECT_VIEW:-third_person}
       --termination-pause ${INSPECT_PAUSE:-3.0}
+      $([ '${INSPECT_MANUAL:-false}' = 'true' ] && echo --manual || true)
       $([ -n '${EPISODES}' ] && echo --episodes ${EPISODES} || true)
       2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
     deploy:

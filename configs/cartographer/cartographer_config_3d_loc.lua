@@ -77,29 +77,34 @@ TRAJECTORY_BUILDER.pure_localization_trimmer = {
 -- 2D trajectory builder settings (same as SLAM except num_range_data)
 -- ---------------------------------------------------------------------------
 
-TRAJECTORY_BUILDER_2D.min_range = 0.1
+TRAJECTORY_BUILDER_2D.min_range = 0.5
 TRAJECTORY_BUILDER_2D.max_range = 50.0
-TRAJECTORY_BUILDER_2D.missing_data_ray_length = 5.0
-TRAJECTORY_BUILDER_2D.use_imu_data = false  -- colocation requirement: IMU frame is not at ego_vehicle/lidar_3d
+-- Set to max_range so missing rays do not insert phantom short obstacles.
+TRAJECTORY_BUILDER_2D.missing_data_ray_length = 50.0
+-- IMU disabled: colocation requirement -- IMU frame is not at ego_vehicle/lidar_3d.
+TRAJECTORY_BUILDER_2D.use_imu_data = false
 
 -- Z-range for horizontal slice extraction from 3D point cloud (sensor frame).
 -- Widen min_z to capture cone returns from roof-mounted LiDAR.
 TRAJECTORY_BUILDER_2D.min_z = -2.5
 TRAJECTORY_BUILDER_2D.max_z = 0.5
 
--- Denser point cloud from 16-layer fan: target 400 points after downsampling
+-- 16-channel VLP-16 produces ~300+ projected 2D points per scan -- 200 is a
+-- safe minimum that rejects near-empty scans without discarding valid ones.
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 400
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 200
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 50.0
 
+-- Wider search window to compensate for IMU-free operation between scans.
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.2
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(20.0)
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.5
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.0)
 
+-- Higher rotation weight: yaw drift is the dominant error without IMU.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
-TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 40.0
+TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 100.0
 
--- Small submap window for fast per-episode convergence in loc mode
+-- Small submap window for fast per-episode convergence in loc mode.
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 10
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 
@@ -108,8 +113,10 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 -- ---------------------------------------------------------------------------
 
 POSE_GRAPH.optimize_every_n_nodes = 0
-POSE_GRAPH.constraint_builder.min_score = 0.50
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.55
+-- Raised from 0.50: accepting low-score matches with sparse scans introduces
+-- false constraints that corrupt the pose estimate.
+POSE_GRAPH.constraint_builder.min_score = 0.60
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.65
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 
 return options

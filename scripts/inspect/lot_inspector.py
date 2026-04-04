@@ -225,8 +225,8 @@ def main() -> None:
     parser.add_argument(
         "--duration",
         type=int,
-        default=300,
-        help="Seconds to hold the scene (default: 300).",
+        default=86400,
+        help="Seconds to run (default: 86400 = 24 h). Episodes end via max_steps or Ctrl+C.",
     )
     parser.add_argument(
         "--episodes",
@@ -257,6 +257,17 @@ def main() -> None:
         help=(
             "Seconds to hold the scene after an episode ends before resetting "
             "(default: 3.0).  Set to 0 to disable.  Dryrun mode only."
+        ),
+    )
+    parser.add_argument(
+        "--manual",
+        action="store_true",
+        default=False,
+        help=(
+            "Enable keyboard control in dryrun mode. "
+            "Arrow keys: Up=throttle, Down=brake, Left/Right=steer. "
+            "Requires pynput (installed in inspect container). "
+            "Ignored in all other modes."
         ),
     )
     args = parser.parse_args()
@@ -353,6 +364,7 @@ def main() -> None:
             sensor_suite="suite_a",
             include_covariance=True,
             include_obstacle_obs=True,
+            max_steps=train_cfg.get("max_steps", 1000),
         )
         env.reset()
         if env.world is None or env.vehicle is None:
@@ -368,9 +380,13 @@ def main() -> None:
             dryrun_action,
             initial_view=args.inspect_view,
             termination_pause=args.termination_pause,
+            manual=args.manual,
         )
         inspector.place_spectator()  # type: ignore[attr-defined]
-        action_desc = str(dryrun_action) if dryrun_action is not None else "random"
+        if args.manual:
+            action_desc = "keyboard (Up=throttle, Down=brake, Left/Right=steer)"
+        else:
+            action_desc = f"constant {dryrun_action}"
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
         print(
             f"  View: {args.inspect_view}  |  " f"pause: {args.termination_pause:.1f}s"
