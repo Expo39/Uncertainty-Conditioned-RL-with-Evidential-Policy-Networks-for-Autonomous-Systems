@@ -736,13 +736,21 @@ class KeyboardController:
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
+    # Step sizes for incremental control.
+    # Steer: 0.1 per press (10 presses = full lock).
+    # Throttle: 0.1 per press (10 presses = full throttle).
+    # Brake: 0.2 per press (5 presses = full brake -- braking is faster).
+    _STEER_STEP: float = 0.1
+    _THROTTLE_STEP: float = 0.1
+    _BRAKE_STEP: float = 0.2
+
     def start(self) -> None:
         """@brief Start background stdin reader thread."""
         self._running = True
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
         print(
-            "  Keyboard control (latching): Up=throttle  Down=brake"
+            "  Keyboard control (incremental): Up=+throttle  Down=+brake"
             "  Left/Right=steer  Space=stop  Ctrl+C=quit"
         )
 
@@ -796,14 +804,22 @@ class KeyboardController:
                     rest = sys.stdin.read(2)
                     seq = ch + rest
                     with self._lock:
-                        if seq == "\x1b[A":    # Up -- latch throttle, cancel brake
-                            self._longitudinal = 1.0
-                        elif seq == "\x1b[B":  # Down -- latch brake, cancel throttle
-                            self._longitudinal = -1.0
-                        elif seq == "\x1b[D":  # Left -- latch left, cancel right
-                            self._steer = -1.0
-                        elif seq == "\x1b[C":  # Right -- latch right, cancel left
-                            self._steer = 1.0
+                        if seq == "\x1b[A":    # Up -- increment throttle
+                            self._longitudinal = min(
+                                1.0, self._longitudinal + self._THROTTLE_STEP
+                            )
+                        elif seq == "\x1b[B":  # Down -- increment brake
+                            self._longitudinal = max(
+                                -1.0, self._longitudinal - self._BRAKE_STEP
+                            )
+                        elif seq == "\x1b[D":  # Left -- increment left steer
+                            self._steer = max(
+                                -1.0, self._steer - self._STEER_STEP
+                            )
+                        elif seq == "\x1b[C":  # Right -- increment right steer
+                            self._steer = min(
+                                1.0, self._steer + self._STEER_STEP
+                            )
         finally:
             try:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
@@ -1042,26 +1058,29 @@ class DryRunInspector(_Inspector):
                 f"  dyaw={math.degrees(obs[14]):+.1f}deg" + X
             )
 
-        # YELLOW -- GT target world; RED -- odom projection + recon
+        # YELLOW -- GT target world; RED -- odom projection + vehicle recon
         gt = self._env._target_bay
         odom_t = self._env._target_bay_odom
         tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
-        recon_wx = cos_r * odom_t["x"] - sin_r * odom_t["y"] + tx
-        recon_wy = sin_r * odom_t["x"] + cos_r * odom_t["y"] + ty
-        err_m = math.sqrt((recon_wx - gt["x"]) ** 2 + (recon_wy - gt["y"]) ** 2)
-        recon_world_yaw = math.atan2(
-            math.sin(odom_t["yaw"] + r),
-            math.cos(odom_t["yaw"] + r),
-        )
-        world_yaw_wrapped = math.atan2(math.sin(gt["yaw"]), math.cos(gt["yaw"]))
-        yaw_err_deg = math.degrees(
-            abs(
-                math.atan2(
-                    math.sin(recon_world_yaw - world_yaw_wrapped),
-                    math.cos(recon_world_yaw - world_yaw_wrapped),
+
+        # Vehicle reconstruction error: transform current EKF pose to
+        # world frame and compare to GT vehicle position. This measures
+        # actual localisation + transform accuracy (unlike the bay
+        # round-trip which is always zero by construction).
+        err_m = 0.0
+        if self._env._cov_subscriber is not None:
+            ekf_pose = self._env._cov_subscriber.get_latest_pose()
+            if ekf_pose is not None and self._env.vehicle is not None:
+                ekf_x = float(ekf_pose[0])
+                ekf_y = float(ekf_pose[1])
+                recon_veh_wx = cos_r * ekf_x - sin_r * ekf_y + tx
+                recon_veh_wy = sin_r * ekf_x + cos_r * ekf_y + ty
+                gt_veh = self._env.vehicle.get_transform()
+                err_m = math.sqrt(
+                    (recon_veh_wx - gt_veh.location.x) ** 2
+                    + (recon_veh_wy - gt_veh.location.y) ** 2
                 )
-            )
-        )
+
         lines.append(
             Y + f"bay  world=({gt['x']:.2f},{gt['y']:.2f})"
             f"  yaw={math.degrees(gt['yaw']):+.1f}deg" + X

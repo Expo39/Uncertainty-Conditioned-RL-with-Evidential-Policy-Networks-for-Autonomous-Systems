@@ -33,7 +33,7 @@ Usage::
 
   # Generate one layout with custom origin:
   python scripts/layouts/generate_layouts.py \
-      --layout rectangle --origin -200 0 0.3 --heading 0
+      --layout rectangle --origin 2 -22.5 0.3 --heading 0
 """
 
 import argparse

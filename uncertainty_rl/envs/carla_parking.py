@@ -43,13 +43,6 @@ try:
 except ImportError:
     carla = None  # Running without CARLA (CI or tests)
 
-try:
-    import rclpy
-
-    _ROS2_AVAILABLE = True
-except ImportError:
-    _ROS2_AVAILABLE = False
-
 from uncertainty_rl.envs._lot_spawner import LotSpawner
 from uncertainty_rl.envs._npc_controller import NPCController
 from uncertainty_rl.envs._sensor_manager import SensorManager
@@ -141,6 +134,8 @@ class CARLAParkingEnv(gym.Env):
         map_load_sleep: float = 5.0,
         action_repeat: int = 1,
         no_rendering_mode: bool = False,
+        max_ego_speed_ms: float = 6.0,
+        use_extra_spawns: bool = False,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -174,6 +169,13 @@ class CARLAParkingEnv(gym.Env):
                a debug dict in vis frames for the visualiser HUD. Off by default.
         @param map_load_sleep: Seconds to wait after loading the FlatPlane OpenDRIVE
                world before continuing. Increase on slow servers (default 5.0).
+        @param max_ego_speed_ms: Maximum ego vehicle speed in m/s. Throttle is cut
+               when this speed is exceeded to keep Cartographer scan-matching stable.
+               Default 6.0 m/s (~22 km/h), appropriate for parking lot manoeuvres.
+        @param use_extra_spawns: If True, extra spawn transforms from the layout
+               YAML are included in the spawn pool. If False (default), only the
+               primary spawn is used, ensuring CARLA and Cartographer coordinate
+               frames align at the origin.
         """
         super().__init__()
 
@@ -186,6 +188,8 @@ class CARLAParkingEnv(gym.Env):
         self._include_obstacle_obs = include_obstacle_obs
         self._eval_mode = eval_mode
         self._map_load_sleep = map_load_sleep
+        self._max_ego_speed_ms = max_ego_speed_ms
+        self._use_extra_spawns = use_extra_spawns
 
         ros2_config = ros2_config or {}
         self._ros2_config: Dict[str, Any] = ros2_config
@@ -249,6 +253,10 @@ class CARLAParkingEnv(gym.Env):
             ),
             bay_occupancy_min=scenarios.get("bay_occupancy_min", 0.3),
             bay_occupancy_max=scenarios.get("bay_occupancy_max", 0.8),
+            spawn_landmarks=scenarios.get("spawn_landmarks", True),
+            landmark_blueprint=scenarios.get(
+                "landmark_blueprint", "static.prop.streetbarrier"
+            ),
         )
 
         # NPC controller -- owns patrol vehicles and pedestrians.
@@ -397,19 +405,14 @@ class CARLAParkingEnv(gym.Env):
 
     def _init_ros2(self) -> None:
         """
-        @brief Initialise rclpy and create the covariance reader.
+        @brief Create the covariance reader (file-based, no DDS).
 
-        The covariance reader uses a shared file (no DDS subscription) to avoid
-        cross-distro serialisation issues between Humble and Jazzy. rclpy is
-        still needed for /initialpose publishing at episode reset.
-
-        When rclpy is unavailable (CI/tests), the reader still works for file
-        reading but /initialpose publishing is disabled.
+        The covariance reader uses a shared file to avoid cross-distro
+        serialisation issues between Humble and Jazzy. The /initialpose
+        signal is also file-based: the reader writes initial_pose.json and
+        the CovarianceExtractorNode in ros2-bridge publishes it locally.
+        No rclpy initialisation is needed.
         """
-        if _ROS2_AVAILABLE:
-            if not rclpy.ok():
-                rclpy.init()
-
         node_name = f"covariance_subscriber_{id(self)}"
         self._cov_subscriber = _CovarianceSubscriber(
             covariance_topic=self._covariance_topic,
@@ -754,9 +757,16 @@ class CARLAParkingEnv(gym.Env):
             vy = velocity.y
             vyaw = math.radians(angular_vel.z)
 
+        # Refresh the odom-to-world transform every step so the target bay
+        # position in odom frame tracks Cartographer drift / jumps.
+        # Uses CARLA GT for the coordinate frame mapping only -- the EKF
+        # pose, velocity, and covariance features remain the real noisy values.
+        # In deployment, bay and EKF are both in the map frame, so no
+        # calibration is needed; this per-step update simulates that reality.
+        if ekf_pose is not None:
+            self._update_odom_transform(x, y, yaw)
+
         # Relative target pose in ego body frame.
-        # Both vehicle pose (x, y, yaw) and target are in Cartographer odom frame,
-        # so odom drift cancels in the subtraction.
         dx, dy, dyaw = _compute_relative_target_pose(
             x,
             y,
@@ -1066,7 +1076,11 @@ class CARLAParkingEnv(gym.Env):
 
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
         primary = self._current_layout.get("spawn_transform", {})
-        extras: List[Any] = self._current_layout.get("extra_spawn_transforms", [])
+        extras: List[Any] = (
+            self._current_layout.get("extra_spawn_transforms", [])
+            if self._use_extra_spawns
+            else []
+        )
         all_spawns = [primary] + list(extras)
 
         chosen = random.choice(all_spawns)
@@ -1124,7 +1138,11 @@ class CARLAParkingEnv(gym.Env):
 
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
         primary = self._current_layout.get("spawn_transform", {})
-        extras: List[Any] = self._current_layout.get("extra_spawn_transforms", [])
+        extras: List[Any] = (
+            self._current_layout.get("extra_spawn_transforms", [])
+            if self._use_extra_spawns
+            else []
+        )
         all_spawns = [primary] + list(extras)
 
         chosen = random.choice(all_spawns)
@@ -1219,6 +1237,44 @@ class CARLAParkingEnv(gym.Env):
             f"EKF inputs ready after {time.monotonic() - start:.2f}s "
             f"(lidar + covariance)."
         )
+
+    def _update_odom_transform(
+        self, ekf_x: float, ekf_y: float, ekf_yaw: float
+    ) -> None:
+        """
+        @brief Refresh the odom-to-world transform using the current EKF and GT.
+
+        Recomputes R and t from the current EKF pose and CARLA ground truth,
+        then reprojects the target bay into odom frame. This keeps the target
+        observation accurate even when Cartographer drifts or jumps.
+
+        Only the coordinate frame mapping uses GT -- the EKF pose, velocity,
+        and covariance fed to the policy are the real noisy values. In real
+        deployment the bay and EKF are both in the map frame, so no
+        calibration is needed; this per-step update simulates that reality.
+
+        @param ekf_x: Current EKF x in odom frame.
+        @param ekf_y: Current EKF y in odom frame.
+        @param ekf_yaw: Current EKF yaw in odom frame (radians).
+        """
+        if self.vehicle is None:
+            return
+
+        gt = self.vehicle.get_transform()
+        gt_x = gt.location.x
+        gt_y = gt.location.y
+        gt_yaw = math.radians(gt.rotation.yaw)
+
+        r = math.atan2(
+            math.sin(gt_yaw - ekf_yaw), math.cos(gt_yaw - ekf_yaw)
+        )
+        cos_r = math.cos(r)
+        sin_r = math.sin(r)
+        tx = gt_x - (cos_r * ekf_x - sin_r * ekf_y)
+        ty = gt_y - (sin_r * ekf_x + cos_r * ekf_y)
+
+        self._ekf_odom_offset = (tx, ty, cos_r, sin_r, r)
+        self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
 
     def _compute_target_bay_odom(
         self, tx: float, ty: float, cos_r: float, sin_r: float, r: float
@@ -1640,8 +1696,16 @@ class CARLAParkingEnv(gym.Env):
             longitudinal = float(np.clip(action[1], -1.0, 1.0))
             control = carla.VehicleControl()
             control.steer = float(np.clip(action[0], -1.0, 1.0))
-            control.throttle = float(max(longitudinal, 0.0))
             control.brake = float(max(-longitudinal, 0.0))
+
+            # Cut throttle when speed limit is exceeded to keep Cartographer
+            # scan-matching stable (fast spins cause TF jumps -> EKF divergence).
+            vel = self.vehicle.get_velocity()
+            current_speed = math.sqrt(vel.x ** 2 + vel.y ** 2)
+            if current_speed >= self._max_ego_speed_ms:
+                control.throttle = 0.0
+            else:
+                control.throttle = float(max(longitudinal, 0.0))
 
             self.vehicle.apply_control(control)
 

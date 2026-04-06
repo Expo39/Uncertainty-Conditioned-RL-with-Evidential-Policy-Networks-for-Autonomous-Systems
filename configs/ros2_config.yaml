@@ -4,7 +4,7 @@
 #
 #   /carla/ego_vehicle/lidar  (PointCloud2)
 #       -> Cartographer (loc mode, matching against frozen .pbstream)
-#       -> TF: odom -> ego_vehicle/lidar  (Cartographer; provide_odom_frame=true)
+#       -> TF: carto_map -> ego_vehicle/lidar  (Cartographer loc; provide_odom_frame=false)
 #       -> tf_to_odom node  -> /scan_matched_odometry  (Odometry, dynamic covariance)
 #
 #   /carla/ego_vehicle/imu  (sensor_msgs/Imu)
@@ -33,10 +33,14 @@ carla_topics:
 ekf:
   frequency: 20.0        # EKF update rate (Hz) -- matches CARLA timestep
   two_d_mode: true       # Constrain to 2D: suppress z, roll, pitch states
-  world_frame: "odom"    # EKF output expressed in the Cartographer odom frame.
-                         # Cartographer (provide_odom_frame=true) publishes odom -> ego_vehicle/lidar;
-                         # tf_to_odom looks this up and feeds the EKF as odom0.
-  odom_frame: "odom"
+  world_frame: "carto_map"  # EKF output frame. Cartographer (provide_odom_frame=false) publishes
+                            # carto_map -> ego_vehicle/lidar directly (globally anchored to the
+                            # pbstream). tf_to_odom looks this up and feeds the EKF as odom0.
+                            # "carto_map" (not "map") avoids TF conflict with the CARLA bridge.
+                            # _calibrate_ekf_frame_offset() computes the rigid transform from
+                            # carto_map frame to CARLA world coordinates at episode reset.
+  odom_frame: "carto_map"  # Must match world_frame for single-sensor mode. robot_localisation
+                            # accepts odom0 messages with frame_id matching world_frame or odom_frame.
   base_link_frame: "ego_vehicle"  # Central body frame for all sensors.
   # The CARLA bridge (passive mode) publishes TF frames directly under "map"
   # with no "ego_vehicle" body frame. Static TF publishers in carla_bridge.launch.py
@@ -105,7 +109,7 @@ covariance_topic: "/ekf_uncertainty/covariance"  # CovarianceEstimate publisher 
 publish_rate: 10.0                           # Hz (file write rate)
 
 # Velocity frame convention.
-# robot_localisation with world_frame=odom publishes twist in the odom
+# robot_localisation with world_frame=carto_map publishes twist in the carto_map
 # (world-aligned) frame, not the vehicle body frame. The extractor rotates
 # it into body frame before writing to ekf_state.json.
 # Set false only if robot_localisation is configured with twist_in_robot_frame: true.

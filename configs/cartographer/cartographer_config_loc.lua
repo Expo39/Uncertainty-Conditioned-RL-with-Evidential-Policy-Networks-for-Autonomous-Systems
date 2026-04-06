@@ -34,22 +34,24 @@ options = {
   -- TF frame names.
   -- tracking_frame = ego_vehicle/lidar: Cartographer tracks the LiDAR frame.
   -- published_frame = ego_vehicle/lidar: Cartographer publishes
-  --   odom -> ego_vehicle/lidar (when provide_odom_frame = true).
+  --   carto_map -> ego_vehicle/lidar (provide_odom_frame = false).
   --
-  -- IMPORTANT: The CARLA bridge (passive mode) also publishes
-  -- map -> ego_vehicle/lidar at 37 Hz. If Cartographer were to publish
-  -- map -> ego_vehicle/lidar (i.e. provide_odom_frame = false), two nodes
-  -- would own the same TF edge, causing TF2 to return garbage transforms.
-  -- provide_odom_frame = true makes Cartographer publish odom -> ego_vehicle/lidar
-  -- only, which the bridge does not conflict with.
+  -- map_frame = "carto_map" (NOT "map"): avoids TF conflict with the CARLA
+  -- bridge, which publishes map -> ego_vehicle/lidar at 37 Hz with ground-truth
+  -- pose. Using a distinct frame name means Cartographer owns a separate TF edge
+  -- (carto_map -> ego_vehicle/lidar) and the two never collide.
   --
-  -- tf_to_odom looks up odom -> ego_vehicle/lidar and republishes as Odometry.
-  -- The EKF uses world_frame = odom (set in ros2_config.yaml).
-  map_frame = "map",
+  -- provide_odom_frame = false: Cartographer publishes the map-frame pose
+  -- directly (globally anchored to the pbstream), not a drifting odom estimate.
+  -- This gives consistent position accumulation across the episode.
+  --
+  -- tf_to_odom looks up carto_map -> ego_vehicle/lidar and publishes Odometry.
+  -- The EKF uses world_frame = "carto_map" (set in ros2_config.yaml).
+  map_frame = "carto_map",
   tracking_frame = "ego_vehicle/lidar",
   published_frame = "ego_vehicle/lidar",
   odom_frame = "odom",
-  provide_odom_frame = true,
+  provide_odom_frame = false,
   publish_frame_projected_to_2d = true,
 
   use_odometry = false,
@@ -100,26 +102,32 @@ TRAJECTORY_BUILDER_2D.missing_data_ray_length = 25.0
 -- violating Cartographer's colocation requirement.
 TRAJECTORY_BUILDER_2D.use_imu_data = false
 
--- min_num_points must be below the actual scan size (64 pts from CARLA 2D
--- LiDAR at 20 Hz / 2M pts_per_second).  200 causes the filter to discard
--- nearly every scan.  Set to 20 so all scans pass through.
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 20
+-- Adaptive voxel filter: 100k raw rays -> ~64 pts at 0.5 m voxels.
+-- min_num_points must be below the actual filtered count (64) so scans
+-- are not silently discarded. Reduced max_length from 0.5 to 0.3 m to
+-- retain more points (~150-200) for more reliable scan matching on the
+-- sparse cone perimeter.
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.3
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 40
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 25.0
 
--- Wider search window to handle the larger pose uncertainty that comes from
--- IMU-free operation between scan matches.
+-- Narrower search windows than SLAM: the vehicle moves at most ~0.15 m
+-- per 20 Hz step at 3 m/s parking speed. 0.3 m linear + 15 deg angular
+-- covers 2x the expected motion uncertainty while rejecting far-away
+-- symmetric false matches that caused EKF position jumping.
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.5
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.0)
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.3
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(15.0)
 
 -- Increase rotation weight: yaw drift is the dominant error source without IMU.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 100.0
 
--- Small submap window: in pure localisation, submaps are never finalised.
--- 10 scans (~0.5 s at 20 Hz) gives fast per-episode convergence.
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 10
+-- Submap window: 30 scans (~1.5 s at 20 Hz). Increased from 10 to
+-- accumulate more cone geometry per submap, reducing position ambiguity
+-- on the symmetric perimeter. Convergence ~1.5 s per episode (acceptable
+-- given the 3.0 s pause between episodes).
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 30
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 
 -- ---------------------------------------------------------------------------
@@ -127,10 +135,13 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 -- ---------------------------------------------------------------------------
 
 POSE_GRAPH.optimize_every_n_nodes = 0
--- Raised from 0.50: accepting scores below 0.60 with only 64-point scans
--- introduces false constraints that corrupt the pose estimate.
-POSE_GRAPH.constraint_builder.min_score = 0.60
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.65
+-- min_score raised to 0.75: the sparse 64-point scans on symmetric cone
+-- geometry produce borderline 67-81% matches at wrong positions. 0.75
+-- rejects the ambiguous matches while still accepting strong ones (>80%).
+POSE_GRAPH.constraint_builder.min_score = 0.75
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.80
+-- Sampling ratio for loop closure: check every node against the pbstream.
+POSE_GRAPH.constraint_builder.sampling_ratio = 0.3
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 
 return options

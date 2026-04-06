@@ -35,13 +35,16 @@ from scripts.layouts.common import (
     BAYS_PER_TYPE,
     PED_STRIP,
     ang_offset_from_wall,
+    compute_landmarks,
     validate_bays_in_polygon,
     warn_narrow_corridors,
 )
 
-# World-frame origin in multi-layout generation (FlatPlane generated OpenDRIVE world).
-ORIGIN_X = -200.0
-ORIGIN_Y = 0.0
+# World-frame origin chosen so the primary spawn lands at CARLA (0,0),
+# aligning CARLA and Cartographer coordinate frames from the start.
+# spawn_local = (-2.0, 22.5) -> origin = (2.0, -22.5).
+ORIGIN_X = 2.0
+ORIGIN_Y = -22.5
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False
@@ -427,4 +430,5 @@ def generate() -> Dict[str, Any]:
         "extra_spawns": [spawn2],
         "patrol_waypoints": patrol,
         "pedestrian_zones": ped_zones,
+        "landmarks": compute_landmarks(corners, all_bays),
     }

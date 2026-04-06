@@ -365,6 +365,7 @@ def main() -> None:
             include_covariance=True,
             include_obstacle_obs=True,
             max_steps=train_cfg.get("max_steps", 1000),
+            max_ego_speed_ms=train_cfg.get("max_ego_speed_ms", 6.0),
         )
         env.reset()
         if env.world is None or env.vehicle is None:

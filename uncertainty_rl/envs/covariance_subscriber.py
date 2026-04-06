@@ -11,26 +11,20 @@ The file is written atomically (via rename) by the extractor node at the
 EKF publish rate (~20 Hz) to /workspace/outputs/ekf_state.json, which is
 on a Docker shared volume visible to both containers.
 
-Also publishes /initialpose via rclpy for Cartographer pure localisation
-convergence at episode reset.
+The /initialpose signal for Cartographer pure localisation is also
+file-based: the training container writes initial_pose.json and the
+CovarianceExtractorNode in ros2-bridge reads it and publishes locally.
 """
 
 import json
+import logging
 import math
 import os
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Optional, Tuple, cast
 
 import numpy as np
-
-try:
-    from geometry_msgs.msg import PoseWithCovarianceStamped
-    from rclpy.node import Node
-
-    _ROS2_AVAILABLE = True
-except ImportError:
-    _ROS2_AVAILABLE = False
 
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
@@ -39,29 +33,26 @@ from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 # so that parallel CARLA workers each read from their own ros2-bridge's output file.
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
-if TYPE_CHECKING:
-    # For static analysis: always treat the base class as rclpy.Node so mypy
-    # can resolve all Node attributes (get_logger, create_publisher, etc.).
-    from rclpy.node import Node as _NodeBase
-else:
-    # At runtime: inherit from Node when available, plain object otherwise.
-    # plain object is only used in CI / unit tests where rclpy is absent;
-    # the Node-specific methods (create_publisher, get_clock) are never
-    # called in that context.
-    _NodeBase = Node if _ROS2_AVAILABLE else object
+# File-based /initialpose signal.  The training container writes this file at
+# episode reset; the CovarianceExtractorNode (ros2-bridge, Jazzy) watches it
+# and publishes /initialpose locally.  Same DDS-bypass pattern as ekf_state.json.
+_INITIAL_POSE_PATH = Path("/workspace/outputs/initial_pose.json")
+
+logger = logging.getLogger(__name__)
 
 
-class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
+class _CovarianceSubscriber:
     """
     @class _CovarianceSubscriber
-    @brief Reads EKF state from a shared JSON file + publishes /initialpose.
+    @brief Reads EKF state from a shared JSON file + signals /initialpose.
 
     The CovarianceExtractorNode (ros2-bridge, Jazzy) writes the latest EKF
     pose, velocity, and 3x3 covariance to a shared file. This class reads
     that file on demand -- no DDS subscription needed.
 
-    Inherits from rclpy.Node only for the /initialpose publisher (needed
-    for Cartographer pure localisation convergence at episode reset).
+    The /initialpose signal is also file-based: this class writes
+    initial_pose.json and the extractor node reads it and publishes
+    /initialpose within the ros2-bridge container (same DDS domain).
     """
 
     def __init__(
@@ -74,7 +65,7 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         @brief Initialise the covariance reader.
         @param covariance_topic: Unused -- EKF state is read from the shared
                JSON file, not via DDS. Accepted for call-site compatibility.
-        @param node_name: Unique node name for the rclpy publisher node.
+        @param node_name: Unused -- no rclpy Node. Accepted for compatibility.
         @param ros2_config: Optional ROS 2 config dict from train_config.yaml.
         """
         self._lock = threading.Lock()
@@ -87,6 +78,8 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         # clocks are unreliable on some host configurations.
         self._valid_after_seq: int = 0
         self._last_read_seq: int = 0
+        # Monotonically increasing counter for initial_pose.json writes.
+        self._initial_pose_seq: int = 0
 
         # Per-worker EKF state file path. Priority order:
         #   1. ros2_config["ekf_state_file"] -- set by make_env() for rank > 0
@@ -99,19 +92,22 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         )
         self._ekf_state_path: Path = Path(ekf_state_file)
 
-        # Initialise rclpy Node for /initialpose publisher only
-        if _ROS2_AVAILABLE:
-            super().__init__(node_name)
-            initial_pose_topic = config.get("initial_pose_topic", "/initialpose")
-            self._initial_pose_pub = self.create_publisher(
-                PoseWithCovarianceStamped,
-                initial_pose_topic,
-                10,
+        # Initial pose file path (shared volume, same dir as EKF state).
+        self._initial_pose_path: Path = Path(
+            config.get(
+                "initial_pose_file",
+                os.environ.get("INITIAL_POSE_FILE", str(_INITIAL_POSE_PATH)),
             )
-            self.get_logger().info(
-                f"Covariance reader: file={self._ekf_state_path}, "
-                f"initialpose={initial_pose_topic}"
-            )
+        )
+        self._initial_pose_tmp: Path = self._initial_pose_path.with_suffix(
+            ".json.tmp"
+        )
+
+        logger.info(
+            "Covariance reader: ekf_file=%s, initial_pose_file=%s",
+            self._ekf_state_path,
+            self._initial_pose_path,
+        )
 
     def invalidate(self) -> None:
         """
@@ -237,35 +233,40 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
 
     def publish_initial_pose(self, x: float, y: float, yaw: float) -> None:
         """
-        @brief Publish the vehicle spawn pose to /initialpose for Cartographer
-               pure localisation mode.
+        @brief Signal the spawn pose to the ros2-bridge via a shared file.
 
-        Converts from CARLA world frame (left-handed, y increases rightward)
-        to ROS/Cartographer map frame (right-handed, y increases leftward) by
-        negating y and yaw before publishing.
+        Writes initial_pose.json with the spawn position in CARLA world frame.
+        The CovarianceExtractorNode in the ros2-bridge container watches this
+        file and publishes /initialpose locally (same DDS domain as Cartographer).
+
+        The CARLA-to-ROS frame conversion (negate y and yaw) is applied by the
+        extractor node at publish time, keeping this file in CARLA convention.
 
         @param x: Spawn X in CARLA world frame (metres).
         @param y: Spawn Y in CARLA world frame (metres).
         @param yaw: Spawn heading in radians (CARLA convention).
         """
-        if not _ROS2_AVAILABLE:
-            return
-
-        # CARLA -> ROS frame: negate y and yaw (left-hand to right-hand mirror)
-        ros_y = -y
-        ros_yaw = -yaw
-
-        msg = PoseWithCovarianceStamped()
-        msg.header.frame_id = "map"
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.pose.pose.position.x = x
-        msg.pose.pose.position.y = ros_y
-        msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
-        msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
-        msg.pose.covariance[0] = 0.1  # xx
-        msg.pose.covariance[7] = 0.1  # yy
-        msg.pose.covariance[35] = 0.05  # yaw-yaw
-        self._initial_pose_pub.publish(msg)
+        self._initial_pose_seq += 1
+        data = {
+            "seq": self._initial_pose_seq,
+            "x": float(x),
+            "y": float(y),
+            "yaw": float(yaw),
+        }
+        try:
+            os.makedirs(self._initial_pose_path.parent, exist_ok=True)
+            with open(self._initial_pose_tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(str(self._initial_pose_tmp), str(self._initial_pose_path))
+            logger.info(
+                "Initial pose written: x=%.2f y=%.2f yaw=%.1fdeg (seq=%d)",
+                x,
+                y,
+                math.degrees(yaw),
+                self._initial_pose_seq,
+            )
+        except OSError as exc:
+            logger.warning("Failed to write initial_pose.json: %s", exc)
 
     @property
     def has_data(self) -> bool:
