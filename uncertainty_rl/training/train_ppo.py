@@ -163,6 +163,8 @@ def make_env(
             map_load_sleep=config.get("map_load_sleep", 5.0),
             action_repeat=config.get("action_repeat", 1),
             no_rendering_mode=config.get("no_rendering_mode", False),
+            max_ego_speed_ms=config.get("max_ego_speed_ms", 6.0),
+            use_extra_spawns=config.get("use_extra_spawns", False),
             vis_output_path=vis_path,
         )
         return env

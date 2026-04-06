@@ -17,6 +17,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -41,6 +42,12 @@ class CovarianceExtractorNode(Node):
     # CARLA workers) each write to a separate file without race conditions.
     # Worker 0: ekf_state.json (default), Worker 1: ekf_state_1.json, etc.
     _DEFAULT_SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
+
+    # File-based /initialpose signal written by the training container.
+    # The training container writes {seq, x, y, yaw} in CARLA world frame.
+    # This node watches the file and publishes /initialpose locally so
+    # Cartographer (same Jazzy DDS domain) receives it.
+    _DEFAULT_INITIAL_POSE_PATH: str = "/workspace/outputs/initial_pose.json"
 
     # Log every N odometry callbacks (~100 at 20 Hz = every 5 s).
     _LOG_EVERY_N: int = 100
@@ -127,10 +134,28 @@ class CovarianceExtractorNode(Node):
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
+        # --- /initialpose file watcher -----------------------------------------
+        # The training container (Humble) writes initial_pose.json at episode
+        # reset.  This node watches the file and publishes /initialpose locally
+        # so Cartographer (same Jazzy DDS domain) can converge quickly.
+        initial_pose_path: str = os.environ.get(
+            "INITIAL_POSE_FILE", self._DEFAULT_INITIAL_POSE_PATH
+        )
+        self._initial_pose_path: str = initial_pose_path
+        self._initial_pose_last_seq: int = 0
+        self._initial_pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, "/initialpose", 10
+        )
+        # Poll at 10 Hz -- fast enough to catch the file within 0.1 s of write.
+        self._initial_pose_timer = self.create_timer(
+            0.1, self._check_initial_pose_file
+        )
+
         self.get_logger().info(
             f"CovarianceExtractor: {odom_topic} -> {covariance_topic} "
             f"at {publish_rate} Hz "
-            f"(twist_in_odom_frame={self._twist_in_odom_frame})"
+            f"(twist_in_odom_frame={self._twist_in_odom_frame}), "
+            f"initial_pose_file={self._initial_pose_path}"
         )
 
     def odom_callback(self, msg: Odometry) -> None:
@@ -260,6 +285,47 @@ class CovarianceExtractorNode(Node):
         msg.covariance = self._latest_cov_flat
 
         self.covariance_publisher.publish(msg)
+
+    def _check_initial_pose_file(self) -> None:
+        """
+        @brief Poll initial_pose.json and publish /initialpose on new writes.
+
+        The training container writes initial_pose.json at episode reset with
+        the vehicle spawn pose in CARLA world frame.  This method reads the
+        file, checks for a new sequence number, converts from CARLA (left-hand)
+        to ROS (right-hand) frame, and publishes a PoseWithCovarianceStamped.
+        """
+        try:
+            with open(self._initial_pose_path, "r") as f:
+                data = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+
+        seq = int(data.get("seq", 0))
+        if seq <= self._initial_pose_last_seq:
+            return
+        self._initial_pose_last_seq = seq
+
+        # CARLA -> ROS frame: negate y and yaw (left-hand to right-hand).
+        x = float(data["x"])
+        ros_y = -float(data["y"])
+        ros_yaw = -float(data["yaw"])
+
+        msg = PoseWithCovarianceStamped()
+        msg.header.frame_id = "map"
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.pose.pose.position.x = x
+        msg.pose.pose.position.y = ros_y
+        msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
+        msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
+        msg.pose.covariance[0] = 0.1  # xx
+        msg.pose.covariance[7] = 0.1  # yy
+        msg.pose.covariance[35] = 0.05  # yaw-yaw
+        self._initial_pose_pub.publish(msg)
+        self.get_logger().info(
+            f"Published /initialpose: x={x:.2f} y={ros_y:.2f} "
+            f"yaw={math.degrees(ros_yaw):.1f}deg (seq={seq})"
+        )
 
 
 class CovarianceMonitorNode(Node):

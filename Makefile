@@ -24,6 +24,7 @@ DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose
 DOCKER_COMPOSE_WORKERS := docker compose -f docker-compose.env_workers.yml
 
 LAYOUT       ?= rectangle
+MAP_LOOPS    ?= 3
 SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/carla/env_config.yaml | awk '{print $$2}')
 MAP_DIM      := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
 
@@ -119,7 +120,7 @@ docker-top: ## Show running processes in containers
 # Then for training use make docker-train-loc LAYOUT=...
 # ----------------------------------------------------------------------
 
-docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle]
+docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle] [MAP_LOOPS=3]
 	mkdir -p outputs/maps/$(MAP_DIM) configs/maps/2d configs/maps/3d
 	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
 	@# Mapping uses a single CARLA instance (worker 0) in SLAM mode.
@@ -132,6 +133,7 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 	SENSOR_SUITE=$(SENSOR_SUITE) bash scripts/multi_workers/workers_up.sh 1
 	$(DOCKER_COMPOSE) exec training python -m scripts.mapping.mapping_drive \
 		--layout $(LAYOUT) \
+		--loops $(MAP_LOOPS) \
 		--carla-host uncertainty-rl-carla-0 \
 		--carla-port 2000
 	bash scripts/mapping/save_map.sh $(LAYOUT) $(MAP_DIM)
@@ -178,8 +180,8 @@ docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT
 		--output-dir evaluation_results
 
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [CHECKPOINT=path]
-	@echo "Demo drive 3D: checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
-	DISPLAY=$(or $(DISPLAY),:0) CHECKPOINT=$(or $(CHECKPOINT),checkpoints/final_model) \
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
+	DISPLAY=$(_DISPLAY) CHECKPOINT=$(or $(CHECKPOINT),checkpoints/final_model) \
 		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
 
 # ----------------------------------------------------------------------
@@ -268,8 +270,7 @@ docker-dev: ## Start N env workers + training stack and drop into training shell
 
 MODEL ?= checkpoints/final_model
 docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make docker-demo MODEL=<path>
-	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
-	@echo "Using DISPLAY=$(_DISPLAY)"
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE_INSPECT) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
@@ -283,9 +284,8 @@ INSPECT_EPISODES ?=
 INSPECT_VIEW     ?= third_person
 INSPECT_PAUSE    ?= 3.0
 docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: constant forward drive. Usage: make docker-inspect-dryrun [MANUAL=true] [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free] [INSPECT_PAUSE=3.0]
-	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	$(eval LAYOUT := $(INSPECT_LAYOUT))
-	@echo "Using DISPLAY=$(_DISPLAY)  LAYOUT=$(LAYOUT)  VIEW=$(INSPECT_VIEW)  PAUSE=$(INSPECT_PAUSE)  EPISODES=$(INSPECT_EPISODES)  MANUAL=$(MANUAL)"
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
@@ -299,10 +299,9 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: con
 		bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]
-	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
-	@echo "Using DISPLAY=$(_DISPLAY)"
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect 2>/dev/null || true
-	$(DOC.KER_COMPOSE) down 2>/dev/null || true
+	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE_INSPECT) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
@@ -312,8 +311,7 @@ INSPECT_SUITE   ?= suite_a
 INSPECT_VIEW    ?= birds_eye
 INSPECT_ZOOM    ?= close
 docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
-	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
-	@echo "Using DISPLAY=$(_DISPLAY)"
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-sensors 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
@@ -323,9 +321,8 @@ docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in win
 
 INSPECT_SENSOR  ?= lidar
 docker-inspect-live: ## Live sensor mode in windowed CARLA. INSPECT_SENSOR=camera forces suite_c automatically. Usage: make docker-inspect-live [INSPECT_SENSOR=lidar|camera] [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a]
-	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No X11 display found. Set DISPLAY manually: export DISPLAY=:0)))
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	$(eval _SUITE := $(if $(filter camera,$(INSPECT_SENSOR)),suite_c,$(INSPECT_SUITE)))
-	@echo "Using DISPLAY=$(_DISPLAY)  SUITE=$(_SUITE)  SENSOR=$(INSPECT_SENSOR)"
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-live 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
@@ -366,11 +363,15 @@ _VIS_FILE = $(if $(filter 0,$(WORKER)),outputs/vis_history.jsonl,outputs/vis_his
 
 visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
 	$(call ensure-venv)
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) \
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
+	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
+	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
 eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
 	$(call ensure-venv)
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
+	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
 	bash scripts/multi_workers/workers_up.sh 1
 	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
@@ -379,7 +380,7 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml
-	PYTHONPATH=$(CURDIR) DISPLAY=$(or $(DISPLAY),:0) \
+	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
 # ----------------------------------------------------------------------
