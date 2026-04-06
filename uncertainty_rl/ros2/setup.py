@@ -41,6 +41,7 @@ setup(
             "covariance_monitor ="
             " uncertainty_rl_ros2.covariance_extractor:main_monitor",
             "tf_to_odom = uncertainty_rl_ros2.tf_to_odom:main",
+            "imu_frame_relay = uncertainty_rl_ros2.imu_frame_relay:main",
         ],
     },
 )

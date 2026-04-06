@@ -23,14 +23,14 @@ carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
 max_steps: 1000  # Episode length in agent decisions. With action_repeat=4, each decision spans 4 sim-steps (0.2s), so 1000 decisions = 4000 sim-steps = 200 seconds sim-time.
                  # Longer episodes amortise the fixed ~13s reset cost: 13s / (1000 * 0.2s + 13s) = 6% overhead vs 52% with max_steps=250.
-                 # Lot diagonal ~79m (65x45m). At 6m/s cruise ~13s traversal +
-                 # ~15-20s slow approach and parking manoeuvre = ~30s typical.
+                 # Lot diagonal ~79m (65x45m). At 3m/s cruise ~26s traversal +
+                 # ~15-20s slow approach and parking manoeuvre = ~45s typical.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz. Fixed for EKF + ROS 2 bridge consistency.
 map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
 no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return empty, physics + state work still active). Essential for state-based agents with no camera input. Speedup: 3-4x.
 action_repeat: 4  # Apply same action for 4 sim-steps, construct observation only on 4th step. Agent decides at 5 Hz (fine for parking <6 m/s). Reduces observations and EKF covariance reads by 4x. Wall-clock speedup: 4x, episode length: same 50 seconds.
 use_extra_spawns: false  # When false, only the primary spawn (0,0) is used. Ensures CARLA and Cartographer coordinate frames align (both start at origin). Set true once per-spawn pbstream maps or odom-to-world calibration are implemented.
-max_ego_speed_ms: 6.0  # Maximum ego vehicle speed (m/s). Throttle is cut when exceeded to keep Cartographer scan-matching stable. 6 m/s (~22 km/h) is appropriate for a parking lot.
+max_ego_speed_ms: 3.0  # Maximum ego vehicle speed (m/s). Throttle is cut when exceeded to keep Cartographer scan-matching stable. 3 m/s (~11 km/h) keeps per-scan motion (0.15m at 20 Hz) well within Cartographer's 0.3m search window.
 
 # ---------------------------------------------------------------------------
 # ROS 2 covariance subscription settings

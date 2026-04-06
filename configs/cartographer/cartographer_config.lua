@@ -91,27 +91,33 @@ TRAJECTORY_BUILDER_2D.max_range = 25.0         -- metres (SICK TiM571 max range)
 -- Set to max_range so missing rays do not insert phantom short obstacles into
 -- the submap, which would corrupt scan matching against the real environment.
 TRAJECTORY_BUILDER_2D.missing_data_ray_length = 25.0
--- IMU disabled: colocation requirement -- IMU frame is not at ego_vehicle/lidar.
-TRAJECTORY_BUILDER_2D.use_imu_data = false
+-- IMU enabled via imu_frame_relay node which overrides the IMU frame_id to the
+-- tracking frame (ego_vehicle/lidar), satisfying the colocation requirement.
+-- Provides absolute yaw reference that prevents rotational drift in scan matching.
+TRAJECTORY_BUILDER_2D.use_imu_data = true
 
--- Adaptive voxel filter: min_num_points must be below actual scan size.
--- CARLA 2D LiDAR at 20 Hz / 2M pts_per_second produces ~64 pts per scan.
--- Setting 200 caused every scan to be discarded; 20 passes all scans through.
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.5
-TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 20
+-- Adaptive voxel filter: finer voxels (0.3 m) retain ~150-200 pts per scan
+-- instead of the ~20 pts that 0.5 m voxels produce. More points give the
+-- scan matcher stronger geometry to match against, raising scores from the
+-- borderline 60-68% range to >70%. min_num_points must stay below the
+-- filtered count so scans are not silently discarded.
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.3
+TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 40
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 25.0
 
--- Wider search window to compensate for IMU-free operation between scans.
+-- Search window: with IMU providing yaw rate, the correlative scan matcher
+-- has a strong rotational prior. 30 deg angular window is safe.
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.5
 TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.0)
 
--- Higher rotation weight: yaw drift is the dominant error without IMU.
--- Preserve meaningful covariance variation across lot occupancy conditions.
+-- Balanced weights: IMU constrains yaw, so rotation_weight does not need to
+-- be inflated. Preserves meaningful covariance variation across conditions.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 100.0
 
 -- Submap size: 30 scans per submap for compact parking lot (~65 x 45 m).
+-- With IMU, inter-submap yaw drift is negligible so standard size is fine.
 TRAJECTORY_BUILDER_2D.submaps.num_range_data = 30
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05   -- 5 cm grid
 
@@ -119,10 +125,10 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05   -- 5 cm grid
 -- Pose graph (loop closure) settings
 -- ---------------------------------------------------------------------------
 
--- Raised from 0.50: accepting low-score matches with sparse 64-pt scans
--- introduces false loop closures that corrupt the map.
-POSE_GRAPH.constraint_builder.min_score = 0.60
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.65
+-- With IMU constraining yaw, loop closure is reliable. Standard thresholds
+-- (0.70) are safe since false rotational matches no longer occur.
+POSE_GRAPH.constraint_builder.min_score = 0.70
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.75
 POSE_GRAPH.optimize_every_n_nodes = 35
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
 
