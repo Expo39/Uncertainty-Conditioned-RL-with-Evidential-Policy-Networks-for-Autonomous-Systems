@@ -54,9 +54,11 @@ from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 # Waypoint capture radius (m) -- advance to next waypoint when within this distance
 _WAYPOINT_CAPTURE_RADIUS: float = 3.0
 
-# Maximum drive speed during mapping (m/s) -- fast enough to finish quickly,
-# slow enough for Cartographer scan quality at 10 Hz rotation
-_MAP_SPEED_MS: float = 5.0
+# Maximum drive speed during mapping (m/s) -- slow enough for Cartographer
+# to accumulate high-quality submaps with many scans per location. At 2 m/s
+# and 20 Hz, the vehicle moves 0.1m per scan -- well within the 0.5m SLAM
+# search window, giving clean submap geometry.
+_MAP_SPEED_MS: float = 2.0
 
 # Proportional heading controller gain (mirrors patrol_heading_gain in
 # train_config.yaml)
@@ -130,11 +132,20 @@ def _parse_args() -> argparse.Namespace:
         default=2,
         help=(
             "Total number of full waypoint loops to drive (default: 2). "
-            "Must be even: first half CCW (forward), second half CW (reverse)."
+            "Must be even when bidirectional (default): first half CCW, "
+            "second half CW."
+        ),
+    )
+    parser.add_argument(
+        "--unidirectional",
+        action="store_true",
+        help=(
+            "Drive all loops in one direction (CCW) only. Avoids a "
+            "mid-drive reset that can misalign submaps between phases."
         ),
     )
     args = parser.parse_args()
-    if args.loops < 2 or args.loops % 2 != 0:
+    if not args.unidirectional and (args.loops < 2 or args.loops % 2 != 0):
         parser.error("--loops must be an even number >= 2.")
     return args
 
@@ -218,20 +229,28 @@ def main() -> None:
         waypoints = waypoints[:-1]
 
     n_waypoints = len(waypoints)
-    half_loops = args.loops // 2
     waypoints_reversed = list(reversed(waypoints))
 
     total_waypoints = args.loops * n_waypoints
-    print(
-        f"Patrol path: {n_waypoints} waypoints x {args.loops} loops "
-        f"({half_loops} CCW + {half_loops} CW) = {total_waypoints} total"
-    )
 
-    # -- Build the two phases: forward (CCW) then reverse (CW) --
-    phases: List[Tuple[str, List[Tuple[float, float]], int]] = [
-        ("CCW (forward)", waypoints, half_loops),
-        ("CW (reverse)", waypoints_reversed, half_loops),
-    ]
+    if args.unidirectional:
+        print(
+            f"Patrol path: {n_waypoints} waypoints x {args.loops} loops "
+            f"(CCW only) = {total_waypoints} total"
+        )
+        phases: List[Tuple[str, List[Tuple[float, float]], int]] = [
+            ("CCW (forward)", waypoints, args.loops),
+        ]
+    else:
+        half_loops = args.loops // 2
+        print(
+            f"Patrol path: {n_waypoints} waypoints x {args.loops} loops "
+            f"({half_loops} CCW + {half_loops} CW) = {total_waypoints} total"
+        )
+        phases = [
+            ("CCW (forward)", waypoints, half_loops),
+            ("CW (reverse)", waypoints_reversed, half_loops),
+        ]
 
     step_count = 0
     global_wp_idx = 0
@@ -305,9 +324,16 @@ def main() -> None:
     # ROS bridge to crash before the Makefile can serialise the .pbstream.
     # The process exit handles cleanup; CARLA garbage-collects orphaned actors.
     env.step(np.array([0.0, 0.0, 1.0], dtype=np.float32))
+
+    if args.unidirectional:
+        lap_summary = f"{args.loops} CCW laps"
+    else:
+        half = args.loops // 2
+        lap_summary = f"{half} CCW + {half} CW laps"
+
     print(
         f"\nMapping drive complete after {step_count} steps "
-        f"({half_loops} CCW + {half_loops} CW laps). "
+        f"({lap_summary}). "
         "Keeping env alive for pbstream serialisation."
     )
 

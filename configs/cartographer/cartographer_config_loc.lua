@@ -80,13 +80,15 @@ options = {
 -- The loaded .pbstream contains the frozen submap; no new submaps are created.
 MAP_BUILDER.use_trajectory_builder_2d = true
 
--- Pure localisation via trimmer: keeps only the most recent submaps, matching
--- new scans against the frozen .pbstream reference.
+-- Pure localisation via trimmer: keeps 2 live submaps for initialisation
+-- against the frozen .pbstream reference.  1 submap is insufficient for
+-- Cartographer to bootstrap; 3 enables multi-hypothesis oscillation.
+-- 2 is the minimum that allows initialisation while limiting drift.
 -- TRAJECTORY_BUILDER_2D.pure_localization is NOT supported in the Jazzy
 -- Cartographer build (crashes with "Key 'pure_localization' was used the wrong
 -- number of times"). The trimmer is the correct API for this build.
 TRAJECTORY_BUILDER.pure_localization_trimmer = {
-  max_submaps_to_keep = 3,
+  max_submaps_to_keep = 2,
 }
 
 -- ---------------------------------------------------------------------------
@@ -111,23 +113,25 @@ TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.3
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 40
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 25.0
 
--- Narrower search windows than SLAM: the vehicle moves at most ~0.15 m
--- per 20 Hz step at 3 m/s parking speed. 0.3 m linear + 15 deg angular
--- covers 2x the expected motion uncertainty while rejecting far-away
--- symmetric false matches that caused EKF position jumping.
+-- Search window: 0.5 m linear (matches SLAM config), 30 deg angular.
+-- At 3 m/s max speed the vehicle moves 0.15 m per scan -- well within
+-- the 0.5 m window. Wider windows (1.5 m) caused false matches at wrong
+-- positions in the frozen pbstream. The trajectory restart per episode
+-- (finish_trajectory + start_trajectory) prevents drift from accumulating
+-- across episodes, so the window only needs to cover per-scan motion.
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.3
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(15.0)
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.5
+TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.0)
 
 -- Increase rotation weight: yaw drift is the dominant error source without IMU.
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 100.0
 
--- Submap window: 30 scans (~1.5 s at 20 Hz). Increased from 10 to
--- accumulate more cone geometry per submap, reducing position ambiguity
--- on the symmetric perimeter. Convergence ~1.5 s per episode (acceptable
--- given the 3.0 s pause between episodes).
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 30
+-- Submap window: 10 scans (0.5 s at 20 Hz). Fast turnover means live
+-- submaps are discarded quickly (max_submaps_to_keep = 2), preventing
+-- stale scan-match hypotheses from persisting. Combined with trajectory
+-- restart at each episode reset, this gives ~0.5 s initial convergence.
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 10
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05
 
 -- ---------------------------------------------------------------------------

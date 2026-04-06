@@ -757,15 +757,6 @@ class CARLAParkingEnv(gym.Env):
             vy = velocity.y
             vyaw = math.radians(angular_vel.z)
 
-        # Refresh the odom-to-world transform every step so the target bay
-        # position in odom frame tracks Cartographer drift / jumps.
-        # Uses CARLA GT for the coordinate frame mapping only -- the EKF
-        # pose, velocity, and covariance features remain the real noisy values.
-        # In deployment, bay and EKF are both in the map frame, so no
-        # calibration is needed; this per-step update simulates that reality.
-        if ekf_pose is not None:
-            self._update_odom_transform(x, y, yaw)
-
         # Relative target pose in ego body frame.
         dx, dy, dyaw = _compute_relative_target_pose(
             x,
@@ -1238,43 +1229,6 @@ class CARLAParkingEnv(gym.Env):
             f"(lidar + covariance)."
         )
 
-    def _update_odom_transform(
-        self, ekf_x: float, ekf_y: float, ekf_yaw: float
-    ) -> None:
-        """
-        @brief Refresh the odom-to-world transform using the current EKF and GT.
-
-        Recomputes R and t from the current EKF pose and CARLA ground truth,
-        then reprojects the target bay into odom frame. This keeps the target
-        observation accurate even when Cartographer drifts or jumps.
-
-        Only the coordinate frame mapping uses GT -- the EKF pose, velocity,
-        and covariance fed to the policy are the real noisy values. In real
-        deployment the bay and EKF are both in the map frame, so no
-        calibration is needed; this per-step update simulates that reality.
-
-        @param ekf_x: Current EKF x in odom frame.
-        @param ekf_y: Current EKF y in odom frame.
-        @param ekf_yaw: Current EKF yaw in odom frame (radians).
-        """
-        if self.vehicle is None:
-            return
-
-        gt = self.vehicle.get_transform()
-        gt_x = gt.location.x
-        gt_y = gt.location.y
-        gt_yaw = math.radians(gt.rotation.yaw)
-
-        r = math.atan2(
-            math.sin(gt_yaw - ekf_yaw), math.cos(gt_yaw - ekf_yaw)
-        )
-        cos_r = math.cos(r)
-        sin_r = math.sin(r)
-        tx = gt_x - (cos_r * ekf_x - sin_r * ekf_y)
-        ty = gt_y - (sin_r * ekf_x + cos_r * ekf_y)
-
-        self._ekf_odom_offset = (tx, ty, cos_r, sin_r, r)
-        self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
 
     def _compute_target_bay_odom(
         self, tx: float, ty: float, cos_r: float, sin_r: float, r: float

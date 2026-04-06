@@ -16,6 +16,7 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>cartographer_ros_msgs</exec_depend>
   <exec_depend>uncertainty_rl_msgs</exec_depend>
   <exec_depend>robot_localization</exec_depend>
   <exec_depend>tf2_ros</exec_depend>

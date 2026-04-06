@@ -291,19 +291,29 @@ def ang_x_margin(bay_depth: float, bay_width: float) -> float:
 
 # Minimum edge length to receive a landmark (metres).
 _LANDMARK_MIN_EDGE: float = 10.0
-# Approximate spacing between landmarks on long edges (metres).
-_LANDMARK_SPACING: float = 25.0
 # Extra clearance between a landmark centre and bay edges (metres).
 # Set to 0.0: landmarks sit on the perimeter wall and _WALL_GAP (0.5 m)
 # already keeps every bay back face 0.5 m inside the wall, so any point on the
 # perimeter is geometrically outside all bays.  A non-zero value would
 # over-filter landmarks near wall-adjacent bays.
 _LANDMARK_BAY_MARGIN: float = 0.0
-# Base fractional offset along the edge for the first landmark on each side.
-# Incremented by _LANDMARK_FRAC_STEP per side index to ensure no two sides
-# have landmarks at mirror-symmetric positions.
-_LANDMARK_FRAC_BASE: float = 0.30
-_LANDMARK_FRAC_STEP: float = 0.07
+
+# Per-edge fractional positions for landmark placement. Each inner list gives
+# the fraction(s) along that edge (0 = start corner, 1 = end corner) where a
+# landmark is placed. The pattern is deliberately lopsided:
+#   Edge 0: 3 landmarks clustered toward the start
+#   Edge 1: 1 landmark near the far end
+#   Edge 2: 2 landmarks in the second half
+#   Edge 3+: no landmarks
+# This guarantees that no rotation, reflection, or 180-degree flip of the lot
+# produces the same LiDAR signature, giving Cartographer a unique scan match
+# hypothesis at every position.
+_LANDMARK_EDGE_FRACS: List[List[float]] = [
+    [0.15, 0.40, 0.70],  # Edge 0 (bottom): 3 landmarks, spread across first 70%
+    [0.25, 0.80],         # Edge 1 (right):  2 landmarks, near start and far end
+    [0.45, 0.85],         # Edge 2 (top):    2 landmarks, second half
+    [0.30, 0.65],         # Edge 3 (left):   2 landmarks -- every edge needs features
+]
 
 
 def _point_in_bay(
@@ -343,10 +353,12 @@ def compute_landmarks(
     """
     @brief Compute deterministic, asymmetric landmark positions from polygon edges.
 
-    For each edge of the lot polygon, one or more landmarks are placed at
-    fractional offsets along the edge.  The offsets vary per side index so that
-    no two sides produce mirror-symmetric positions, giving Cartographer
-    unique features for scan matching.
+    Landmarks are placed at pre-defined fractional offsets along each edge of
+    the lot polygon, using the deliberately lopsided profile in
+    ``_LANDMARK_EDGE_FRACS``.  Edge 0 gets 3 landmarks (spread), edge 1 gets
+    2 (near ends), edge 2 gets 2 (second half), edge 3 gets 2 (first two
+    thirds).  Every edge has at least 2 landmarks so that movement along any
+    edge produces a distinguishable scan change for Cartographer.
 
     Landmarks sit directly on the perimeter wall (no inset) and replace the
     perimeter cones at those positions.  Any candidate that falls inside a
@@ -361,10 +373,6 @@ def compute_landmarks(
     landmarks: List[Dict[str, float]] = []
     bays = bays or []
 
-    # Compute polygon centroid for inward normal direction.
-    cx = sum(p[0] for p in pts) / n
-    cy = sum(p[1] for p in pts) / n
-
     for i in range(n):
         x0, y0 = pts[i]
         x1, y1 = pts[(i + 1) % n]
@@ -376,32 +384,24 @@ def compute_landmarks(
         if edge_len < _LANDMARK_MIN_EDGE:
             continue
 
-        # Unit vectors: along edge and inward normal.
+        # Look up fractional positions for this edge index.
+        # Edges beyond the profile length get no landmarks.
+        if i >= len(_LANDMARK_EDGE_FRACS):
+            continue
+        fracs = _LANDMARK_EDGE_FRACS[i]
+        if not fracs:
+            continue
+
+        # Unit vector along the edge.
         ux = edge_dx / edge_len
         uy = edge_dy / edge_len
-        # Inward normal: perpendicular toward polygon interior.
-        # Test which perpendicular direction points toward centroid.
-        nx_a, ny_a = -uy, ux
-        mid_x = (x0 + x1) / 2.0
-        mid_y = (y0 + y1) / 2.0
-        dot_to_centre = (cx - mid_x) * nx_a + (cy - mid_y) * ny_a
-        if dot_to_centre < 0:
-            nx_a, ny_a = -nx_a, -ny_a
-
-        # Number of landmarks on this edge.
-        n_landmarks = max(1, int(edge_len / _LANDMARK_SPACING))
 
         # Yaw: aligned with the edge direction (degrees).
         yaw_deg = math.degrees(math.atan2(uy, ux))
 
-        for j in range(n_landmarks):
-            # Fractional position along the edge, offset per side and per
-            # landmark index to guarantee asymmetry.
-            frac = (_LANDMARK_FRAC_BASE + _LANDMARK_FRAC_STEP * i) + j / (
-                n_landmarks + 1
-            )
-            # Wrap into (0.1, 0.9) to stay clear of corners.
-            frac = 0.1 + (frac % 1.0) * 0.8
+        for frac in fracs:
+            # Clamp to (0.05, 0.95) to stay clear of corners.
+            frac = max(0.05, min(0.95, frac))
 
             # Place directly on the perimeter edge (no inward offset).
             lx = x0 + ux * edge_len * frac
