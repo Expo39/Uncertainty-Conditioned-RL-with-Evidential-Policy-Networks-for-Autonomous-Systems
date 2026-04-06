@@ -317,6 +317,34 @@ def generate_launch_description() -> LaunchDescription:
     # for both mapping and localisation, ensuring consistency. On the real robot,
     # rebuild the pbstream with the physical sensor's native FOV.
 
+    # -- IMU frame relay (Cartographer colocation workaround) ----------------
+    #
+    # Cartographer requires the IMU frame to be colocated (< 1e-5 m) with the
+    # tracking frame (ego_vehicle/lidar). The CARLA bridge publishes IMU at
+    # ego_vehicle/imu which is 2.4 m away. This relay republishes with
+    # frame_id = tracking frame. Angular velocity is identical on a rigid body;
+    # centripetal acceleration is negligible at parking speeds (< 3 m/s).
+
+    tf_tracking_frame_for_relay = (
+        "ego_vehicle/lidar_3d" if is_3d else "ego_vehicle/lidar"
+    )
+
+    imu_relay_node = Node(
+        package="uncertainty_rl_ros2",
+        executable="imu_frame_relay",
+        name="imu_frame_relay",
+        parameters=[
+            {
+                "use_sim_time": use_sim_time,
+                "target_frame": tf_tracking_frame_for_relay,
+            }
+        ],
+        remappings=[
+            ("imu_in", "/carla/ego_vehicle/imu"),
+            ("imu_out", "/carla/ego_vehicle/imu_relayed"),
+        ],
+    )
+
     # -- Cartographer node -------------------------------------------------
 
     cartographer_basename = _select_cartographer_config(cartographer_mode, is_3d)
@@ -352,9 +380,11 @@ def generate_launch_description() -> LaunchDescription:
     # No odom input remapping: Cartographer uses LiDAR + IMU only.
     # The "odom" remapping would only be needed if feeding an external odometry
     # source into Cartographer, which we do not do.
+    # IMU is relayed through imu_frame_relay to override frame_id to the tracking
+    # frame (Cartographer requires IMU < 1e-5 m from tracking frame).
     carto_remappings = [
         ("points2", lidar_topic),
-        ("imu", "/carla/ego_vehicle/imu"),
+        ("imu", "/carla/ego_vehicle/imu_relayed"),
     ]
 
     cartographer_node = Node(
@@ -450,6 +480,8 @@ def generate_launch_description() -> LaunchDescription:
                 # the odom (world-aligned) frame. The extractor rotates it into
                 # the vehicle body frame before writing to ekf_state.json.
                 "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", True),
+                # Cartographer Lua config for trajectory restart at episode reset.
+                "cartographer_config_basename": cartographer_basename,
             }
         ],
     )
@@ -469,6 +501,7 @@ def generate_launch_description() -> LaunchDescription:
 
     actions.extend(
         [
+            imu_relay_node,
             cartographer_node,
             tf_to_odom_node,
             ekf_node,

@@ -24,7 +24,8 @@ DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose
 DOCKER_COMPOSE_WORKERS := docker compose -f docker-compose.env_workers.yml
 
 LAYOUT       ?= rectangle
-MAP_LOOPS    ?= 3
+MAP_LOOPS    ?= 6
+MAP_UNIDIR   ?= true
 SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/carla/env_config.yaml | awk '{print $$2}')
 MAP_DIM      := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
 
@@ -120,9 +121,9 @@ docker-top: ## Show running processes in containers
 # Then for training use make docker-train-loc LAYOUT=...
 # ----------------------------------------------------------------------
 
-docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle] [MAP_LOOPS=3]
+docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle] [MAP_LOOPS=6] [MAP_UNIDIR=true]
 	mkdir -p outputs/maps/$(MAP_DIM) configs/maps/2d configs/maps/3d
-	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM), loops=$(MAP_LOOPS), unidir=$(MAP_UNIDIR)"
 	@# Mapping uses a single CARLA instance (worker 0) in SLAM mode.
 	@# Tear down all running workers first for a clean world state.
 	$(WORKERS_DOWN)
@@ -135,7 +136,8 @@ docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docke
 		--layout $(LAYOUT) \
 		--loops $(MAP_LOOPS) \
 		--carla-host uncertainty-rl-carla-0 \
-		--carla-port 2000
+		--carla-port 2000 \
+		$(if $(filter true,$(MAP_UNIDIR)),--unidirectional,)
 	bash scripts/mapping/save_map.sh $(LAYOUT) $(MAP_DIM)
 
 # ----------------------------------------------------------------------
