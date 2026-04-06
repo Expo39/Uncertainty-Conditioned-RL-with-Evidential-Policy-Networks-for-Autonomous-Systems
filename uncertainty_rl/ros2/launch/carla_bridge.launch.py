@@ -407,11 +407,10 @@ def generate_launch_description() -> LaunchDescription:
                 # are accepted despite the apparent age. Lookup uses rclpy.time.Time()
                 # (latest available) so the counter-time stamp does not affect results.
                 "use_sim_time": use_sim_time,
-                # Cartographer (provide_odom_frame=true in both loc and slam configs)
-                # publishes odom -> ego_vehicle/lidar. The CARLA bridge publishes
-                # map -> ego_vehicle/lidar -- using "odom" here avoids the TF
-                # conflict that would arise if tf_to_odom looked up map -> ego_vehicle/lidar
-                # (two publishers for the same TF edge = garbage transform values).
+                # tf_to_odom publishes /scan_matched_odometry with frame_id=odom_frame
+                # so robot_localisation accepts it as the odom0 correction input.
+                # robot_localisation accepts odom0 messages with frame_id matching
+                # either world_frame or odom_frame -- we use odom_frame here.
                 "odom_frame": ros2_config.get("ekf", {}).get("odom_frame", "odom"),
                 "tracking_frame": tf_tracking_frame,
                 # Must match ekf.base_link_frame so robot_localisation correctly

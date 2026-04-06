@@ -7,10 +7,21 @@ then drives the patrol_waypoints loop at low speed so Cartographer accumulates
 scans of the cone perimeter. Bay occupancy is zero (empty lot), no patrol NPCs,
 no pedestrians -- just the ego and cones.
 
-Runs the loop twice: the first lap initialises Cartographer and the second lap
-closes the loop constraint for a consistent pose-graph. After both loops the
-script exits -- then run make docker-save-map to serialise the Cartographer
-state to a .pbstream file.
+Drives the patrol loop in two phases (bidirectional mapping):
+  1. Forward (CCW): loops/2 laps around the patrol waypoints in order.
+  2. Reverse (CW):  loops/2 laps around the patrol waypoints in reverse.
+
+The forward phase initialises Cartographer with consistent submaps. The reverse
+phase revisits the same cone perimeter from opposing LiDAR angles, creating
+inter-submap constraints that tighten the pose graph. The simulation resets
+between phases so the vehicle always starts from spawn (0,0) facing the same
+heading -- matching the initial conditions the trained model will see.
+
+The --loops argument must be even (default 2) so the laps split equally between
+the two directions.
+
+After all laps the script exits -- then run make docker-save-map to serialise
+the Cartographer state to a .pbstream file.
 
 Usage::
 
@@ -117,9 +128,15 @@ def _parse_args() -> argparse.Namespace:
         "--loops",
         type=int,
         default=2,
-        help="Number of full waypoint loops to drive (default: 2).",
+        help=(
+            "Total number of full waypoint loops to drive (default: 2). "
+            "Must be even: first half CCW (forward), second half CW (reverse)."
+        ),
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.loops < 2 or args.loops % 2 != 0:
+        parser.error("--loops must be an even number >= 2.")
+    return args
 
 
 def main() -> None:
@@ -201,47 +218,87 @@ def main() -> None:
         waypoints = waypoints[:-1]
 
     n_waypoints = len(waypoints)
+    half_loops = args.loops // 2
+    waypoints_reversed = list(reversed(waypoints))
+
     total_waypoints = args.loops * n_waypoints
     print(
         f"Patrol path: {n_waypoints} waypoints x {args.loops} loops "
-        f"= {total_waypoints} total"
+        f"({half_loops} CCW + {half_loops} CW) = {total_waypoints} total"
     )
 
-    # -- Drive the patrol loop --
-    wp_idx = 0
+    # -- Build the two phases: forward (CCW) then reverse (CW) --
+    phases: List[Tuple[str, List[Tuple[float, float]], int]] = [
+        ("CCW (forward)", waypoints, half_loops),
+        ("CW (reverse)", waypoints_reversed, half_loops),
+    ]
+
     step_count = 0
+    global_wp_idx = 0
 
     print("Starting mapping drive ...")
-    while wp_idx < total_waypoints:
-        target_x, target_y = waypoints[wp_idx % n_waypoints]
-
-        # Compute steering from current vehicle state
-        transform = env.vehicle.get_transform()
-        velocity = env.vehicle.get_velocity()
-        action = _compute_action(transform, velocity, target_x, target_y)
-
-        # Advance simulation
-        env.step(action)
-        step_count += 1
-
-        # Re-read post-step position for waypoint capture check
-        transform = env.vehicle.get_transform()
-        dx = target_x - transform.location.x
-        dy = target_y - transform.location.y
-        dist = math.sqrt(dx * dx + dy * dy)
-
-        if dist < _WAYPOINT_CAPTURE_RADIUS:
-            wp_idx += 1
-            loop_num = (wp_idx - 1) // n_waypoints + 1
-            wp_in_loop = ((wp_idx - 1) % n_waypoints) + 1
-            velocity = env.vehicle.get_velocity()
-            speed = math.sqrt(velocity.x**2 + velocity.y**2)
+    for phase_idx, (phase_name, phase_waypoints, phase_loops) in enumerate(phases):
+        # Reset the sim at the start of each phase so the vehicle always
+        # begins from spawn (0,0) facing the same heading. This mirrors
+        # training episodes and avoids a messy U-turn between phases.
+        if phase_idx > 0:
             print(
-                f"  [{wp_idx}/{total_waypoints}] "
-                f"loop {loop_num}/{args.loops}, "
-                f"wp {wp_in_loop}/{n_waypoints} "
-                f"(step {step_count}, speed={speed:.1f} m/s)"
+                f"\n  >>> Resetting simulation for {phase_name} phase ...\n"
             )
+            _obs, info = env.reset()
+            print(
+                f"  Environment reset. "
+                f"Floor plan: {info.get('floor_plan', args.layout)}"
+            )
+
+        phase_total = phase_loops * n_waypoints
+        phase_wp_idx = 0
+
+        wp_order = " -> ".join(
+            f"({x:.0f},{y:.0f})" for x, y in phase_waypoints
+        )
+        print(
+            f"\n{'=' * 60}\n"
+            f"  Phase: {phase_name} -- {phase_loops} laps x "
+            f"{n_waypoints} waypoints\n"
+            f"  Route: {wp_order}\n"
+            f"{'=' * 60}"
+        )
+
+        while phase_wp_idx < phase_total:
+            target_x, target_y = phase_waypoints[phase_wp_idx % n_waypoints]
+
+            # Compute steering from current vehicle state
+            transform = env.vehicle.get_transform()
+            velocity = env.vehicle.get_velocity()
+            action = _compute_action(transform, velocity, target_x, target_y)
+
+            # Advance simulation
+            env.step(action)
+            step_count += 1
+
+            # Re-read post-step position for waypoint capture check
+            transform = env.vehicle.get_transform()
+            dx = target_x - transform.location.x
+            dy = target_y - transform.location.y
+            dist = math.sqrt(dx * dx + dy * dy)
+
+            if dist < _WAYPOINT_CAPTURE_RADIUS:
+                phase_wp_idx += 1
+                global_wp_idx += 1
+                loop_num = (phase_wp_idx - 1) // n_waypoints + 1
+                wp_in_loop = ((phase_wp_idx - 1) % n_waypoints) + 1
+                velocity = env.vehicle.get_velocity()
+                speed = math.sqrt(velocity.x**2 + velocity.y**2)
+                print(
+                    f"  [{global_wp_idx}/{total_waypoints}] "
+                    f"{phase_name} lap {loop_num}/{phase_loops}, "
+                    f"wp {wp_in_loop}/{n_waypoints} "
+                    f"-> ({target_x:.1f},{target_y:.1f}) "
+                    f"(step {step_count}, speed={speed:.1f} m/s)"
+                )
+
+        print(f"  {phase_name} phase complete.")
 
     # -- Stop the vehicle but do NOT close the env --
     # env.close() destroys the ego vehicle and sensors, which can cause the
@@ -249,7 +306,8 @@ def main() -> None:
     # The process exit handles cleanup; CARLA garbage-collects orphaned actors.
     env.step(np.array([0.0, 0.0, 1.0], dtype=np.float32))
     print(
-        f"Mapping drive complete after {step_count} steps. "
+        f"\nMapping drive complete after {step_count} steps "
+        f"({half_loops} CCW + {half_loops} CW laps). "
         "Keeping env alive for pbstream serialisation."
     )
 

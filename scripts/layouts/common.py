@@ -9,7 +9,7 @@ Nothing in this module is layout-specific.
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -286,6 +286,140 @@ def ang_x_margin(bay_depth: float, bay_width: float) -> float:
 
 
 # ---------------------------------------------------------------------------
+# Asymmetric landmark generation
+# ---------------------------------------------------------------------------
+
+# Minimum edge length to receive a landmark (metres).
+_LANDMARK_MIN_EDGE: float = 10.0
+# Approximate spacing between landmarks on long edges (metres).
+_LANDMARK_SPACING: float = 25.0
+# Extra clearance between a landmark centre and bay edges (metres).
+# Set to 0.0: landmarks sit on the perimeter wall and _WALL_GAP (0.5 m)
+# already keeps every bay back face 0.5 m inside the wall, so any point on the
+# perimeter is geometrically outside all bays.  A non-zero value would
+# over-filter landmarks near wall-adjacent bays.
+_LANDMARK_BAY_MARGIN: float = 0.0
+# Base fractional offset along the edge for the first landmark on each side.
+# Incremented by _LANDMARK_FRAC_STEP per side index to ensure no two sides
+# have landmarks at mirror-symmetric positions.
+_LANDMARK_FRAC_BASE: float = 0.30
+_LANDMARK_FRAC_STEP: float = 0.07
+
+
+def _point_in_bay(
+    px: float,
+    py: float,
+    bay: Dict[str, Any],
+    margin: float,
+) -> bool:
+    """
+    @brief Check if a point falls inside a bay rectangle (with margin).
+
+    Transforms the point into bay-local coordinates and tests against the
+    half-extents expanded by *margin* on each side.
+
+    @param px: Point x in local frame.
+    @param py: Point y in local frame.
+    @param bay: Bay dict with local_x, local_y, local_yaw_deg, width, depth.
+    @param margin: Extra clearance around the bay rectangle (metres).
+    @return True if the point is inside the expanded bay rectangle.
+    """
+    dx = px - float(bay["local_x"])
+    dy = py - float(bay["local_y"])
+    yaw_rad = math.radians(float(bay["local_yaw_deg"]))
+    cos_y = math.cos(-yaw_rad)
+    sin_y = math.sin(-yaw_rad)
+    lx = dx * cos_y - dy * sin_y
+    ly = dx * sin_y + dy * cos_y
+    half_d = float(bay["depth"]) / 2.0 + margin
+    half_w = float(bay["width"]) / 2.0 + margin
+    return abs(lx) <= half_d and abs(ly) <= half_w
+
+
+def compute_landmarks(
+    corners: List[Dict[str, float]],
+    bays: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, float]]:
+    """
+    @brief Compute deterministic, asymmetric landmark positions from polygon edges.
+
+    For each edge of the lot polygon, one or more landmarks are placed at
+    fractional offsets along the edge.  The offsets vary per side index so that
+    no two sides produce mirror-symmetric positions, giving Cartographer
+    unique features for scan matching.
+
+    Landmarks sit directly on the perimeter wall (no inset) and replace the
+    perimeter cones at those positions.  Any candidate that falls inside a
+    parking bay (expanded by ``_LANDMARK_BAY_MARGIN``) is discarded.
+
+    @param corners: Polygon vertices as list of {x, y} dicts (local frame, CCW).
+    @param bays: Optional list of bay dicts (local frame) for collision filtering.
+    @return List of landmark dicts with x, y, yaw_deg keys (local frame).
+    """
+    pts = [(c["x"], c["y"]) for c in corners]
+    n = len(pts)
+    landmarks: List[Dict[str, float]] = []
+    bays = bays or []
+
+    # Compute polygon centroid for inward normal direction.
+    cx = sum(p[0] for p in pts) / n
+    cy = sum(p[1] for p in pts) / n
+
+    for i in range(n):
+        x0, y0 = pts[i]
+        x1, y1 = pts[(i + 1) % n]
+
+        edge_dx = x1 - x0
+        edge_dy = y1 - y0
+        edge_len = math.sqrt(edge_dx * edge_dx + edge_dy * edge_dy)
+
+        if edge_len < _LANDMARK_MIN_EDGE:
+            continue
+
+        # Unit vectors: along edge and inward normal.
+        ux = edge_dx / edge_len
+        uy = edge_dy / edge_len
+        # Inward normal: perpendicular toward polygon interior.
+        # Test which perpendicular direction points toward centroid.
+        nx_a, ny_a = -uy, ux
+        mid_x = (x0 + x1) / 2.0
+        mid_y = (y0 + y1) / 2.0
+        dot_to_centre = (cx - mid_x) * nx_a + (cy - mid_y) * ny_a
+        if dot_to_centre < 0:
+            nx_a, ny_a = -nx_a, -ny_a
+
+        # Number of landmarks on this edge.
+        n_landmarks = max(1, int(edge_len / _LANDMARK_SPACING))
+
+        # Yaw: aligned with the edge direction (degrees).
+        yaw_deg = math.degrees(math.atan2(uy, ux))
+
+        for j in range(n_landmarks):
+            # Fractional position along the edge, offset per side and per
+            # landmark index to guarantee asymmetry.
+            frac = (_LANDMARK_FRAC_BASE + _LANDMARK_FRAC_STEP * i) + j / (
+                n_landmarks + 1
+            )
+            # Wrap into (0.1, 0.9) to stay clear of corners.
+            frac = 0.1 + (frac % 1.0) * 0.8
+
+            # Place directly on the perimeter edge (no inward offset).
+            lx = x0 + ux * edge_len * frac
+            ly = y0 + uy * edge_len * frac
+
+            # Skip if inside or too close to any parking bay.
+            if any(
+                _point_in_bay(lx, ly, b, _LANDMARK_BAY_MARGIN)
+                for b in bays
+            ):
+                continue
+
+            landmarks.append({"x": lx, "y": ly, "yaw_deg": yaw_deg})
+
+    return landmarks
+
+
+# ---------------------------------------------------------------------------
 # World-frame transformation
 # ---------------------------------------------------------------------------
 
@@ -398,6 +532,19 @@ def to_world_frame(
             }
         )
 
+    # Transform asymmetric landmarks to world frame.
+    world_landmarks = []
+    for lm in local_layout.get("landmarks", []):
+        wx, wy = _translate(lm["x"], lm["y"], origin_x, origin_y, h_rad)
+        world_landmarks.append(
+            {
+                "x": round(wx, 3),
+                "y": round(wy, 3),
+                "z": origin_z,
+                "yaw_deg": round(_world_yaw(lm["yaw_deg"], heading_deg), 2),
+            }
+        )
+
     return {
         "corners": world_corners,
         "bays": world_bays,
@@ -406,6 +553,7 @@ def to_world_frame(
         "patrol_waypoints": world_patrol,
         "pedestrian_zones": world_ped_zones,
         "obstacles": world_obstacles,
+        "landmarks": world_landmarks,
     }
 
 
@@ -452,6 +600,7 @@ def write_layout_yaml(
         "patrol_waypoints": world_layout["patrol_waypoints"],
         "pedestrian_zones": world_layout["pedestrian_zones"],
         "obstacles": world_layout.get("obstacles", []),
+        "landmarks": world_layout.get("landmarks", []),
     }
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

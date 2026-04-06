@@ -29,6 +29,8 @@ carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz. Fixed for EKF + RO
 map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
 no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return empty, physics + state work still active). Essential for state-based agents with no camera input. Speedup: 3-4x.
 action_repeat: 4  # Apply same action for 4 sim-steps, construct observation only on 4th step. Agent decides at 5 Hz (fine for parking <6 m/s). Reduces observations and EKF covariance reads by 4x. Wall-clock speedup: 4x, episode length: same 50 seconds.
+use_extra_spawns: false  # When false, only the primary spawn (0,0) is used. Ensures CARLA and Cartographer coordinate frames align (both start at origin). Set true once per-spawn pbstream maps or odom-to-world calibration are implemented.
+max_ego_speed_ms: 6.0  # Maximum ego vehicle speed (m/s). Throttle is cut when exceeded to keep Cartographer scan-matching stable. 6 m/s (~22 km/h) is appropriate for a parking lot.
 
 # ---------------------------------------------------------------------------
 # ROS 2 covariance subscription settings
@@ -138,6 +140,8 @@ carla_sensors:
 # stored in configs/layouts/. The env reads from these YAML files directly.
 # ---------------------------------------------------------------------------
 parking_scenarios:
+  spawn_landmarks: true  # Spawn asymmetric jersey barriers along the perimeter to break lot symmetry for Cartographer scan matching. Set false to disable.
+  landmark_blueprint: "static.prop.streetbarrier"  # CARLA blueprint for asymmetric landmarks. streetbarrier (~1.0m tall, 1.5m long) gives strong LiDAR returns.
   perimeter_marker_blueprint: "static.prop.constructioncone"
                                        # CARLA blueprint for perimeter/obstacle markers. Options:
                                        #   static.prop.constructioncone  - traffic cone (~0.7m, good LiDAR return)
