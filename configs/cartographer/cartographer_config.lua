@@ -105,13 +105,11 @@ TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.3
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 40
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 25.0
 
--- Correlative scan matcher disabled: with IMU providing yaw and the Ceres
--- scan matcher starting from the IMU-extrapolated prior, the correlative
--- brute-force search is unnecessary and harmful on sparse cone geometry.
--- The correlative matcher's low default rotation_delta_cost_weight (0.1)
--- lets it freely explore +-30 deg of rotation, locking onto ambiguous cone
--- matches at wrong angles (inter-submap fan drift). Disabling it lets Ceres
--- refine directly from the IMU prior -- the default Cartographer behaviour.
+-- Correlative scan matcher disabled: causes inter-submap rotational drift on
+-- sparse cone geometry (even rotation_delta_cost_weight=2.0 was insufficient).
+-- Without it, Ceres refines from the IMU-extrapolated prior and rotation is
+-- correct. Translational drift is corrected by the pose graph (loop closure)
+-- rather than the local scan matcher.
 TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = false
 
 -- Balanced weights: IMU constrains yaw, so rotation_weight does not need to
@@ -119,23 +117,27 @@ TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = false
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.translation_weight = 10.0
 TRAJECTORY_BUILDER_2D.ceres_scan_matcher.rotation_weight = 100.0
 
--- Submap size: 30 scans per submap for compact parking lot (~65 x 45 m).
--- With IMU, inter-submap yaw drift is negligible so standard size is fine.
-TRAJECTORY_BUILDER_2D.submaps.num_range_data = 30
+-- Single submap: the parking lot is small (~65 x 45 m) so all scans fit in
+-- one submap. This eliminates inter-submap drift entirely -- the rotational
+-- fan pattern was caused by submaps misaligning against each other. With one
+-- submap, every scan refines against the same growing map. 10000 exceeds the
+-- total scan count for any mapping session (2 laps ~4400 scans at 20 Hz).
+TRAJECTORY_BUILDER_2D.submaps.num_range_data = 10000
 TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05   -- 5 cm grid
 
 -- ---------------------------------------------------------------------------
 -- Pose graph (loop closure) settings
 -- ---------------------------------------------------------------------------
 
--- Raised from 0.70/0.75: symmetric cone perimeter produces ambiguous 0.65-0.75
--- matches at wrong positions. 0.80/0.85 rejects those while accepting strong
--- matches (>80%) that have genuine geometric overlap with jersey barriers.
-POSE_GRAPH.constraint_builder.min_score = 0.80
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.85
-POSE_GRAPH.optimize_every_n_nodes = 35
+-- Keep min_score conservative: symmetric cone perimeter produces ambiguous
+-- 0.65-0.75 matches at wrong positions. 0.75/0.80 rejects those while
+-- accepting strong matches. Optimise every 20 nodes (down from 35) so
+-- genuine loop closures correct translational drift sooner.
+POSE_GRAPH.constraint_builder.min_score = 0.75
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.80
+POSE_GRAPH.optimize_every_n_nodes = 20
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
--- Increase rotation weight so the optimiser trusts IMU yaw over false
+-- High rotation weight so the optimiser trusts IMU yaw over false
 -- rotational loop closures on the symmetric cone perimeter (default ~1e5).
 POSE_GRAPH.optimization_problem.rotation_weight = 1e7
 
