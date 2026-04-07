@@ -349,16 +349,18 @@ def _point_in_bay(
 def compute_landmarks(
     corners: List[Dict[str, float]],
     bays: Optional[List[Dict[str, Any]]] = None,
+    edge_fracs: Optional[List[List[float]]] = None,
 ) -> List[Dict[str, float]]:
     """
     @brief Compute deterministic, asymmetric landmark positions from polygon edges.
 
     Landmarks are placed at pre-defined fractional offsets along each edge of
     the lot polygon, using the deliberately lopsided profile in
-    ``_LANDMARK_EDGE_FRACS``.  Edge 0 gets 3 landmarks (spread), edge 1 gets
-    2 (near ends), edge 2 gets 2 (second half), edge 3 gets 2 (first two
-    thirds).  Every edge has at least 2 landmarks so that movement along any
-    edge produces a distinguishable scan change for Cartographer.
+    ``_LANDMARK_EDGE_FRACS`` (or a caller-supplied override).  Edge 0 gets 3
+    landmarks (spread), edge 1 gets 2 (near ends), edge 2 gets 2 (second
+    half), edge 3 gets 2 (first two thirds).  Every long edge has at least 2
+    landmarks so that movement along any edge produces a distinguishable scan
+    change for Cartographer.
 
     Landmarks sit directly on the perimeter wall (no inset) and replace the
     perimeter cones at those positions.  Any candidate that falls inside a
@@ -366,8 +368,13 @@ def compute_landmarks(
 
     @param corners: Polygon vertices as list of {x, y} dicts (local frame, CCW).
     @param bays: Optional list of bay dicts (local frame) for collision filtering.
+    @param edge_fracs: Optional per-edge fractional positions override.  When
+           None, ``_LANDMARK_EDGE_FRACS`` is used.  Callers with non-rectangular
+           polygons (e.g. asymmetric notch) should supply a custom profile that
+           matches the edge count.
     @return List of landmark dicts with x, y, yaw_deg keys (local frame).
     """
+    fracs_table = edge_fracs if edge_fracs is not None else _LANDMARK_EDGE_FRACS
     pts = [(c["x"], c["y"]) for c in corners]
     n = len(pts)
     landmarks: List[Dict[str, float]] = []
@@ -386,9 +393,9 @@ def compute_landmarks(
 
         # Look up fractional positions for this edge index.
         # Edges beyond the profile length get no landmarks.
-        if i >= len(_LANDMARK_EDGE_FRACS):
+        if i >= len(fracs_table):
             continue
-        fracs = _LANDMARK_EDGE_FRACS[i]
+        fracs = fracs_table[i]
         if not fracs:
             continue
 
@@ -545,7 +552,25 @@ def to_world_frame(
             }
         )
 
-    return {
+    # Transform optional asymmetric corner polygon and its landmarks.
+    world_asym_corners = []
+    for c in local_layout.get("asymmetric_corners", []):
+        wx, wy = _translate(c["x"], c["y"], origin_x, origin_y, h_rad)
+        world_asym_corners.append({"x": round(wx, 3), "y": round(wy, 3)})
+
+    world_asym_landmarks = []
+    for lm in local_layout.get("asymmetric_landmarks", []):
+        wx, wy = _translate(lm["x"], lm["y"], origin_x, origin_y, h_rad)
+        world_asym_landmarks.append(
+            {
+                "x": round(wx, 3),
+                "y": round(wy, 3),
+                "z": origin_z,
+                "yaw_deg": round(_world_yaw(lm["yaw_deg"], heading_deg), 2),
+            }
+        )
+
+    result: Dict[str, Any] = {
         "corners": world_corners,
         "bays": world_bays,
         "spawn_transform": world_spawn,
@@ -555,6 +580,11 @@ def to_world_frame(
         "obstacles": world_obstacles,
         "landmarks": world_landmarks,
     }
+    if world_asym_corners:
+        result["asymmetric_corners"] = world_asym_corners
+    if world_asym_landmarks:
+        result["asymmetric_landmarks"] = world_asym_landmarks
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -602,6 +632,10 @@ def write_layout_yaml(
         "obstacles": world_layout.get("obstacles", []),
         "landmarks": world_layout.get("landmarks", []),
     }
+    if world_layout.get("asymmetric_corners"):
+        doc_clean["asymmetric_corners"] = world_layout["asymmetric_corners"]
+    if world_layout.get("asymmetric_landmarks"):
+        doc_clean["asymmetric_landmarks"] = world_layout["asymmetric_landmarks"]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as f:
@@ -670,6 +704,23 @@ def plot_layout(
             linewidth=2,
             solid_capstyle="butt",
         )
+
+    # Draw asymmetric corner polygon as a dashed blue overlay when present.
+    asym_corners = world_layout.get("asymmetric_corners", [])
+    if asym_corners:
+        asym_pts = [(c["x"], c["y"]) for c in asym_corners]
+        asym_n = len(asym_pts)
+        for i in range(asym_n):
+            p0 = asym_pts[i]
+            p1 = asym_pts[(i + 1) % asym_n]
+            ax.plot(
+                [p0[0], p1[0]],
+                [p0[1], p1[1]],
+                color="blue",
+                linewidth=2,
+                linestyle="--",
+                solid_capstyle="butt",
+            )
 
     from scripts.colours import (
         BAY_HEX,

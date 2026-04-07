@@ -165,6 +165,7 @@ def make_env(
             no_rendering_mode=config.get("no_rendering_mode", False),
             max_ego_speed_ms=config.get("max_ego_speed_ms", 6.0),
             use_extra_spawns=config.get("use_extra_spawns", False),
+            asymmetric_corner=config.get("asymmetric_corner", False),
             vis_output_path=vis_path,
         )
         return env

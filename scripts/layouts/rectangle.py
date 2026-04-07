@@ -72,6 +72,25 @@ def generate() -> Dict[str, Any]:
         {"x": -5.0, "y": width},
     ]
 
+    # Asymmetric variant: rectangular notch on the bottom wall where Spawn 2
+    # sits (local x=26..34, y=0..8). Breaks the lot's rotational and reflective
+    # symmetry so Cartographer SLAM converges to a single scan-match hypothesis.
+    # Mutually exclusive with use_extra_spawns (Spawn 2 entrance is inside the
+    # notch, so it cannot be used as a spawn point when the notch is active).
+    _NOTCH_X_LEFT = 26.0   # clears last perp bay right edge (25.5)
+    _NOTCH_X_RIGHT = 32.0  # clears leftmost angled bay left extent (32.7)
+    _NOTCH_DEPTH = 8.0     # 8 m inward from bottom wall
+    asymmetric_corners = [
+        {"x": -5.0, "y": 0.0},
+        {"x": _NOTCH_X_LEFT, "y": 0.0},
+        {"x": _NOTCH_X_LEFT, "y": _NOTCH_DEPTH},
+        {"x": _NOTCH_X_RIGHT, "y": _NOTCH_DEPTH},
+        {"x": _NOTCH_X_RIGHT, "y": 0.0},
+        {"x": depth, "y": 0.0},
+        {"x": depth, "y": width},
+        {"x": -5.0, "y": width},
+    ]
+
     dims_perp = BAY_DIMS["perpendicular"]  # width=2.5, depth=5.0
     dims_ang = BAY_DIMS["angled"]  # width=2.5, depth=5.4
     dims_par = BAY_DIMS["parallel"]  # width=2.5, depth=8.0
@@ -425,10 +444,27 @@ def generate() -> Dict[str, Any]:
 
     return {
         "corners": corners,
+        "asymmetric_corners": asymmetric_corners,
         "bays": all_bays,
         "spawn": spawn,
         "extra_spawns": [spawn2],
         "patrol_waypoints": patrol,
         "pedestrian_zones": ped_zones,
         "landmarks": compute_landmarks(corners, all_bays),
+        # 8-edge polygon: edges 0 (bottom-left segment), 1-3 (notch, <10 m,
+        # skipped), 4 (bottom-right segment), 5 (right), 6 (top), 7 (left).
+        "asymmetric_landmarks": compute_landmarks(
+            asymmetric_corners,
+            all_bays,
+            edge_fracs=[
+                [0.30, 0.70],  # Edge 0: bottom-left segment (26 m)
+                [],             # Edge 1: notch left wall (8 m, below min)
+                [],             # Edge 2: notch bottom (8 m, below min)
+                [],             # Edge 3: notch right wall (8 m, below min)
+                [0.30, 0.70],  # Edge 4: bottom-right segment (26 m)
+                [0.25, 0.80],  # Edge 5: right wall (45 m)
+                [0.45, 0.85],  # Edge 6: top wall (65 m)
+                [0.30, 0.65],  # Edge 7: left wall (45 m)
+            ],
+        ),
     }
