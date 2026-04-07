@@ -26,6 +26,10 @@ max_steps: 1000  # Episode length in agent decisions. With action_repeat=4, each
                  # Lot diagonal ~79m (65x45m). At 3m/s cruise ~26s traversal +
                  # ~15-20s slow approach and parking manoeuvre = ~45s typical.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz. Fixed for EKF + ROS 2 bridge consistency.
+mapping_timestep: 0.05  # Same as carla_timestep. Faster mapping timesteps (0.01-0.025)
+                        # cause incomplete LiDAR rotations (rotation_frequency=20 needs
+                        # 0.05s for a full scan). IMU interleaving requires changes to
+                        # LiDAR rotation_frequency which affects scan density.
 map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
 no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return empty, physics + state work still active). Essential for state-based agents with no camera input. Speedup: 3-4x.
 action_repeat: 4  # Apply same action for 4 sim-steps, construct observation only on 4th step. Agent decides at 5 Hz (fine for parking <6 m/s). Reduces observations and EKF covariance reads by 4x. Wall-clock speedup: 4x, episode length: same 50 seconds.

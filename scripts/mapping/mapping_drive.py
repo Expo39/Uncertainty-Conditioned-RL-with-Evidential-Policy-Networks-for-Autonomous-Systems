@@ -282,7 +282,10 @@ def main() -> None:
     # rendering engine does not fire between ticks without an explicit tick call.
     # Synchronous mode ensures each env.step() -> world.tick() triggers a full
     # physics + sensor step, giving Cartographer dense (>20k point) scans.
-    carla_timestep: float = float(config.get("carla_timestep", 0.05))
+    # Use mapping_timestep (default: half the training timestep) so the IMU
+    # fires every tick while the LiDAR fires every 2 ticks, giving Cartographer
+    # 2 IMU samples per scan for proper yaw interpolation.
+    carla_timestep: float = float(config.get("mapping_timestep", 0.025))
     if env.world is not None:
         _map_settings = env.world.get_settings()
         if not _map_settings.synchronous_mode:
