@@ -130,6 +130,7 @@ def _build_env(
         sensor_suite=suite,
         include_covariance=False,
         include_obstacle_obs=False,
+        asymmetric_corner=train_cfg.get("asymmetric_corner", False),
     )
     return env
 
@@ -366,6 +367,7 @@ def main() -> None:
             include_obstacle_obs=True,
             max_steps=train_cfg.get("max_steps", 1000),
             max_ego_speed_ms=train_cfg.get("max_ego_speed_ms", 6.0),
+            asymmetric_corner=train_cfg.get("asymmetric_corner", False),
         )
         env.reset()
         if env.world is None or env.vehicle is None:
