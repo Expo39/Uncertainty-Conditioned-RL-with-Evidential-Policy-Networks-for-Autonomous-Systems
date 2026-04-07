@@ -105,11 +105,14 @@ TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_length = 0.3
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.min_num_points = 40
 TRAJECTORY_BUILDER_2D.adaptive_voxel_filter.max_range = 25.0
 
--- Search window: with IMU providing yaw rate, the correlative scan matcher
--- has a strong rotational prior. 30 deg angular window is safe.
-TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = true
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.linear_search_window = 0.5
-TRAJECTORY_BUILDER_2D.real_time_correlative_scan_matcher.angular_search_window = math.rad(30.0)
+-- Correlative scan matcher disabled: with IMU providing yaw and the Ceres
+-- scan matcher starting from the IMU-extrapolated prior, the correlative
+-- brute-force search is unnecessary and harmful on sparse cone geometry.
+-- The correlative matcher's low default rotation_delta_cost_weight (0.1)
+-- lets it freely explore +-30 deg of rotation, locking onto ambiguous cone
+-- matches at wrong angles (inter-submap fan drift). Disabling it lets Ceres
+-- refine directly from the IMU prior -- the default Cartographer behaviour.
+TRAJECTORY_BUILDER_2D.use_online_correlative_scan_matching = false
 
 -- Balanced weights: IMU constrains yaw, so rotation_weight does not need to
 -- be inflated. Preserves meaningful covariance variation across conditions.
@@ -125,11 +128,15 @@ TRAJECTORY_BUILDER_2D.submaps.grid_options_2d.resolution = 0.05   -- 5 cm grid
 -- Pose graph (loop closure) settings
 -- ---------------------------------------------------------------------------
 
--- With IMU constraining yaw, loop closure is reliable. Standard thresholds
--- (0.70) are safe since false rotational matches no longer occur.
-POSE_GRAPH.constraint_builder.min_score = 0.70
-POSE_GRAPH.constraint_builder.global_localization_min_score = 0.75
+-- Raised from 0.70/0.75: symmetric cone perimeter produces ambiguous 0.65-0.75
+-- matches at wrong positions. 0.80/0.85 rejects those while accepting strong
+-- matches (>80%) that have genuine geometric overlap with jersey barriers.
+POSE_GRAPH.constraint_builder.min_score = 0.80
+POSE_GRAPH.constraint_builder.global_localization_min_score = 0.85
 POSE_GRAPH.optimize_every_n_nodes = 35
 POSE_GRAPH.optimization_problem.huber_scale = 1e1
+-- Increase rotation weight so the optimiser trusts IMU yaw over false
+-- rotational loop closures on the symmetric cone perimeter (default ~1e5).
+POSE_GRAPH.optimization_problem.rotation_weight = 1e7
 
 return options

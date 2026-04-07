@@ -30,6 +30,7 @@ map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before cont
 no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return empty, physics + state work still active). Essential for state-based agents with no camera input. Speedup: 3-4x.
 action_repeat: 4  # Apply same action for 4 sim-steps, construct observation only on 4th step. Agent decides at 5 Hz (fine for parking <6 m/s). Reduces observations and EKF covariance reads by 4x. Wall-clock speedup: 4x, episode length: same 50 seconds.
 use_extra_spawns: false  # When false, only the primary spawn (0,0) is used. Ensures CARLA and Cartographer coordinate frames align (both start at origin). Set true once per-spawn pbstream maps or odom-to-world calibration are implemented.
+asymmetric_corner: false  # Use notched polygon (asymmetric_corners from layout YAML) instead of rectangular perimeter. Breaks lot symmetry for Cartographer SLAM. Mutually exclusive with use_extra_spawns (Spawn 2 entrance is inside the notch).
 max_ego_speed_ms: 3.0  # Maximum ego vehicle speed (m/s). Throttle is cut when exceeded to keep Cartographer scan-matching stable. 3 m/s (~11 km/h) keeps per-scan motion (0.15m at 20 Hz) well within Cartographer's 0.3m search window.
 
 # ---------------------------------------------------------------------------

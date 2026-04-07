@@ -38,18 +38,10 @@ Usage::
 import argparse
 import math
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import yaml
-
-try:
-    import carla  # noqa: F401 -- needed at runtime inside training container
-except ImportError:
-    print("ERROR: carla package not found. Run inside the training container.")
-    sys.exit(1)
-
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
 # Waypoint capture radius (m) -- advance to next waypoint when within this distance
 _WAYPOINT_CAPTURE_RADIUS: float = 3.0
@@ -63,6 +55,87 @@ _MAP_SPEED_MS: float = 2.0
 # Proportional heading controller gain (mirrors patrol_heading_gain in
 # train_config.yaml)
 _K_P: float = 0.8
+
+
+def get_mapping_waypoints(
+    layout: str,
+    asymmetric_corner: bool,
+    layout_corners: Optional[List[Dict[str, float]]] = None,
+    wall_inset: float = 3.0,
+) -> List[Tuple[float, float]]:
+    """
+    @brief Get mapping waypoints for a given layout with dynamic wall inset.
+
+    Waypoints start at spawn (0, 0) and trace the perimeter inset from walls.
+    For asymmetric layouts, adds waypoints to trace around the notch with 1m inset.
+
+    @param layout: Layout name (rectangle, trapezoid, irregular_a).
+    @param asymmetric_corner: If True, use notch-avoiding waypoints (rectangle only).
+    @param layout_corners: List of corner dicts {x, y} from layout YAML. If None,
+                           will attempt to load from configs/layouts/{layout}.yaml.
+    @param wall_inset: Distance inward from walls to place waypoints (metres).
+    @return List of (x, y) waypoint tuples in world frame.
+    """
+    if layout_corners is None:
+        # Load from YAML if not provided
+        import yaml as yaml_module
+        layout_file = f"configs/layouts/{layout}.yaml"
+        with open(layout_file) as f:
+            layout_data: Dict[str, Any] = yaml_module.safe_load(f)
+        layout_corners = layout_data.get("corners", [])
+
+    if not layout_corners:
+        raise ValueError(f"No corners found for layout '{layout}'.")
+
+    # Extract corner coordinates
+    corners = [(c["x"], c["y"]) for c in layout_corners]
+
+    # For rectangle: corners are (-3, -22.5), (62, -22.5), (62, 22.5), (-3, 22.5)
+    x_min = min(c[0] for c in corners)
+    x_max = max(c[0] for c in corners)
+    y_min = min(c[1] for c in corners)
+    y_max = max(c[1] for c in corners)
+
+    # Inset from walls
+    x_left = x_min + wall_inset
+    x_right = x_max - wall_inset
+    y_bottom = y_min + wall_inset
+    y_top = y_max - wall_inset
+
+    if asymmetric_corner and layout == "rectangle":
+        # Asymmetric: trace around notch with wall_inset from notch edges.
+        # Notch in local: x=26..32, y=0..8. In world: x=28..34, y=-14.5..(-22.5)
+        x_notch_left = 28.0
+        x_notch_right = 34.0
+        y_notch_top = -14.5
+
+        return [
+            (0.0, y_bottom),                           # WP1: spawn on left wall (closest to 0,0)
+            (x_left, y_bottom),                        # WP2: bottom-left corner
+            (x_notch_left - wall_inset, y_bottom),     # WP3: at notch left edge (inset)
+            (x_notch_left - wall_inset, y_notch_top + wall_inset),  # WP4: up notch left
+            (x_notch_right + wall_inset, y_notch_top + wall_inset), # WP5: across notch top
+            (x_notch_right + wall_inset, y_bottom),    # WP6: down notch right
+            (x_right, y_bottom),                       # WP7: bottom-right corner
+            (x_right, (y_top + y_bottom) / 2),         # WP8: right mid
+            (x_right, y_top),                           # WP9: top-right corner
+            ((x_left + x_right) / 2, y_top),           # WP10: top mid
+            (x_left, y_top),                            # WP11: top-left
+            (x_left, (y_top + y_bottom) / 2),          # WP12: left mid
+        ]
+    else:
+        # Symmetric: rectangular loop starting from spawn on left wall.
+        return [
+            (0.0, y_bottom),                           # WP1: spawn on left wall (closest to 0,0)
+            (x_left, y_bottom),                        # WP2: bottom-left corner
+            ((x_left + x_right) / 2, y_bottom),       # WP3: bottom mid
+            (x_right, y_bottom),                       # WP4: bottom-right corner
+            (x_right, (y_top + y_bottom) / 2),        # WP5: right mid
+            (x_right, y_top),                          # WP6: top-right corner
+            ((x_left + x_right) / 2, y_top),          # WP7: top mid
+            (x_left, y_top),                           # WP8: top-left corner
+            (x_left, (y_top + y_bottom) / 2),         # WP9: left mid
+        ]
 
 
 def _compute_action(
@@ -154,6 +227,14 @@ def main() -> None:
     """
     @brief Entry point: create env, drive the patrol loop, exit.
     """
+    # Check CARLA availability before importing heavy dependencies
+    try:
+        import carla  # noqa: F401
+        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+    except ImportError:
+        print("ERROR: carla package not found. Run inside the training container.")
+        sys.exit(1)
+
     args = _parse_args()
 
     # -- Load env config for sensor and scenario settings --
@@ -187,6 +268,7 @@ def main() -> None:
         include_covariance=False,  # No EKF covariance during SLAM mapping
         include_obstacle_obs=False,  # Not needed for mapping
         sensor_suite=config.get("sensor_suite", "suite_a"),
+        asymmetric_corner=config.get("asymmetric_corner", False),
     )
 
     print(f"Mapping drive: layout={args.layout}, loops={args.loops}")
@@ -212,21 +294,19 @@ def main() -> None:
             env.world.apply_settings(_map_settings)
             print("Synchronous mode enabled. LiDAR will produce dense scans.")
 
-    # -- Load patrol waypoints from layout YAML --
+    # -- Load layout and get mapping waypoints --
     with open(layout_file) as f:
-        layout: Dict[str, Any] = yaml.safe_load(f)
+        layout_data: Dict[str, Any] = yaml.safe_load(f)
 
-    waypoints_raw = layout.get("patrol_waypoints", [])
-    if not waypoints_raw:
-        raise ValueError(
-            f"Layout '{args.layout}' has no patrol_waypoints. "
-            "Regenerate layout YAMLs with `make generate-layouts`."
-        )
-    waypoints: List[Tuple[float, float]] = [
-        (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
-    ]
-    if len(waypoints) > 1 and waypoints[-1] == waypoints[0]:
-        waypoints = waypoints[:-1]
+    # Define wall inset for waypoint positioning (metres)
+    wall_inset = 3.0
+
+    waypoints = get_mapping_waypoints(
+        args.layout,
+        config.get("asymmetric_corner", False),
+        layout_corners=layout_data.get("corners"),
+        wall_inset=wall_inset,
+    )
 
     n_waypoints = len(waypoints)
     waypoints_reversed = list(reversed(waypoints))

@@ -136,6 +136,7 @@ class CARLAParkingEnv(gym.Env):
         no_rendering_mode: bool = False,
         max_ego_speed_ms: float = 6.0,
         use_extra_spawns: bool = False,
+        asymmetric_corner: bool = False,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -176,8 +177,18 @@ class CARLAParkingEnv(gym.Env):
                YAML are included in the spawn pool. If False (default), only the
                primary spawn is used, ensuring CARLA and Cartographer coordinate
                frames align at the origin.
+        @param asymmetric_corner: If True, use the notched polygon
+               (asymmetric_corners) from the layout YAML as the lot perimeter.
+               Breaks lot symmetry for Cartographer SLAM. Mutually exclusive
+               with use_extra_spawns (Spawn 2 entrance is inside the notch).
         """
         super().__init__()
+
+        if asymmetric_corner and use_extra_spawns:
+            raise ValueError(
+                "asymmetric_corner and use_extra_spawns are mutually exclusive. "
+                "The notch occupies the Spawn 2 entrance area."
+            )
 
         self.carla_host = carla_host
         self.carla_port = carla_port
@@ -190,6 +201,7 @@ class CARLAParkingEnv(gym.Env):
         self._map_load_sleep = map_load_sleep
         self._max_ego_speed_ms = max_ego_speed_ms
         self._use_extra_spawns = use_extra_spawns
+        self._asymmetric_corner = asymmetric_corner
 
         ros2_config = ros2_config or {}
         self._ros2_config: Dict[str, Any] = ros2_config
@@ -464,6 +476,22 @@ class CARLAParkingEnv(gym.Env):
                 self._current_layout = yaml.safe_load(fh)
             CARLAParkingEnv._layout_cache[cache_key] = self._current_layout
             logger.debug(f"Cached floor plan layout: {layout_path}")
+
+        # When asymmetric_corner is active, swap corners and landmarks with the
+        # notched polygon variants. Shallow copy so the cache is not mutated.
+        if self._asymmetric_corner and "asymmetric_corners" in self._current_layout:
+            self._current_layout = dict(self._current_layout)
+            self._current_layout["corners"] = self._current_layout[
+                "asymmetric_corners"
+            ]
+            if "asymmetric_landmarks" in self._current_layout:
+                self._current_layout["landmarks"] = self._current_layout[
+                    "asymmetric_landmarks"
+                ]
+            logger.info(
+                "Asymmetric corner active: using notched polygon (%d vertices).",
+                len(self._current_layout["corners"]),
+            )
 
         self._current_floor_plan_name = name
         logger.info(f"Loaded floor plan: {name} from {layout_path}")
