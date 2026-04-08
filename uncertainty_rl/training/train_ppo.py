@@ -157,7 +157,6 @@ def make_env(
             parking_scenarios_config=config.get("parking_scenarios", {}),
             include_covariance=config.get("include_covariance", True),
             include_obstacle_obs=config.get("include_obstacle_obs", True),
-            sensor_suite=config.get("sensor_suite", "suite_a"),
             carla_timestep=config.get("carla_timestep", 0.05),
             debug=config.get("debug", False),
             map_load_sleep=config.get("map_load_sleep", 5.0),
@@ -165,7 +164,7 @@ def make_env(
             no_rendering_mode=config.get("no_rendering_mode", False),
             max_ego_speed_ms=config.get("max_ego_speed_ms", 6.0),
             use_extra_spawns=config.get("use_extra_spawns", False),
-            asymmetric_corner=config.get("asymmetric_corner", False),
+            gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             vis_output_path=vis_path,
         )
         return env

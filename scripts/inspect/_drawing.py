@@ -374,7 +374,6 @@ def _draw_fov_arc(
 
 def _draw_sensor_overlays(
     env: CARLAParkingEnv,
-    suite: str,
     train_cfg: Dict[str, Any],
     life_time: float,
     side_view: bool = False,
@@ -383,17 +382,15 @@ def _draw_sensor_overlays(
     @brief Draw sensor mount dots and FOV arcs for the current vehicle pose.
 
     Reads mount positions from ``train_cfg`` (``carla_sensors`` section) and draws:
-      - IMU: yellow dot at centre-of-mass height (all suites)
-      - Suite A: cyan dot at front bumper + 270 deg FOV arc + faint 90 deg blind sector
-      - Suite B/C: green dot at roof + full 360 deg ring
-      - Suite C: orange dot at windscreen + 90 deg camera cone arc
+      - IMU: yellow dot at centre-of-mass height
+      - GNSS: magenta dot at roof antenna mount
+      - 2D LiDAR: cyan dot at front bumper + 270 deg FOV arc + faint 90 deg blind sector
 
     All positions are read from ``carla_sensors.<sensor>.mount`` in ``train_cfg``
     and transformed from vehicle body frame to world frame using the current
     vehicle transform.
 
     @param env: Active CARLAParkingEnv (vehicle must be spawned).
-    @param suite: Sensor suite ('suite_a', 'suite_b', 'suite_c').
     @param train_cfg: Loaded train_config.yaml dict.
     @param life_time: Primitive lifetime in seconds.
     @param side_view: If True, draw vertical drop lines from each sensor mount
@@ -417,7 +414,7 @@ def _draw_sensor_overlays(
         wy = vy + lx * math.sin(yaw_rad) + ly * math.cos(yaw_rad)
         return carla.Location(x=wx, y=wy, z=vz + lz)
 
-    # ---- IMU (all suites) ------------------------------------------------
+    # ---- IMU ---------------------------------------------------------------
     imu_m = sensors_cfg.get("imu", {}).get("mount", {})
     imu_loc = _to_world(
         float(imu_m.get("x", 0.0)),
@@ -434,116 +431,49 @@ def _draw_sensor_overlays(
         ground_z=ground_z,
     )
 
-    # ---- Suite A: 2D LiDAR -----------------------------------------------
-    if suite == "suite_a":
-        lid_m = sensors_cfg.get("lidar", {}).get("mount", {})
-        lx = float(lid_m.get("x", 2.4))
-        ly = float(lid_m.get("y", 0.0))
-        lz = float(lid_m.get("z", 0.5))
-        lidar_loc = _to_world(lx, ly, lz)
-        _draw_sensor_dot(
+    # ---- 2D LiDAR (obstacle detection) ------------------------------------
+    lid_m = sensors_cfg.get("lidar", {}).get("mount", {})
+    lx = float(lid_m.get("x", 2.4))
+    ly = float(lid_m.get("y", 0.0))
+    lz = float(lid_m.get("z", 0.5))
+    lidar_loc = _to_world(lx, ly, lz)
+    _draw_sensor_dot(
+        debug,
+        lidar_loc,
+        "2D LiDAR",
+        _COL_LIDAR_2D,
+        life_time,
+        drop_line=side_view,
+        ground_z=ground_z,
+    )
+
+    if not side_view:
+        lidar_range = float(sensors_cfg.get("lidar", {}).get("range", 30.0))
+        fov_half = math.radians(135.0)
+        _draw_fov_arc(
             debug,
-            lidar_loc,
-            "2D LiDAR",
-            _COL_LIDAR_2D,
-            life_time,
-            drop_line=side_view,
-            ground_z=ground_z,
+            lidar_loc.x,
+            lidar_loc.y,
+            lidar_loc.z + 0.05,
+            radius=lidar_range,
+            angle_min_rad=yaw_rad - fov_half,
+            angle_max_rad=yaw_rad + fov_half,
+            colour=_COL_FOV_LIDAR,
+            life_time=life_time,
+            dot_size=0.05,
+            draw_radials=True,
+        )
+        _draw_fov_arc(
+            debug,
+            lidar_loc.x,
+            lidar_loc.y,
+            lidar_loc.z + 0.05,
+            radius=lidar_range,
+            angle_min_rad=yaw_rad + fov_half,
+            angle_max_rad=yaw_rad + math.radians(360.0) - fov_half,
+            colour=_COL_FOV_BLIND,
+            life_time=life_time,
+            dot_size=0.03,
+            draw_radials=False,
         )
 
-        if not side_view:
-            lidar_range = float(sensors_cfg.get("lidar", {}).get("range", 30.0))
-            fov_half = math.radians(135.0)
-            _draw_fov_arc(
-                debug,
-                lidar_loc.x,
-                lidar_loc.y,
-                lidar_loc.z + 0.05,
-                radius=lidar_range,
-                angle_min_rad=yaw_rad - fov_half,
-                angle_max_rad=yaw_rad + fov_half,
-                colour=_COL_FOV_LIDAR,
-                life_time=life_time,
-                dot_size=0.05,
-                draw_radials=True,
-            )
-            _draw_fov_arc(
-                debug,
-                lidar_loc.x,
-                lidar_loc.y,
-                lidar_loc.z + 0.05,
-                radius=lidar_range,
-                angle_min_rad=yaw_rad + fov_half,
-                angle_max_rad=yaw_rad + math.radians(360.0) - fov_half,
-                colour=_COL_FOV_BLIND,
-                life_time=life_time,
-                dot_size=0.03,
-                draw_radials=False,
-            )
-
-    # ---- Suite B / C: 3D LiDAR ------------------------------------------
-    if suite in ("suite_b", "suite_c"):
-        lid3_m = sensors_cfg.get("lidar_3d", {}).get("mount", {})
-        lx = float(lid3_m.get("x", 0.0))
-        ly = float(lid3_m.get("y", 0.0))
-        lz = float(lid3_m.get("z", 1.5))
-        lidar3d_loc = _to_world(lx, ly, lz)
-        _draw_sensor_dot(
-            debug,
-            lidar3d_loc,
-            "3D LiDAR",
-            _COL_LIDAR_3D,
-            life_time,
-            drop_line=side_view,
-            ground_z=ground_z,
-        )
-
-        if not side_view:
-            lidar3d_range = float(sensors_cfg.get("lidar_3d", {}).get("range", 100.0))
-            _draw_fov_arc(
-                debug,
-                lidar3d_loc.x,
-                lidar3d_loc.y,
-                lidar3d_loc.z,
-                radius=lidar3d_range,
-                angle_min_rad=0.0,
-                angle_max_rad=2.0 * math.pi,
-                colour=_COL_FOV_LIDAR,
-                life_time=life_time,
-                dot_size=0.05,
-                draw_radials=False,
-            )
-
-    # ---- Suite C: RGB camera ---------------------------------------------
-    if suite == "suite_c":
-        cam_m = sensors_cfg.get("camera_rgb", {}).get("mount", {})
-        cx = float(cam_m.get("x", 2.0))
-        cy_l = float(cam_m.get("y", 0.0))
-        cz = float(cam_m.get("z", 1.4))
-        cam_loc = _to_world(cx, cy_l, cz)
-        _draw_sensor_dot(
-            debug,
-            cam_loc,
-            "RGB CAM",
-            _COL_CAMERA,
-            life_time,
-            drop_line=side_view,
-            ground_z=ground_z,
-        )
-
-        cam_fov_deg = float(sensors_cfg.get("camera_rgb", {}).get("fov", 90.0))
-        if not side_view:
-            cam_fov_half = math.radians(cam_fov_deg / 2.0)
-            _draw_fov_arc(
-                debug,
-                cam_loc.x,
-                cam_loc.y,
-                cam_loc.z,
-                radius=30.0,
-                angle_min_rad=yaw_rad - cam_fov_half,
-                angle_max_rad=yaw_rad + cam_fov_half,
-                colour=_COL_CAMERA,
-                life_time=life_time,
-                dot_size=0.05,
-                draw_radials=True,
-            )
