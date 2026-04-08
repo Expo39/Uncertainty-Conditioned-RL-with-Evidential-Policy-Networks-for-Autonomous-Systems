@@ -273,7 +273,6 @@ class TestMakeEnvParallel:
         "parking_scenarios": {},
         "include_covariance": True,
         "include_obstacle_obs": True,
-        "sensor_suite": "suite_a",
         "carla_timestep": 0.05,
         "debug": False,
         "map_load_sleep": 0.0,

@@ -115,8 +115,8 @@ def _scale_sensor_noise(
     @param imu_multiplier: Multiplier for all IMU noise stddev values.
     @return New sensor config dict with scaled noise values.
 
-    @note Only IMU noise is scaled. Suite A uses 2D LiDAR + IMU only; GNSS is
-          excluded (unreliable in covered parking lots).
+    @note Only IMU noise is scaled here. GNSS noise is controlled separately
+          via gnss_noise_multiplier passed to the env constructor.
     """
     scaled = copy.deepcopy(base_sensors)
 
@@ -194,14 +194,24 @@ def make_eval_env(
     # Observation flags from env config (baseline-specific obs dims respected)
     include_covariance: bool = True
     include_obstacle_obs: bool = True
-    sensor_suite: str = "suite_a"
     if env_config is not None:
         include_covariance = bool(env_config.get("include_covariance", True))
         include_obstacle_obs = bool(env_config.get("include_obstacle_obs", True))
-        sensor_suite = str(env_config.get("sensor_suite", "suite_a"))
 
     # debug: per-step DebugLogger diagnostics -- off by default, same as training.
     debug: bool = bool(config.get("debug", False))
+
+    # GNSS noise multiplier override: locks tier for this eval condition.
+    gnss_override: Optional[float] = condition.get(
+        "gnss_noise_multiplier", None
+    )
+
+    # Forward use_extra_spawns from env_config (defaults to False).
+    use_extra_spawns: bool = bool(
+        env_config.get("use_extra_spawns", False)
+        if env_config is not None
+        else False
+    )
 
     def _init() -> CARLAParkingEnv:
         return CARLAParkingEnv(
@@ -214,7 +224,13 @@ def make_eval_env(
             parking_scenarios_config=parking_config,
             include_covariance=include_covariance,
             include_obstacle_obs=include_obstacle_obs,
-            sensor_suite=sensor_suite,
+            use_extra_spawns=use_extra_spawns,
+            gnss_noise_profiles_path=(
+                env_config.get("gnss_noise_profiles", None)
+                if env_config is not None
+                else None
+            ),
+            gnss_noise_multiplier_override=gnss_override,
             debug=debug,
         )
 
@@ -398,12 +414,17 @@ def evaluate_across_conditions(
         result = metrics.to_dict()
         result["condition"] = name
         result["description"] = description
+        result["gnss_noise_multiplier"] = condition.get(
+            "gnss_noise_multiplier", 1.0
+        )
         result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
         result["num_patrol_vehicles"] = condition.get("num_patrol_vehicles", 0)
         result["pedestrian_spawn_probability"] = condition.get(
             "pedestrian_spawn_probability", 1.0
         )
         result["bay_occupancy_rate"] = condition.get("bay_occupancy_rate", 0.6)
+        if "floor_plan" in condition:
+            result["floor_plan"] = condition["floor_plan"]
         results.append(result)
 
         logger.info(

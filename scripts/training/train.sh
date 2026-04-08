@@ -3,7 +3,7 @@
 # @brief Run train_ppo.py inside the training container, filtering known
 #        benign ROS 2 DDS noise from stderr.
 #
-# Called by `make docker-train-loc` and `make docker-train-loc-short`.
+# Called by `make docker-train` and `make docker-train-short`.
 # Runs inside the training container (not on the host).
 #
 # Usage:

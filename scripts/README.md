@@ -11,7 +11,6 @@ pipeline -- they are invoked exclusively via `make` targets.
 | [`colours/`](colours/) | Centralised colour palette for all visualisations (single source of truth) |
 | [`layouts/`](layouts/) | Parking lot floor plan modules + `generate_layouts.py` orchestrator |
 | [`inspect/`](inspect/) | CARLA debug overlay scripts for layouts, sensor placement, and dryrun |
-| [`mapping/`](mapping/) | Patrol drive script + map serialisation helper (`save_map.sh`) |
 | [`training/`](training/) | Training helper scripts invoked inside the container (`train.sh`) |
 | [`visualise/`](visualise/) | 2D bird's-eye visualiser + checkpoint demo driver |
 
@@ -21,11 +20,10 @@ pipeline -- they are invoked exclusively via `make` targets.
 |------|---------|
 | Generate all lot YAMLs + PNGs | `make generate-layouts` |
 | Generate one layout | `make generate-layouts LAYOUT=trapezoid` |
-| Build Cartographer map | `make docker-map LAYOUT=rectangle` |
-| Train (full run) | `make docker-train-loc` |
-| Train (10k step smoke-test) | `make docker-train-loc-short` |
+| Train (full run) | `make docker-train` |
+| Train (10k step smoke-test) | `make docker-train-short` |
 | Inspect layout in CARLA | `make docker-inspect INSPECT_LAYOUT=rectangle` |
-| Inspect sensor placement | `make docker-inspect-sensors INSPECT_SUITE=suite_a` |
+| Inspect sensor placement | `make docker-inspect-sensors` |
 | Full pipeline dryrun (windowed) | `make docker-inspect-dryrun` |
 | Live training visualiser | `make visualise` |
 | Checkpoint demo + 2D viewer | `make eval-visualise-2d` |

@@ -20,11 +20,11 @@ CARLAParkingEnv(
     max_steps=500,
     render_mode=None,
     ros2_config={"covariance_topic": "/odometry/filtered", "covariance_timeout": 10.0},
-    carla_sensors_config={"imu": {...}, "lidar": {...}},  # Suite A: 2D LiDAR + IMU
+    carla_sensors_config={"imu": {...}, "gnss": {...}, "lidar": {...}},
     parking_scenarios_config={...},  # parking_scenarios section from carla/env_config.yaml
     include_covariance=True,
     include_obstacle_obs=True,
-    sensor_suite="suite_a",
+    gnss_noise_profiles_path="configs/gnss_noise_profiles.yaml",
     map_load_sleep=5.0,   # seconds to wait after FlatPlane OpenDRIVE load (from config)
 )
 ```
@@ -33,7 +33,7 @@ CARLAParkingEnv(
 
 **All 20 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
 
-Absolute EKF position (x, y, yaw) is excluded: it accumulates across episodes in the Cartographer odom frame and carries no consistent signal for the policy. Navigation intent is fully encoded by dx/dy/dyaw (indices 12-14).
+Absolute EKF position (x, y, yaw) is excluded: it accumulates across episodes in the EKF odom frame and carries no consistent signal for the policy. Navigation intent is fully encoded by dx/dy/dyaw (indices 12-14).
 
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|
@@ -132,12 +132,11 @@ Each episode: sample bay type uniformly (1/3 each), then sample one bay of that 
 
 | Source | EKF effect |
 |--------|-----------|
-| Bay occupancy | Fewer parked cars = sparser LiDAR features = higher covariance |
-| NPC patrol vehicles | Dynamic occlusions raise covariance during passes |
-| Pedestrians | Short covariance spikes |
-| Weather (HardRainNoon) | Rain attenuates LiDAR returns = higher covariance |
-| Floor plan geometry | Perimeter shape affects scan-match quality |
-| Open traversal | Sparse returns far from perimeter = genuinely high covariance |
+| RTK fix-state tier | Primary source: per-episode GNSS noise from `gnss_noise_profiles.yaml` |
+| IMU noise multiplier | Higher noise -> noisier EKF prediction step |
+| NPC patrol vehicles | Dynamic obstacles for LiDAR clearance obs |
+| Pedestrians | Moving obstacles for LiDAR clearance obs |
+| No weather | FlatPlane does not render weather effects |
 
 ---
 

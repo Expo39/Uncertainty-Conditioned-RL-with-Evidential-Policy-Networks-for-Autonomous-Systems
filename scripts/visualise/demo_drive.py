@@ -94,7 +94,7 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
             parking_scenarios_config=env_config.get("parking_scenarios", {}),
             include_covariance=bool(env_config.get("include_covariance", True)),
             include_obstacle_obs=bool(env_config.get("include_obstacle_obs", True)),
-            sensor_suite=str(env_config.get("sensor_suite", "suite_a")),
+            gnss_noise_profiles_path=env_config.get("gnss_noise_profiles", None),
         )
 
     return DummyVecEnv([_init])

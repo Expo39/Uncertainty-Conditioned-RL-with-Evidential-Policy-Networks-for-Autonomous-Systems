@@ -5,8 +5,9 @@
 This module implements a Gymnasium-compatible environment for autonomous parking
 in CARLA simulator. The agent parks in one of three floor-plan geometries loaded
 from pre-computed layout YAMLs (configs/layouts/). Localisation uncertainty comes
-from the robot_localisation EKF node (via ROS 2 DDS), driven by noisy CARLA
-sensors, weather conditions, and dynamic traffic - not from a simulated noise model.
+from the robot_localisation EKF node fusing RTK-GNSS and IMU, with per-episode
+GNSS noise tiers modelling RTK fix-state variation (fixed, float, standalone,
+degraded). 2D LiDAR provides obstacle detection only (obs indices 15-19).
 
 The observation comprises up to 20 dimensions (default, include_obstacle_obs=true):
   - indices  0-5:  EKF filtered pose (x, y, yaw, vx, vy, vyaw)
@@ -126,7 +127,6 @@ class CARLAParkingEnv(gym.Env):
         parking_scenarios_config: Optional[Dict[str, Any]] = None,
         include_covariance: bool = True,
         include_obstacle_obs: bool = True,
-        sensor_suite: str = "suite_a",
         vis_output_path: Optional[str] = None,
         carla_timestep: float = 0.05,
         eval_mode: bool = False,
@@ -136,7 +136,8 @@ class CARLAParkingEnv(gym.Env):
         no_rendering_mode: bool = False,
         max_ego_speed_ms: float = 6.0,
         use_extra_spawns: bool = False,
-        asymmetric_corner: bool = False,
+        gnss_noise_profiles_path: Optional[str] = None,
+        gnss_noise_multiplier_override: Optional[float] = None,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -154,9 +155,6 @@ class CARLAParkingEnv(gym.Env):
         @param include_obstacle_obs: If True, obs includes 2 obstacle awareness dims
                (nearest_dist_m, nearest_bearing_rad). Set False to revert to 18-dim
                obs without changing any other code.
-        @param sensor_suite: Sensor suite to spawn ('suite_a', 'suite_b', 'suite_c').
-               suite_a = 2D LiDAR + IMU. suite_b = 3D LiDAR + IMU.
-               suite_c = 3D LiDAR + camera + IMU.
         @param vis_output_path: Path for vis_history.jsonl writes. If None,
                defaults to outputs/vis_history.jsonl. Writing only occurs when
                the signal file outputs/.vis_active exists (created by the
@@ -171,24 +169,20 @@ class CARLAParkingEnv(gym.Env):
         @param map_load_sleep: Seconds to wait after loading the FlatPlane OpenDRIVE
                world before continuing. Increase on slow servers (default 5.0).
         @param max_ego_speed_ms: Maximum ego vehicle speed in m/s. Throttle is cut
-               when this speed is exceeded to keep Cartographer scan-matching stable.
-               Default 6.0 m/s (~22 km/h), appropriate for parking lot manoeuvres.
+               when this speed is exceeded. Default 6.0 m/s (~22 km/h),
+               appropriate for parking lot manoeuvres.
         @param use_extra_spawns: If True, extra spawn transforms from the layout
                YAML are included in the spawn pool. If False (default), only the
-               primary spawn is used, ensuring CARLA and Cartographer coordinate
-               frames align at the origin.
-        @param asymmetric_corner: If True, use the notched polygon
-               (asymmetric_corners) from the layout YAML as the lot perimeter.
-               Breaks lot symmetry for Cartographer SLAM. Mutually exclusive
-               with use_extra_spawns (Spawn 2 entrance is inside the notch).
+               primary spawn is used. With RTK-GNSS the odom frame is UTM-aligned
+               regardless of spawn location, so extra spawns are safe to enable.
+        @param gnss_noise_profiles_path: Path to GNSS noise profiles YAML. If
+               provided, the env samples an RTK fix-state tier each reset() and
+               spawns the GNSS sensor with the corresponding noise multiplier.
+        @param gnss_noise_multiplier_override: If set, bypasses tier sampling and
+               uses this fixed multiplier every episode. Used during evaluation
+               to lock GNSS noise to a specific condition.
         """
         super().__init__()
-
-        if asymmetric_corner and use_extra_spawns:
-            raise ValueError(
-                "asymmetric_corner and use_extra_spawns are mutually exclusive. "
-                "The notch occupies the Spawn 2 entrance area."
-            )
 
         self.carla_host = carla_host
         self.carla_port = carla_port
@@ -201,7 +195,20 @@ class CARLAParkingEnv(gym.Env):
         self._map_load_sleep = map_load_sleep
         self._max_ego_speed_ms = max_ego_speed_ms
         self._use_extra_spawns = use_extra_spawns
-        self._asymmetric_corner = asymmetric_corner
+        self._gnss_noise_multiplier_override = gnss_noise_multiplier_override
+
+        # Per-step uncertainty estimates set externally (by policy or wrapper).
+        # Used for uncertainty-aware reward shaping when enabled.
+        self._step_epistemic: float = 0.0
+        self._step_aleatoric: float = 0.0
+
+        # Load GNSS noise profiles for per-episode RTK fix-state sampling.
+        self._gnss_noise_tiers: List[Dict[str, Any]] = []
+        self._gnss_tier_weights: List[float] = []
+        self._current_gnss_multiplier: float = 1.0
+        self._current_gnss_tier: Optional[Dict[str, Any]] = None
+        if gnss_noise_profiles_path:
+            self._load_gnss_noise_profiles(gnss_noise_profiles_path)
 
         ros2_config = ros2_config or {}
         self._ros2_config: Dict[str, Any] = ros2_config
@@ -265,10 +272,6 @@ class CARLAParkingEnv(gym.Env):
             ),
             bay_occupancy_min=scenarios.get("bay_occupancy_min", 0.3),
             bay_occupancy_max=scenarios.get("bay_occupancy_max", 0.8),
-            spawn_landmarks=scenarios.get("spawn_landmarks", True),
-            landmark_blueprint=scenarios.get(
-                "landmark_blueprint", "static.prop.streetbarrier"
-            ),
         )
 
         # NPC controller -- owns patrol vehicles and pedestrians.
@@ -284,10 +287,9 @@ class CARLAParkingEnv(gym.Env):
             pedestrian_max_lifetime=self._pedestrian_max_lifetime,
         )
 
-        # Sensor manager -- owns IMU, LiDAR, collision sensor, camera.
+        # Sensor manager -- owns IMU, GNSS, 2D LiDAR, collision sensor.
         self._sensor_manager = SensorManager(
             sensors_config=self._sensors_config,
-            sensor_suite=sensor_suite,
         )
 
         # Cached actor list for patrol obstacle proximity checks.  Rebuilt
@@ -307,7 +309,7 @@ class CARLAParkingEnv(gym.Env):
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
 
-        # Full 2D rigid body transform from Cartographer odom frame to CARLA
+        # Full 2D rigid body transform from EKF odom frame to CARLA
         # world frame, computed once per episode in _calibrate_ekf_frame_offset().
         # Stored as (tx, ty, cos_r, sin_r, r) where:
         #   tx, ty   -- world translation after applying the rotation
@@ -332,7 +334,7 @@ class CARLAParkingEnv(gym.Env):
             "depth": 5.0,
         }
 
-        # Target bay expressed in Cartographer odom frame (set each episode after
+        # Target bay expressed in EKF odom frame (set each episode after
         # _calibrate_ekf_frame_offset() resolves the odom->world transform).
         # Using odom-frame coordinates for the relative target computation means
         # both the vehicle pose (EKF output) and the target are in the same
@@ -434,6 +436,110 @@ class CARLAParkingEnv(gym.Env):
         logger.info("Covariance reader initialised (file-based, no DDS).")
 
     # ------------------------------------------------------------------
+    # GNSS noise profile loading and tier sampling
+    # ------------------------------------------------------------------
+
+    def _load_gnss_noise_profiles(self, path: str) -> None:
+        """
+        @brief Load RTK-GNSS noise tiers from YAML for per-episode sampling.
+        @param path: Path to the GNSS noise profiles YAML file.
+
+        Each tier models a different RTK fix state (fixed, float, standalone,
+        degraded) with corresponding CARLA GNSS sensor noise and a sampling
+        weight. At each reset(), a tier is drawn from this weighted distribution
+        and the GNSS sensor is spawned with the corresponding noise multiplier.
+        """
+        profiles_path = Path(path)
+        if not profiles_path.is_absolute():
+            profiles_path = Path.cwd() / profiles_path
+
+        with open(profiles_path, "r") as f:
+            data = yaml.safe_load(f)
+
+        tiers = data.get("tiers", {})
+        if not tiers:
+            logger.warning(
+                "No GNSS noise tiers found in %s; using multiplier=1.0.",
+                profiles_path,
+            )
+            return
+
+        self._gnss_noise_tiers = []
+        self._gnss_tier_weights = []
+        for name, tier in tiers.items():
+            tier["name"] = name
+            self._gnss_noise_tiers.append(tier)
+            self._gnss_tier_weights.append(float(tier.get("weight", 1.0)))
+
+        # Normalise weights to sum to 1.0
+        total = sum(self._gnss_tier_weights)
+        if total > 0:
+            self._gnss_tier_weights = [w / total for w in self._gnss_tier_weights]
+
+        tier_names = [t["name"] for t in self._gnss_noise_tiers]
+        logger.info(
+            "Loaded %d GNSS noise tiers: %s",
+            len(self._gnss_noise_tiers),
+            tier_names,
+        )
+
+    def _sample_gnss_noise_tier(self) -> None:
+        """
+        @brief Sample a GNSS noise tier for the current episode.
+
+        Sets self._current_gnss_multiplier based on the sampled tier's
+        metric_stddev_m relative to the base RTK-fixed stddev (0.02 m).
+        If no tiers are loaded, the multiplier stays at 1.0 (base noise).
+
+        When gnss_noise_multiplier_override is set (evaluation mode),
+        bypasses random tier sampling and uses the fixed multiplier.
+        """
+        if self._gnss_noise_multiplier_override is not None:
+            self._current_gnss_multiplier = self._gnss_noise_multiplier_override
+            self._current_gnss_tier = None
+            logger.info(
+                "Episode %d: GNSS multiplier override=%.1f",
+                self._episode_id,
+                self._current_gnss_multiplier,
+            )
+            return
+
+        if not self._gnss_noise_tiers:
+            self._current_gnss_multiplier = 1.0
+            self._current_gnss_tier = None
+            return
+
+        idx = self.np_random.choice(
+            len(self._gnss_noise_tiers),
+            p=self._gnss_tier_weights,
+        )
+        tier = self._gnss_noise_tiers[idx]
+        self._current_gnss_tier = tier
+
+        # Multiplier = tier metric stddev / base RTK-fixed stddev.
+        # The base GNSS sensor noise in env_config.yaml corresponds to
+        # RTK-fixed (~0.02 m). The multiplier scales that base noise.
+        base_stddev = 0.02  # RTK-fixed base (metres)
+        tier_stddev = float(tier.get("metric_stddev_m", base_stddev))
+        self._current_gnss_multiplier = max(1.0, tier_stddev / base_stddev)
+
+        logger.info(
+            "Episode %d: GNSS tier '%s' (%.2f m stddev, multiplier=%.1f)",
+            self._episode_id,
+            tier.get("name", "unknown"),
+            tier_stddev,
+            self._current_gnss_multiplier,
+        )
+
+    def _get_current_gnss_tier(self) -> Optional[Dict[str, Any]]:
+        """
+        @brief Return the currently sampled GNSS noise tier dict.
+        @return Tier dict with lat_stddev_deg, lon_stddev_deg, alt_stddev_m,
+                metric_stddev_m, name, weight. None if no tiers loaded.
+        """
+        return self._current_gnss_tier
+
+    # ------------------------------------------------------------------
     # Floor plan loading and bay sampling
     # ------------------------------------------------------------------
 
@@ -476,22 +582,6 @@ class CARLAParkingEnv(gym.Env):
                 self._current_layout = yaml.safe_load(fh)
             CARLAParkingEnv._layout_cache[cache_key] = self._current_layout
             logger.debug(f"Cached floor plan layout: {layout_path}")
-
-        # When asymmetric_corner is active, swap corners and landmarks with the
-        # notched polygon variants. Shallow copy so the cache is not mutated.
-        if self._asymmetric_corner and "asymmetric_corners" in self._current_layout:
-            self._current_layout = dict(self._current_layout)
-            self._current_layout["corners"] = self._current_layout[
-                "asymmetric_corners"
-            ]
-            if "asymmetric_landmarks" in self._current_layout:
-                self._current_layout["landmarks"] = self._current_layout[
-                    "asymmetric_landmarks"
-                ]
-            logger.info(
-                "Asymmetric corner active: using notched polygon (%d vertices).",
-                len(self._current_layout["corners"]),
-            )
 
         self._current_floor_plan_name = name
         logger.info(f"Loaded floor plan: {name} from {layout_path}")
@@ -626,6 +716,23 @@ class CARLAParkingEnv(gym.Env):
     # Clearance and reward
     # ------------------------------------------------------------------
 
+    def set_step_uncertainty(
+        self,
+        epistemic: float,
+        aleatoric: float,
+    ) -> None:
+        """
+        @brief Set the current step's uncertainty estimates from the policy.
+        @param epistemic: Mean epistemic uncertainty from evidential actor.
+        @param aleatoric: Mean aleatoric uncertainty from evidential actor.
+
+        Called by the evaluation loop or EvidentialPPO before each step()
+        to enable uncertainty-aware reward shaping. If never called,
+        defaults remain at 0.0 and reward shaping has no effect.
+        """
+        self._step_epistemic = epistemic
+        self._step_aleatoric = aleatoric
+
     def _compute_reward(self) -> Tuple[float, bool, bool, Dict[str, float]]:
         """
         @brief Compute reward and termination flags for the current step.
@@ -753,7 +860,7 @@ class CARLAParkingEnv(gym.Env):
             ekf_pose, _prefetched_uncertainty = self._cov_subscriber.get_latest_state()
 
         if ekf_pose is not None:
-            # Use EKF pose directly in Cartographer odom frame.
+            # Use EKF pose directly in the odom frame.
             # Both the vehicle pose and the target bay (_target_bay_odom) are
             # expressed in this frame, so mid-episode odom drift cancels in the
             # relative-target subtraction.  No world-frame transform is needed.
@@ -762,7 +869,7 @@ class CARLAParkingEnv(gym.Env):
             yaw = float(ekf_pose[2])
             # Clamp EKF velocities to physically plausible range.
             # The IMU prediction step can integrate large noise spikes
-            # before the first scan-match correction at episode start,
+            # before the first GNSS correction at episode start,
             # producing transient velocity readings in the hundreds of m/s.
             # MAX_PARKING_SPEED (15 m/s) is the translational cap; pi rad/s
             # (180 deg/s) is a generous upper bound for parking yaw rates.
@@ -877,12 +984,10 @@ class CARLAParkingEnv(gym.Env):
         _MIN_DIST = 1.0
         valid = dists >= _MIN_DIST
 
-        # Suite A only: discard rear hemisphere (x <= 0). Front-bumper-mounted
-        # 2D LiDAR is physically blocked rearward on the real robot; discarding
+        # Discard rear hemisphere (x <= 0). Front-bumper-mounted 2D LiDAR
+        # is physically blocked rearward on the real robot; discarding
         # replicates the ~270 deg FOV and removes CARLA self-returns.
-        # Suite B/C roof-mounted 3D LiDAR has full 360 deg FOV -- keep all.
-        if self._sensor_manager._sensor_suite == "suite_a":
-            valid = valid & (scan[:, 0] > 0.0)
+        valid = valid & (scan[:, 0] > 0.0)
 
         if not np.any(valid):
             self._obstacle_features_buffer[:] = 0.0
@@ -1114,7 +1219,7 @@ class CARLAParkingEnv(gym.Env):
             bp_lib = self.world.get_blueprint_library()
             self._vehicle_bp = bp_lib.filter("vehicle.bmw.grandtourer")[0]
             # The ROS bridge identifies the ego vehicle by role_name and publishes
-            # sensor data under /carla/ego_vehicle/* for Cartographer and the EKF.
+            # sensor data under /carla/ego_vehicle/* for the EKF.
             self._vehicle_bp.set_attribute("role_name", "ego_vehicle")
         vehicle_bp = self._vehicle_bp
 
@@ -1194,13 +1299,18 @@ class CARLAParkingEnv(gym.Env):
 
     def _spawn_sensors(self) -> None:
         """
-        @brief Spawn sensors for the configured suite attached to the ego vehicle.
+        @brief Spawn sensors (IMU, GNSS, 2D LiDAR, collision) on the ego vehicle.
 
-        Delegates to SensorManager.spawn(), passing the NPC controller's patrol_npc_ids
-        set by reference so the collision callback can identify patrol vehicles.
+        Delegates to SensorManager.spawn(), passing the current episode's GNSS
+        noise multiplier (sampled in reset()) and the NPC controller's
+        patrol_npc_ids set by reference so the collision callback can identify
+        patrol vehicles.
         """
         self._sensor_manager.spawn(
-            self.world, self.vehicle, self._npc_controller.patrol_npc_ids
+            self.world,
+            self.vehicle,
+            self._npc_controller.patrol_npc_ids,
+            gnss_noise_multiplier=self._current_gnss_multiplier,
         )
 
     def _wait_for_covariance(self) -> None:
@@ -1208,7 +1318,7 @@ class CARLAParkingEnv(gym.Env):
         @brief Block until all EKF inputs are present and covariance is available.
 
         Checks two conditions before allowing an episode to start:
-          1. LiDAR scan received by SensorManager (Cartographer input).
+          1. LiDAR scan received by SensorManager (obstacle detection ready).
           2. EKF state file written by CovarianceExtractorNode (EKF output).
 
         Ticks the CARLA simulation while waiting. Raises RuntimeError naming
@@ -1262,15 +1372,15 @@ class CARLAParkingEnv(gym.Env):
         self, tx: float, ty: float, cos_r: float, sin_r: float, r: float
     ) -> None:
         """
-        @brief Project the world-frame target bay into Cartographer odom frame.
+        @brief Project the world-frame target bay into the EKF odom frame.
 
         The forward transform is p_world = R * p_odom + t.
         The inverse (world -> odom) is p_odom = R^T * (p_world - t),
         where R^T = [[cos_r, sin_r], [-sin_r, cos_r]].
 
         Storing the target in odom frame means both the EKF pose estimate and
-        the target are expressed in the same (drifting) frame.  Mid-episode
-        odom drift therefore cancels in the relative-target subtraction.
+        the target are expressed in the same frame. Mid-episode odom drift
+        therefore cancels in the relative-target subtraction.
 
         @param tx: World translation X after rotation (from _ekf_odom_offset).
         @param ty: World translation Y after rotation (from _ekf_odom_offset).
@@ -1296,8 +1406,8 @@ class CARLAParkingEnv(gym.Env):
 
         Applies the cached transform to the current EKF pose and compares
         against the CARLA ground-truth spawn position. If the reconstruction
-        error exceeds 2 m the transform is considered stale (Cartographer
-        restarted and reset its odom frame origin).
+        error exceeds 2 m the transform is considered stale (the EKF odom
+        frame origin may have shifted, e.g. after a navsat_transform datum reset).
 
         @return True if the transform should be recomputed.
         """
@@ -1317,21 +1427,19 @@ class CARLAParkingEnv(gym.Env):
         if err > 2.0:
             logger.warning(
                 f"Odom transform stale (recon_err={err:.2f}m > 2.0m) -- "
-                "Cartographer may have restarted. Recalibrating."
+                "EKF odom frame may have shifted. Recalibrating."
             )
             return True
         return False
 
     def _calibrate_ekf_frame_offset(self) -> None:
         """
-        @brief Compute the full 2D rigid body transform from Cartographer odom
-               frame to CARLA world frame and store it in self._ekf_odom_offset.
+        @brief Compute the full 2D rigid body transform from EKF odom frame
+               to CARLA world frame and store it in self._ekf_odom_offset.
 
-        Cartographer's odom x-axis aligns with the vehicle's heading at
-        Cartographer startup. For a spawn at yaw=0 this matches CARLA world x,
-        but for yaw=90 the odom x-axis points along CARLA world y -- so a
-        pure translation offset is insufficient. A rotation must be applied
-        first to bring odom coordinates into CARLA world axis alignment.
+        The navsat_transform_node creates an odom frame aligned with UTM
+        coordinates. This may be rotated relative to CARLA world coordinates,
+        so a rotation + translation is needed (not just a pure translation).
 
         The transform is: p_world = R * p_odom + t
         where R is a 2D rotation matrix by angle `r = world_yaw - ekf_yaw`
@@ -1352,8 +1460,8 @@ class CARLAParkingEnv(gym.Env):
         tick_interval = 0.05  # 20 Hz
 
         # Convergence detection: the vehicle is stationary at episode reset,
-        # so the EKF velocity should be near zero once Cartographer has matched
-        # the map and the IMU initialisation transient has settled.
+        # so the EKF velocity should be near zero once navsat_transform has
+        # produced a stable odom frame and the IMU transient has settled.
         _VEL_CONVERGED = 0.5  # m/s
 
         while True:
@@ -1383,8 +1491,8 @@ class CARLAParkingEnv(gym.Env):
             ekf_vy = float(ekf_pose[4])
 
             # Rotation angle: odom frame -> CARLA world frame.
-            # Cartographer odom x-axis points along the vehicle heading at
-            # startup, so the rotation is world_yaw - ekf_yaw.
+            # The navsat_transform odom x-axis may not align with CARLA world x,
+            # so the rotation is world_yaw - ekf_yaw.
             r = math.atan2(
                 math.sin(world_yaw - ekf_yaw),
                 math.cos(world_yaw - ekf_yaw),
@@ -1479,6 +1587,10 @@ class CARLAParkingEnv(gym.Env):
         self.steps = 0
         self._trajectory_buffer.clear()
 
+        # Sample GNSS noise tier for this episode (RTK fix-state variation).
+        # Must happen before _spawn_sensors() so the multiplier is available.
+        self._sample_gnss_noise_tier()
+
         # Connect to CARLA on first reset
         if self.client is None:
             self._connect_to_carla()
@@ -1558,8 +1670,8 @@ class CARLAParkingEnv(gym.Env):
         if self._include_covariance and self._cov_subscriber is not None:
             self._cov_subscriber.invalidate()
 
-        # Publish spawn pose to /initialpose so Cartographer pure localisation
-        # can converge quickly at the start of each episode. Safe no-op in SLAM mode.
+        # Publish spawn pose to /initialpose so the EKF can reset its state
+        # at the start of each episode.
         if (
             self._include_covariance
             and self._cov_subscriber is not None
@@ -1569,6 +1681,23 @@ class CARLAParkingEnv(gym.Env):
             sy = float(self._chosen_spawn.get("y", 0.0))
             syaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
             self._cov_subscriber.publish_initial_pose(sx, sy, syaw)
+
+        # Signal GNSS noise tier to the ros2-bridge GnssNoiseRelayNode.
+        # The relay adds extra Gaussian noise to CARLA GNSS output and stamps
+        # position_covariance to match the sampled RTK fix state.
+        if (
+            self._include_covariance
+            and self._cov_subscriber is not None
+            and self._gnss_noise_tiers
+        ):
+            tier = self._get_current_gnss_tier()
+            if tier is not None:
+                self._cov_subscriber.publish_gnss_noise_config(
+                    lat_stddev_deg=float(tier.get("lat_stddev_deg", 0.0)),
+                    lon_stddev_deg=float(tier.get("lon_stddev_deg", 0.0)),
+                    alt_stddev_m=float(tier.get("alt_stddev_m", 0.0)),
+                    metric_stddev_m=float(tier.get("metric_stddev_m", 0.02)),
+                )
 
         # Spawn all static lot actors (cones + parked vehicles) then NPCs
         self._spawn_lot_statics()
@@ -1584,14 +1713,14 @@ class CARLAParkingEnv(gym.Env):
         if self._include_covariance:
             self._wait_for_covariance()
             if self._episode_id == 1 or self._odom_transform_stale():
-                # First episode, or Cartographer restarted (odom frame reset):
-                # full calibration -- wait for EKF to converge and recompute
-                # the odom->world rigid body transform.
+                # First episode, or EKF odom frame reset: full calibration --
+                # wait for EKF to converge and recompute the odom->world
+                # rigid body transform.
                 self._calibrate_ekf_frame_offset()
             else:
                 # Subsequent episodes: odom frame is stable across resets
-                # (CARLA world is not reloaded -- vehicle is teleported -- so the
-                # sim clock is monotonic and Cartographer never resets its origin).
+                # (CARLA world is not reloaded -- vehicle is teleported -- so
+                # the sim clock is monotonic and the EKF odom origin persists).
                 # The rigid body transform R,t is unchanged regardless of spawn
                 # point -- only the target bay projection needs recomputing.
                 tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
@@ -1680,8 +1809,8 @@ class CARLAParkingEnv(gym.Env):
             control.steer = float(np.clip(action[0], -1.0, 1.0))
             control.brake = float(max(-longitudinal, 0.0))
 
-            # Cut throttle when speed limit is exceeded to keep Cartographer
-            # scan-matching stable (fast spins cause TF jumps -> EKF divergence).
+            # Cut throttle when speed limit is exceeded. Appropriate for
+            # parking lot manoeuvres (< 3 m/s).
             vel = self.vehicle.get_velocity()
             current_speed = math.sqrt(vel.x ** 2 + vel.y ** 2)
             if current_speed >= self._max_ego_speed_ms:

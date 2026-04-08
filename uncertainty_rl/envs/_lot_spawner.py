@@ -112,8 +112,6 @@ class LotSpawner:
         marker_blueprint: str,
         bay_occupancy_min: float,
         bay_occupancy_max: float,
-        spawn_landmarks: bool = True,
-        landmark_blueprint: str = "static.prop.streetbarrier",
     ) -> None:
         """
         @brief Construct LotSpawner with fixed config parameters.
@@ -125,17 +123,11 @@ class LotSpawner:
                with parked cars [0, 1]. Resampled each episode.
         @param bay_occupancy_max: Maximum fraction of non-target bays to fill
                with parked cars [0, 1]. Resampled each episode.
-        @param spawn_landmarks: If True, spawn asymmetric jersey barriers at
-               positions defined in the layout YAML to break lot symmetry for
-               Cartographer scan matching.
-        @param landmark_blueprint: CARLA blueprint ID for landmark props.
         """
         self._cone_spacing = cone_spacing
         self._marker_blueprint = marker_blueprint
         self._bay_occupancy_min = bay_occupancy_min
         self._bay_occupancy_max = bay_occupancy_max
-        self._spawn_landmarks = spawn_landmarks
-        self._landmark_blueprint = landmark_blueprint
 
         # Per-episode occupancy rate; resampled in spawn_static_vehicles().
         self._bay_occupancy_rate: float = bay_occupancy_max
@@ -146,9 +138,7 @@ class LotSpawner:
 
         # Cones (perimeter + obstacle) are layout-specific and fixed for the
         # lifetime of a floor plan.  Caching them avoids destroying and
-        # re-spawning ~60-80 actors every episode reset, which would otherwise
-        # cause a large burst of bridge callbacks that temporarily starves
-        # Cartographer of LiDAR data.
+        # re-spawning ~60-80 actors every episode reset.
         self._cached_cones_layout: str = ""
         self._cached_cone_positions: List[Tuple[float, float]] = []
 
@@ -163,7 +153,6 @@ class LotSpawner:
         # Easter-egg motorcycle blueprints (None when CARLA unavailable)
         self._ninja_bp: Optional[Any] = None
         self._yzf_bp: Optional[Any] = None
-        self._landmark_bp: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Per-reset setup
@@ -201,8 +190,6 @@ class LotSpawner:
         self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
         self._yzf_bp = bp_lib.find("vehicle.yamaha.yzf")
         self._cone_bp = bp_lib.find(self._marker_blueprint)
-        if self._spawn_landmarks:
-            self._landmark_bp = bp_lib.find(self._landmark_blueprint)
 
     # ------------------------------------------------------------------
     # Spawning
@@ -222,8 +209,7 @@ class LotSpawner:
         Perimeter and obstacle cones are cached across episodes for the same
         floor plan -- they are layout-fixed and do not need to be destroyed and
         re-spawned every reset.  Only parked vehicles are re-randomised each
-        episode.  This avoids the large bridge callback burst that would
-        otherwise temporarily starve Cartographer of LiDAR data.
+        episode.
 
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict.
@@ -271,12 +257,6 @@ class LotSpawner:
             cone_pending.extend(
                 self._spawn_obstacle_cones(world, current_layout, floor_contact_z)
             )
-            if self._spawn_landmarks:
-                cone_pending.extend(
-                    self._spawn_landmarks_from_layout(
-                        world, current_layout, floor_contact_z
-                    )
-                )
 
             self._settle_pending(world, cone_pending)
 
@@ -382,19 +362,11 @@ class LotSpawner:
             ):
                 break
 
-    # Radius within which a perimeter cone is suppressed by a nearby landmark.
-    # A jersey barrier is ~1.5 m long; suppressing cones within 1.5 m avoids
-    # visual overlap while keeping the perimeter dense elsewhere.
-    _LANDMARK_REPLACE_RADIUS: float = 1.5
-
     def _spawn_perimeter_cones(
         self, world: Any, current_layout: Dict[str, Any], floor_contact_z: float
     ) -> List[Tuple[Any, float, float, float]]:
         """
         @brief Spawn static markers along the lot perimeter polygon with physics ON.
-
-        Cone positions that fall within ``_LANDMARK_REPLACE_RADIUS`` of an
-        asymmetric landmark are skipped -- the landmark replaces them.
 
         Returns pending (actor, x, y, yaw) tuples for the shared settle loop in
         spawn_all().  Physics is left ON so gravity drops each cone to the true
@@ -415,26 +387,12 @@ class LotSpawner:
         ]
         cone_positions = _interpolate_cone_positions(corners, self._cone_spacing)
 
-        # Build landmark position list for cone suppression.
-        landmark_xy: List[Tuple[float, float]] = [
-            (float(lm["x"]), float(lm["y"]))
-            for lm in current_layout.get("landmarks", [])
-        ]
-        replace_r = self._LANDMARK_REPLACE_RADIUS
-
         # Spawn slightly above the ego CoM z so the cone clears the surface
         # before physics drops it flush to the ground.
         z = floor_contact_z + self._CONE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
         for cx, cy, yaw_deg in cone_positions:
-            # Skip cone positions where a landmark will be placed instead.
-            if any(
-                math.hypot(cx - lx, cy - ly) < replace_r
-                for lx, ly in landmark_xy
-            ):
-                continue
-
             cone = world.try_spawn_actor(
                 self._cone_bp,
                 carla.Transform(
@@ -507,52 +465,6 @@ class LotSpawner:
             "Spawned obstacle cones for %d interior obstacle(s) (settling).",
             len(obstacles),
         )
-        return pending
-
-    def _spawn_landmarks_from_layout(
-        self, world: Any, current_layout: Dict[str, Any], floor_contact_z: float
-    ) -> List[Tuple[Any, float, float, float]]:
-        """
-        @brief Spawn asymmetric landmark props at positions from the layout YAML.
-
-        Landmarks (jersey barriers by default) break the lot's rotational and
-        reflective symmetry so Cartographer scan matching converges to a single
-        hypothesis.  Positions are pre-computed by ``compute_landmarks()`` in
-        ``scripts/layouts/common.py`` and stored in the layout YAML under the
-        ``landmarks`` key.
-
-        Returns pending (actor, x, y, yaw) tuples for the shared settle loop
-        in ``spawn_all()``.
-
-        @param world: Live carla.World handle.
-        @param current_layout: Parsed floor plan YAML dict with 'landmarks' key.
-        @param floor_contact_z: Ego CoM z -- used as the spawn height reference.
-        @return List of (actor, x, y, yaw) for each successfully spawned landmark.
-        """
-        landmarks = current_layout.get("landmarks", [])
-        if not landmarks or self._landmark_bp is None:
-            return []
-
-        z = floor_contact_z + self._CONE_Z_OFFSET
-        pending: List[Tuple[Any, float, float, float]] = []
-
-        for lm in landmarks:
-            lx = float(lm["x"])
-            ly = float(lm["y"])
-            yaw_deg = float(lm.get("yaw_deg", 0.0))
-
-            actor = world.try_spawn_actor(
-                self._landmark_bp,
-                carla.Transform(
-                    carla.Location(x=lx, y=ly, z=z),
-                    carla.Rotation(yaw=yaw_deg),
-                ),
-            )
-            if actor is not None:
-                actor.set_simulate_physics(True)
-                pending.append((actor, lx, ly, yaw_deg))
-
-        logger.debug("Spawned %d asymmetric landmarks (settling).", len(pending))
         return pending
 
     def _spawn_static_vehicles(

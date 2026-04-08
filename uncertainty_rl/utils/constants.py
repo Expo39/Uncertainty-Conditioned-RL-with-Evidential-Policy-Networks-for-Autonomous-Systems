@@ -80,7 +80,7 @@ ACTION_DIM = 2
 # Maximum physically plausible vehicle speed in a parking lot (m/s).
 # Used to clamp EKF velocity observations during the IMU initialisation
 # transient at episode reset, where integrated IMU noise can produce
-# unrealistic velocity spikes before the first scan-match correction.
+# unrealistic velocity spikes before the first GNSS correction.
 MAX_PARKING_SPEED = 15.0
 
 # Minimum clearance to any obstacle before episode terminates (metres)

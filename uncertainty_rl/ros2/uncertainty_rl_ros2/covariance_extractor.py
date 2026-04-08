@@ -17,8 +17,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import rclpy
-from cartographer_ros_msgs.srv import FinishTrajectory, StartTrajectory
-from geometry_msgs.msg import Pose, PoseWithCovarianceStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -47,7 +46,7 @@ class CovarianceExtractorNode(Node):
     # File-based /initialpose signal written by the training container.
     # The training container writes {seq, x, y, yaw} in CARLA world frame.
     # This node watches the file and publishes /initialpose locally so
-    # Cartographer (same Jazzy DDS domain) receives it.
+    # the EKF (same Jazzy DDS domain) receives it.
     _DEFAULT_INITIAL_POSE_PATH: str = "/workspace/outputs/initial_pose.json"
 
     # Log every N odometry callbacks (~100 at 20 Hz = every 5 s).
@@ -121,7 +120,7 @@ class CovarianceExtractorNode(Node):
         self._write_seq: int = 0
 
         # Ensure the outputs directory exists before the first file write.
-        # The Dockerfile creates /workspace/configs/maps but not /workspace/outputs;
+        # The container may not have /workspace/outputs on first run;
         # this guard prevents a FileNotFoundError on the first odom_callback.
         # Uses the instance-specific path so parallel workers each create their
         # own output directory if it differs from the default.
@@ -138,7 +137,7 @@ class CovarianceExtractorNode(Node):
         # --- /initialpose file watcher -----------------------------------------
         # The training container (Humble) writes initial_pose.json at episode
         # reset.  This node watches the file and publishes /initialpose locally
-        # so Cartographer (same Jazzy DDS domain) can converge quickly.
+        # so the EKF (same Jazzy DDS domain) can converge quickly.
         initial_pose_path: str = os.environ.get(
             "INITIAL_POSE_FILE", self._DEFAULT_INITIAL_POSE_PATH
         )
@@ -152,39 +151,11 @@ class CovarianceExtractorNode(Node):
             0.1, self._check_initial_pose_file
         )
 
-        # --- Cartographer trajectory restart -----------------------------------
-        # Cartographer does not handle /initialpose. After the vehicle teleports
-        # at episode reset, the old trajectory's live submaps are stale (built at
-        # the wrong position). Calling finish_trajectory + start_trajectory
-        # discards them and forces Cartographer to re-initialise against the
-        # frozen pbstream.
-        self._carto_finish_cli = self.create_client(
-            FinishTrajectory, "/finish_trajectory"
-        )
-        self._carto_start_cli = self.create_client(
-            StartTrajectory, "/start_trajectory"
-        )
-        # Cartographer starts trajectory 0 at launch; first episode reset
-        # finishes it and starts trajectory 1.  Incremented optimistically
-        # in _restart_cartographer_trajectory.
-        self._carto_trajectory_id: int = 0
-        # Lua config directory and basename inside the ros2-bridge container.
-        # The basename is passed from the launch file so it matches the
-        # Cartographer node's actual config (suite + mode selection).
-        self.declare_parameter(
-            "cartographer_config_basename", "cartographer_config_loc.lua"
-        )
-        self._carto_config_dir: str = "/workspace/configs/cartographer"
-        self._carto_config_basename: str = str(
-            self.get_parameter("cartographer_config_basename").value
-        )
-
         self.get_logger().info(
             f"CovarianceExtractor: {odom_topic} -> {covariance_topic} "
             f"at {publish_rate} Hz "
             f"(twist_in_odom_frame={self._twist_in_odom_frame}), "
-            f"initial_pose_file={self._initial_pose_path}, "
-            f"carto_config={self._carto_config_basename}"
+            f"initial_pose_file={self._initial_pose_path}"
         )
 
     def odom_callback(self, msg: Odometry) -> None:
@@ -199,7 +170,7 @@ class CovarianceExtractorNode(Node):
         # -- Pose ---------------------------------------------------------------
         x = msg.pose.pose.position.x
         # Negate y: CARLA uses a left-handed coordinate system (y increases
-        # rightward / southward) while ROS/Cartographer uses right-handed
+        # rightward / southward) while ROS uses right-handed
         # (y increases leftward / northward). Negating here ensures all
         # downstream consumers (training container, calibration, _get_state)
         # work in CARLA world-frame convention consistently.
@@ -317,18 +288,13 @@ class CovarianceExtractorNode(Node):
 
     def _check_initial_pose_file(self) -> None:
         """
-        @brief Poll initial_pose.json and restart Cartographer trajectory.
+        @brief Poll initial_pose.json and publish /initialpose for EKF reset.
 
         The training container writes initial_pose.json at episode reset with
-        the vehicle spawn pose in CARLA world frame.  This method reads the
+        the vehicle spawn pose in CARLA world frame. This method reads the
         file, checks for a new sequence number, converts from CARLA (left-hand)
-        to ROS (right-hand) frame, publishes /initialpose, and restarts the
-        Cartographer trajectory to discard stale live submaps from the previous
-        episode.
-
-        @note Trajectory restart is skipped during SLAM mode (cartographer_config.lua)
-              since mapping data must be preserved. Only active during pure localisation
-              mode (*_loc.lua configs).
+        to ROS (right-hand) frame, and publishes /initialpose so the EKF can
+        reset its state at the start of each episode.
         """
         try:
             with open(self._initial_pose_path, "r") as f:
@@ -347,7 +313,7 @@ class CovarianceExtractorNode(Node):
         ros_yaw = -float(data["yaw"])
 
         msg = PoseWithCovarianceStamped()
-        msg.header.frame_id = "map"
+        msg.header.frame_id = "odom"
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.pose.pose.position.x = x
         msg.pose.pose.position.y = ros_y
@@ -360,74 +326,6 @@ class CovarianceExtractorNode(Node):
         self.get_logger().info(
             f"Published /initialpose: x={x:.2f} y={ros_y:.2f} "
             f"yaw={math.degrees(ros_yaw):.1f}deg (seq={seq})"
-        )
-
-        # -- Restart Cartographer trajectory ------------------------------------
-        # Only in pure localisation mode (*_loc.lua). SLAM mode preserves mapping.
-        is_slam_mode = "loc" not in self._carto_config_basename
-        if is_slam_mode:
-            self.get_logger().debug(
-                "SLAM mode detected; skipping trajectory restart to preserve mapping"
-            )
-            return
-
-        # Finish the current trajectory (discards live submaps), then start a
-        # new one with the spawn pose so Cartographer re-initialises against the
-        # frozen pbstream.
-        self._restart_cartographer_trajectory(x, ros_y, ros_yaw)
-
-    def _restart_cartographer_trajectory(
-        self, x: float, ros_y: float, ros_yaw: float
-    ) -> None:
-        """
-        @brief Finish old trajectory and start a new one at the given pose.
-
-        Fire-and-forget: sends both service requests without waiting for
-        responses.  Cartographer processes them in order internally.
-        The trajectory ID is incremented optimistically -- Cartographer
-        assigns sequential IDs (0, 1, 2, ...) so this stays in sync.
-
-        @param x: Spawn x in ROS frame (metres).
-        @param ros_y: Spawn y in ROS frame (metres).
-        @param ros_yaw: Spawn yaw in ROS frame (radians).
-        """
-        if not self._carto_finish_cli.service_is_ready():
-            self.get_logger().warn(
-                "/finish_trajectory service not ready -- skipping restart"
-            )
-            return
-        if not self._carto_start_cli.service_is_ready():
-            self.get_logger().warn(
-                "/start_trajectory service not ready -- skipping restart"
-            )
-            return
-
-        # -- Finish current trajectory (discards live submaps) --
-        finish_req = FinishTrajectory.Request()
-        finish_req.trajectory_id = self._carto_trajectory_id
-        self._carto_finish_cli.call_async(finish_req)
-        self.get_logger().info(
-            f"Finishing Cartographer trajectory {self._carto_trajectory_id}"
-        )
-
-        # -- Start new trajectory with initial pose --
-        # Cartographer assigns IDs sequentially; increment optimistically.
-        self._carto_trajectory_id += 1
-
-        start_req = StartTrajectory.Request()
-        start_req.configuration_directory = self._carto_config_dir
-        start_req.configuration_basename = self._carto_config_basename
-        start_req.use_initial_pose = True
-        start_req.initial_pose = Pose()
-        start_req.initial_pose.position.x = x
-        start_req.initial_pose.position.y = ros_y
-        start_req.initial_pose.orientation.z = math.sin(ros_yaw / 2.0)
-        start_req.initial_pose.orientation.w = math.cos(ros_yaw / 2.0)
-        start_req.relative_to_trajectory_id = 0
-        self._carto_start_cli.call_async(start_req)
-        self.get_logger().info(
-            f"Starting Cartographer trajectory {self._carto_trajectory_id} "
-            f"at ({x:.2f}, {ros_y:.2f}, {math.degrees(ros_yaw):.1f}deg)"
         )
 
 

@@ -8,8 +8,8 @@ to the appropriate inspector class from :mod:`scripts.inspect._inspectors`.
 Class hierarchy (defined in ``_inspectors.py``):
   _Inspector          -- CARLA connection, world tick loop, spectator placement
     LayoutInspector   -- lot bay outlines, spawn/patrol/pedestrian overlays
-      SensorInspector -- sensor mount dots + LiDAR/camera FOV arcs
-    LiveInspector     -- real spawned sensors: LiDAR dots or camera view
+      SensorInspector -- sensor mount dots + LiDAR FOV arcs
+    LiveInspector     -- real spawned 2D LiDAR: scan points as debug dots
     DryRunInspector   -- full training pipeline, random actions, no model
 
 
@@ -17,28 +17,23 @@ Drawing helpers (free functions) are in :mod:`scripts.inspect._drawing`.
 
 Usage (via Make targets):
   make docker-inspect INSPECT_LAYOUT=rectangle          # Layout only
-  make docker-inspect-sensors INSPECT_SUITE=suite_a     # Sensors on layout
-  make docker-inspect-sensors INSPECT_SUITE=suite_b INSPECT_LAYOUT=trapezoid
-  make docker-inspect-live INSPECT_SUITE=suite_a        # Live LiDAR feed
-  make docker-inspect-live INSPECT_SUITE=suite_c        # Live camera view (default)
-  make docker-inspect-live INSPECT_SUITE=suite_c INSPECT_SENSOR=lidar  # LiDAR override
+  make docker-inspect-sensors                           # Sensors on layout
+  make docker-inspect-sensors INSPECT_LAYOUT=trapezoid
+  make docker-inspect-live                              # Live LiDAR feed
   make docker-inspect-dryrun INSPECT_LAYOUT=rectangle   # Full pipeline, random actions
 
 Or directly:
   python -m scripts.inspect.lot_inspector --mode layout --layout trapezoid
-  python -m scripts.inspect.lot_inspector --mode sensors --suite suite_a \
-      --layout rectangle
-  python -m scripts.inspect.lot_inspector --mode live     --suite suite_a
+  python -m scripts.inspect.lot_inspector --mode sensors --layout rectangle
+  python -m scripts.inspect.lot_inspector --mode live
   python -m scripts.inspect.lot_inspector --mode dryrun  --layout rectangle
 
 Arguments:
   --mode               layout | sensors | live | dryrun (default: sensors)
   --layout             rectangle | trapezoid | irregular_a
                        (default: rectangle)
-  --suite              suite_a | suite_b | suite_c (default: suite_a)
   --view               birds_eye | side | front
                        (default: birds_eye, sensors mode)
-  --sensor             lidar | camera (live mode, suite_c only)
   --host               CARLA server hostname (default: carla-server-demo)
   --port               CARLA server port (default: 2100)
   --duration           Seconds to run (default: 300)
@@ -91,7 +86,6 @@ def _build_env(
     layout: str,
     train_cfg: Dict[str, Any],
     sensors_cfg: Optional[Dict[str, Any]] = None,
-    suite: Optional[str] = None,
     full_lot: bool = True,
 ) -> CARLAParkingEnv:
     """
@@ -102,7 +96,6 @@ def _build_env(
     @param layout: Floor plan name ('rectangle', 'trapezoid', 'irregular_a').
     @param train_cfg: Full train_config.yaml dict.
     @param sensors_cfg: Optional sensors config dict (for sensor mode).
-    @param suite: Sensor suite name (for sensor mode).
     @param full_lot: If True spawn full lot (bays, NPCs, cones).  If False,
                      suppress NPCs/cones to keep scene clean for sensor mode.
     @return Pre-reset CARLAParkingEnv instance.
@@ -127,28 +120,10 @@ def _build_env(
         town=train_cfg.get("town", "FlatPlane"),
         parking_scenarios_config=scenarios,
         carla_sensors_config=sensors_cfg,
-        sensor_suite=suite,
         include_covariance=False,
         include_obstacle_obs=False,
-        asymmetric_corner=train_cfg.get("asymmetric_corner", False),
     )
     return env
-
-
-def _resolve_live_sensor(suite: str, sensor_arg: str) -> str:
-    """
-    @brief Resolve which sensor to display in live mode.
-
-    suite_a / suite_b always use lidar (no camera available).
-    suite_c defaults to camera unless the user explicitly passes --sensor lidar.
-
-    @param suite: Sensor suite name ('suite_a', 'suite_b', 'suite_c').
-    @param sensor_arg: Value of the --sensor CLI argument.
-    @return 'camera' or 'lidar'.
-    """
-    if suite == "suite_c" and sensor_arg != "lidar":
-        return "camera"
-    return "lidar"
 
 
 def main() -> None:
@@ -167,7 +142,7 @@ def main() -> None:
             "Inspector mode: 'layout' = lot geometry only; "
             "'sensors' = sensors on lot; "
             "'live' = real spawned sensors with live output "
-            "(LiDAR debug dots, or camera spectator view for suite_c); "
+            "(LiDAR debug dots); "
             "'dryrun' = full training pipeline with random actions (no model), "
             "spectator follows ego, EKF covariance printed to console. "
             "Default: sensors."
@@ -180,12 +155,6 @@ def main() -> None:
         help="Floor plan to spawn (default: rectangle).",
     )
     parser.add_argument(
-        "--suite",
-        default="suite_a",
-        choices=["suite_a", "suite_b", "suite_c"],
-        help="Sensor suite to visualise (sensors mode only, default: suite_a).",
-    )
-    parser.add_argument(
         "--view",
         default="birds_eye",
         choices=["birds_eye", "side", "front"],
@@ -195,18 +164,6 @@ def main() -> None:
             "'side' = left-profile showing sensor mount heights; "
             "'front' = front-profile showing sensor lateral positions.  "
             "Not used in live mode."
-        ),
-    )
-    parser.add_argument(
-        "--sensor",
-        default="lidar",
-        choices=["lidar", "camera"],
-        help=(
-            "Active sensor for live mode, suite_c only: "
-            "'lidar' = birds-eye + red LiDAR debug dots; "
-            "'camera' = CARLA spectator locked to camera mount (no dots).  "
-            "suite_c defaults to camera; suite_a/b always use lidar.  "
-            "Default: lidar."
         ),
     )
     parser.add_argument(
@@ -282,10 +239,7 @@ def main() -> None:
         end="",
     )
     if args.mode == "sensors":
-        print(f"  |  Suite: {args.suite}  |  View: {args.view}", end="")
-    elif args.mode == "live":
-        active_sensor = _resolve_live_sensor(args.suite, args.sensor)
-        print(f"  |  Suite: {args.suite}  |  Sensor: {active_sensor}", end="")
+        print(f"  |  View: {args.view}", end="")
     print()
 
     if args.mode == "layout":
@@ -313,7 +267,6 @@ def main() -> None:
 
     elif args.mode == "sensors":
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
-        sensors_cfg["sensor_suite"] = args.suite
 
         env = _build_env(
             args.host,
@@ -321,7 +274,6 @@ def main() -> None:
             args.layout,
             train_cfg,
             sensors_cfg=sensors_cfg,
-            suite=args.suite,
             # Side/front views: ego only. Birds-eye: full lot for context.
             full_lot=(args.view == "birds_eye"),
         )
@@ -332,16 +284,15 @@ def main() -> None:
             sys.exit(1)
 
         inspector = SensorInspector(
-            env, args.duration, args.suite, train_cfg, args.view, args.zoom
+            env, args.duration, train_cfg, args.view, args.zoom,
         )
         inspector.place_spectator()  # type: ignore[attr-defined]
         print("Layout overlays:")
         print("  blue=perpendicular | yellow=angled | violet=parallel | green=TARGET")
         print("Sensor overlays:")
-        print("  yellow=IMU | cyan=2D LiDAR | green=3D LiDAR | orange=RGB camera")
+        print("  yellow=IMU | cyan=2D LiDAR | magenta=GNSS")
         print("FOV arcs:")
-        print("  light-blue arc = 270 deg (Suite A) | green ring = 360 deg (Suite B/C)")
-        print("  orange arc = 90 deg camera (Suite C)")
+        print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
         scenarios = dict(train_cfg.get("parking_scenarios", {}))
@@ -353,7 +304,6 @@ def main() -> None:
             }
         }
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
-        sensors_cfg["sensor_suite"] = "suite_a"
 
         env = CARLAParkingEnv(
             carla_host=args.host,
@@ -362,12 +312,11 @@ def main() -> None:
             parking_scenarios_config=scenarios,
             carla_sensors_config=sensors_cfg,
             ros2_config=train_cfg.get("ros2", {}),
-            sensor_suite="suite_a",
             include_covariance=True,
             include_obstacle_obs=True,
             max_steps=train_cfg.get("max_steps", 1000),
             max_ego_speed_ms=train_cfg.get("max_ego_speed_ms", 6.0),
-            asymmetric_corner=train_cfg.get("asymmetric_corner", False),
+            gnss_noise_profiles_path=train_cfg.get("gnss_noise_profiles", None),
         )
         env.reset()
         if env.world is None or env.vehicle is None:
@@ -398,9 +347,6 @@ def main() -> None:
 
     else:  # live
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
-        sensors_cfg["sensor_suite"] = args.suite
-
-        live_sensor = _resolve_live_sensor(args.suite, args.sensor)
 
         env = _build_env(
             args.host,
@@ -408,8 +354,7 @@ def main() -> None:
             args.layout,
             train_cfg,
             sensors_cfg=sensors_cfg,
-            suite=args.suite,
-            full_lot=True,  # Spawn lot so LiDAR / camera has scene context
+            full_lot=True,  # Spawn lot so LiDAR has scene context
         )
         env.reset()
         if env.world is None or env.vehicle is None:
@@ -418,14 +363,11 @@ def main() -> None:
             sys.exit(1)
 
         inspector = LiveInspector(
-            env, args.duration, args.suite, train_cfg, live_sensor
+            env, args.duration, train_cfg
         )
         inspector.place_spectator()  # type: ignore[attr-defined]
         print("Live sensor mode:")
-        if live_sensor == "camera":
-            print("  RGB camera -- CARLA spectator locked to camera mount position.")
-        else:
-            print("  LiDAR hit points -> red debug dots in CARLA world.")
+        print("  LiDAR hit points -> red debug dots in CARLA world.")
 
     try:
         inspector.run()

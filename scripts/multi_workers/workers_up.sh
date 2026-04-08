@@ -15,7 +15,7 @@
 #
 # Examples:
 #   bash scripts/multi_workers/workers_up.sh
-#   CARTOGRAPHER_MODE=loc bash scripts/multi_workers/workers_up.sh 2
+#   bash scripts/multi_workers/workers_up.sh 2
 
 set -euo pipefail
 

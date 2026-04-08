@@ -68,9 +68,6 @@ services:
       - PYTHONUNBUFFERED=1
       - CARLA_HOST=carla-server-0
       - CARLA_PORT=2000
-      - CARTOGRAPHER_MODE=${CARTOGRAPHER_MODE:-loc}
-      - CARTOGRAPHER_MAP=${CARTOGRAPHER_MAP:-}
-      - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
     networks:
       - uncertainty-rl-network
     volumes:
