@@ -151,7 +151,7 @@ services:
 
   # Sensor inspector - draws sensor mount and FOV overlays on the parking lot.
   # Uses lot_inspector.py in sensors mode.
-  # Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle]
+  # Usage: make docker-inspect-sensors [INSPECT_LAYOUT=rectangle]
   #        [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
   training-inspect-sensors:
     build:
@@ -183,7 +183,6 @@ services:
     command: >
       python scripts/inspect/lot_inspector.py
       --mode sensors
-      --suite ${SUITE:-suite_a}
       --layout ${LAYOUT:-rectangle}
       --view ${VIEW:-birds_eye}
       --zoom ${ZOOM:-close}
@@ -198,11 +197,9 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Live sensor inspector - spawns real CARLA sensors on the ego vehicle and
-  # streams their output live: LiDAR hit points as red debug dots (suite_a/b),
-  # or CARLA spectator locked to the camera mount (suite_c default).
-  # Usage: make docker-inspect-live [INSPECT_SUITE=suite_a] [INSPECT_LAYOUT=rectangle]
-  #        [INSPECT_SENSOR=lidar|camera]
+  # Live sensor inspector - spawns a real 2D LiDAR on the ego vehicle and
+  # streams scan points as red debug dots in the CARLA world.
+  # Usage: make docker-inspect-live [INSPECT_LAYOUT=rectangle]
   training-inspect-live:
     build:
       context: .
@@ -235,9 +232,7 @@ services:
     command: >
       python scripts/inspect/lot_inspector.py
       --mode live
-      --suite ${SUITE:-suite_a}
       --layout ${LAYOUT:-rectangle}
-      --sensor ${SENSOR:-lidar}
       --host carla-server-demo
       --port 2100
       --duration 300
@@ -268,9 +263,6 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CARLA_HOST=carla-server-demo
       - CARLA_PORT=2100
-      - SENSOR_SUITE=${SENSOR_SUITE:-suite_a}
-      - CARTOGRAPHER_MODE=${CARTOGRAPHER_MODE:-loc}
-      - CARTOGRAPHER_MAP=${CARTOGRAPHER_MAP:-}
     depends_on:
       carla-server-demo:
         condition: service_healthy
@@ -278,7 +270,6 @@ services:
       - uncertainty-rl-network
     volumes:
       - ./configs:/workspace/configs:ro
-      - ./configs/maps:/workspace/configs/maps:rw
       - ./logs/ros2:/workspace/logs:rw
       - ./outputs:/workspace/outputs:rw
       - ./uncertainty_rl/ros2:/workspace/src/uncertainty_rl_ros2:ro

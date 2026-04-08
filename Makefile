@@ -4,13 +4,13 @@
 .PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs
-.PHONY: generate-layouts plot-mapping-waypoints visualise eval-visualise-2d docker-eval-visualise-3d
+.PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
-.PHONY: docker-map docker-train-loc docker-train-loc-short docker-tune
+.PHONY: docker-train docker-train-short docker-tune
 
 VENV        := .venv
 PYTHON      := $(VENV)/bin/python3
@@ -24,15 +24,6 @@ DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose
 DOCKER_COMPOSE_WORKERS := docker compose -f docker-compose.env_workers.yml
 
 LAYOUT       ?= rectangle
-MAP_LOOPS    ?= 6
-MAP_UNIDIR   ?= true
-SENSOR_SUITE := $(shell grep '^sensor_suite:' $(CONFIG_DIR)/carla/env_config.yaml | awk '{print $$2}')
-MAP_DIM      := $(if $(filter suite_a,$(SENSOR_SUITE)),2d,3d)
-
-# Shared env vars for localisation mode.
-LOC_ENV = export CARTOGRAPHER_MODE=loc \
-	CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-	SENSOR_SUITE=$(SENSOR_SUITE)
 
 # Scripts that bring up/down N env workers (N read from train_config.yaml by default).
 WORKERS_UP   = bash scripts/multi_workers/workers_up.sh
@@ -113,68 +104,40 @@ docker-top: ## Show running processes in containers
 	$(DOCKER_COMPOSE) top
 
 # ----------------------------------------------------------------------
-# Cartographer SLAM mapping workflow (one-time per floor plan)
-# ----------------------------------------------------------------------
-# Two-step process:
-#   1. make docker-up              (start stack in SLAM mode, default)
-#   2. make docker-map LAYOUT=...  (drive patrol loop + serialise .pbstream in one step)
-# Then for training use make docker-train-loc LAYOUT=...
-# ----------------------------------------------------------------------
-
-docker-map: ## Drive patrol loop + serialise Cartographer map. Usage: make docker-map [LAYOUT=rectangle] [MAP_LOOPS=6] [MAP_UNIDIR=true]
-	mkdir -p outputs/maps/$(MAP_DIM) configs/maps/2d configs/maps/3d
-	@echo "Mapping: layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM), loops=$(MAP_LOOPS), unidir=$(MAP_UNIDIR)"
-	@# Mapping uses a single CARLA instance (worker 0) in SLAM mode.
-	@# Tear down all running workers first for a clean world state.
-	$(WORKERS_DOWN)
-	$(DOCKER_COMPOSE) down
-	@# docker-compose.yml owns the network definition; bring it up first so the
-	@# network exists with correct compose labels before workers_up.sh attaches.
-	SENSOR_SUITE=$(SENSOR_SUITE) $(DOCKER_COMPOSE) up -d --wait
-	SENSOR_SUITE=$(SENSOR_SUITE) bash scripts/multi_workers/workers_up.sh 1
-	$(DOCKER_COMPOSE) exec training python -m scripts.mapping.mapping_drive \
-		--layout $(LAYOUT) \
-		--loops $(MAP_LOOPS) \
-		--carla-host uncertainty-rl-carla-0 \
-		--carla-port 2000 \
-		$(if $(filter true,$(MAP_UNIDIR)),--unidirectional,)
-	bash scripts/mapping/save_map.sh $(LAYOUT) $(MAP_DIM)
-
-# ----------------------------------------------------------------------
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train-loc: ## Run training in pure localisation mode. Usage: make docker-train-loc [LAYOUT=rectangle]
-	@echo "Training (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+docker-train: ## Run training. Usage: make docker-train [LAYOUT=rectangle]
+	@echo "Training: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(LOC_ENV) && $(WORKERS_UP)
-	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh
+	$(WORKERS_UP)
+	$(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh
 
-docker-train-loc-short: ## Quick training (10k steps) in pure localisation mode. Usage: make docker-train-loc-short [LAYOUT=rectangle]
-	@echo "Training (loc, 10k steps): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+docker-train-short: ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle]
+	@echo "Training (10k steps): layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(LOC_ENV) && $(WORKERS_UP)
-	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
+	$(WORKERS_UP)
+	$(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
 
 docker-tune: ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle]
-	@echo "Tuning (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	@echo "Tuning: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(LOC_ENV) && $(WORKERS_UP)
-	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
+	$(WORKERS_UP)
+	$(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
 
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
-	@echo "Evaluation (loc): layout=$(LAYOUT), suite=$(SENSOR_SUITE), map_dim=$(MAP_DIM)"
+	@echo "Evaluation: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(LOC_ENV) && bash scripts/multi_workers/workers_up.sh 1
-	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
+	bash scripts/multi_workers/workers_up.sh 1
+	$(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
@@ -295,9 +258,6 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: con
 	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
 		INSPECT_MANUAL=$(MANUAL) \
-		CARTOGRAPHER_MODE=loc \
-		CARTOGRAPHER_MAP=/workspace/configs/maps/$(MAP_DIM)/$(LAYOUT).pbstream \
-		SENSOR_SUITE=$(SENSOR_SUITE) \
 		bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]
@@ -309,27 +269,25 @@ docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (inclu
 	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) $(DOCKER_COMPOSE_INSPECT) --profile inspect up --force-recreate --abort-on-container-exit carla-server-demo training-inspect
 	xhost -local:docker 2>/dev/null || true
 
-INSPECT_SUITE   ?= suite_a
 INSPECT_VIEW    ?= birds_eye
 INSPECT_ZOOM    ?= close
-docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
+docker-inspect-sensors: ## Visualise sensor FOV on the parking lot layout in windowed CARLA. Usage: make docker-inspect-sensors [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a] [INSPECT_VIEW=birds_eye|side|front] [INSPECT_ZOOM=close|wide]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-sensors 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) SUITE=$(INSPECT_SUITE) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) $(DOCKER_COMPOSE_INSPECT) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) VIEW=$(INSPECT_VIEW) ZOOM=$(INSPECT_ZOOM) $(DOCKER_COMPOSE_INSPECT) --profile inspect-sensors up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-sensors
 	xhost -local:docker 2>/dev/null || true
 
 INSPECT_SENSOR  ?= lidar
-docker-inspect-live: ## Live sensor mode in windowed CARLA. INSPECT_SENSOR=camera forces suite_c automatically. Usage: make docker-inspect-live [INSPECT_SENSOR=lidar|camera] [INSPECT_SUITE=suite_a|suite_b|suite_c] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a]
+docker-inspect-live: ## Live sensor mode in windowed CARLA. Usage: make docker-inspect-live [INSPECT_SENSOR=lidar] [INSPECT_LAYOUT=rectangle|trapezoid|irregular_a]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
-	$(eval _SUITE := $(if $(filter camera,$(INSPECT_SENSOR)),suite_c,$(INSPECT_SUITE)))
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-training-inspect-live 2>/dev/null || true
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) SUITE=$(_SUITE) LAYOUT=$(INSPECT_LAYOUT) SENSOR=$(INSPECT_SENSOR) $(DOCKER_COMPOSE_INSPECT) --profile inspect-live up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-live
+	DISPLAY=$(_DISPLAY) LAYOUT=$(INSPECT_LAYOUT) SENSOR=$(INSPECT_SENSOR) $(DOCKER_COMPOSE_INSPECT) --profile inspect-live up --force-recreate --abort-on-container-exit carla-server-demo training-inspect-live
 	xhost -local:docker 2>/dev/null || true
 
 
@@ -349,14 +307,6 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 		--output-dir configs/layouts \
 		--plot-dir outputs/layouts \
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
-
-plot-mapping-waypoints: ## Plot mapping waypoints for a layout. Usage: make plot-mapping-waypoints [LAYOUT=rectangle]
-	$(call ensure-venv)
-	mkdir -p outputs/maps/2d
-	$(PYTHON) scripts/mapping/plot_mapping_waypoints.py \
-		--layout $(LAYOUT) \
-		--output outputs/maps/2d/$(LAYOUT)_waypoints.png
-
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
@@ -383,8 +333,8 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
 	bash scripts/multi_workers/workers_up.sh 1
-	$(LOC_ENV) && $(DOCKER_COMPOSE) up -d --wait
-	$(LOC_ENV) && $(DOCKER_COMPOSE) --profile demo run --rm -d demo \
+	$(DOCKER_COMPOSE) up -d --wait
+	$(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
@@ -442,7 +392,6 @@ clean: ## Remove build artefacts, caches, generated outputs, maps, and layouts (
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
 	sudo rm -rf evaluation_results/ experiments/ results/
 	sudo rm -rf outputs/
-	sudo rm -rf configs/maps/
 	find configs/layouts/ -type f ! -name "*.xodr" -delete 2>/dev/null || true
 	find . -path ./$(VENV) -prune -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -path ./$(VENV) -prune -o -type f -name "*.pyc" -delete 2>/dev/null || true
@@ -451,7 +400,6 @@ clean-all: ## Remove everything including checkpoints and logs (preserves .xodr 
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
 	sudo rm -rf logs/ checkpoints/ evaluation_results/ experiments/ results/
 	sudo rm -rf outputs/
-	sudo rm -rf configs/maps/
 	find configs/layouts/ -type f ! -name "*.xodr" -delete 2>/dev/null || true
 	find . -path ./$(VENV) -prune -o -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	find . -path ./$(VENV) -prune -o -type f -name "*.pyc" -delete 2>/dev/null || true

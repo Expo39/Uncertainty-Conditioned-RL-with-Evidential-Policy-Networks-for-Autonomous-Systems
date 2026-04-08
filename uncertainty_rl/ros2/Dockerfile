@@ -30,16 +30,14 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ROS 2 packages:
-# - robot-localization: EKF node (fuses IMU + odometry, outputs /odometry/filtered)
+# - robot-localization: EKF node + navsat_transform_node (fuses GNSS+IMU, outputs /odometry/filtered)
 # - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
-# - cartographer-ros: 2D SLAM / scan-matching on raw PointCloud2; publishes TF for EKF
 RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-cv-bridge \
     ros-${ROS_DISTRO}-derived-object-msgs \
-    ros-${ROS_DISTRO}-cartographer-ros \
     ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 
@@ -93,7 +91,7 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
 
 # Install the uncertainty_rl Python package (base deps only -- no torch/SB3).
-# tf_to_odom imports uncertainty_rl.utils.covariance_utils at node startup.
+# Covariance extraction nodes import uncertainty_rl.utils.covariance_utils.
 # Placed outside /workspace/src so colcon does not find it as a duplicate package.
 COPY pyproject.toml /opt/uncertainty_rl_pkg/pyproject.toml
 COPY uncertainty_rl/__init__.py /opt/uncertainty_rl_pkg/uncertainty_rl/__init__.py
@@ -111,11 +109,8 @@ COPY uncertainty_rl/ros2/setup.cfg /workspace/src/uncertainty_rl_ros2/setup.cfg
 COPY uncertainty_rl/ros2/resource /workspace/src/uncertainty_rl_ros2/resource
 COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
-# Create the maps directory as an anchor for the configs/maps:rw bind-mount.
-# .pbstream files are generated at runtime via make docker-map; never baked in.
-# All configs (ros2_config.yaml, train_config.yaml, cartographer/) are provided
-# at runtime via the ./configs:/workspace/configs:ro bind-mount.
-RUN mkdir -p /workspace/configs/maps
+# All configs (ros2_config.yaml, env_config.yaml, gnss_noise_profiles.yaml) are
+# provided at runtime via the ./configs:/workspace/configs:ro bind-mount.
 
 # Build custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \

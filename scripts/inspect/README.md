@@ -7,7 +7,6 @@ placement before training. Requires windowed CARLA (X11 display) and the
 ## Entry Point
 
 All inspector modes are driven by a single script: **`lot_inspector.py`**.
-The old `inspect_layout.py` and `inspect_sensors.py` have been removed.
 
 ## Modes
 
@@ -32,18 +31,16 @@ make docker-inspect INSPECT_LAYOUT=irregular_a
 
 Spawns the ego vehicle and draws static sensor mount dots and FOV arcs:
 
-| Suite | Sensors shown | FOV overlay |
-|-------|--------------|-------------|
-| `suite_a` | IMU (yellow) + 2D LiDAR (cyan) | 270 deg arc at 30 m radius |
-| `suite_b` | IMU (yellow) + 3D LiDAR (green) | 360 deg ring at 100 m radius |
-| `suite_c` | IMU (yellow) + 3D LiDAR (green) + RGB camera (orange) | 360 deg ring + 90 deg wedge |
+| Sensor | Colour | FOV overlay |
+|--------|--------|-------------|
+| IMU | Yellow dot | None |
+| GNSS | Magenta dot | None |
+| 2D LiDAR | Cyan dot | 270 deg arc at 30 m radius |
 
 Mount positions and ranges are read from `configs/carla/env_config.yaml`.
 
 ```bash
-make docker-inspect-sensors                            # Default: suite_a, birds-eye
-make docker-inspect-sensors INSPECT_SUITE=suite_b
-make docker-inspect-sensors INSPECT_SUITE=suite_c
+make docker-inspect-sensors                            # Default: birds-eye
 make docker-inspect-sensors INSPECT_VIEW=side          # Side profile (mount heights)
 make docker-inspect-sensors INSPECT_VIEW=front         # Front profile
 make docker-inspect-sensors INSPECT_ZOOM=wide          # Raise camera to show full arc
@@ -51,19 +48,11 @@ make docker-inspect-sensors INSPECT_ZOOM=wide          # Raise camera to show fu
 
 ### Live mode (`--mode live`)
 
-Spawns real CARLA sensor actors on the ego vehicle and shows live output:
-
-| Suite | Default view | What you see |
-|-------|-------------|-------------|
-| `suite_a` | Birds-eye | Red LiDAR point cloud debug dots |
-| `suite_b` | Birds-eye | Red LiDAR point cloud debug dots (denser, 3D) |
-| `suite_c` | Camera | CARLA spectator locked to camera mount (forward view) |
+Spawns a real 2D LiDAR on the ego vehicle and shows live scan output as red debug
+dots in the CARLA world, with spectator in birds-eye view.
 
 ```bash
-make docker-inspect-live                               # Default: suite_a, LiDAR dots
-make docker-inspect-live INSPECT_SUITE=suite_b
-make docker-inspect-live INSPECT_SUITE=suite_c         # Camera view (default for c)
-make docker-inspect-live INSPECT_SUITE=suite_c INSPECT_SENSOR=lidar  # Override to LiDAR
+make docker-inspect-live                               # Default: LiDAR dots
 make docker-inspect-live INSPECT_LAYOUT=trapezoid      # Different floor plan
 ```
 
@@ -71,12 +60,10 @@ make docker-inspect-live INSPECT_LAYOUT=trapezoid      # Different floor plan
 
 | Argument | Choices | Default | Modes |
 |----------|---------|---------|-------|
-| `--mode` | `layout`, `sensors`, `live` | `sensors` | all |
+| `--mode` | `layout`, `sensors`, `live`, `dryrun` | `sensors` | all |
 | `--layout` | `rectangle`, `trapezoid`, `irregular_a` | `rectangle` | all |
-| `--suite` | `suite_a`, `suite_b`, `suite_c` | `suite_a` | sensors, live |
 | `--view` | `birds_eye`, `side`, `front` | `birds_eye` | sensors only |
 | `--zoom` | `close`, `wide` | `close` | sensors, birds_eye only |
-| `--sensor` | `lidar`, `camera` | `lidar` | live only (suite_c) |
 | `--duration` | int | `300` | all |
 
 ## Requirements

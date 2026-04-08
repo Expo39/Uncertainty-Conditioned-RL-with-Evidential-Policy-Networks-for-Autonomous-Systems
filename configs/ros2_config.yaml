@@ -1,105 +1,89 @@
-# ROS 2 configuration for the sensor-to-uncertainty pipeline.
+# ROS 2 configuration for the RTK-GNSS + IMU localisation pipeline.
 #
-# Pipeline summary (Suite A, 2D LiDAR + IMU):
+# Pipeline summary:
 #
-#   /carla/ego_vehicle/lidar  (PointCloud2)
-#       -> Cartographer (loc mode, matching against frozen .pbstream)
-#       -> TF: carto_map -> ego_vehicle/lidar  (Cartographer loc; provide_odom_frame=false)
-#       -> tf_to_odom node  -> /scan_matched_odometry  (Odometry, dynamic covariance)
+#   /carla/ego_vehicle/gnss  (NavSatFix, raw CARLA GNSS with base RTK noise)
+#       -> GnssNoiseRelayNode  (adds per-episode noise, stamps position_covariance)
+#       -> /gnss/noisy  (NavSatFix with realistic covariance)
+#       -> navsat_transform_node  (robot_localisation: UTM projection -> Odometry)
+#       -> /odometry/gps  (Odometry in odom frame)
 #
 #   /carla/ego_vehicle/imu  (sensor_msgs/Imu)
-#       -> EKF imu0: yaw rate PREDICTION step between LiDAR scan corrections
+#       -> EKF imu0: orientation + yaw rate PREDICTION step between GNSS fixes
 #
 #   robot_localisation EKF fuses both:
-#       odom0 = /scan_matched_odometry  (x, y, yaw, vx, vy) -- CORRECTION step
-#       imu0  = /carla/ego_vehicle/imu  (vyaw only)          -- PREDICTION step
+#       odom0 = /odometry/gps   (x, y, yaw from GNSS via navsat_transform)
+#       imu0  = /carla/ego_vehicle/imu  (orientation, vyaw)
 #       output = /odometry/filtered  (pose + 6x6 covariance)
 #
 #   CovarianceExtractorNode reads /odometry/filtered and writes ekf_state.json.
-#   Training container reads ekf_state.json for obs[0-14] (pose + covariance).
+#   Training container reads ekf_state.json for obs[0-14] (velocity + covariance).
 #
-# The EKF output covariance reflects Cartographer scan-match quality:
-#   strong match (clear lot, all cones visible) -> low covariance -> small std_x, std_y
-#   weak match (crowded lot, rain, cone occlusion) -> high covariance -> large std_x, std_y
-# This covariance variation is the primary uncertainty signal for the RL policy.
+# EKF output covariance reflects RTK fix-state quality:
+#   RTK fixed (~2 cm)    -> low covariance  -> confident parking
+#   RTK float (~30 cm)   -> medium covariance -> cautious approach
+#   Standalone (~2-5 m)  -> high covariance -> abort/handoff
+# Per-episode RTK fix states are sampled from configs/carla/gnss_noise_profiles.yaml.
+# The GnssNoiseRelayNode reads the tier from gnss_noise_config.json (shared volume).
 
-# CARLA ROS bridge topic names (used as reference -- bridge publishes these automatically)
+# CARLA ROS bridge topic names (published automatically by the bridge)
 carla_topics:
-  imu: "/carla/ego_vehicle/imu"    # sensor_msgs/Imu
-  lidar: "/carla/ego_vehicle/lidar"  # sensor_msgs/PointCloud2 (2D single-channel, Suite A)
+  imu: "/carla/ego_vehicle/imu"      # sensor_msgs/Imu
+  gnss: "/carla/ego_vehicle/gnss"    # sensor_msgs/NavSatFix
+  lidar: "/carla/ego_vehicle/lidar"  # sensor_msgs/PointCloud2 (2D, obstacle detection only)
 
 # robot_localisation EKF node parameters.
 # Loaded directly by carla_bridge.launch.py as node parameters.
 ekf:
   frequency: 20.0        # EKF update rate (Hz) -- matches CARLA timestep
   two_d_mode: true       # Constrain to 2D: suppress z, roll, pitch states
-  world_frame: "carto_map"  # EKF output frame. Cartographer (provide_odom_frame=false) publishes
-                            # carto_map -> ego_vehicle/lidar directly (globally anchored to the
-                            # pbstream). tf_to_odom looks this up and feeds the EKF as odom0.
-                            # "carto_map" (not "map") avoids TF conflict with the CARLA bridge.
-                            # _calibrate_ekf_frame_offset() computes the rigid transform from
-                            # carto_map frame to CARLA world coordinates at episode reset.
-  odom_frame: "carto_map"  # Must match world_frame for single-sensor mode. robot_localisation
-                            # accepts odom0 messages with frame_id matching world_frame or odom_frame.
+  world_frame: "odom"    # EKF output frame. navsat_transform creates a stable
+                         # UTM-aligned odom frame. _calibrate_ekf_frame_offset()
+                         # computes the rigid transform from odom to CARLA world
+                         # coordinates at episode reset.
+  odom_frame: "odom"     # Must match world_frame for single-odom-source mode.
   base_link_frame: "ego_vehicle"  # Central body frame for all sensors.
-  # The CARLA bridge (passive mode) publishes TF frames directly under "map"
-  # with no "ego_vehicle" body frame. Static TF publishers in carla_bridge.launch.py
-  # create the chain: ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu,
-  # so robot_localisation can resolve all sensor poses relative to ego_vehicle.
   publish_tf: true
 
-  # IMU sensor: prediction step only.
-  # Enabled: yaw (index 5) and vyaw (index 11).
+  # IMU sensor: prediction step.
+  # Enabled: yaw orientation (index 5) and vyaw (index 11).
   # Linear acceleration disabled: CARLA bridge publishes zero IMU covariance,
   # so robot_localization would treat acceleration as infinitely reliable and
-  # override the Cartographer velocity corrections. Yaw rate alone is sufficient
-  # to propagate the heading estimate between 20 Hz scan-match corrections.
+  # override the GNSS velocity corrections. Yaw rate alone is sufficient
+  # to propagate the heading estimate between 20 Hz GNSS fixes.
   imu0: "/carla/ego_vehicle/imu"
   # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
-  imu0_config: [false, false, false, false, false, false,
+  imu0_config: [false, false, false, false, false, true,
                 false, false, false, false, false, true,
                 false, false, false]
 
-  # Cartographer scan-matched odometry: correction step.
-  # Published by tf_to_odom node with dynamic covariance:
-  #   - Nominal: base_xy_variance=0.05, base_yaw_variance=0.05
-  #   - Stale TF (lost scan match): inflates up to 100x over 2 s
-  #   - Jump (relocalisation): inflates 50x, decays over 10 steps
-  # This dynamic covariance propagates through the EKF filter and produces
-  # the varying std_x, std_y, std_yaw that appear in obs[6-8].
+  # GNSS-derived odometry: correction step.
+  # Published by navsat_transform_node with covariance from the NavSatFix
+  # position_covariance field (stamped by GnssNoiseRelayNode).
   # Enabled: x (0), y (1), yaw (5), vx (6), vy (7).
-  odom0: "/scan_matched_odometry"
+  odom0: "/odometry/gps"
   # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   odom0_config: [true, true, false, false, false, true,
                  true, true, false, false, false, false,
                  false, false, false]
 
-# tf_to_odom dynamic covariance parameters.
-# These are read by carla_bridge.launch.py and passed to TfToOdomNode.
-# Tune these for the real robot without touching any Python code.
-tf_to_odom:
-  # Nominal variances when Cartographer is actively matching (best-case).
-  # x/y: 0.05 m^2 (std ~0.22 m).  yaw: 0.05 rad^2 (std ~13 deg).
-  base_xy_variance: 0.05
-  base_yaw_variance: 0.05
+# navsat_transform_node parameters (robot_localisation package).
+# Converts NavSatFix -> Odometry via UTM projection.
+navsat_transform:
+  frequency: 20.0          # Publish rate (Hz), matches EKF frequency
+  zero_altitude: true      # 2D operation: ignore altitude
+  publish_filtered_gps: false  # Do not re-publish filtered GPS
+  use_odometry_yaw: false  # Use IMU yaw, not GNSS-derived heading
+  yaw_offset: 0.0          # Radians. Adjust if CARLA IMU convention differs from ENU.
+  wait_for_datum: false     # Use first GNSS fix as datum (no manual datum needed)
+  broadcast_utm_transform: true  # Publish TF: utm -> odom
 
-  # Hard clamps on the published pose variance (applied after inflation).
-  # Floor prevents the EKF treating Cartographer as infinitely reliable.
-  # Ceiling prevents a frozen EKF when Cartographer is completely lost.
-  min_variance: 0.01    # m^2 -- never more confident than std ~0.10 m
-  max_variance: 50.0    # m^2 -- caps inflation; EKF stays numerically stable
-
-  # Staleness inflation: covariance ramps up when TF stops updating.
-  stale_threshold_sec: 0.15   # seconds without a new TF before inflation starts
-  staleness_scale: 100.0      # maximum multiplier at stale_max_sec
-  stale_max_sec: 2.0          # seconds to reach full staleness_scale
-
-  # Jump inflation: covariance spikes on Cartographer relocalisation events.
-  # At 20 Hz, normal parking speed (~2 m/s) moves 0.10 m/step.
-  # Anything above 1.0 m is a Cartographer jump, not vehicle motion.
-  jump_threshold_m: 1.0
-  jump_scale: 50.0
-  jump_decay_steps: 10
+# GnssNoiseRelayNode parameters.
+# Subscribes to raw CARLA GNSS, adds per-episode noise, stamps covariance.
+gnss_noise_relay:
+  input_topic: "/carla/ego_vehicle/gnss"
+  output_topic: "/gnss/noisy"
+  base_metric_stddev_m: 0.02  # RTK-fixed baseline noise (metres)
 
 # CovarianceExtractorNode configuration.
 # Subscribes to /odometry/filtered, extracts 3x3 [x, y, yaw] covariance submatrix,
@@ -109,18 +93,17 @@ covariance_topic: "/ekf_uncertainty/covariance"  # CovarianceEstimate publisher 
 publish_rate: 10.0                           # Hz (file write rate)
 
 # Velocity frame convention.
-# robot_localisation with world_frame=carto_map publishes twist in the carto_map
+# robot_localisation with world_frame=odom publishes twist in the odom
 # (world-aligned) frame, not the vehicle body frame. The extractor rotates
 # it into body frame before writing to ekf_state.json.
 # Set false only if robot_localisation is configured with twist_in_robot_frame: true.
 twist_in_odom_frame: true
 
-# Time source for ROS 2 nodes (excluding Cartographer -- see cartographer_use_sim_time).
+# Time source for ROS 2 nodes.
 # The CARLA bridge node itself runs with use_sim_time=true and publishes /clock from
 # CARLA's internal simulation time (UNIX epoch scale, ~1.77e9 s).
 # All nodes that need consistent TF lookups must use the same time source as the bridge.
 use_sim_time: true
-
 
 # QoS settings for ROS 2 subscribers/publishers
 qos:

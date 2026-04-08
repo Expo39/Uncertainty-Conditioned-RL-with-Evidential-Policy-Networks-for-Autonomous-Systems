@@ -294,7 +294,6 @@ class SensorInspector(LayoutInspector):
         self,
         env: CARLAParkingEnv,
         duration: int,
-        suite: str,
         train_cfg: Dict[str, Any],
         view: str = "birds_eye",
         zoom: str = "close",
@@ -303,13 +302,11 @@ class SensorInspector(LayoutInspector):
         @brief Construct the sensor inspector.
         @param env: Pre-reset CARLAParkingEnv instance.
         @param duration: Scene duration in seconds.
-        @param suite: Sensor suite ('suite_a', 'suite_b', 'suite_c').
         @param train_cfg: Loaded train_config.yaml dict (for mount positions).
-        @param view: Spectator view ('birds_eye' or 'side').
+        @param view: Spectator view ('birds_eye', 'side', or 'front').
         @param zoom: Camera height mode ('close' = lot detail, 'wide' = full FOV arc).
         """
         super().__init__(env, duration)
-        self._suite = suite
         self._train_cfg = train_cfg
         self._view = view
         self._zoom = zoom
@@ -318,8 +315,7 @@ class SensorInspector(LayoutInspector):
         """
         @brief Position spectator based on --view and --zoom flags.
 
-        birds_eye + close: 80 m above vehicle -- lot detail clearly visible,
-          arc may be clipped for long-range suites (suite_b/c).
+        birds_eye + close: 80 m above vehicle -- lot detail clearly visible.
         birds_eye + wide: high enough to see the full FOV arc boundary.
         side: 8 m to the left of the ego vehicle, at vehicle height.
         """
@@ -342,16 +338,13 @@ class SensorInspector(LayoutInspector):
         cx, cy, sz = vt.location.x, vt.location.y, vt.location.z
 
         sensors_cfg = self._train_cfg.get("carla_sensors", {})
-        if self._suite in ("suite_b", "suite_c"):
-            lidar_range = float(sensors_cfg.get("lidar_3d", {}).get("range", 100.0))
-        else:
-            lidar_range = float(sensors_cfg.get("lidar", {}).get("range", 30.0))
+        lidar_range = float(sensors_cfg.get("lidar", {}).get("range", 30.0))
 
         if self._zoom == "wide":
             # High enough so the full arc boundary stays within CARLA's cull sphere.
             cam_z = max(lidar_range * 2.2, 80.0)
         else:
-            # Close view: fixed 80 m shows lot detail clearly regardless of suite.
+            # Close view: fixed 80 m shows lot detail clearly.
             cam_z = 80.0
 
         yaw = vt.rotation.yaw
@@ -374,7 +367,6 @@ class SensorInspector(LayoutInspector):
         if self._env.vehicle is not None and self._env.world is not None:
             _draw_sensor_overlays(
                 self._env,
-                self._suite,
                 self._train_cfg,
                 life_time,
                 side_view=(self._view in ("side", "front")),
@@ -389,26 +381,20 @@ class SensorInspector(LayoutInspector):
 class LiveInspector(_Inspector):
     """
     @class LiveInspector
-    @brief Spawns real CARLA sensors on the ego vehicle and shows live output.
+    @brief Spawns a real 2D LiDAR on the ego vehicle and shows live scan dots.
 
     Inherits from :class:`_Inspector` directly -- no layout overlays are drawn
     because the focus is on raw sensor data, not lot geometry annotations.
 
-    Behaviour by suite and sensor mode:
-      - suite_a / suite_b: always LiDAR mode -- scan points drawn as small red
-        debug dots in the CARLA world frame at ~20 Hz, spectator birds-eye.
-      - suite_c (default / sensor='camera'): spectator locked to the RGB camera
-        mount position and orientation -- shows exactly what the camera sees
-        directly in the CARLA window.  No LiDAR dots drawn.
-      - suite_c (sensor='lidar'): override to birds-eye + LiDAR dots, same as
-        suite_a/b.
+    LiDAR scan points are drawn as small red debug dots in the CARLA world frame
+    at ~20 Hz, with the spectator in birds-eye view above the vehicle.
 
-    All sensor mount positions are read from ``train_cfg["carla_sensors"]``.
-    Sensors are attached via ``world.spawn_actor()`` with ``attach_to=vehicle``.
+    Sensor mount positions are read from ``train_cfg["carla_sensors"]``.
+    The sensor is attached via ``world.spawn_actor()`` with ``attach_to=vehicle``.
 
     @note Requires the full Docker stack (CARLA server + training container).
-    @warning Sensors are destroyed in a ``try/finally`` block -- if CARLA
-             crashes mid-session the actors may linger until the server restarts.
+    @warning The sensor is destroyed in a ``try/finally`` block -- if CARLA
+             crashes mid-session the actor may linger until the server restarts.
     """
 
     _LIDAR_DOT_SIZE: float = 0.08
@@ -418,27 +404,17 @@ class LiveInspector(_Inspector):
         self,
         env: CARLAParkingEnv,
         duration: int,
-        suite: str,
         train_cfg: Dict[str, Any],
-        sensor: str = "lidar",
     ) -> None:
         """
         @brief Construct the live inspector.
         @param env: Pre-reset CARLAParkingEnv instance (vehicle must be spawned).
         @param duration: Total session duration in seconds.
-        @param suite: Sensor suite ('suite_a', 'suite_b', 'suite_c').
         @param train_cfg: Loaded train_config.yaml dict (for mount positions and
                          blueprint attributes).
-        @param sensor: Active sensor to display ('lidar' or 'camera').
-                       Ignored for suite_a/b (always lidar).
-                       For suite_c: 'camera' moves spectator to camera mount;
-                       'lidar' shows birds-eye + debug dots.
         """
         super().__init__(env, duration)
-        self._suite = suite
         self._train_cfg = train_cfg
-        # suite_a/b always use lidar mode regardless of sensor arg
-        self._sensor = sensor if suite == "suite_c" else "lidar"
 
         # Spawned sensor actors -- destroyed on exit
         self._sensors: List[Any] = []
@@ -449,14 +425,10 @@ class LiveInspector(_Inspector):
 
     def _spawn_sensors(self) -> None:
         """
-        @brief Spawn only the sensor needed for the active display mode.
+        @brief Spawn the 2D LiDAR sensor on the ego vehicle.
 
-        In lidar mode: spawns the LiDAR (2D for suite_a, 3D for suite_b/c).
-        In camera mode (suite_c only): spawns the RGB camera only -- no LiDAR
-          is spawned so no debug dots appear and the CARLA viewport is clean.
-
-        Reads blueprint attributes and mount positions from
-        ``self._train_cfg["carla_sensors"]``.
+        Reads blueprint attributes and mount position from
+        ``self._train_cfg["carla_sensors"]["lidar"]``.
         """
         if self._env.vehicle is None or self._env.world is None:
             return
@@ -465,41 +437,7 @@ class LiveInspector(_Inspector):
         bp_lib = world.get_blueprint_library()
         sensors_cfg = self._train_cfg.get("carla_sensors", {})
 
-        if self._sensor == "camera":
-            # Camera mode: spawn RGB camera only
-            cam_cfg = sensors_cfg.get("camera_rgb", {})
-            cam_bp = bp_lib.find("sensor.camera.rgb")
-
-            for attr_name in ("image_size_x", "image_size_y", "fov", "sensor_tick"):
-                if attr_name in cam_cfg:
-                    cam_bp.set_attribute(attr_name, str(cam_cfg[attr_name]))
-
-            cam_mount = cam_cfg.get("mount", {})
-            cam_transform = carla.Transform(
-                carla.Location(
-                    x=float(cam_mount.get("x", 0.2)),
-                    y=float(cam_mount.get("y", 0.0)),
-                    z=float(cam_mount.get("z", 1.4)),
-                ),
-                carla.Rotation(
-                    pitch=float(cam_mount.get("pitch", 0.0)),
-                    yaw=float(cam_mount.get("yaw", 0.0)),
-                    roll=float(cam_mount.get("roll", 0.0)),
-                ),
-            )
-            cam_actor = world.spawn_actor(
-                cam_bp,
-                cam_transform,
-                attach_to=self._env.vehicle,
-            )
-            # No callback needed -- spectator provides the view directly
-            cam_actor.listen(lambda _: None)
-            self._sensors.append(cam_actor)
-            return
-
-        # Lidar mode: spawn LiDAR only
-        lidar_key = "lidar" if self._suite == "suite_a" else "lidar_3d"
-        lidar_cfg = sensors_cfg.get(lidar_key, {})
+        lidar_cfg = sensors_cfg.get("lidar", {})
         lidar_bp = bp_lib.find("sensor.lidar.ray_cast")
 
         for attr_name in (
@@ -574,59 +512,15 @@ class LiveInspector(_Inspector):
 
     def place_spectator(self) -> None:
         """
-        @brief Position the spectator according to suite and sensor mode.
-
-        lidar mode: birds-eye view 80 m above the ego vehicle.
-        camera mode (suite_c only): spectator locked to the RGB camera mount
-          position and orientation so the CARLA viewport shows exactly what
-          the camera sees.
+        @brief Position the spectator in birds-eye view 80 m above the ego vehicle.
         """
         if self._env.vehicle is None or self._env.world is None:
             return
-
-        if self._sensor == "camera":
-            self._place_spectator_camera()
-            print("Spectator: RGB camera mount (suite_c camera view).")
-        else:
-            vt = self._env.vehicle.get_transform()
-            cx, cy, sz = vt.location.x, vt.location.y, vt.location.z
-            self._place_spectator_birds_eye(cx, cy, sz, 80.0)
-            print("Spectator: birds-eye view (80 m).")
-
-    def _place_spectator_camera(self) -> None:
-        """
-        @brief Move the CARLA spectator to the RGB camera mount position.
-
-        Reads mount x/y/z and pitch from ``train_cfg["carla_sensors"]["camera_rgb"]``
-        and transforms the local mount offset into world frame using the vehicle
-        transform.  The spectator yaw matches the vehicle heading so the view
-        faces forward.
-        """
-        if self._env.vehicle is None or self._env.world is None:
-            return
-
-        sensors_cfg = self._train_cfg.get("carla_sensors", {})
-        cam_mount = sensors_cfg.get("camera_rgb", {}).get("mount", {})
-        mx = float(cam_mount.get("x", 0.2))
-        my = float(cam_mount.get("y", 0.0))
-        mz = float(cam_mount.get("z", 1.4))
-        pitch = float(cam_mount.get("pitch", 0.0))
 
         vt = self._env.vehicle.get_transform()
-        yaw_rad = math.radians(vt.rotation.yaw)
-
-        # Rotate mount offset into world frame
-        wx = vt.location.x + mx * math.cos(yaw_rad) - my * math.sin(yaw_rad)
-        wy = vt.location.y + mx * math.sin(yaw_rad) + my * math.cos(yaw_rad)
-        wz = vt.location.z + mz
-
-        spectator = self._env.world.get_spectator()
-        spectator.set_transform(
-            carla.Transform(
-                carla.Location(x=wx, y=wy, z=wz),
-                carla.Rotation(pitch=pitch, yaw=vt.rotation.yaw, roll=0.0),
-            )
-        )
+        cx, cy, sz = vt.location.x, vt.location.y, vt.location.z
+        self._place_spectator_birds_eye(cx, cy, sz, 80.0)
+        print("Spectator: birds-eye view (80 m).")
 
     # ------------------------------------------------------------------
     # Main run loop
@@ -636,11 +530,10 @@ class LiveInspector(_Inspector):
         """
         @brief Run the live sensor session at ~20 Hz.
 
-        Spawns only the active sensor, then drives the synchronous CARLA tick
-        loop.  On each tick:
+        Spawns the 2D LiDAR, then drives the synchronous CARLA tick loop.
+        On each tick:
           1. World is ticked (triggers sensor callbacks via listener threads).
-          2. Spectator is locked to the vehicle (birds-eye for lidar mode,
-             camera mount position for camera mode).
+          2. Spectator is locked to the vehicle in birds-eye view.
 
         Sensors are destroyed in the ``finally`` block regardless of how the
         loop exits (Ctrl+C or normal timeout).
@@ -658,10 +551,7 @@ class LiveInspector(_Inspector):
         print(
             f"Live sensor session for {self._duration}s.  Press Ctrl+C to exit early."
         )
-        if self._sensor == "camera":
-            print("  RGB camera view -- CARLA spectator locked to camera mount.")
-        else:
-            print("  LiDAR hit points rendered as red debug dots in the CARLA world.")
+        print("  LiDAR hit points rendered as red debug dots in the CARLA world.")
 
         try:
             for i in range(total_ticks):
@@ -671,13 +561,10 @@ class LiveInspector(_Inspector):
 
                 # Keep spectator locked to the vehicle each tick.
                 if self._env.vehicle is not None:
-                    if self._sensor == "camera":
-                        self._place_spectator_camera()
-                    else:
-                        vt = self._env.vehicle.get_transform()
-                        self._place_spectator_birds_eye(
-                            vt.location.x, vt.location.y, vt.location.z, 80.0
-                        )
+                    vt = self._env.vehicle.get_transform()
+                    self._place_spectator_birds_eye(
+                        vt.location.x, vt.location.y, vt.location.z, 80.0
+                    )
 
                 time.sleep(1.0 / tick_hz)
 

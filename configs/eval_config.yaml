@@ -2,9 +2,13 @@
 # Configuration for evaluating trained agents across physical conditions
 # that produce varying EKF uncertainty levels.
 #
-# Uncertainty variation is induced via IMU noise multipliers, bay occupancy
-# (fewer parked cars -> sparser LiDAR scan-match features -> higher covariance),
-# and dynamic actor density (patrol vehicles + pedestrians -> occlusions).
+# Primary uncertainty axis: GNSS noise tier (RTK fix state).
+#   gnss_noise_multiplier scales the base RTK-fixed noise (0.02 m stddev):
+#     1.0  = RTK fixed  (~2 cm)   -- nominal parking
+#     15.0 = RTK float  (~30 cm)  -- marginal, policy should be cautious
+#     100.0 = Standalone (~2 m)   -- policy should abort
+#     250.0 = Degraded   (~5 m)   -- policy must abort / safety handoff
+# Secondary axes: IMU noise multiplier, bay occupancy, dynamic actor density.
 
 # Model settings
 model_path: "checkpoints/final_model"  # Path to trained model
@@ -28,98 +32,98 @@ render: false  # Render episodes (requires display)
 debug: false   # Enable per-step DebugLogger diagnostics (same flag as train_config)
 
 # Evaluation conditions sweep
-# Each condition specifies IMU noise multiplier and traffic density.
-# Base IMU noise comes from train_config.yaml carla_sensors.imu.*; multiplier scales it.
-# No GNSS: excluded from Suite A (unreliable in covered parking lots).
-# EKF uncertainty variation comes from LiDAR scan-matching quality + IMU drift:
-#   - Fewer parked cars -> sparser LiDAR features -> higher covariance
-#   - Dynamic actors (patrol, pedestrians) -> occlusions -> transient covariance spikes
-#   - Higher IMU noise multiplier -> noisier prediction step -> higher covariance
+# Each condition specifies GNSS noise tier, IMU noise multiplier, and traffic density.
+# gnss_noise_multiplier overrides per-episode tier sampling from gnss_noise_profiles.yaml
+# when present. When absent, the env samples a tier randomly (training behaviour).
 # Ordered from easiest (low uncertainty) to hardest (extreme uncertainty).
 eval_conditions:
-  - name: "low_noise"
-    description: "0.5x IMU noise, no traffic -- best-case LiDAR conditions"
-    imu_noise_multiplier: 0.5
+  # --- Nominal conditions (car should park successfully) ---
+  - name: "nominal_empty"
+    description: "RTK fixed, empty lot -- best-case conditions"
+    gnss_noise_multiplier: 1.0    # RTK fixed (~2 cm)
+    imu_noise_multiplier: 1.0
     num_patrol_vehicles: 0
     pedestrian_spawn_probability: 0.0
     bay_occupancy_rate: 0.6
 
-  - name: "nominal"
-    description: "1.0x IMU noise, 1 patrol, all pedestrian zones -- training distribution"
+  - name: "nominal_busy"
+    description: "RTK fixed, full traffic + all pedestrian zones -- training distribution"
+    gnss_noise_multiplier: 1.0    # RTK fixed (~2 cm)
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
+    bay_occupancy_rate: 0.8
+
+  # --- GNSS degradation sweep (graduated uncertainty response) ---
+  - name: "rtk_float"
+    description: "RTK float (~30 cm), moderate traffic -- marginal localisation"
+    gnss_noise_multiplier: 15.0   # RTK float (~30 cm)
+    imu_noise_multiplier: 1.0
+    num_patrol_vehicles: 1
+    pedestrian_spawn_probability: 0.8
     bay_occupancy_rate: 0.6
 
-  - name: "sparse_lot"
-    description: "1.0x IMU noise, sparse bays -- fewer LiDAR anchors"
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 0
-    pedestrian_spawn_probability: 0.0
-    bay_occupancy_rate: 0.3  # Sparse end of training range: fewer parked cars = fewer scan-match features
-
-  - name: "full_traffic"
-    description: "1.5x IMU noise, 1 patrol, all zones, full lot -- dynamic occlusions"
+  - name: "rtk_float_busy"
+    description: "RTK float (~30 cm), full traffic -- compound degradation"
+    gnss_noise_multiplier: 15.0   # RTK float (~30 cm)
     imu_noise_multiplier: 1.5
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.8
 
-  - name: "high_noise_nominal"
-    description: "2.0x IMU noise, 1 patrol, all zones -- elevated sensor degradation"
-    imu_noise_multiplier: 2.0
+  - name: "rtk_standalone"
+    description: "Standalone GNSS (~2 m), moderate traffic -- policy should abort"
+    gnss_noise_multiplier: 100.0  # Standalone (~2 m)
+    imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
+    pedestrian_spawn_probability: 0.8
     bay_occupancy_rate: 0.6
 
-  - name: "high_noise_degraded"
-    description: "2.0x IMU noise, 1 patrol, all zones, sparse lot -- compound degradation"
+  - name: "rtk_lost"
+    description: "Degraded GNSS (~5 m), busy lot -- safety handoff expected"
+    gnss_noise_multiplier: 250.0  # Degraded (~5 m)
     imu_noise_multiplier: 2.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.3
-
-  - name: "extreme_noise"
-    description: "3.0x IMU noise, 1 patrol, all zones, full lot -- maximum training stress"
-    imu_noise_multiplier: 3.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.8
 
-  # OOD floor plan evaluation (calibration experiment)
+  # --- OOD floor plan evaluation (calibration experiment) ---
   # Whether a layout is OOD is determined by its ood: true/false flag in
-  # train_config.yaml floor_plans -- not hardcoded here. Currently trapezoid
+  # env_config.yaml floor_plans -- not hardcoded here. Currently trapezoid
   # and irregular_a are both ood: true (held out from training). rectangle is
   # ood: false (training geometry). Tests whether epistemic uncertainty rises
   # on novel geometry -- a calibration check on the NIG prior.
-  - name: "ood_nominal"
-    description: "OOD floor plan (trapezoid), nominal conditions -- calibration check"
+  - name: "ood_layout"
+    description: "OOD floor plan (irregular_a), RTK fixed -- epistemic calibration check"
+    gnss_noise_multiplier: 1.0    # RTK fixed -- good localisation
     imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.6
-    floor_plan: "trapezoid"  # Held out from training
-
-  - name: "ood_degraded"
-    description: "OOD floor plan (irregular_a), 2.0x IMU noise -- compound novelty"
-    imu_noise_multiplier: 2.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.6
     floor_plan: "irregular_a"  # Held out from training
 
-  # Worst-case / safety handoff demonstration
+  - name: "ood_layout_degraded"
+    description: "OOD floor plan (irregular_a), RTK float -- double challenge"
+    gnss_noise_multiplier: 15.0   # RTK float (~30 cm)
+    imu_noise_multiplier: 1.5
+    num_patrol_vehicles: 1
+    pedestrian_spawn_probability: 1.0
+    bay_occupancy_rate: 0.6
+    floor_plan: "irregular_a"  # Held out from training
+
+  # --- Worst-case / safety handoff demonstration ---
   # Familiar training geometry under conditions far beyond the training distribution.
-  # Expected: empty lot removes scan-match anchors, extreme IMU noise,
-  # EKF covariance spikes, evidential epistemic uncertainty crosses the safety
-  # handoff threshold -- demonstrating the core safety capability.
+  # Expected: degraded GNSS + extreme IMU noise -> EKF covariance spikes,
+  # evidential epistemic uncertainty crosses the safety handoff threshold --
+  # demonstrating the core safety capability.
   - name: "worst_case"
-    description: "Safety handoff demo: empty lot + max IMU noise + all pedestrian zones"
-    imu_noise_multiplier: 6.0      # Well beyond training range (training: 0.5x-3.0x)
-    num_patrol_vehicles: 0         # No patrol -- focus on LiDAR/IMU degradation
+    description: "Safety handoff demo: degraded GNSS + max IMU noise + all pedestrians"
+    gnss_noise_multiplier: 250.0  # Degraded (~5 m)
+    imu_noise_multiplier: 6.0     # Well beyond training range (training: 0.5x-3.0x)
+    num_patrol_vehicles: 0        # No patrol -- focus on GNSS/IMU degradation
     pedestrian_spawn_probability: 1.0  # All zones occupied -- maximum occlusion
-    bay_occupancy_rate: 0.0        # Zero parked cars -- no scan-match anchors
-    floor_plan: "rectangle"        # Familiar training geometry (not OOD)
+    bay_occupancy_rate: 0.0       # Zero parked cars
+    floor_plan: "rectangle"       # Familiar training geometry (not OOD)
 
 # Output settings
 output_dir: "evaluation_results"

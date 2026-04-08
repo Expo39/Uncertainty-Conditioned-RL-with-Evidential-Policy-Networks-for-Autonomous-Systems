@@ -11,9 +11,10 @@ The file is written atomically (via rename) by the extractor node at the
 EKF publish rate (~20 Hz) to /workspace/outputs/ekf_state.json, which is
 on a Docker shared volume visible to both containers.
 
-The /initialpose signal for Cartographer pure localisation is also
-file-based: the training container writes initial_pose.json and the
-CovarianceExtractorNode in ros2-bridge reads it and publishes locally.
+The /initialpose signal for EKF state reset is also file-based: the
+training container writes initial_pose.json and the CovarianceExtractorNode
+in ros2-bridge reads it and publishes locally. Similarly, GNSS noise tier
+config is signalled via gnss_noise_config.json for the GnssNoiseRelayNode.
 """
 
 import json
@@ -37,6 +38,11 @@ _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 # episode reset; the CovarianceExtractorNode (ros2-bridge, Jazzy) watches it
 # and publishes /initialpose locally.  Same DDS-bypass pattern as ekf_state.json.
 _INITIAL_POSE_PATH = Path("/workspace/outputs/initial_pose.json")
+
+# File-based GNSS noise config signal.  The training container writes this at
+# episode reset with the current noise tier; the GnssNoiseRelayNode (ros2-bridge)
+# reads it and applies dynamic noise to CARLA GNSS output.
+_GNSS_NOISE_CONFIG_PATH = Path("/workspace/outputs/gnss_noise_config.json")
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +108,21 @@ class _CovarianceSubscriber:
         self._initial_pose_tmp: Path = self._initial_pose_path.with_suffix(
             ".json.tmp"
         )
+
+        # GNSS noise config file path (shared volume, same dir as EKF state).
+        self._gnss_noise_config_path: Path = Path(
+            config.get(
+                "gnss_noise_config_file",
+                os.environ.get(
+                    "GNSS_NOISE_CONFIG_FILE", str(_GNSS_NOISE_CONFIG_PATH)
+                ),
+            )
+        )
+        self._gnss_noise_config_tmp: Path = (
+            self._gnss_noise_config_path.with_suffix(".json.tmp")
+        )
+        # Monotonically increasing counter for gnss_noise_config.json writes.
+        self._gnss_noise_config_seq: int = 0
 
         logger.info(
             "Covariance reader: ekf_file=%s, initial_pose_file=%s",
@@ -237,7 +258,7 @@ class _CovarianceSubscriber:
 
         Writes initial_pose.json with the spawn position in CARLA world frame.
         The CovarianceExtractorNode in the ros2-bridge container watches this
-        file and publishes /initialpose locally (same DDS domain as Cartographer).
+        file and publishes /initialpose locally (same DDS domain as the EKF).
 
         The CARLA-to-ROS frame conversion (negate y and yaw) is applied by the
         extractor node at publish time, keeping this file in CARLA convention.
@@ -267,6 +288,51 @@ class _CovarianceSubscriber:
             )
         except OSError as exc:
             logger.warning("Failed to write initial_pose.json: %s", exc)
+
+    def publish_gnss_noise_config(
+        self,
+        lat_stddev_deg: float,
+        lon_stddev_deg: float,
+        alt_stddev_m: float,
+        metric_stddev_m: float,
+    ) -> None:
+        """
+        @brief Signal the GNSS noise tier to the ros2-bridge via a shared file.
+
+        Writes gnss_noise_config.json with the current episode's RTK fix-state
+        noise parameters. The GnssNoiseRelayNode in the ros2-bridge container
+        reads this file and applies extra Gaussian noise to CARLA GNSS output.
+
+        @param lat_stddev_deg: Extra latitude noise stddev (degrees).
+        @param lon_stddev_deg: Extra longitude noise stddev (degrees).
+        @param alt_stddev_m: Extra altitude noise stddev (metres).
+        @param metric_stddev_m: Metric position stddev for covariance stamping.
+        """
+        self._gnss_noise_config_seq += 1
+        data = {
+            "seq": self._gnss_noise_config_seq,
+            "lat_stddev_deg": float(lat_stddev_deg),
+            "lon_stddev_deg": float(lon_stddev_deg),
+            "alt_stddev_m": float(alt_stddev_m),
+            "metric_stddev_m": float(metric_stddev_m),
+        }
+        try:
+            os.makedirs(self._gnss_noise_config_path.parent, exist_ok=True)
+            with open(self._gnss_noise_config_tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(
+                str(self._gnss_noise_config_tmp),
+                str(self._gnss_noise_config_path),
+            )
+            logger.info(
+                "GNSS noise config written: metric_stddev=%.3fm, "
+                "lat_stddev=%.10fdeg (seq=%d)",
+                metric_stddev_m,
+                lat_stddev_deg,
+                self._gnss_noise_config_seq,
+            )
+        except OSError as exc:
+            logger.warning("Failed to write gnss_noise_config.json: %s", exc)
 
     @property
     def has_data(self) -> bool:

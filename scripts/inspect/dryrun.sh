@@ -36,9 +36,6 @@ DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
     INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
     INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
     EPISODES="${EPISODES:-}" \
-    CARTOGRAPHER_MODE="${CARTOGRAPHER_MODE:-loc}" \
-    CARTOGRAPHER_MAP="${CARTOGRAPHER_MAP:-}" \
-    SENSOR_SUITE="${SENSOR_SUITE:-suite_a}" \
     ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
     --force-recreate --detach --wait \
     carla-server-demo ros2-bridge-inspect
@@ -53,9 +50,6 @@ if [ "${INSPECT_MANUAL:-false}" = "true" ]; then
         INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
         INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
         EPISODES="${EPISODES:-}" \
-        CARTOGRAPHER_MODE="${CARTOGRAPHER_MODE:-loc}" \
-        CARTOGRAPHER_MAP="${CARTOGRAPHER_MAP:-}" \
-        SENSOR_SUITE="${SENSOR_SUITE:-suite_a}" \
         ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun \
         run --rm -it --name "${CONTAINER}" \
         training-inspect-dryrun
@@ -66,9 +60,6 @@ else
         INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
         INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
         EPISODES="${EPISODES:-}" \
-        CARTOGRAPHER_MODE="${CARTOGRAPHER_MODE:-loc}" \
-        CARTOGRAPHER_MAP="${CARTOGRAPHER_MAP:-}" \
-        SENSOR_SUITE="${SENSOR_SUITE:-suite_a}" \
         ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
         --force-recreate --detach \
         training-inspect-dryrun

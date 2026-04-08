@@ -2,9 +2,14 @@
 @file _sensor_manager.py
 @brief Sensor lifecycle manager for CARLAParkingEnv.
 
-Owns all per-episode sensor state (IMU, LiDAR, collision sensor, camera) and
-the spawn, callback, and cleanup logic for each. CARLAParkingEnv holds a
-SensorManager instance and delegates sensor lifecycle calls to it.
+Owns all per-episode sensor state (IMU, GNSS, 2D LiDAR, collision sensor)
+and the spawn, callback, and cleanup logic for each. CARLAParkingEnv holds
+a SensorManager instance and delegates sensor lifecycle calls to it.
+
+Sensor roles:
+  - RTK-GNSS + IMU: localisation via robot_localisation EKF.
+  - 2D LiDAR: obstacle detection only (obs indices 15-19). NOT localisation.
+  - Collision sensor: terminal reward signal.
 """
 
 import logging
@@ -51,21 +56,14 @@ class SensorManager:
     def __init__(
         self,
         sensors_config: Dict[str, Any],
-        sensor_suite: str,
     ) -> None:
         """
         @brief Construct SensorManager with fixed config parameters.
 
         @param sensors_config: Sensor noise and mount config dict (carla_sensors
-               section of train_config.yaml). Sub-keys: imu, lidar, lidar_3d,
-               camera_rgb.
-        @param sensor_suite: Which sensor suite to spawn:
-               'suite_a' = 2D LiDAR + IMU,
-               'suite_b' = 3D LiDAR + IMU,
-               'suite_c' = 3D LiDAR + RGB camera + IMU.
+               section of env_config.yaml). Sub-keys: imu, lidar, gnss.
         """
         self._sensors_config = sensors_config
-        self._sensor_suite = sensor_suite
 
         # Per-episode sensor actor list
         self._spawned_sensors: List[Any] = []
@@ -141,22 +139,23 @@ class SensorManager:
         world: Any,
         vehicle: Any,
         patrol_npc_ids: Set[int],
+        gnss_noise_multiplier: float = 1.0,
     ) -> None:
         """
-        @brief Spawn all sensors for the configured suite attached to the ego vehicle.
+        @brief Spawn all sensors attached to the ego vehicle.
 
-        Dispatches to per-suite helpers based on self._sensor_suite. All suites
-        include an IMU and a collision sensor.
-
-        Suite A: 2D LiDAR (front bumper) + IMU.
-        Suite B: 3D LiDAR (roof) + IMU.
-        Suite C: 3D LiDAR (roof) + RGB camera (windscreen) + IMU.
+        Always spawns: IMU + GNSS + 2D LiDAR + collision sensor.
+        GNSS noise is scaled by gnss_noise_multiplier to simulate different
+        RTK fix states (fixed, float, standalone, degraded).
 
         @param world: carla.World handle for the current episode.
         @param vehicle: Ego carla.Vehicle actor to attach sensors to.
         @param patrol_npc_ids: Mutable set of patrol vehicle actor IDs owned by
                NPCController. Shared by reference so _on_collision always sees
                the current contents even after NPCController mutates it.
+        @param gnss_noise_multiplier: Scale factor applied to base GNSS noise
+               stddevs. 1.0 = RTK fixed (~2 cm). Higher values simulate
+               degraded fix states (e.g. 15.0 for RTK float, 100.0 for standalone).
         """
         if vehicle is None or world is None:
             return
@@ -164,26 +163,9 @@ class SensorManager:
         # Store the shared reference -- mutations from NPCController are visible
         self._patrol_npc_ids = patrol_npc_ids
 
-        # IMU is present in all suites
         self._spawn_imu(world, vehicle)
-
-        if self._sensor_suite == "suite_a":
-            self._spawn_lidar_2d(world, vehicle)
-        elif self._sensor_suite == "suite_b":
-            self._spawn_lidar_3d(world, vehicle)
-        elif self._sensor_suite == "suite_c":
-            # @todo(AG) Camera is currently passive. Pending decision
-            # on Suite C utility (visual odometry vs removal).
-            self._spawn_lidar_3d(world, vehicle)
-            self._spawn_camera_rgb(world, vehicle)
-        else:
-            logger.warning(
-                "Unknown sensor_suite '%s'. Defaulting to suite_a (2D LiDAR + IMU).",
-                self._sensor_suite,
-            )
-            self._spawn_lidar_2d(world, vehicle)
-
-        # Collision sensor always spawned regardless of suite
+        self._spawn_gnss(world, vehicle, gnss_noise_multiplier)
+        self._spawn_lidar_2d(world, vehicle)
         self._spawn_collision_sensor(world, vehicle)
 
     def cleanup(self) -> None:
@@ -288,10 +270,11 @@ class SensorManager:
 
     def _spawn_lidar_2d(self, world: Any, vehicle: Any) -> None:
         """
-        @brief Spawn 2D LiDAR sensor at front bumper height (Suite A).
+        @brief Spawn 2D LiDAR sensor at front bumper height for obstacle detection.
 
-        Single-channel horizontal scan (SICK TiM 5xx / Hokuyo style). CARLA
-        ray_cast scans 360 deg; Cartographer receives raw PointCloud2 directly.
+        Single-channel horizontal scan (SICK TiM 5xx / Hokuyo style). Feeds
+        obstacle clearance features (obs indices 15-19) only -- NOT used for
+        localisation (that role belongs to RTK-GNSS + IMU).
 
         Config key: sensors_config.lidar. Mount defaults: x=2.4, z=0.5.
 
@@ -326,87 +309,71 @@ class SensorManager:
         lidar_sensor.listen(self._lidar_callback)
         self._spawned_sensors.append(lidar_sensor)
 
-    def _spawn_lidar_3d(self, world: Any, vehicle: Any) -> None:
+    def _spawn_gnss(
+        self,
+        world: Any,
+        vehicle: Any,
+        noise_multiplier: float = 1.0,
+    ) -> None:
         """
-        @brief Spawn 3D LiDAR sensor at roof centre (Suite B and C).
+        @brief Spawn GNSS sensor at roof antenna position.
 
-        Multi-channel scan (Velodyne VLP-16 style). Provides richer point clouds
-        for Cartographer and denser obstacle proximity information.
+        CARLA's sensor.other.gnss outputs WGS84 lat/lon at the configured
+        noise level. The base noise stddevs (from sensors_config.gnss) model
+        RTK-fixed conditions (~2 cm). The noise_multiplier scales these to
+        simulate degraded RTK states (float, standalone, degraded).
 
-        Config key: sensors_config.lidar_3d. Mount defaults: x=0.0, z=1.5.
+        The CARLA ROS bridge publishes this as sensor_msgs/NavSatFix on
+        /carla/ego_vehicle/gnss. The GnssNoiseRelay node in the ros2-bridge
+        adds additional noise and stamps position_covariance before feeding
+        navsat_transform_node.
 
         @param world: carla.World for the current episode.
         @param vehicle: Ego vehicle actor to attach to.
+        @param noise_multiplier: Scale factor for base noise stddevs.
+               1.0 = RTK fixed. Higher = degraded fix state.
         """
-        lidar3d_config = self._sensors_config.get("lidar_3d", {})
-        mount = lidar3d_config.get("mount", {})
+        gnss_config = self._sensors_config.get("gnss", {})
+        mount = gnss_config.get("mount", {})
 
-        lidar_bp = world.get_blueprint_library().find("sensor.lidar.ray_cast")
-        lidar_bp.set_attribute("role_name", "lidar_3d")
-        for attr, default in [
-            ("channels", 16),
-            ("range", 100.0),
-            ("points_per_second", 300000),
-            ("rotation_frequency", 10.0),
-            ("upper_fov", 15.0),
-            ("lower_fov", -15.0),
-            ("sensor_tick", 0.05),
+        gnss_bp = world.get_blueprint_library().find("sensor.other.gnss")
+        gnss_bp.set_attribute("role_name", "gnss")
+
+        # Scale base noise by the per-episode multiplier
+        base_lat = float(gnss_config.get("noise_lat_stddev", 0.0000002))
+        base_lon = float(gnss_config.get("noise_lon_stddev", 0.0000002))
+        base_alt = float(gnss_config.get("noise_alt_stddev", 0.05))
+
+        for attr, value in [
+            ("noise_alt_bias", gnss_config.get("noise_alt_bias", 0.0)),
+            ("noise_alt_stddev", base_alt * noise_multiplier),
+            ("noise_lat_bias", gnss_config.get("noise_lat_bias", 0.0)),
+            ("noise_lat_stddev", base_lat * noise_multiplier),
+            ("noise_lon_bias", gnss_config.get("noise_lon_bias", 0.0)),
+            ("noise_lon_stddev", base_lon * noise_multiplier),
+            ("sensor_tick", gnss_config.get("sensor_tick", 0.05)),
         ]:
-            lidar_bp.set_attribute(attr, str(lidar3d_config.get(attr, default)))
+            gnss_bp.set_attribute(attr, str(value))
 
-        lidar_transform = carla.Transform(
+        gnss_transform = carla.Transform(
             carla.Location(
                 x=float(mount.get("x", 0.0)),
                 y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 1.5)),
+                z=float(mount.get("z", 1.8)),
             )
         )
-        lidar_sensor = world.spawn_actor(lidar_bp, lidar_transform, attach_to=vehicle)
-        lidar_sensor.listen(self._lidar_callback)
-        self._spawned_sensors.append(lidar_sensor)
-
-    def _spawn_camera_rgb(self, world: Any, vehicle: Any) -> None:
-        """
-        @brief Spawn forward-facing RGB camera at windscreen height (Suite C).
-
-        @note The camera is currently passive: spawned and registered so it
-              appears in CARLA diagnostics, but data is not consumed by the
-              RL observation or EKF pipeline. The listener is a no-op.
-
-        @todo(AG) Pending decision on Suite C utility.
-
-        Config key: sensors_config.camera_rgb.
-        Mount defaults: x=2.0, z=1.2, pitch=-5 deg.
-
-        @param world: carla.World for the current episode.
-        @param vehicle: Ego vehicle actor to attach to.
-        """
-        cam_config = self._sensors_config.get("camera_rgb", {})
-        mount = cam_config.get("mount", {})
-
-        cam_bp = world.get_blueprint_library().find("sensor.camera.rgb")
-        cam_bp.set_attribute("role_name", "rgb_front")
-        for attr, default in [
-            ("image_size_x", 640),
-            ("image_size_y", 480),
-            ("fov", 90.0),
-            ("sensor_tick", 0.05),
-        ]:
-            cam_bp.set_attribute(attr, str(cam_config.get(attr, default)))
-
-        cam_transform = carla.Transform(
-            carla.Location(
-                x=float(mount.get("x", 2.0)),
-                y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 1.2)),
-            ),
-            carla.Rotation(pitch=float(mount.get("pitch", -5.0))),
+        gnss_sensor = world.spawn_actor(
+            gnss_bp, gnss_transform, attach_to=vehicle
         )
-        cam_sensor = world.spawn_actor(cam_bp, cam_transform, attach_to=vehicle)
-        # Camera data not consumed; listener is a no-op placeholder so the sensor
-        # is registered and visible in CARLA diagnostics.
-        cam_sensor.listen(lambda _: None)
-        self._spawned_sensors.append(cam_sensor)
+        # Register a no-op listener so CARLA considers the stream open.
+        # The ROS bridge publishes NavSatFix from the GNSS data automatically.
+        gnss_sensor.listen(lambda _: None)
+        self._spawned_sensors.append(gnss_sensor)
+        logger.debug(
+            "Spawned GNSS sensor (noise_multiplier=%.1f, lat_stddev=%.10f deg).",
+            noise_multiplier,
+            base_lat * noise_multiplier,
+        )
 
     def _spawn_collision_sensor(self, world: Any, vehicle: Any) -> None:
         """

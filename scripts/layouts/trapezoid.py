@@ -38,13 +38,12 @@ from scripts.layouts.common import (
     ang_offset_from_wall,
     ang_x_margin,
     angled_bays_along_wall,
-    compute_landmarks,
     validate_bays_in_polygon,
     warn_narrow_corridors,
 )
 
 # World-frame origin chosen so the primary spawn lands at CARLA (0,0),
-# aligning CARLA and Cartographer coordinate frames from the start.
+# ensuring consistent coordinate frame alignment at the origin.
 # spawn_local = (-2.0, 24.0) -> origin = (2.0, -24.0).
 ORIGIN_X = 2.0
 ORIGIN_Y = -24.0
@@ -150,25 +149,33 @@ def generate() -> Dict[str, Any]:
     )
 
     # ------------------------------------------------------------------
-    # Top-wall parallel group: 3 bays along the sloped top wall P3(0,48)->P2(44,39).
+    # Top-wall parallel group: 3 bays along the sloped top wall P3(-5,48)->P2(44,39).
     # Wall direction P3->P2: dx=+depth, dy=-y_offset (same length as bottom wall).
-    # CCW inward normal from (wdx_top, wdy_top): (wdy_top, -wdx_top) points into lot.
-    # par_top_along_start: first bay placed 9 m along the wall from P3 so it
-    # clears the left-wall corner cones.
-    # facing_yaw: computed from wall direction so bays align with the slope.
+    # Inward normal: CW rotation of wall direction = (top_wdy, -top_wdx), pointing
+    # into the lot interior (decreasing y from the top wall).
+    # par_top_along_start: first bay placed 9 m along the wall from actual P3 (-5,48)
+    # so it clears the left-wall corner cones.
+    # par_top_spacing: depth + 1 m gap so bays do not touch end-to-end in CARLA.
+    # Wall start uses P3 (-5, width_front) to match the actual lot corner, so that
+    # par_top_normal_offset correctly places the back face at _WALL_GAP from the wall.
     # ------------------------------------------------------------------
     top_wdx = depth / wall_len  # same magnitude as bottom wall (symmetric taper)
     top_wdy = -y_offset / wall_len
-    top_nx = top_wdy  # CCW inward normal x component
-    top_ny = -top_wdx  # CCW inward normal y component
+    top_nx = top_wdy  # CW inward normal x component (points into lot)
+    top_ny = -top_wdx  # CW inward normal y component
     top_par_yaw = math.degrees(math.atan2(top_wdy, top_wdx))
     par_top_along_start = 9.0 + dims_par["depth"] / 2.0
+    par_top_spacing = dims_par["depth"] + 1.0  # 1 m gap between bay ends
     par_top_normal_offset = dims_par["width"] / 2.0 + _WALL_GAP
+    # Use the actual P3 corner (-5, width_front) as wall start so the normal offset
+    # places bay centres at the correct distance from the real wall line.
+    par_top_wall_x0 = -5.0
+    par_top_wall_y0 = width_front
     par_bays_top = []
     for i in range(3):
-        along = par_top_along_start + i * dims_par["depth"]
-        wx = 0.0 + top_wdx * along
-        wy = width_front + top_wdy * along
+        along = par_top_along_start + i * par_top_spacing
+        wx = par_top_wall_x0 + top_wdx * along
+        wy = par_top_wall_y0 + top_wdy * along
         cx = wx + top_nx * par_top_normal_offset
         cy = wy + top_ny * par_top_normal_offset
         par_bays_top.append(
@@ -297,5 +304,4 @@ def generate() -> Dict[str, Any]:
         "extra_spawns": [spawn2],
         "patrol_waypoints": patrol,
         "pedestrian_zones": ped_zones,
-        "landmarks": compute_landmarks(corners, all_bays),
     }
