@@ -1512,10 +1512,20 @@ class CARLAParkingEnv(gym.Env):
         start = time.monotonic()
         tick_interval = 0.05  # 20 Hz
 
-        # Convergence detection: the vehicle is stationary at episode reset,
-        # so the EKF velocity should be near zero once the GNSS flat-earth
-        # projection has produced a stable position and the IMU transient has settled.
-        _VEL_CONVERGED = 0.5  # m/s
+        # Convergence detection: the vehicle is stationary at episode reset.
+        # The EKF has no direct velocity measurements (only GNSS position +
+        # IMU yaw rate), so its velocity estimate is unreliable (often 100s
+        # of m/s from noisy position differentiation). Instead of checking
+        # velocity, we check that the computed odom->world transform is
+        # stable across consecutive readings. Once the rotation and
+        # translation stop changing, the EKF position has settled.
+        _POS_STABLE_THRESHOLD = 0.5  # metres: tx/ty must change < this
+        _YAW_STABLE_THRESHOLD = 0.1  # radians (~5.7 deg): r must change < this
+        _MIN_STABLE_READINGS = 3  # consecutive stable readings required
+        prev_tx: Optional[float] = None
+        prev_ty: Optional[float] = None
+        prev_r: Optional[float] = None
+        stable_count = 0
 
         while True:
             ekf_pose = self._cov_subscriber.get_latest_pose()
@@ -1540,8 +1550,6 @@ class CARLAParkingEnv(gym.Env):
             ekf_x = float(ekf_pose[0])
             ekf_y = float(ekf_pose[1])
             ekf_yaw = float(ekf_pose[2])
-            ekf_vx = float(ekf_pose[3])
-            ekf_vy = float(ekf_pose[4])
 
             # Rotation angle: odom frame -> CARLA world frame.
             # The EKF odom x-axis may not align with CARLA world x,
@@ -1560,15 +1568,36 @@ class CARLAParkingEnv(gym.Env):
             tx = world_x - rotated_x
             ty = world_y - rotated_y
 
-            ekf_speed = math.sqrt(ekf_vx**2 + ekf_vy**2)
-            if ekf_speed <= _VEL_CONVERGED:
+            # Check transform stability rather than velocity.
+            if prev_tx is not None:
+                dtx = abs(tx - prev_tx)
+                dty = abs(ty - prev_ty)  # type: ignore[operator]
+                dr = abs(
+                    math.atan2(
+                        math.sin(r - prev_r),  # type: ignore[arg-type]
+                        math.cos(r - prev_r),  # type: ignore[arg-type]
+                    )
+                )
+                if (
+                    dtx < _POS_STABLE_THRESHOLD
+                    and dty < _POS_STABLE_THRESHOLD
+                    and dr < _YAW_STABLE_THRESHOLD
+                ):
+                    stable_count += 1
+                else:
+                    stable_count = 0
+
+            prev_tx = tx
+            prev_ty = ty
+            prev_r = r
+
+            if stable_count >= _MIN_STABLE_READINGS:
                 self._ekf_odom_offset = (tx, ty, cos_r, sin_r, r)
                 self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
                 logger.info(
                     f"EKF converged after {elapsed:.2f}s: "
                     f"rotation={math.degrees(r):.1f}deg "
                     f"tx={tx:.3f}m ty={ty:.3f}m "
-                    f"ekf_speed={ekf_speed:.3f}m/s "
                     f"(CARLA spawn=({world_x:.2f},{world_y:.2f}) "
                     f"EKF odom=({ekf_x:.2f},{ekf_y:.2f})) "
                     f"target_odom=({self._target_bay_odom['x']:.2f},"
@@ -1581,14 +1610,14 @@ class CARLAParkingEnv(gym.Env):
                 self._compute_target_bay_odom(tx, ty, cos_r, sin_r, r)
                 logger.warning(
                     f"EKF convergence timeout ({self._ekf_convergence_timeout:.0f}s) "
-                    f"-- ekf_speed={ekf_speed:.2f}m/s still above threshold. "
+                    f"-- transform still unstable after {stable_count} stable readings. "
                     "Using best available transform; position obs may be inaccurate."
                 )
                 return
 
             logger.debug(
                 f"Waiting for EKF convergence: "
-                f"ekf_speed={ekf_speed:.2f}m/s elapsed={elapsed:.1f}s"
+                f"stable={stable_count}/{_MIN_STABLE_READINGS} elapsed={elapsed:.1f}s"
             )
             if self.world is not None:
                 self.world.tick(10.0)

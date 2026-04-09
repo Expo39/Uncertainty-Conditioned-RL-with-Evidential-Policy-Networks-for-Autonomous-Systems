@@ -44,16 +44,15 @@ no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return emp
 # Training env loads this file at __init__ and samples a tier each reset().
 gnss_noise_profiles: configs/deployment/sim/gnss_noise_profiles.yaml
 
-# Geographic datum for navsat_transform_node and the /datum service call.
-# Must match the GNSS origin used by the CARLA map. For worlds loaded via
-# generate_opendrive_world() without a <geoReference> element in the OpenDRIVE
-# file, CARLA defaults to lat=0.0, lon=0.0 as the world (0,0) origin.
-# The datum_primer in carla_bridge.launch.py calls the /datum service once at
-# startup with these values, latching the navsat_transform local-Cartesian
-# origin to CARLA world (0,0). Do NOT set to a non-zero value (e.g. 42N 2E)
-# unless the OpenDRIVE file contains a matching <geoReference> element.
-gnss_datum_lat: 0.0  # degrees north
-gnss_datum_lon: 0.0  # degrees east
+# Geographic datum for the flat-earth projection in GnssNoiseRelayNode.
+# When both are 0.0 (default), GnssNoiseRelayNode auto-latches the datum from
+# the first raw GNSS reading so the EKF odom frame is centred near CARLA world
+# (0,0) in metres. This is safe for FlatPlane worlds loaded via
+# generate_opendrive_world() where CARLA uses an internal GPS reference
+# (not lat=0, lon=0). Set explicit non-zero values only if you need to override
+# the auto-detected origin (e.g. a known real-world datum).
+gnss_datum_lat: 0.0  # degrees north (0.0 = auto-detect from first GNSS reading)
+gnss_datum_lon: 0.0  # degrees east  (0.0 = auto-detect from first GNSS reading)
 
 # ---------------------------------------------------------------------------
 # CARLA sensor noise configuration

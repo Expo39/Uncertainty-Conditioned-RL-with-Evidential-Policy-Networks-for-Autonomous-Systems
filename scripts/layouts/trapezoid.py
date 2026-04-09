@@ -44,9 +44,11 @@ from scripts.layouts.common import (
 
 # World-frame origin chosen so the primary spawn lands at CARLA (0,0),
 # ensuring consistent coordinate frame alignment at the origin.
-# spawn_local = (-2.0, 30.0) -> origin = (2.0, -30.0).
+# to_world_frame() negates Y for CARLA's left-handed frame:
+#   carla_y = -(local_y + (-ORIGIN_Y))  =>  carla_y = -(30.0 + (-30.0)) = 0.
+# spawn_local = (-2.0, 30.0) -> CARLA (0.0, 0.0).
 ORIGIN_X = 2.0
-ORIGIN_Y = -30.0
+ORIGIN_Y = 30.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False

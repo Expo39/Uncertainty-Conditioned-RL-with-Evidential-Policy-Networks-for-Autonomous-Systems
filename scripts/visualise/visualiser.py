@@ -131,9 +131,12 @@ def _world_to_screen(
     @param scale: Pixels per metre.
     @return List of (px, py) integer tuples.
     """
+    # Layout coordinates are in CARLA's left-handed frame (Y increases
+    # rightward). Screen Y increases downward, which matches CARLA Y
+    # direction in a bird's-eye view, so no Y-flip is needed.
     shifted = pts - origin
     px = (shifted[:, 0] * scale + _MARGIN_PX).astype(int)
-    py = (_WINDOW_H - _MARGIN_PX - shifted[:, 1] * scale).astype(int)
+    py = (shifted[:, 1] * scale + _MARGIN_PX).astype(int)
     return list(zip(px.tolist(), py.tolist()))
 
 
