@@ -1,11 +1,14 @@
 """
 @file gnss_noise_relay.py
-@brief ROS 2 node that adds dynamic noise to CARLA GNSS and stamps covariance.
+@brief ROS 2 node that adds dynamic noise to CARLA GNSS, converts to local
+       Odometry via flat-earth projection, and stamps covariance.
 
 This node subscribes to the raw NavSatFix from the CARLA GNSS sensor, adds
-Gaussian noise to lat/lon/alt, stamps the position_covariance diagonal with
-metric variance matching the current episode's RTK fix-state tier, and
-republishes on /gnss/noisy.
+Gaussian noise to lat/lon/alt, converts the noisy lat/lon to local XY via a
+flat-earth projection, and publishes the result as nav_msgs/Odometry on
+/odometry/gps for direct consumption by the robot_localisation EKF. This
+replaces navsat_transform_node, eliminating the datum service, startup delay,
+and circular EKF dependency that caused persistent NaN output.
 
 It also relays the CARLA IMU topic with realistic angular_velocity_covariance
 stamped. CARLA's IMU bridge publishes zero covariance on all fields, which
@@ -32,11 +35,13 @@ gnss_noise_profiles.yaml alongside the tier noise parameters.
 """
 
 import json
+import math
 import os
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rclpy
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu, NavSatFix
@@ -86,9 +91,9 @@ class GnssNoiseRelayNode(Node):
     at each GNSS callback, modelling mid-episode fix-state transitions (e.g.
     RTK loss when driving under a structure).
 
-    The position_covariance field is stamped with the TOTAL metric variance
-    (base + extra) so navsat_transform_node and the downstream EKF receive
-    correctly scaled measurement noise.
+    The Odometry pose covariance is stamped with the TOTAL metric variance
+    (base + extra) so the downstream EKF receives correctly scaled measurement
+    noise. The NavSatFix is also republished on /gnss/noisy for diagnostics.
 
     @see documentation/design/gnss_markov_transitions.md
     """
@@ -121,6 +126,14 @@ class GnssNoiseRelayNode(Node):
         # runs that require a fixed noise tier throughout each episode.
         self.declare_parameter("enable_markov_transitions", True)
 
+        # Flat-earth projection datum (degrees). Noisy lat/lon are converted to
+        # local XY metres relative to this origin: x = (lon - datum_lon) * scale,
+        # y = (lat - datum_lat) * 111320. Replaces navsat_transform_node.
+        self.declare_parameter("datum_lat", 0.0)
+        self.declare_parameter("datum_lon", 0.0)
+        # Topic for the local Odometry output (consumed by EKF as odom0).
+        self.declare_parameter("odom_output_topic", "/odometry/gps")
+
         input_topic = str(
             self.get_parameter("input_topic").get_parameter_value().string_value
         )
@@ -139,6 +152,25 @@ class GnssNoiseRelayNode(Node):
             self.get_parameter("enable_markov_transitions")
             .get_parameter_value()
             .bool_value
+        )
+
+        # Flat-earth datum and Odometry output.
+        self._datum_lat: float = float(
+            self.get_parameter("datum_lat").get_parameter_value().double_value
+        )
+        self._datum_lon: float = float(
+            self.get_parameter("datum_lon").get_parameter_value().double_value
+        )
+        odom_output_topic = str(
+            self.get_parameter("odom_output_topic")
+            .get_parameter_value()
+            .string_value
+        )
+        # Precompute flat-earth scale factor (constant for a given datum latitude).
+        # At lat=0 the cosine factor is 1.0 so both axes scale identically.
+        self._metres_per_deg_lat: float = 111320.0
+        self._metres_per_deg_lon: float = (
+            111320.0 * math.cos(math.radians(self._datum_lat))
         )
 
         # Tier noise lookup populated from _TIER_DEFAULTS (updated if
@@ -203,6 +235,8 @@ class GnssNoiseRelayNode(Node):
             NavSatFix, input_topic, self._gnss_callback, qos
         )
         self._pub = self.create_publisher(NavSatFix, output_topic, qos)
+        # Odometry publisher: flat-earth converted position for the EKF.
+        self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos)
 
         self._imu_sub = self.create_subscription(
             Imu, imu_input_topic, self._imu_callback, qos
@@ -211,7 +245,9 @@ class GnssNoiseRelayNode(Node):
 
         self.get_logger().info(
             f"GnssNoiseRelay: {input_topic} -> {output_topic} "
-            f"(config: {self._config_path}, "
+            f"-> {odom_output_topic} (flat-earth, "
+            f"datum={self._datum_lat:.6f}N {self._datum_lon:.6f}E, "
+            f"config: {self._config_path}, "
             f"markov_transitions: {self._markov_enabled})"
         )
         self.get_logger().info(
@@ -400,9 +436,7 @@ class GnssNoiseRelayNode(Node):
         )
 
         # Stamp position_covariance with metric variance (metres^2).
-        # navsat_transform_node reads this to weight the GNSS measurement
-        # in the EKF. Diagonal: [lat_var, 0, 0, 0, lon_var, 0, 0, 0, alt_var].
-        # NavSatFix covariance is in ENU frame (metres^2).
+        # Diagnostic / logging use only now that navsat_transform is removed.
         metric_var = self._metric_stddev_m ** 2
         alt_var = (self._extra_alt_stddev_m + 0.05) ** 2  # Base alt noise = 0.05 m
         out.position_covariance = [
@@ -414,6 +448,30 @@ class GnssNoiseRelayNode(Node):
         out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
 
         self._pub.publish(out)
+
+        # -- Flat-earth projection: lat/lon -> local XY (metres) ---------------
+        # Replaces navsat_transform_node. Simple and accurate for parking-lot
+        # scale distances (< 100 m from datum).
+        local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
+        local_y = (out.latitude - self._datum_lat) * self._metres_per_deg_lat
+
+        odom_msg = Odometry()
+        odom_msg.header = out.header
+        odom_msg.header.frame_id = "odom"
+        odom_msg.child_frame_id = "ego_vehicle"
+        odom_msg.pose.pose.position.x = local_x
+        odom_msg.pose.pose.position.y = local_y
+
+        # 6x6 pose covariance (row-major). Set xx (index 0) and yy (index 7)
+        # to the GNSS metric variance so the EKF weights GNSS measurements
+        # according to the current RTK tier quality.
+        pose_cov = [0.0] * 36
+        pose_cov[0] = metric_var   # xx
+        pose_cov[7] = metric_var   # yy
+        pose_cov[35] = 1.0e6       # yaw-yaw: large = "no yaw info from GNSS"
+        odom_msg.pose.covariance = pose_cov
+
+        self._odom_pub.publish(odom_msg)
 
 
 def main() -> None:
