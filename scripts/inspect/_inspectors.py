@@ -924,7 +924,10 @@ class DryRunInspector(_Inspector):
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None:
                 ekf_x = float(ekf_pose[0])
-                ekf_y = float(ekf_pose[1])
+                # ekf_y from the extractor is in ROS convention (northward+).
+                # Negate here for CARLA convention (southward+) so EKF(world)
+                # can be compared directly to GT which is in CARLA frame.
+                ekf_y = -float(ekf_pose[1])
                 ekf_yaw = float(ekf_pose[2])
                 lines.append(
                     R + f"EKF(odom)   x={ekf_x:.2f}  y={ekf_y:.2f}"
@@ -975,7 +978,7 @@ class DryRunInspector(_Inspector):
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None and self._env.vehicle is not None:
                 ekf_x = float(ekf_pose[0])
-                ekf_y = float(ekf_pose[1])
+                ekf_y = -float(ekf_pose[1])
                 recon_veh_wx = cos_r * ekf_x - sin_r * ekf_y + tx
                 recon_veh_wy = sin_r * ekf_x + cos_r * ekf_y + ty
                 gt_veh = self._env.vehicle.get_transform()
