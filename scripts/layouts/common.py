@@ -301,32 +301,53 @@ def to_world_frame(
     """
     @brief Transform a local-frame layout to CARLA world frame.
 
-    All (x, y) coordinates are rotated by heading_deg and translated by
-    (origin_x, origin_y). Yaw angles are offset by heading_deg.
+    Layout modules define geometry in a right-handed math frame (Y-up, yaw
+    CCW-positive). CARLA uses UE4's left-handed frame (Y increases rightward,
+    yaw CW-positive). This function applies rotation + translation in the
+    math frame, then mirrors into CARLA's frame by negating Y and yaw.
+
+    The origin_x/origin_y constants in each layout module are specified in
+    CARLA world coordinates (left-handed). The internal math is done in the
+    right-handed frame and converted at the end.
 
     @param local_layout: Layout dict from one of the layout modules.
-    @param origin_x: World-frame x of lot origin.
-    @param origin_y: World-frame y of lot origin.
-    @param origin_z: World-frame z of lot ground (CARLA z, typically 0.3).
+    @param origin_x: CARLA world-frame x of lot origin.
+    @param origin_y: CARLA world-frame y of lot origin (left-handed).
+    @param origin_z: CARLA world-frame z of lot ground (typically 0.3).
     @param heading_deg: Heading of the lot in world frame (degrees, CCW positive).
-    @return World-frame layout dict ready for YAML serialisation.
+    @return CARLA world-frame layout dict ready for YAML serialisation.
     """
     h_rad = math.radians(heading_deg)
+    # The origin is in CARLA's left-handed frame. Negate origin_y so the
+    # intermediate math stays in the right-handed frame; then negate the
+    # final Y output to return to CARLA frame.
+    rh_origin_y = -origin_y
+
+    def _to_carla(x_rh: float, y_rh: float) -> Tuple[float, float]:
+        """Convert right-handed (x, y) to CARLA left-handed (x, -y)."""
+        # + 0.0 avoids negative zero in YAML output.
+        return (x_rh + 0.0, -y_rh + 0.0)
+
+    def _carla_yaw(yaw_rh_deg: float) -> float:
+        """Convert right-handed yaw (CCW+) to CARLA yaw (CW+)."""
+        return (-yaw_rh_deg) % 360.0
 
     world_corners = []
     for c in local_layout["corners"]:
-        wx, wy = _translate(c["x"], c["y"], origin_x, origin_y, h_rad)
-        world_corners.append({"x": round(wx, 3), "y": round(wy, 3)})
+        wx, wy = _translate(c["x"], c["y"], origin_x, rh_origin_y, h_rad)
+        cx, cy = _to_carla(wx, wy)
+        world_corners.append({"x": round(cx, 3), "y": round(cy, 3)})
 
     world_bays = []
     for i, b in enumerate(local_layout["bays"]):
-        wx, wy = _translate(b["local_x"], b["local_y"], origin_x, origin_y, h_rad)
-        world_yaw = _world_yaw(b["local_yaw_deg"], heading_deg)
+        wx, wy = _translate(b["local_x"], b["local_y"], origin_x, rh_origin_y, h_rad)
+        cx, cy = _to_carla(wx, wy)
+        world_yaw = _carla_yaw(_world_yaw(b["local_yaw_deg"], heading_deg))
         world_bay: Dict[str, Any] = {
             "id": f"{b['bay_type']}_{i}",
             "bay_type": b["bay_type"],
-            "x": round(wx, 3),
-            "y": round(wy, 3),
+            "x": round(cx, 3),
+            "y": round(cy, 3),
             "z": origin_z,
             "yaw_deg": round(world_yaw, 2),
             "width": b["width"],
@@ -339,42 +360,50 @@ def to_world_frame(
         world_bays.append(world_bay)
 
     sp = local_layout["spawn"]
-    sx, sy = _translate(sp["x"], sp["y"], origin_x, origin_y, h_rad)
+    sx, sy = _translate(sp["x"], sp["y"], origin_x, rh_origin_y, h_rad)
+    csx, csy = _to_carla(sx, sy)
     world_spawn = {
-        "x": round(sx, 3),
-        "y": round(sy, 3),
+        "x": round(csx, 3),
+        "y": round(csy, 3),
         "z": origin_z,
-        "yaw_deg": round(_world_yaw(sp["yaw_deg"], heading_deg), 2),
+        "yaw_deg": round(
+            _carla_yaw(_world_yaw(sp["yaw_deg"], heading_deg)), 2
+        ),
     }
 
     world_extra_spawns = []
     for esp in local_layout.get("extra_spawns", []):
-        esx, esy = _translate(esp["x"], esp["y"], origin_x, origin_y, h_rad)
+        esx, esy = _translate(esp["x"], esp["y"], origin_x, rh_origin_y, h_rad)
+        cesx, cesy = _to_carla(esx, esy)
         world_extra_spawns.append(
             {
-                "x": round(esx, 3),
-                "y": round(esy, 3),
+                "x": round(cesx, 3),
+                "y": round(cesy, 3),
                 "z": origin_z,
-                "yaw_deg": round(_world_yaw(esp["yaw_deg"], heading_deg), 2),
+                "yaw_deg": round(
+                    _carla_yaw(_world_yaw(esp["yaw_deg"], heading_deg)), 2
+                ),
             }
         )
 
     world_patrol = []
     for wp in local_layout["patrol_waypoints"]:
-        wx, wy = _translate(wp["x"], wp["y"], origin_x, origin_y, h_rad)
-        world_patrol.append({"x": round(wx, 3), "y": round(wy, 3)})
+        wx, wy = _translate(wp["x"], wp["y"], origin_x, rh_origin_y, h_rad)
+        cx, cy = _to_carla(wx, wy)
+        world_patrol.append({"x": round(cx, 3), "y": round(cy, 3)})
 
     world_ped_zones = []
     for zone in local_layout["pedestrian_zones"]:
-        cx = (zone["x_min"] + zone["x_max"]) / 2.0
-        cy = (zone["y_min"] + zone["y_max"]) / 2.0
+        zx = (zone["x_min"] + zone["x_max"]) / 2.0
+        zy = (zone["y_min"] + zone["y_max"]) / 2.0
         half_w = (zone["x_max"] - zone["x_min"]) / 2.0
         half_h = (zone["y_max"] - zone["y_min"]) / 2.0
-        wcx, wcy = _translate(cx, cy, origin_x, origin_y, h_rad)
+        wcx, wcy = _translate(zx, zy, origin_x, rh_origin_y, h_rad)
+        ccx, ccy = _to_carla(wcx, wcy)
         world_ped_zones.append(
             {
-                "centre_x": round(wcx, 3),
-                "centre_y": round(wcy, 3),
+                "centre_x": round(ccx, 3),
+                "centre_y": round(ccy, 3),
                 "half_width": round(half_w, 3),
                 "half_height": round(half_h, 3),
             }
@@ -389,11 +418,12 @@ def to_world_frame(
         cy_loc = (obs["y_min"] + obs["y_max"]) / 2.0
         half_w = (obs["x_max"] - obs["x_min"]) / 2.0
         half_h = (obs["y_max"] - obs["y_min"]) / 2.0
-        wcx, wcy = _translate(cx_loc, cy_loc, origin_x, origin_y, h_rad)
+        wcx, wcy = _translate(cx_loc, cy_loc, origin_x, rh_origin_y, h_rad)
+        ccx, ccy = _to_carla(wcx, wcy)
         world_obstacles.append(
             {
-                "centre_x": round(wcx, 3),
-                "centre_y": round(wcy, 3),
+                "centre_x": round(ccx, 3),
+                "centre_y": round(ccy, 3),
                 "half_width": round(half_w, 3),
                 "half_height": round(half_h, 3),
             }
@@ -502,6 +532,9 @@ def plot_layout(
     ax.set_title(f"Floor plan: {shape}", fontsize=14)
     ax.set_xlabel("x (m)", fontsize=12)
     ax.set_ylabel("y (m)", fontsize=12)
+    # Layout YAMLs are in CARLA's left-handed frame (Y increases rightward).
+    # Invert Y so the PNG matches an intuitive bird's-eye view (north = up).
+    ax.invert_yaxis()
 
     corner_pts = [(c["x"], c["y"]) for c in world_layout["corners"]]
     from matplotlib.patches import Polygon as MPoly

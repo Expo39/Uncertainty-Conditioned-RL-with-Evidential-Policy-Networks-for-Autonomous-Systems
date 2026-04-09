@@ -935,7 +935,10 @@ class DryRunInspector(_Inspector):
                 tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
                 wx = cos_r * ekf_x - sin_r * ekf_y + tx
                 wy = sin_r * ekf_x + cos_r * ekf_y + ty
-                wyaw = math.degrees(ekf_yaw + r)
+                wyaw_rad = math.atan2(
+                    math.sin(ekf_yaw + r), math.cos(ekf_yaw + r)
+                )
+                wyaw = math.degrees(wyaw_rad)
                 lines.append(
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
                     f"  yaw={wyaw:+.1f}deg  (compare to GT above)" + X

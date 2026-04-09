@@ -199,11 +199,11 @@ covariance_topic: "/ekf_uncertainty/covariance"  # CovarianceEstimate publisher 
 publish_rate: 10.0                           # Hz (file write rate)
 
 # Velocity frame convention.
-# robot_localisation with world_frame=odom publishes twist in the odom
-# (world-aligned) frame, not the vehicle body frame. The extractor rotates
-# it into body frame before writing to ekf_state.json.
-# Set false only if robot_localisation is configured with twist_in_robot_frame: true.
-twist_in_odom_frame: true
+# robot_localisation publishes twist in the child frame (body frame) per the
+# nav_msgs/Odometry convention, regardless of world_frame setting. No rotation
+# needed. Set true only for non-standard EKF configs that genuinely output
+# twist in the odom frame (none known).
+twist_in_odom_frame: false
 
 # Time source for ROS 2 nodes.
 # The CARLA bridge runs with use_sim_time=true and publishes /clock from
