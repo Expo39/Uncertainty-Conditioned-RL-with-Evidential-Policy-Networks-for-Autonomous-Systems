@@ -919,13 +919,26 @@ class DryRunInspector(_Inspector):
                 f"  yaw={t.rotation.yaw:+.1f}deg  spd={spd:.2f}m/s" + X
             )
 
-        # RED -- raw EKF odom pose
+        # RED -- EKF odom pose AND projected into world frame for direct GT comparison
         if self._env._cov_subscriber is not None:
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None:
+                ekf_x = float(ekf_pose[0])
+                ekf_y = float(ekf_pose[1])
+                ekf_yaw = float(ekf_pose[2])
                 lines.append(
-                    R + f"EKF  x={float(ekf_pose[0]):.2f}  y={float(ekf_pose[1]):.2f}"
-                    f"  yaw={math.degrees(float(ekf_pose[2])):+.1f}deg" + X
+                    R + f"EKF(odom)   x={ekf_x:.2f}  y={ekf_y:.2f}"
+                    f"  yaw={math.degrees(ekf_yaw):+.1f}deg" + X
+                )
+                # Project EKF odom pose into world frame using the calibrated
+                # odom->world transform so it can be compared directly to GT.
+                tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
+                wx = cos_r * ekf_x - sin_r * ekf_y + tx
+                wy = sin_r * ekf_x + cos_r * ekf_y + ty
+                wyaw = math.degrees(ekf_yaw + r)
+                lines.append(
+                    R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
+                    f"  yaw={wyaw:+.1f}deg  (compare to GT above)" + X
                 )
 
         # WHITE -- EKF covariance split over two lines (indices 3-11)
@@ -1078,6 +1091,13 @@ class DryRunInspector(_Inspector):
                     obs, reward, terminated, truncated, info = self._env.step(action)
                     step += 1
                     total_steps += 1
+                    # Pace the dryrun at real-time speed. Each env.step() advances
+                    # the simulation by action_repeat * carla_timestep seconds.
+                    # Without this sleep the loop runs as fast as CARLA can tick,
+                    # which is much faster than wall-clock time on a GPU machine.
+                    time.sleep(
+                        self._env._action_repeat * self._env._carla_timestep
+                    )
                     self._update_spectator()
 
                     # Inspector-level GT proximity check: end episode the moment

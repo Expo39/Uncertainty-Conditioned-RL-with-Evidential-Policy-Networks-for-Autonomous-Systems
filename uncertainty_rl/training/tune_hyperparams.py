@@ -45,6 +45,7 @@ except ImportError:
 from uncertainty_rl.training.train_ppo import (
     TrainResult,
     load_config,
+    load_env_config,
     merge_configs,
     train,
 )
@@ -492,7 +493,7 @@ def main() -> None:
     parser.add_argument(
         "--env-config",
         type=str,
-        default="configs/carla/env_config.yaml",
+        default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config",
     )
 
@@ -505,9 +506,11 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Load configs
+    # Load configs. load_env_config merges sensor_config.yaml (shared keys)
+    # with env_config.yaml (CARLA-specific keys) so all shared params have
+    # a single source of truth.
     train_config = load_config(args.train_config)
-    env_config = load_config(args.env_config)
+    env_config = load_env_config(args.env_config)
     tuning_config = load_config(args.tuning_config)
 
     # Merge train + env configs

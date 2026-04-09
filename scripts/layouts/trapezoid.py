@@ -44,9 +44,9 @@ from scripts.layouts.common import (
 
 # World-frame origin chosen so the primary spawn lands at CARLA (0,0),
 # ensuring consistent coordinate frame alignment at the origin.
-# spawn_local = (-2.0, 24.0) -> origin = (2.0, -24.0).
+# spawn_local = (-2.0, 30.0) -> origin = (2.0, -30.0).
 ORIGIN_X = 2.0
-ORIGIN_Y = -24.0
+ORIGIN_Y = -30.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False
@@ -58,8 +58,8 @@ def generate() -> Dict[str, Any]:
     @return Layout dict with keys: corners, bays, spawn, extra_spawns,
             patrol_waypoints, pedestrian_zones.
     """
-    width_front = 48.0
-    width_rear = 30.0
+    width_front = 60.0
+    width_rear = 40.0
     depth = 44.0
 
     # y_offset: how much each sloped wall tapers inward from front to rear.
@@ -86,7 +86,7 @@ def generate() -> Dict[str, Any]:
     # ------------------------------------------------------------------
     PERP_BAYS_PER_ROW = BAYS_PER_TYPE + 3  # 8 bays per row
     _cx_shift = -1.5 - 3.63
-    perp_mid_y = 25.5
+    perp_mid_y = width_front / 2.0
     perp_row_a_cy = perp_mid_y - dims_perp["aisle"] / 2.0 - dims_perp["depth"] / 2.0
     perp_row_b_cy = perp_mid_y + dims_perp["aisle"] / 2.0 + dims_perp["depth"] / 2.0
     perp_cx_start = (
@@ -150,32 +150,30 @@ def generate() -> Dict[str, Any]:
 
     # ------------------------------------------------------------------
     # Top-wall parallel group: 3 bays along the sloped top wall P3(-5,48)->P2(44,39).
-    # Wall direction P3->P2: dx=+depth, dy=-y_offset (same length as bottom wall).
-    # Inward normal: CW rotation of wall direction = (top_wdy, -top_wdx), pointing
-    # into the lot interior (decreasing y from the top wall).
-    # par_top_along_start: first bay placed 9 m along the wall from actual P3 (-5,48)
-    # so it clears the left-wall corner cones.
+    # Wall direction derived from actual P3->P2 endpoints so the unit vector and
+    # yaw match the real wall slope (dx=49, dy=-9, not the bottom-wall dx=44).
+    # Inward normal: CW rotation of wall direction = (wdy, -wdx), pointing into lot.
+    # Wall start uses actual P3 (-5, width_front) so par_top_normal_offset places
+    # the back face exactly _WALL_GAP from the real wall line.
+    # par_top_along_start: first bay centre 9 m + hd along the wall from P3.
     # par_top_spacing: depth + 1 m gap so bays do not touch end-to-end in CARLA.
-    # Wall start uses P3 (-5, width_front) to match the actual lot corner, so that
-    # par_top_normal_offset correctly places the back face at _WALL_GAP from the wall.
     # ------------------------------------------------------------------
-    top_wdx = depth / wall_len  # same magnitude as bottom wall (symmetric taper)
-    top_wdy = -y_offset / wall_len
-    top_nx = top_wdy  # CW inward normal x component (points into lot)
-    top_ny = -top_wdx  # CW inward normal y component
+    _top_wall_dx = depth - (-5.0)  # = 49.0, actual P3->P2 x-span
+    _top_wall_dy = -y_offset       # = -9.0, actual P3->P2 y-span
+    _top_wall_len = math.hypot(_top_wall_dx, _top_wall_dy)
+    top_wdx = _top_wall_dx / _top_wall_len
+    top_wdy = _top_wall_dy / _top_wall_len
+    top_nx = top_wdy   # CW inward normal x (points into lot)
+    top_ny = -top_wdx  # CW inward normal y
     top_par_yaw = math.degrees(math.atan2(top_wdy, top_wdx))
     par_top_along_start = 9.0 + dims_par["depth"] / 2.0
-    par_top_spacing = dims_par["depth"] + 1.0  # 1 m gap between bay ends
+    par_top_spacing = dims_par["depth"]  # end-to-end, matching the right-wall group
     par_top_normal_offset = dims_par["width"] / 2.0 + _WALL_GAP
-    # Use the actual P3 corner (-5, width_front) as wall start so the normal offset
-    # places bay centres at the correct distance from the real wall line.
-    par_top_wall_x0 = -5.0
-    par_top_wall_y0 = width_front
     par_bays_top = []
-    for i in range(3):
+    for i in range(4):
         along = par_top_along_start + i * par_top_spacing
-        wx = par_top_wall_x0 + top_wdx * along
-        wy = par_top_wall_y0 + top_wdy * along
+        wx = -5.0 + top_wdx * along
+        wy = width_front + top_wdy * along
         cx = wx + top_nx * par_top_normal_offset
         cy = wy + top_ny * par_top_normal_offset
         par_bays_top.append(
@@ -192,10 +190,11 @@ def generate() -> Dict[str, Any]:
     # ------------------------------------------------------------------
     # Right-wall parallel group: 3 bays against the right wall (x=depth).
     # yaw=90: depth (8 m) along Y, nose facing +Y. Back against x=depth.
-    # par_right_y_start: 3 m clear of the bottom-right corner (y_offset + 3).
+    # par_right_y_start: centred on the rear wall span (y_offset..width_front-y_offset).
     # ------------------------------------------------------------------
     par_cx_right = depth - dims_par["width"] / 2.0 - _WALL_GAP
-    par_right_y_start = y_offset + 3.0
+    _right_wall_span = (width_front - y_offset) - y_offset
+    par_right_y_start = y_offset + (_right_wall_span - 3 * dims_par["depth"]) / 2.0
     par_bays_right = []
     for i in range(3):
         par_bays_right.append(
@@ -252,14 +251,44 @@ def generate() -> Dict[str, Any]:
     par_right_inner_x = par_cx_right - dims_par["width"] / 2.0
     aisle1_cy = perp_row_a_cy - dims_perp["depth"] / 2.0 - dims_perp["aisle"] / 2.0
     aisle3_cy = perp_row_b_cy + dims_perp["depth"] / 2.0 + dims_perp["aisle"] / 2.0
-    # 4 m inset from each end keeps the patrol path inside the tapered boundary.
+    # Patrol y values: midpoint between the nearest parallel bay inner edge and
+    # the closest perpendicular bay nose face, on each side.
+    #
+    # Upper: between row B nose face and the minimum-y corner of the top-wall bays.
+    _row_b_nose_y = perp_row_b_cy + dims_perp["depth"] / 2.0
+    _top_yaw_rad = math.radians(top_par_yaw)
+    _top_cos = math.cos(_top_yaw_rad)
+    _top_sin = math.sin(_top_yaw_rad)
+    _hd = dims_par["depth"] / 2.0
+    _hw = dims_par["width"] / 2.0
+    _top_par_min_y = min(
+        (width_front + top_wdy * (par_top_along_start + i * par_top_spacing) + top_ny * par_top_normal_offset)
+        + _top_sin * lx + _top_cos * ly
+        for i in range(4)
+        for lx, ly in [(-_hd, -_hw), (_hd, -_hw), (_hd, _hw), (-_hd, _hw)]
+    )
+    _patrol_upper_cy = (_row_b_nose_y + _top_par_min_y) / 2.0
+    #
+    # Lower: between row A nose face and the max-y (inner) edge of the angled bays.
+    _row_a_nose_y = perp_row_a_cy - dims_perp["depth"] / 2.0
     x_enter = perp_cluster_x_min / 2.0
     x_exit = (perp_cluster_x_max + par_right_inner_x) / 2.0
+    _ang_yaw_rad = math.radians(ang_yaw)
+    _ang_cos = math.cos(_ang_yaw_rad)
+    _ang_sin = math.sin(_ang_yaw_rad)
+    _ang_hd = dims_ang["depth"] / 2.0
+    _ang_hw = dims_ang["width"] / 2.0
+    _ang_max_y = max(
+        b["local_y"] + _ang_sin * lx + _ang_cos * ly
+        for b in ang_bays
+        for lx, ly in [(-_ang_hd, -_ang_hw), (_ang_hd, -_ang_hw), (_ang_hd, _ang_hw), (-_ang_hd, _ang_hw)]
+    )
+    _patrol_lower_cy = (_row_a_nose_y + _ang_max_y) / 2.0
     patrol = [
-        {"x": x_enter, "y": aisle1_cy - 4.0},  # WP1: lower-left, clear of entrance
-        {"x": x_exit, "y": aisle1_cy},  # WP2: lower-right
-        {"x": x_exit, "y": aisle3_cy},  # WP3: upper-right
-        {"x": x_enter, "y": aisle3_cy + 4.0},  # WP4: upper-left, clear of entrance
+        {"x": x_enter, "y": _patrol_lower_cy - 4.0},  # WP1: lower-left, clear of entrance
+        {"x": x_exit, "y": _patrol_lower_cy},           # WP2: lower-right
+        {"x": x_exit, "y": _patrol_upper_cy},           # WP3: upper-right
+        {"x": x_enter, "y": _patrol_upper_cy + 4.0},   # WP4: upper-left
     ]
 
     # ------------------------------------------------------------------
