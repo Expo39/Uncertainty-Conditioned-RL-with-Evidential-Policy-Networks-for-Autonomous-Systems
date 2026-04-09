@@ -10,12 +10,11 @@ simulation. The bridge auto-discovers sensors spawned by the training container
 Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (passive; publishes sensor data from CARLA to ROS 2 topics)
 2. Static TF publishers (sensor frames to vehicle body)
-3. GnssNoiseRelayNode (adds per-episode noise to GNSS, stamps covariance;
-   also relays IMU with realistic angular_velocity_covariance stamped -- CARLA
-   bridge publishes zero covariance which would make vyaw infinitely reliable)
-4. navsat_transform_node (UTM projection: NavSatFix -> Odometry)
-5. robot_localisation EKF (fuses IMU/stamped + GNSS odometry -> /odometry/filtered)
-6. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
+3. GnssNoiseRelayNode (adds per-episode noise to GNSS, converts lat/lon to local
+   XY via flat-earth projection, publishes Odometry on /odometry/gps; also relays
+   IMU with realistic angular_velocity_covariance stamped)
+4. robot_localisation EKF (fuses IMU/stamped + GNSS odometry -> /odometry/filtered)
+5. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
    ekf_state.json for the training container)
 
 TF tree (map is root):
@@ -339,11 +338,18 @@ def generate_launch_description() -> LaunchDescription:
     ]
 
     # -- GNSS noise relay node ---------------------------------------------
-    # Adds per-episode noise to CARLA GNSS and stamps position_covariance
-    # for navsat_transform_node. Noise tier signalled via gnss_noise_config.json.
+    # Adds per-episode noise to CARLA GNSS, converts lat/lon to local XY via
+    # flat-earth projection, and publishes Odometry on /odometry/gps for the
+    # EKF. Replaces navsat_transform_node (eliminates datum service, startup
+    # delay, and circular EKF dependency that caused persistent NaN).
 
     gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
     carla_topics = ros2_config.get("carla_topics", {})
+
+    # Datum lat/lon for flat-earth projection (from env_config.yaml).
+    datum_lat: float = float(env_config.get("gnss_datum_lat", 0.0))
+    datum_lon: float = float(env_config.get("gnss_datum_lon", 0.0))
+
     gnss_noise_relay_node = Node(
         package="uncertainty_rl_ros2",
         executable="gnss_noise_relay",
@@ -363,6 +369,12 @@ def generate_launch_description() -> LaunchDescription:
                 "enable_markov_transitions": gnss_relay_cfg.get(
                     "enable_markov_transitions", True
                 ),
+                # Flat-earth datum for GPS-to-local-XY conversion.
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
+                "odom_output_topic": gnss_relay_cfg.get(
+                    "odom_output_topic", "/odometry/gps"
+                ),
                 # IMU covariance relay: stamp realistic angular_velocity_covariance
                 # so the EKF treats vyaw with finite (not infinite) reliability.
                 # CARLA bridge publishes zero covariance on all Imu fields.
@@ -377,59 +389,6 @@ def generate_launch_description() -> LaunchDescription:
             }
         ],
     )
-
-    # -- navsat_transform_node (robot_localisation package) -----------------
-    # Converts NavSatFix (/gnss/noisy) -> Odometry (/odometry/gps) via UTM.
-
-    navsat_cfg = ros2_config.get("navsat_transform", {})
-    navsat_transform_node = Node(
-        package="robot_localization",
-        executable="navsat_transform_node",
-        name="navsat_transform_node",
-        parameters=[
-            {
-                "use_sim_time": use_sim_time,
-                "frequency": navsat_cfg.get("frequency", 20.0),
-                "zero_altitude": navsat_cfg.get("zero_altitude", True),
-                "publish_filtered_gps": navsat_cfg.get(
-                    "publish_filtered_gps", False
-                ),
-                "use_odometry_yaw": navsat_cfg.get("use_odometry_yaw", False),
-                "yaw_offset": navsat_cfg.get("yaw_offset", 0.0),
-                # Magnetic declination at the simulated CARLA FlatPlane location.
-                # CARLA's IMU is already ENU-aligned, so 0.0 rad is correct.
-                # On the real vehicle, set this to the local magnetic declination.
-                "magnetic_declination_radians": float(
-                    navsat_cfg.get("magnetic_declination_radians", 0.0)
-                ),
-                # wait_for_datum: true -> latch datum on the first /datum service
-                # call and never reset it. With false, navsat re-datums on every
-                # incoming GPS fix (spam visible in logs), which causes the local
-                # Cartesian origin to drift every tick. The datum_primer below
-                # calls the /datum service once at startup with CARLA's FlatPlane
-                # geographic origin (42 N, 2 E), latching the origin permanently.
-                "wait_for_datum": True,
-                # Suppress the 3-second startup delay so navsat begins
-                # processing on the first GNSS callback. Default is 3.0 s
-                # in robot_localization which adds unnecessary latency.
-                "delay": float(navsat_cfg.get("delay", 0.0)),
-                "broadcast_cartesian_transform": navsat_cfg.get(
-                    "broadcast_cartesian_transform",
-                    navsat_cfg.get("broadcast_utm_transform", True),
-                ),
-                "use_local_cartesian": navsat_cfg.get("use_local_cartesian", True),
-            }
-        ],
-        remappings=[
-            ("gps/fix", "/gnss/noisy"),
-            ("imu", "/carla/ego_vehicle/imu"),
-            ("odometry/filtered", "/odometry/filtered"),
-        ],
-    )
-
-    # -- Datum lat/lon (needed by both covariance_extractor and datum_primer) -
-    datum_lat: float = float(env_config.get("gnss_datum_lat", 42.0))
-    datum_lon: float = float(env_config.get("gnss_datum_lon", 2.0))
 
     # -- Covariance extractor node -----------------------------------------
 
@@ -451,11 +410,6 @@ def generate_launch_description() -> LaunchDescription:
                 "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", True),
             }
         ],
-        # Pass datum lat/lon so the extractor can reset navsat at each episode.
-        additional_env={
-            "DATUM_LAT": str(datum_lat),
-            "DATUM_LON": str(datum_lon),
-        },
     )
 
     # -- Pipeline diagnostic: log topic status after 20 s ------------------
@@ -504,33 +458,9 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
-    # -- Datum primer + EKF reset ------------------------------------------
-    # Step 1: Wait for /datum service (navsat_transform_node ready), then latch
-    #         the geographic origin so navsat never re-datums per GPS fix.
-    # Latch the geographic datum so navsat_transform never re-datums per GPS fix.
-    # 10 s delay: bridge needs ~5 s to connect to CARLA and start /clock.
-    # No /set_pose reset: the EKF converges naturally from GNSS corrections.
-    # A manual reset with a mis-stamped pose causes the EKF to integrate a huge
-    # time delta and produce NaN -- so we let GNSS pull it to the correct origin.
-    datum_primer = ExecuteProcess(
-        cmd=[
-            "bash",
-            "-c",
-            f"sleep 10 && source /opt/ros/jazzy/setup.bash && "
-            f"until ros2 service list 2>/dev/null | grep -q /datum; do sleep 1; done && "
-            f"ros2 service call /datum robot_localization/srv/SetDatum "
-            f'"{{geo_pose: {{position: {{latitude: {datum_lat}, '
-            f"longitude: {datum_lon}, altitude: 0.0}}, "
-            f'orientation: {{x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}}}}" && '
-            f"echo 'Datum latched at {datum_lat} N, {datum_lon} E'",
-        ],
-        output="screen",
-    )
-
     # -- Assemble launch description ---------------------------------------
-    # Startup order matters: bridge must be up before navsat_transform tries to
-    # subscribe to sensor topics. The EKF waits for /clock from the bridge
-    # before starting its timer loop.
+    # Startup order: bridge first (so sensor topics exist and /clock publishes),
+    # then static TFs (so the EKF can resolve sensor frames), then the rest.
 
     actions = [*launch_args]
 
@@ -544,10 +474,8 @@ def generate_launch_description() -> LaunchDescription:
     actions.extend(
         [
             gnss_noise_relay_node,
-            navsat_transform_node,
             ekf_node,
             covariance_extractor,
-            datum_primer,
             pipeline_diag,
         ]
     )

@@ -13,8 +13,6 @@ ROS 2 best practices.
 import json
 import math
 import os
-import subprocess
-import threading
 from typing import List, Optional, Tuple
 
 import numpy as np
@@ -45,9 +43,9 @@ class CovarianceExtractorNode(Node):
     # Worker 0: ekf_state.json (default), Worker 1: ekf_state_1.json, etc.
     _DEFAULT_SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
 
-    # File-based /initialpose signal written by the training container.
+    # File-based /set_pose signal written by the training container.
     # The training container writes {seq, x, y, yaw} in CARLA world frame.
-    # This node watches the file and publishes /initialpose locally so
+    # This node watches the file and publishes /set_pose locally so
     # the EKF (same Jazzy DDS domain) receives it.
     _DEFAULT_INITIAL_POSE_PATH: str = "/workspace/outputs/initial_pose.json"
 
@@ -136,27 +134,20 @@ class CovarianceExtractorNode(Node):
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
-        # --- /initialpose file watcher + navsat datum reset -------------------
+        # --- /set_pose file watcher -------------------------------------------
         # The training container (Humble) writes initial_pose.json at episode
-        # reset.  This node watches the file and:
-        #   1. Publishes /initialpose so the EKF resets its state.
-        #   2. Calls the /datum service to reset navsat_transform_node's internal
-        #      local cartesian frame back to the geographic origin. Without this,
-        #      navsat accumulates odom-frame drift across episodes: the EKF is
-        #      reset to (0,0) by /initialpose but navsat still outputs positions
-        #      relative to the old drifted frame (e.g. y=251 after 10 episodes),
-        #      causing the EKF to immediately fight against those corrections.
+        # reset. This node watches the file and publishes on /set_pose so the
+        # EKF resets its state to the vehicle spawn pose.
+        # NOTE: robot_localization 3.8.3 (Jazzy) subscribes to "set_pose",
+        # NOT "/initialpose". The /initialpose topic is a ROS 1 convention.
         initial_pose_path: str = os.environ.get(
             "INITIAL_POSE_FILE", self._DEFAULT_INITIAL_POSE_PATH
         )
         self._initial_pose_path: str = initial_pose_path
         self._initial_pose_last_seq: int = 0
         self._initial_pose_pub = self.create_publisher(
-            PoseWithCovarianceStamped, "/initialpose", 10
+            PoseWithCovarianceStamped, "/set_pose", 10
         )
-        # Datum values loaded from env vars (set by launch file via datum_lat/lon).
-        self._datum_lat: float = float(os.environ.get("DATUM_LAT", "42.0"))
-        self._datum_lon: float = float(os.environ.get("DATUM_LON", "2.0"))
         # Poll at 10 Hz -- fast enough to catch the file within 0.1 s of write.
         self._initial_pose_timer = self.create_timer(
             0.1, self._check_initial_pose_file
@@ -312,19 +303,13 @@ class CovarianceExtractorNode(Node):
 
     def _check_initial_pose_file(self) -> None:
         """
-        @brief Poll initial_pose.json, publish /initialpose and reset navsat datum.
+        @brief Poll initial_pose.json and publish /set_pose to reset the EKF.
 
-        At each episode reset the training container writes initial_pose.json.
-        This method:
-          1. Publishes /initialpose so the EKF resets to the vehicle spawn pose.
-          2. Calls the /datum service to reset navsat_transform_node's internal
-             local cartesian frame. Without this, navsat accumulates odom-frame
-             drift across episodes and keeps feeding stale position corrections
-             that fight the EKF /initialpose reset.
-
-        The datum reset must fire AFTER /initialpose so the EKF is at (0,0) when
-        navsat re-anchors its frame -- navsat uses the first EKF odom->base_link
-        transform it sees after the datum call to anchor the output frame.
+        At each episode reset the training container writes initial_pose.json
+        with the vehicle spawn pose. This method publishes on /set_pose so the
+        robot_localisation EKF resets its state estimate. No datum reset is
+        needed since navsat_transform has been replaced by the flat-earth
+        projection in GnssNoiseRelayNode.
         """
         try:
             with open(self._initial_pose_path, "r") as f:
@@ -342,7 +327,6 @@ class CovarianceExtractorNode(Node):
         ros_y = -float(data["y"])
         ros_yaw = -float(data["yaw"])
 
-        # 1. Publish /initialpose to reset EKF state.
         msg = PoseWithCovarianceStamped()
         msg.header.frame_id = "odom"
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -355,40 +339,9 @@ class CovarianceExtractorNode(Node):
         msg.pose.covariance[35] = 0.05  # yaw-yaw
         self._initial_pose_pub.publish(msg)
         self.get_logger().info(
-            f"Published /initialpose: x={x:.2f} y={ros_y:.2f} "
+            f"Published /set_pose: x={x:.2f} y={ros_y:.2f} "
             f"yaw={math.degrees(ros_yaw):.1f}deg (seq={seq})"
         )
-
-        # 2. Reset navsat datum via subprocess so its local cartesian frame
-        #    re-anchors to the geographic origin. This prevents accumulated
-        #    odom drift across episodes. Runs in a daemon thread to avoid
-        #    blocking the 10 Hz poll timer while the service call completes.
-        datum_lat = self._datum_lat
-        datum_lon = self._datum_lon
-        logger = self.get_logger()
-
-        def _reset_datum() -> None:
-            cmd = (
-                "source /opt/ros/jazzy/setup.bash && "
-                f"ros2 service call /datum robot_localization/srv/SetDatum "
-                f'"{{geo_pose: {{position: {{latitude: {datum_lat}, '
-                f"longitude: {datum_lon}, altitude: 0.0}}, "
-                f'orientation: {{x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}}}}"'
-            )
-            try:
-                subprocess.run(
-                    ["bash", "-c", cmd],
-                    timeout=5.0,
-                    capture_output=True,
-                )
-                logger.info(
-                    f"Datum reset at episode reset (seq={seq}): "
-                    f"{datum_lat}N {datum_lon}E"
-                )
-            except Exception as exc:
-                logger.warn(f"Datum reset failed (seq={seq}): {exc}")
-
-        threading.Thread(target=_reset_datum, daemon=True).start()
 
 
 class CovarianceMonitorNode(Node):

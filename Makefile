@@ -254,6 +254,9 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: con
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
+	@# Clean stale signal files from previous runs to prevent the ros2-bridge
+	@# from processing leftover initial_pose or ekf_state data on startup.
+	rm -f outputs/initial_pose.json outputs/ekf_state.json outputs/ekf_state.json.tmp 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
