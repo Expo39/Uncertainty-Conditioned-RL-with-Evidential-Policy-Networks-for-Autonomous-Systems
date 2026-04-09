@@ -49,6 +49,7 @@ BAY_HEX: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 HEX_SENSOR_IMU = "#FFDC00"  # Yellow
+HEX_SENSOR_GNSS = "#FF00FF"  # Magenta (RTK antenna)
 HEX_SENSOR_LIDAR_2D = "#00B4FF"  # Cyan (sensor mount dot)
 HEX_SENSOR_LIDAR_3D = "#00FF50"  # Green (sensor mount dot)
 HEX_SENSOR_CAMERA = "#FF0080"  # Hot pink/orange (g=0 avoids CARLA yellow shift)

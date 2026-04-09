@@ -355,8 +355,11 @@ def evaluate_across_conditions(
     with open(eval_config_path, "r") as f:
         eval_config: Dict[str, Any] = yaml.safe_load(f)
 
-    with open(env_config_path, "r") as f:
-        env_config: Dict[str, Any] = yaml.safe_load(f)
+    # load_env_config merges sensor_config.yaml (shared keys) with env_config.yaml
+    # (CARLA-specific keys) so env_config is the single unified config for the env.
+    from uncertainty_rl.training.train_ppo import load_env_config
+
+    env_config: Dict[str, Any] = load_env_config(env_config_path)
 
     with open(train_config_path, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
@@ -545,7 +548,7 @@ def main() -> None:
     parser.add_argument(
         "--env-config",
         type=str,
-        default="configs/carla/env_config.yaml",
+        default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config (sensors, parking scenarios)",
     )
     parser.add_argument(

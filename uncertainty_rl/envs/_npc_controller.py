@@ -47,7 +47,7 @@ class NPCController:
     _EGO_AVOID_RADIUS: float = 5.0
     _PATROL_AVOID_RADIUS: float = 5.0
     # Zone boundary margin (metres): steer toward zone centre inside this band
-    _BOUNDARY_MARGIN: float = 0.5
+    _BOUNDARY_MARGIN: float = 1.0
     # Zone clustering radius (metres): zones within this distance share one pedestrian
     _CLUSTER_RADIUS: float = 12.0
 
@@ -384,12 +384,19 @@ class NPCController:
             fwd_y = math.sin(npc_yaw)
             blocked = False
 
-            # Ego vehicle: omnidirectional stop
+            # Ego vehicle: forward-cone stop only -- do not stop if ego can pass.
+            # Lateral threshold = patrol half-width (1.0 m) + ego half-width (1.0 m) + 0.3 m margin.
             if vehicle is not None and vehicle.is_alive:
                 ego_to_x = vehicle.get_location().x - t.location.x
                 ego_to_y = vehicle.get_location().y - t.location.y
+                ego_fwd_proj = ego_to_x * fwd_x + ego_to_y * fwd_y
+                ego_lat = abs(ego_to_x * fwd_y - ego_to_y * fwd_x)
                 ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
-                if ego_dist < self._patrol_obstacle_distance + 1.0:
+                if (
+                    ego_fwd_proj > 0.0
+                    and ego_dist < self._patrol_obstacle_distance
+                    and ego_lat < 2.3
+                ):
                     blocked = True
 
             for other in all_vehicles:
@@ -486,6 +493,32 @@ class NPCController:
 
             loc = walker.get_location()
             zone = self._pedestrian_zones[i]
+
+            # Hard boundary enforcement: if the pedestrian has escaped the zone,
+            # teleport it back to the nearest in-bounds point and point it toward
+            # the zone centre so it does not immediately escape again.
+            outside = (
+                loc.x < zone["x_min"]
+                or loc.x > zone["x_max"]
+                or loc.y < zone["y_min"]
+                or loc.y > zone["y_max"]
+            )
+            if outside:
+                clamped_x = max(zone["x_min"], min(zone["x_max"], loc.x))
+                clamped_y = max(zone["y_min"], min(zone["y_max"], loc.y))
+                clamped_loc = carla.Location(
+                    x=clamped_x, y=clamped_y, z=loc.z
+                )
+                walker.set_location(clamped_loc)
+                loc = clamped_loc
+                cx = (zone["x_min"] + zone["x_max"]) / 2.0
+                cy = (zone["y_min"] + zone["y_max"]) / 2.0
+                to_cx = cx - clamped_x
+                to_cy = cy - clamped_y
+                c_mag = math.sqrt(to_cx * to_cx + to_cy * to_cy)
+                if c_mag > 1e-6:
+                    self._pedestrian_headings[i] = (to_cx / c_mag, to_cy / c_mag, 0.0)
+                self._pedestrian_heading_steps[i] = 0
 
             repulse_x = 0.0
             repulse_y = 0.0

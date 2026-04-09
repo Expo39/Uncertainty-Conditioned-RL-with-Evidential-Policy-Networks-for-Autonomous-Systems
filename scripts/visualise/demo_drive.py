@@ -46,7 +46,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--env-config",
         type=str,
-        default="configs/carla/env_config.yaml",
+        default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config (CARLA, sensors, parking scenarios).",
     )
     parser.add_argument(
@@ -106,9 +106,11 @@ def main() -> None:
     """
     args = _parse_args()
 
-    # Load configs
-    with open(args.env_config, "r") as f:
-        env_config: Dict[str, Any] = yaml.safe_load(f)
+    # Load configs. load_env_config merges sensor_config.yaml (shared keys)
+    # with env_config.yaml (CARLA-specific keys) into one unified dict.
+    from uncertainty_rl.training.train_ppo import load_env_config
+
+    env_config: Dict[str, Any] = load_env_config(args.env_config)
     with open(args.train_config, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
 

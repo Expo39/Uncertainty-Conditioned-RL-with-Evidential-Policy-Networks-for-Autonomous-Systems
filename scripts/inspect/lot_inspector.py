@@ -230,8 +230,9 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    with open("configs/carla/env_config.yaml", "r") as _f:
-        train_cfg = yaml.safe_load(_f)
+    from uncertainty_rl.training.train_ppo import load_env_config
+
+    train_cfg = load_env_config("configs/deployment/sim/env_config.yaml")
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
     print(

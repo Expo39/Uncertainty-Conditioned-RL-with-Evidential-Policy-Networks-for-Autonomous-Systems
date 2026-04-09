@@ -63,6 +63,7 @@ from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     wrap_angle_symmetric,
 )
+from uncertainty_rl.envs.real_world_deployment import RealWorldDeployment
 from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
@@ -93,18 +94,19 @@ class CARLAParkingEnv(gym.Env):
     naturally by the robot_localisation EKF processing noisy CARLA sensors.
 
     Observation space when include_covariance=True, include_obstacle_obs=True (20-dim):
-      [0-5]   EKF pose: x, y, yaw, vx, vy, vyaw
-      [6-14]  EKF covariance features
-      [15-17] target bay in ego body frame
-      [18-19] obstacle awareness: nearest_dist_m, nearest_bearing_rad
+      [0-2]   EKF velocity: vx, vy, vyaw
+      [3-11]  EKF covariance features
+      [12-14] target bay in ego body frame
+      [15-19] obstacle awareness: left_dist, left_bearing, right_dist,
+              right_bearing, forward_dist
 
-    When include_covariance=False (9-dim or 11-dim depending on include_obstacle_obs):
-      [0-5]   EKF pose
-      [6-8]   target bay in ego body frame
-      [9-10]  obstacle awareness (only when include_obstacle_obs=True)
+    When include_covariance=False (6-dim or 11-dim depending on include_obstacle_obs):
+      [0-2]   EKF velocity: vx, vy, vyaw
+      [3-5]   target bay in ego body frame
+      [6-10]  obstacle awareness (only when include_obstacle_obs=True)
 
-    Setting include_obstacle_obs=False removes obs indices 18-19 (reverts 20->18 dim,
-    or 11->9 dim). Set in train_config.yaml: include_obstacle_obs: false.
+    Setting include_obstacle_obs=False removes obstacle dims (20->15 or 11->6).
+    Set in train_config.yaml: include_obstacle_obs: false.
 
     @note Docker + ROS 2 required for training. No standalone fallback.
     """
@@ -138,6 +140,9 @@ class CARLAParkingEnv(gym.Env):
         use_extra_spawns: bool = False,
         gnss_noise_profiles_path: Optional[str] = None,
         gnss_noise_multiplier_override: Optional[float] = None,
+        real_world_deployment: bool = False,
+        real_world_datum_path: Optional[str] = None,
+        actuation_calibration_path: Optional[str] = None,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -181,6 +186,17 @@ class CARLAParkingEnv(gym.Env):
         @param gnss_noise_multiplier_override: If set, bypasses tier sampling and
                uses this fixed multiplier every episode. Used during evaluation
                to lock GNSS noise to a specific condition.
+        @param real_world_deployment: If True, CARLA ground-truth calls are
+               replaced with datum-file-based calibration for real-vehicle use.
+               Disables any code path that calls vehicle.get_transform() for
+               calibration or reward purposes.
+        @param real_world_datum_path: Path to real_world_datum.yaml. Required
+               when real_world_deployment=True. Contains the surveyed UTM
+               coordinates and lot-frame position of the calibration datum point.
+        @param actuation_calibration_path: Path to actuation_calibration.yaml.
+               When provided and real_world_deployment=True, applies per-actuator
+               gain/deadband/bias to policy outputs before sending to the vehicle.
+               Defaults to identity (no transformation) when absent.
         """
         super().__init__()
 
@@ -219,6 +235,18 @@ class CARLAParkingEnv(gym.Env):
         self._ekf_convergence_timeout: float = ros2_config.get(
             "ekf_convergence_timeout", 15.0
         )
+
+        # Real-world deployment mode. All real-vehicle-specific logic
+        # (datum loading, EKF frame calibration, actuation calibration) lives
+        # in RealWorldDeployment -- carla_parking.py only calls into it.
+        self._real_world_deployment: bool = real_world_deployment
+        if real_world_deployment:
+            self._deployment = RealWorldDeployment.from_config(
+                datum_path=real_world_datum_path,
+                calibration_path=actuation_calibration_path,
+            )
+        else:
+            self._deployment: Optional[RealWorldDeployment] = None
 
         self._sensors_config = carla_sensors_config or {}
 
@@ -1435,26 +1463,51 @@ class CARLAParkingEnv(gym.Env):
     def _calibrate_ekf_frame_offset(self) -> None:
         """
         @brief Compute the full 2D rigid body transform from EKF odom frame
-               to CARLA world frame and store it in self._ekf_odom_offset.
+               to lot layout frame and store it in self._ekf_odom_offset.
 
-        The navsat_transform_node creates an odom frame aligned with UTM
-        coordinates. This may be rotated relative to CARLA world coordinates,
-        so a rotation + translation is needed (not just a pure translation).
+        In simulation: the reference frame is the CARLA world frame. The
+        vehicle's ground-truth transform is read from CARLA via
+        vehicle.get_transform() while the vehicle is stationary at reset.
+
+        In real-world deployment (self._real_world_deployment=True): the
+        reference frame is the lot layout frame (same coordinates as the
+        layout YAMLs and bird's-eye PNGs). The reference position is read
+        from self._real_world_datum (loaded from configs/real_world_datum.yaml).
+        The datum must be surveyed once per deployment site: drive the vehicle
+        to a known physical marker, record its EKF odom position when RTK-fixed,
+        and fill in the datum file with both the odom coordinates and the
+        corresponding lot-frame coordinates.
 
         The transform is: p_world = R * p_odom + t
-        where R is a 2D rotation matrix by angle `r = world_yaw - ekf_yaw`
-        and t is the translation after rotation.
+        where R is a 2D rotation by angle r = world_yaw - ekf_yaw
+        and t is the translation after applying R.
 
-        Computed once per episode while the vehicle is stationary at reset,
-        after the EKF velocity has settled below 0.5 m/s (convergence signal).
+        Computed once per episode while the vehicle is stationary, after the
+        EKF velocity has settled below 0.5 m/s (convergence signal).
         """
-        if self._cov_subscriber is None or self.vehicle is None:
+        if self._cov_subscriber is None:
             return
 
-        carla_t = self.vehicle.get_transform()
-        world_x = carla_t.location.x
-        world_y = carla_t.location.y
-        world_yaw = math.radians(carla_t.rotation.yaw)
+        if self._real_world_deployment:
+            # Real-world path: delegate to RealWorldDeployment.
+            # All datum loading and pose look-up logic lives there.
+            if self._deployment is None or not self._deployment.datum_loaded():
+                logger.warning(
+                    "real_world_deployment=True but no datum loaded. "
+                    "EKF calibration will use identity transform."
+                )
+                self._ekf_odom_offset = (0.0, 0.0, 1.0, 0.0, 0.0)
+                self._compute_target_bay_odom(0.0, 0.0, 1.0, 0.0, 0.0)
+                return
+            world_x, world_y, world_yaw = self._deployment.reference_pose()
+        else:
+            # Simulation path: use CARLA ground-truth vehicle transform.
+            if self.vehicle is None:
+                return
+            carla_t = self.vehicle.get_transform()
+            world_x = carla_t.location.x
+            world_y = carla_t.location.y
+            world_yaw = math.radians(carla_t.rotation.yaw)
 
         start = time.monotonic()
         tick_interval = 0.05  # 20 Hz
@@ -1697,6 +1750,9 @@ class CARLAParkingEnv(gym.Env):
                     lon_stddev_deg=float(tier.get("lon_stddev_deg", 0.0)),
                     alt_stddev_m=float(tier.get("alt_stddev_m", 0.0)),
                     metric_stddev_m=float(tier.get("metric_stddev_m", 0.02)),
+                    # Pass tier_name so GnssNoiseRelayNode seeds the Markov
+                    # chain from the correct starting state each episode.
+                    tier_name=str(tier.get("name", "")),
                 )
 
         # Spawn all static lot actors (cones + parked vehicles) then NPCs
@@ -1802,11 +1858,22 @@ class CARLAParkingEnv(gym.Env):
         self._action_repeat_counter += 1
 
         if self.vehicle is not None:
-            # Split longitudinal action into CARLA throttle/brake.
+            # Apply actuation calibration (identity in sim; real-vehicle mapping
+            # loaded from configs/actuation_calibration.yaml when deployed).
+            raw_steer = float(np.clip(action[0], -1.0, 1.0))
+            raw_longitudinal = float(np.clip(action[1], -1.0, 1.0))
+            if self._deployment is not None:
+                cal_steer, cal_longitudinal = self._deployment.calibrate_action(
+                    raw_steer, raw_longitudinal
+                )
+            else:
+                cal_steer, cal_longitudinal = raw_steer, raw_longitudinal
+
+            # Split calibrated longitudinal into CARLA throttle/brake.
             # Positive longitudinal -> throttle, negative -> brake.
-            longitudinal = float(np.clip(action[1], -1.0, 1.0))
+            longitudinal = cal_longitudinal
             control = carla.VehicleControl()
-            control.steer = float(np.clip(action[0], -1.0, 1.0))
+            control.steer = cal_steer
             control.brake = float(max(-longitudinal, 0.0))
 
             # Cut throttle when speed limit is exceeded. Appropriate for

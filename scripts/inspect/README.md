@@ -37,7 +37,7 @@ Spawns the ego vehicle and draws static sensor mount dots and FOV arcs:
 | GNSS | Magenta dot | None |
 | 2D LiDAR | Cyan dot | 270 deg arc at 30 m radius |
 
-Mount positions and ranges are read from `configs/carla/env_config.yaml`.
+Mount positions and ranges are read from `configs/deployment/sim/env_config.yaml`.
 
 ```bash
 make docker-inspect-sensors                            # Default: birds-eye

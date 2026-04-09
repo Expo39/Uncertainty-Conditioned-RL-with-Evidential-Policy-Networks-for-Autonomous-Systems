@@ -7,7 +7,7 @@ Performance evaluation across varying physical conditions - the centrepiece of t
 ### Evaluation Protocol
 
 1. Load trained model and VecNormalize statistics from checkpoint
-2. Load base sensor noise from `configs/carla/env_config.yaml`
+2. Load base sensor noise from `configs/deployment/sim/env_config.yaml`
 3. Sweep across `eval_conditions` defined in `configs/eval_config.yaml`
 4. For each condition: fix weather/traffic/floor plan, run `n_episodes`
 5. Collect metrics, generate plots and CSV
@@ -57,7 +57,7 @@ Three distinct experiment types, all using the same environment code:
 python uncertainty_rl/evaluation/evaluate.py \
     --model-path checkpoints/final_model \
     --eval-config configs/eval_config.yaml \
-    --env-config configs/carla/env_config.yaml \
+    --env-config configs/deployment/sim/env_config.yaml \
     --train-config configs/train_config.yaml
 ```
 

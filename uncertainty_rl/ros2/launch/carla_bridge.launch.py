@@ -10,19 +10,26 @@ simulation. The bridge auto-discovers sensors spawned by the training container
 Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (passive; publishes sensor data from CARLA to ROS 2 topics)
 2. Static TF publishers (sensor frames to vehicle body)
-3. GnssNoiseRelayNode (adds per-episode noise to GNSS, stamps covariance)
+3. GnssNoiseRelayNode (adds per-episode noise to GNSS, stamps covariance;
+   also relays IMU with realistic angular_velocity_covariance stamped -- CARLA
+   bridge publishes zero covariance which would make vyaw infinitely reliable)
 4. navsat_transform_node (UTM projection: NavSatFix -> Odometry)
-5. robot_localisation EKF (fuses IMU + GNSS odometry -> /odometry/filtered)
+5. robot_localisation EKF (fuses IMU/stamped + GNSS odometry -> /odometry/filtered)
 6. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
    ekf_state.json for the training container)
 
-TF tree (ego_vehicle is root):
-  ego_vehicle -> ego_vehicle/imu
-  ego_vehicle -> ego_vehicle/lidar
-  ego_vehicle -> ego_vehicle/gnss
+TF tree (map is root):
+  map -> ego_vehicle          (static identity -- bridge does not publish this)
+  map -> odom                 (static identity -- for nav_msgs consumers)
+  map -> ego_vehicle/imu      (dynamic, published by CARLA bridge ImuSensor)
+  map -> ego_vehicle/gnss     (dynamic, published by CARLA bridge GnssSensor)
+  map -> ego_vehicle/lidar    (dynamic, published by CARLA bridge LidarSensor)
+  odom -> ego_vehicle         (dynamic, published by EKF as its filtered output)
 
-@note The CARLA ROS bridge in passive mode publishes each sensor as a separate
-      TF tree under "map". Static TF publishers create the unified body frame.
+@note The CARLA bridge in passive mode publishes sensor frame TFs under "map"
+      but does NOT publish map->ego_vehicle (no TFSensor pseudo-actor is spawned).
+      A static identity map->ego_vehicle TF is published so the EKF can resolve
+      sensor offsets relative to base_link_frame=ego_vehicle.
 
 @author Antonio Galdes
 """
@@ -33,7 +40,7 @@ from typing import Dict, List
 
 import yaml
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -118,7 +125,8 @@ def _static_tf(
 
 
 def _build_sensor_tf_nodes(
-    sensors_config: Dict, use_sim_time: bool = True
+    sensors_config: Dict,
+    use_sim_time: bool = True,
 ) -> List[Node]:
     """
     @brief Build static TF nodes connecting sensor frames to the ego_vehicle body frame.
@@ -129,8 +137,12 @@ def _build_sensor_tf_nodes(
       ego_vehicle -> ego_vehicle/lidar
       ego_vehicle -> ego_vehicle/gnss
 
-    Mount positions are read from env_config.yaml (carla_sensors section).
-    On the real car, update mount values to match physical sensor positions.
+    Mount positions come from carla_sensors.*.mount in env_config.yaml.
+    These are the single source of truth for both simulation and the real
+    vehicle -- update them directly when physical sensor positions are measured.
+
+    @warning IMU lever arm from GNSS antenna must be accurate to ~2 cm.
+             A 5 cm error causes ~5 cm * sin(heading_change) positional bias.
 
     @param sensors_config: carla_sensors dict from env_config.yaml.
     @param use_sim_time: Whether to use sim time (from ros2_config.yaml).
@@ -180,7 +192,15 @@ def generate_launch_description() -> LaunchDescription:
     @return LaunchDescription with all nodes and launch arguments.
     """
     ros2_config = _load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")
-    env_config = _load_yaml("/workspace/configs/carla/env_config.yaml")
+    sensor_config = _load_yaml(
+        "/workspace/configs/deployment/sensor_config.yaml", "SENSOR_CONFIG_PATH"
+    )
+    # Merge: sensor_config provides shared keys, env_config overrides with
+    # CARLA-specific keys. Matches load_env_config() in train_ppo.py.
+    env_config = {
+        **sensor_config,
+        **_load_yaml("/workspace/configs/deployment/sim/env_config.yaml"),
+    }
 
     # Time source for all ROS 2 nodes. Read from ros2_config.yaml so it can be
     # changed without modifying Python source. Default true: CARLA bridge runs
@@ -260,15 +280,70 @@ def generate_launch_description() -> LaunchDescription:
     )
 
     # -- Static TF: sensor mount tree --------------------------------------
+    # NOTE: The CARLA ROS bridge in passive (non-synchronous) mode publishes
+    # ALL sensor TF as "map -> sensor_frame" (see sensor.py get_ros_transform).
+    # It also publishes "map -> ego_vehicle" via the TFSensor pseudo-actor.
+    # Our static TFs (ego_vehicle -> ego_vehicle/imu etc.) conflict with the
+    # bridge's dynamic "map -> ego_vehicle/imu" transforms, causing TF2 to
+    # reject one of the two transforms for each sensor frame (two-parent error).
+    # The EKF can look up "ego_vehicle -> ego_vehicle/imu" via the bridge's
+    # transforms using the path:
+    #   ego_vehicle -> [inv(map->ego_vehicle)] -> map -> ego_vehicle/imu
+    # This correctly yields the physical sensor offset. We therefore do NOT
+    # publish static sensor TFs and let the bridge be the sole TF source.
 
-    sensors_config = env_config.get("carla_sensors", {})
-    static_tf_nodes = _build_sensor_tf_nodes(sensors_config, use_sim_time)
+    # Static TFs for EKF body frame and odom anchor.
+    #
+    # The CARLA bridge in passive mode only publishes sensor frame TFs, NOT
+    # the vehicle body frame. Specifically, the bridge publishes:
+    #   map -> ego_vehicle/imu   (ImuSensor, dynamic, via /tf)
+    #   map -> ego_vehicle/gnss  (GnssSensor, dynamic, via /tf)
+    #   map -> ego_vehicle/lidar (LidarSensor, dynamic, via /tf)
+    # It does NOT publish map -> ego_vehicle. The TFSensor pseudo-actor is only
+    # created when the bridge discovers a dedicated TF sensor actor attached to
+    # the ego vehicle -- which we do not spawn.
+    #
+    # The EKF uses base_link_frame=ego_vehicle. Without ego_vehicle in the TF
+    # tree, the EKF cannot look up the sensor offsets and never produces output.
+    #
+    # Fix: publish a static identity map -> ego_vehicle TF. This gives ego_vehicle
+    # a stable root in the map frame. The EKF can then look up:
+    #   ego_vehicle -> ego_vehicle/imu
+    # via the path:
+    #   ego_vehicle -> [inv(map->ego_vehicle)] -> map -> ego_vehicle/imu
+    #
+    # The EKF publishes odom -> ego_vehicle as its output. The static map -> odom
+    # identity TF lets any nav_msgs consumer that needs map->odom find it.
+    static_tf_nodes = [
+        # Anchors ego_vehicle at the map origin. The EKF will override this by
+        # publishing odom -> ego_vehicle as it fuses IMU and GNSS data.
+        _static_tf(
+            "map_to_ego_vehicle_tf",
+            "map",
+            "ego_vehicle",
+            0.0,
+            0.0,
+            0.0,
+            use_sim_time=False,
+        ),
+        # Identity map -> odom for consumers that need the full map->odom->body chain.
+        _static_tf(
+            "map_to_odom_tf",
+            "map",
+            "odom",
+            0.0,
+            0.0,
+            0.0,
+            use_sim_time=False,
+        ),
+    ]
 
     # -- GNSS noise relay node ---------------------------------------------
     # Adds per-episode noise to CARLA GNSS and stamps position_covariance
     # for navsat_transform_node. Noise tier signalled via gnss_noise_config.json.
 
     gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
+    carla_topics = ros2_config.get("carla_topics", {})
     gnss_noise_relay_node = Node(
         package="uncertainty_rl_ros2",
         executable="gnss_noise_relay",
@@ -283,6 +358,22 @@ def generate_launch_description() -> LaunchDescription:
                 "base_metric_stddev_m": gnss_relay_cfg.get(
                     "base_metric_stddev_m", 0.02
                 ),
+                # Mid-episode Markov fix-state transitions (sim-to-real transfer).
+                # Disable for ablation runs that require a fixed tier per episode.
+                "enable_markov_transitions": gnss_relay_cfg.get(
+                    "enable_markov_transitions", True
+                ),
+                # IMU covariance relay: stamp realistic angular_velocity_covariance
+                # so the EKF treats vyaw with finite (not infinite) reliability.
+                # CARLA bridge publishes zero covariance on all Imu fields.
+                "imu_input_topic": carla_topics.get(
+                    "imu", "/carla/ego_vehicle/imu"
+                ),
+                "imu_output_topic": carla_topics.get(
+                    "imu_stamped", "/carla/ego_vehicle/imu/stamped"
+                ),
+                # Gyro noise variance: (0.0035 rad/s/sqrt(Hz) * sqrt(20 Hz))^2
+                "imu_gyro_variance": gnss_relay_cfg.get("imu_gyro_variance", 2.5e-4),
             }
         ],
     )
@@ -305,10 +396,28 @@ def generate_launch_description() -> LaunchDescription:
                 ),
                 "use_odometry_yaw": navsat_cfg.get("use_odometry_yaw", False),
                 "yaw_offset": navsat_cfg.get("yaw_offset", 0.0),
-                "wait_for_datum": navsat_cfg.get("wait_for_datum", False),
-                "broadcast_utm_transform": navsat_cfg.get(
-                    "broadcast_utm_transform", True
+                # Magnetic declination at the simulated CARLA FlatPlane location.
+                # CARLA's IMU is already ENU-aligned, so 0.0 rad is correct.
+                # On the real vehicle, set this to the local magnetic declination.
+                "magnetic_declination_radians": float(
+                    navsat_cfg.get("magnetic_declination_radians", 0.0)
                 ),
+                # wait_for_datum: true -> latch datum on the first /datum service
+                # call and never reset it. With false, navsat re-datums on every
+                # incoming GPS fix (spam visible in logs), which causes the local
+                # Cartesian origin to drift every tick. The datum_primer below
+                # calls the /datum service once at startup with CARLA's FlatPlane
+                # geographic origin (42 N, 2 E), latching the origin permanently.
+                "wait_for_datum": True,
+                # Suppress the 3-second startup delay so navsat begins
+                # processing on the first GNSS callback. Default is 3.0 s
+                # in robot_localization which adds unnecessary latency.
+                "delay": float(navsat_cfg.get("delay", 0.0)),
+                "broadcast_cartesian_transform": navsat_cfg.get(
+                    "broadcast_cartesian_transform",
+                    navsat_cfg.get("broadcast_utm_transform", True),
+                ),
+                "use_local_cartesian": navsat_cfg.get("use_local_cartesian", True),
             }
         ],
         remappings=[
@@ -317,6 +426,10 @@ def generate_launch_description() -> LaunchDescription:
             ("odometry/filtered", "/odometry/filtered"),
         ],
     )
+
+    # -- Datum lat/lon (needed by both covariance_extractor and datum_primer) -
+    datum_lat: float = float(env_config.get("gnss_datum_lat", 42.0))
+    datum_lon: float = float(env_config.get("gnss_datum_lon", 2.0))
 
     # -- Covariance extractor node -----------------------------------------
 
@@ -338,11 +451,86 @@ def generate_launch_description() -> LaunchDescription:
                 "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", True),
             }
         ],
+        # Pass datum lat/lon so the extractor can reset navsat at each episode.
+        additional_env={
+            "DATUM_LAT": str(datum_lat),
+            "DATUM_LON": str(datum_lon),
+        },
+    )
+
+    # -- Pipeline diagnostic: log topic status after 20 s ------------------
+    # Prints which key topics are publishing so stalls can be diagnosed from
+    # the ros2-bridge container logs. Safe to leave in permanently.
+    pipeline_diag = ExecuteProcess(
+        cmd=[
+            "bash",
+            "-c",
+            "sleep 20 && source /opt/ros/jazzy/setup.bash && "
+            "echo '=== EKF pipeline diagnostic (t+20s) ===' && "
+            "echo '-- /clock hz:' && "
+            "timeout 2 ros2 topic hz /clock --window 10 2>&1 | head -3 || "
+            "echo 'SILENT'; "
+            "echo '-- /carla/ego_vehicle/imu hz:' && "
+            "timeout 2 ros2 topic hz /carla/ego_vehicle/imu --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /carla/ego_vehicle/imu/stamped hz:' && "
+            "timeout 2 ros2 topic hz /carla/ego_vehicle/imu/stamped --window 10 2>&1 "
+            "| head -3 || echo 'SILENT'; "
+            "echo '-- /carla/ego_vehicle/imu frame_id:' && "
+            "timeout 3 ros2 topic echo /carla/ego_vehicle/imu --once 2>&1 | "
+            "grep frame_id | head -1 || echo 'no message'; "
+            "echo '-- /gnss/noisy hz:' && "
+            "timeout 2 ros2 topic hz /gnss/noisy --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /odometry/filtered hz:' && "
+            "timeout 2 ros2 topic hz /odometry/filtered --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /odometry/gps hz:' && "
+            "timeout 2 ros2 topic hz /odometry/gps --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /tf publishers (bridge dynamic TF frames):' && "
+            "timeout 3 ros2 topic echo /tf --once 2>&1 | grep -E 'frame_id|child_frame' "
+            "| head -20 || echo 'no /tf'; "
+            "echo '-- /tf_static publishers:' && "
+            "timeout 3 ros2 topic echo /tf_static --once 2>&1 | "
+            "grep -E 'frame_id|child_frame' | head -20 || echo 'no /tf_static'; "
+            "echo '-- EKF node log (last 10 lines):' && "
+            "ros2 node info /ekf_filter_node 2>&1 | head -20 || echo 'EKF node not found'; "
+            "echo '-- TF ego_vehicle -> ego_vehicle/imu:' && "
+            "timeout 3 ros2 run tf2_ros tf2_echo ego_vehicle ego_vehicle/imu 2>&1 "
+            "| head -5 || echo 'TF lookup failed'; "
+            "echo '=== end diagnostic ==='",
+        ],
+        output="screen",
+    )
+
+    # -- Datum primer + EKF reset ------------------------------------------
+    # Step 1: Wait for /datum service (navsat_transform_node ready), then latch
+    #         the geographic origin so navsat never re-datums per GPS fix.
+    # Latch the geographic datum so navsat_transform never re-datums per GPS fix.
+    # 10 s delay: bridge needs ~5 s to connect to CARLA and start /clock.
+    # No /set_pose reset: the EKF converges naturally from GNSS corrections.
+    # A manual reset with a mis-stamped pose causes the EKF to integrate a huge
+    # time delta and produce NaN -- so we let GNSS pull it to the correct origin.
+    datum_primer = ExecuteProcess(
+        cmd=[
+            "bash",
+            "-c",
+            f"sleep 10 && source /opt/ros/jazzy/setup.bash && "
+            f"until ros2 service list 2>/dev/null | grep -q /datum; do sleep 1; done && "
+            f"ros2 service call /datum robot_localization/srv/SetDatum "
+            f'"{{geo_pose: {{position: {{latitude: {datum_lat}, '
+            f"longitude: {datum_lon}, altitude: 0.0}}, "
+            f'orientation: {{x: 0.0, y: 0.0, z: 0.0, w: 1.0}}}}}}" && '
+            f"echo 'Datum latched at {datum_lat} N, {datum_lon} E'",
+        ],
+        output="screen",
     )
 
     # -- Assemble launch description ---------------------------------------
     # Startup order matters: bridge must be up before navsat_transform tries to
-    # subscribe to sensor topics; static TFs must exist before the EKF starts.
+    # subscribe to sensor topics. The EKF waits for /clock from the bridge
+    # before starting its timer loop.
 
     actions = [*launch_args]
 
@@ -359,6 +547,8 @@ def generate_launch_description() -> LaunchDescription:
             navsat_transform_node,
             ekf_node,
             covariance_extractor,
+            datum_primer,
+            pipeline_diag,
         ]
     )
 

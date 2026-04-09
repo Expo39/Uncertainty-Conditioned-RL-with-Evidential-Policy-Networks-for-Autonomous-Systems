@@ -37,7 +37,7 @@ Optuna hyperparameter tuning orchestrator with:
 # Inside the training container (make docker-shell):
 python uncertainty_rl/training/train_ppo.py \
     --train-config configs/train_config.yaml \
-    --env-config configs/carla/env_config.yaml \
+    --env-config configs/deployment/sim/env_config.yaml \
     --total-timesteps 1000000
 ```
 
