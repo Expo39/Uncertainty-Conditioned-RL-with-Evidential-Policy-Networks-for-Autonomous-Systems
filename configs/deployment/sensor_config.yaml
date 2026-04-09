@@ -37,12 +37,11 @@ ros2:
   covariance_topic: "/odometry/filtered"
   covariance_timeout: 120.0
   ekf_convergence_timeout: 15.0
-  publish_initial_pose: false  # Disabled: /initialpose resets EKF covariance to near-zero on velocity axes,
-                               # and the datum reset fires 0.5-2s later via subprocess, so navsat outputs
-                               # GPS in the old frame during that gap. EKF receives a large discontinuous
-                               # correction -> Cholesky fails -> permanent NaN. Let GNSS pull the EKF
-                               # to the spawn position naturally instead (handled by _calibrate_ekf_frame_offset).
-  initial_pose_topic: "/initialpose"
+  publish_initial_pose: true   # Publishes /set_pose at each episode reset so the EKF starts from the
+                               # known vehicle spawn pose. navsat_transform has been removed (replaced by
+                               # flat-earth projection in GnssNoiseRelayNode), so there is no datum reset
+                               # race condition. The EKF resets cleanly via the /set_pose topic.
+  initial_pose_topic: "/set_pose"
 
 # ---------------------------------------------------------------------------
 # Sensor physical specifications and mount positions

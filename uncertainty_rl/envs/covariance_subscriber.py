@@ -11,9 +11,9 @@ The file is written atomically (via rename) by the extractor node at the
 EKF publish rate (~20 Hz) to /workspace/outputs/ekf_state.json, which is
 on a Docker shared volume visible to both containers.
 
-The /initialpose signal for EKF state reset is also file-based: the
+The /set_pose signal for EKF state reset is also file-based: the
 training container writes initial_pose.json and the CovarianceExtractorNode
-in ros2-bridge reads it and publishes locally. Similarly, GNSS noise tier
+in ros2-bridge reads it and publishes on /set_pose. Similarly, GNSS noise tier
 config is signalled via gnss_noise_config.json for the GnssNoiseRelayNode.
 """
 
@@ -34,9 +34,9 @@ from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 # so that parallel CARLA workers each read from their own ros2-bridge's output file.
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
-# File-based /initialpose signal.  The training container writes this file at
+# File-based /set_pose signal.  The training container writes this file at
 # episode reset; the CovarianceExtractorNode (ros2-bridge, Jazzy) watches it
-# and publishes /initialpose locally.  Same DDS-bypass pattern as ekf_state.json.
+# and publishes /set_pose locally.  Same DDS-bypass pattern as ekf_state.json.
 _INITIAL_POSE_PATH = Path("/workspace/outputs/initial_pose.json")
 
 # File-based GNSS noise config signal.  The training container writes this at
@@ -50,15 +50,15 @@ logger = logging.getLogger(__name__)
 class _CovarianceSubscriber:
     """
     @class _CovarianceSubscriber
-    @brief Reads EKF state from a shared JSON file + signals /initialpose.
+    @brief Reads EKF state from a shared JSON file + signals /set_pose.
 
     The CovarianceExtractorNode (ros2-bridge, Jazzy) writes the latest EKF
     pose, velocity, and 3x3 covariance to a shared file. This class reads
     that file on demand -- no DDS subscription needed.
 
-    The /initialpose signal is also file-based: this class writes
+    The /set_pose signal is also file-based: this class writes
     initial_pose.json and the extractor node reads it and publishes
-    /initialpose within the ros2-bridge container (same DDS domain).
+    /set_pose within the ros2-bridge container (same DDS domain).
     """
 
     def __init__(
@@ -270,7 +270,7 @@ class _CovarianceSubscriber:
 
         Writes initial_pose.json with the spawn position in CARLA world frame.
         The CovarianceExtractorNode in the ros2-bridge container watches this
-        file and publishes /initialpose locally (same DDS domain as the EKF).
+        file and publishes /set_pose locally (same DDS domain as the EKF).
 
         The CARLA-to-ROS frame conversion (negate y and yaw) is applied by the
         extractor node at publish time, keeping this file in CARLA convention.

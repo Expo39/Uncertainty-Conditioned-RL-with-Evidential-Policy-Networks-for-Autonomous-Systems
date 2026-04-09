@@ -325,8 +325,8 @@ class SensorManager:
 
         The CARLA ROS bridge publishes this as sensor_msgs/NavSatFix on
         /carla/ego_vehicle/gnss. The GnssNoiseRelay node in the ros2-bridge
-        adds additional noise and stamps position_covariance before feeding
-        navsat_transform_node.
+        adds additional noise, converts to local XY via flat-earth projection,
+        and publishes Odometry on /odometry/gps for the EKF.
 
         @param world: carla.World for the current episode.
         @param vehicle: Ego vehicle actor to attach to.

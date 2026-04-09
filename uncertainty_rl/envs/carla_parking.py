@@ -280,7 +280,7 @@ class CARLAParkingEnv(gym.Env):
         self.vehicle: Optional[Any] = None
 
         # The spawn transform chosen for this episode (set in _spawn_vehicle()).
-        # Used for /initialpose publishing to seed the EKF on reset.
+        # Used for /set_pose publishing to seed the EKF on reset.
         self._chosen_spawn: Dict[str, float] = {}
 
         # Ego vehicle CoM z after settling under gravity.  Set in _spawn_vehicle()
@@ -450,7 +450,7 @@ class CARLAParkingEnv(gym.Env):
         @brief Create the covariance reader (file-based, no DDS).
 
         The covariance reader uses a shared file to avoid cross-distro
-        serialisation issues between Humble and Jazzy. The /initialpose
+        serialisation issues between Humble and Jazzy. The /set_pose
         signal is also file-based: the reader writes initial_pose.json and
         the CovarianceExtractorNode in ros2-bridge publishes it locally.
         No rclpy initialisation is needed.
@@ -1435,7 +1435,7 @@ class CARLAParkingEnv(gym.Env):
         Applies the cached transform to the current EKF pose and compares
         against the CARLA ground-truth spawn position. If the reconstruction
         error exceeds 2 m the transform is considered stale (the EKF odom
-        frame origin may have shifted, e.g. after a navsat_transform datum reset).
+        frame origin may have shifted, e.g. after an EKF /set_pose reset).
 
         @return True if the transform should be recomputed.
         """
@@ -1513,8 +1513,8 @@ class CARLAParkingEnv(gym.Env):
         tick_interval = 0.05  # 20 Hz
 
         # Convergence detection: the vehicle is stationary at episode reset,
-        # so the EKF velocity should be near zero once navsat_transform has
-        # produced a stable odom frame and the IMU transient has settled.
+        # so the EKF velocity should be near zero once the GNSS flat-earth
+        # projection has produced a stable position and the IMU transient has settled.
         _VEL_CONVERGED = 0.5  # m/s
 
         while True:
@@ -1544,7 +1544,7 @@ class CARLAParkingEnv(gym.Env):
             ekf_vy = float(ekf_pose[4])
 
             # Rotation angle: odom frame -> CARLA world frame.
-            # The navsat_transform odom x-axis may not align with CARLA world x,
+            # The EKF odom x-axis may not align with CARLA world x,
             # so the rotation is world_yaw - ekf_yaw.
             r = math.atan2(
                 math.sin(world_yaw - ekf_yaw),
@@ -1723,7 +1723,7 @@ class CARLAParkingEnv(gym.Env):
         if self._include_covariance and self._cov_subscriber is not None:
             self._cov_subscriber.invalidate()
 
-        # Publish spawn pose to /initialpose so the EKF can reset its state
+        # Publish spawn pose to /set_pose so the EKF can reset its state
         # at the start of each episode.
         if (
             self._include_covariance
