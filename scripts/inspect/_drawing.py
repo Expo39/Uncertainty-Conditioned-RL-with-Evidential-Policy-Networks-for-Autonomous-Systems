@@ -35,6 +35,7 @@ from scripts.colours import (
     HEX_SENSOR_CAMERA,
     HEX_SENSOR_FOV_BLIND,
     HEX_SENSOR_FOV_LIDAR,
+    HEX_SENSOR_GNSS,
     HEX_SENSOR_IMU,
     HEX_SENSOR_LIDAR_2D,
     HEX_SENSOR_LIDAR_3D,
@@ -56,6 +57,7 @@ _ARC_SPACING: float = 0.3  # metres between dot centres on FOV arcs
 # ---------------------------------------------------------------------------
 
 _COL_IMU = hex_to_carla_color(HEX_SENSOR_IMU)
+_COL_GNSS = hex_to_carla_color(HEX_SENSOR_GNSS)
 _COL_LIDAR_2D = hex_to_carla_color(HEX_SENSOR_LIDAR_2D)
 _COL_LIDAR_3D = hex_to_carla_color(HEX_SENSOR_LIDAR_3D)
 _COL_CAMERA = hex_to_carla_color(HEX_SENSOR_CAMERA)
@@ -476,4 +478,21 @@ def _draw_sensor_overlays(
             dot_size=0.03,
             draw_radials=False,
         )
+
+    # ---- GNSS (RTK antenna) ------------------------------------------------
+    gnss_m = sensors_cfg.get("gnss", {}).get("mount", {})
+    gnss_loc = _to_world(
+        float(gnss_m.get("x", 0.0)),
+        float(gnss_m.get("y", 0.0)),
+        float(gnss_m.get("z", 1.8)),
+    )
+    _draw_sensor_dot(
+        debug,
+        gnss_loc,
+        "GNSS",
+        _COL_GNSS,
+        life_time,
+        drop_line=side_view,
+        ground_z=ground_z,
+    )
 

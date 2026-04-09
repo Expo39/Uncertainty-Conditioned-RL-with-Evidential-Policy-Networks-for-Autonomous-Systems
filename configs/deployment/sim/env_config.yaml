@@ -1,7 +1,11 @@
-# CARLA Environment Configuration
-# All settings that describe the simulation environment, sensors, and parking
-# lot scenarios. Consumed by CARLAParkingEnv and related scripts.
-# Training hyperparameters (PPO, evidential, architecture) live in train_config.yaml.
+# CARLA Simulation Configuration
+# Contains ONLY settings specific to the CARLA simulator: connection details,
+# simulation timing, sensor noise parameters, and parking lot scenario geometry.
+#
+# Keys shared between simulation and real-vehicle deployment (sensor mounts,
+# agent parameters, ROS 2 settings, observation flags, deployment flags) live
+# in configs/deployment/sensor_config.yaml -- the single source of truth.
+# Consumers merge both files before constructing the environment.
 
 # Debug mode -- set true to emit per-step diagnostics and show a second HUD line
 # in the visualiser. Off by default to avoid I/O overhead during training runs.
@@ -21,44 +25,46 @@ inspect:
 carla_host: "uncertainty-rl-carla-0"  # Container name for worker 0 (resolved via shared bridge network). Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
-max_steps: 1000  # Episode length in agent decisions. With action_repeat=4, each decision spans 4 sim-steps (0.2s), so 1000 decisions = 4000 sim-steps = 200 seconds sim-time.
-                 # Longer episodes amortise the fixed ~13s reset cost: 13s / (1000 * 0.2s + 13s) = 6% overhead vs 52% with max_steps=250.
+max_steps: 1000  # Episode length in agent decisions.
                  # Lot diagonal ~79m (65x45m). At 3m/s cruise ~26s traversal +
                  # ~15-20s slow approach and parking manoeuvre = ~45s typical.
+                 # 1000 steps * 0.05s = 50s sim time.
+action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz, matching the EKF and
+                  # ROS 2 control frequency. action_repeat=1 removes any sim/real
+                  # rate mismatch.
+use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs. RTK-GNSS
+                        # odom frame is UTM-aligned regardless of spawn location.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz. Fixed for EKF + ROS 2 bridge consistency.
 mapping_timestep: 0.05  # Same as carla_timestep. Kept for consistency with LiDAR rotation_frequency=20
                         # which needs 0.05s for a full scan.
 map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
 no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return empty, physics + state work still active). Essential for state-based agents with no camera input. Speedup: 3-4x.
-action_repeat: 4  # Apply same action for 4 sim-steps, construct observation only on 4th step. Agent decides at 5 Hz (fine for parking <6 m/s). Reduces observations and EKF covariance reads by 4x. Wall-clock speedup: 4x, episode length: same 50 seconds.
-use_extra_spawns: true   # Extra spawn transforms from layout YAMLs are included in the spawn pool. RTK-GNSS odom frame is UTM-aligned regardless of spawn location.
-max_ego_speed_ms: 3.0  # Maximum ego vehicle speed (m/s). Throttle is cut when exceeded. 3 m/s (~11 km/h) is appropriate for parking lot manoeuvres.
 
-# ---------------------------------------------------------------------------
-# ROS 2 covariance subscription settings
-# The training container subscribes to real EKF covariance via DDS
-# ---------------------------------------------------------------------------
-ros2:
-  covariance_topic: "/odometry/filtered"  # nav_msgs/Odometry from robot_localisation EKF
-  covariance_timeout: 120.0  # Seconds to wait for first covariance message per episode (120s allows ros2-bridge to auto-restart on crash)
-  # Total seconds to keep waiting for EKF velocity to drop below 0.5 m/s
-  # (the convergence signal) before falling back to best available offset.
-  # navsat_transform typically produces stable output within 1-2 s of first
-  # GNSS fix; 15 s covers cold-start and degraded RTK cases.
-  ekf_convergence_timeout: 15.0
-  publish_initial_pose: true     # Publish /initialpose at episode reset for EKF state reset.
-  initial_pose_topic: "/initialpose"
+# GNSS noise profiles for per-episode RTK fix-state sampling (sim only).
+# Training env loads this file at __init__ and samples a tier each reset().
+gnss_noise_profiles: configs/deployment/sim/gnss_noise_profiles.yaml
+
+# Geographic datum for navsat_transform_node and the /datum service call.
+# Must match the GNSS origin used by the CARLA map. For worlds loaded via
+# generate_opendrive_world() without a <geoReference> element in the OpenDRIVE
+# file, CARLA defaults to lat=0.0, lon=0.0 as the world (0,0) origin.
+# The datum_primer in carla_bridge.launch.py calls the /datum service once at
+# startup with these values, latching the navsat_transform local-Cartesian
+# origin to CARLA world (0,0). Do NOT set to a non-zero value (e.g. 42N 2E)
+# unless the OpenDRIVE file contains a matching <geoReference> element.
+gnss_datum_lat: 0.0  # degrees north
+gnss_datum_lon: 0.0  # degrees east
 
 # ---------------------------------------------------------------------------
 # CARLA sensor noise configuration
 # Sensors: RTK-GNSS + IMU (localisation) + 2D LiDAR (obstacle detection).
 # RTK-GNSS provides cm-level accuracy under nominal conditions; degradation
-# is modelled via per-episode noise tiers (see configs/carla/gnss_noise_profiles.yaml).
+# is modelled via per-episode noise tiers (see gnss_noise_profiles.yaml).
 # 2D LiDAR feeds obstacle clearance observations (obs indices 15-19) only --
 # it does NOT participate in localisation.
 #
-# Mount positions are in vehicle body frame (BMW Grand Tourer):
-#   x = longitudinal (positive = forward), y = lateral (positive = left), z = vertical
+# Sensor mount positions live in configs/deployment/sensor_config.yaml.
+# Noise parameters (CARLA-specific) live here only.
 # ---------------------------------------------------------------------------
 carla_sensors:
   imu:
@@ -69,45 +75,44 @@ carla_sensors:
     noise_gyro_stddev_y: 0.01
     noise_gyro_stddev_z: 0.01
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
-    mount:
-      x: 0.0    # Centre of mass (longitudinal)
-      y: 0.0
-      z: 0.3    # Centre-of-mass height (metres)
 
   lidar:        # 2D LiDAR (SICK TiM571) -- obstacle detection only, NOT localisation.
     # Feeds _get_obstacle_features() for obs indices 15-19 (hemispheric clearance).
-    # Real spec: 1 channel, 270 deg, 25 m, 15 Hz, 0.33 deg angular resolution (~810 pts/scan).
-    # Single channel at 0 deg vertical FOV = true horizontal scan plane.
-    # Mount z=0.3 (vehicle frame) puts the scan plane at front bumper height,
-    # intersecting the body of perimeter traffic cones (~0.7m tall).
+    # Real spec: 1 channel, 270 deg FOV, 25 m range, 15 Hz, 0.33 deg angular
+    # resolution (~810 pts/scan at 270 deg).
     #
-    # CARLA sim-to-real caveats (revert on real robot):
-    #   - points_per_second: 2M (real TiM571: ~12,150 pts/sec). TiM571 beam
-    #     divergence is ~1.26 deg; CARLA's zero-width rays need ~166x more
-    #     density to compensate.
-    #   - rotation_frequency: 20 Hz (real TiM571: 15 Hz). Matched to
-    #     carla_timestep to avoid empty scan messages on tick boundaries.
-    # On the real robot, revert to native specs.
+    # The policy only consumes 5 hemisphere min-distance features from this scan
+    # (left_dist, left_bearing, right_dist, right_bearing, forward_dist).
+    # Min-distance features are insensitive to point density, so the sim-to-real
+    # gap from point count does not affect the policy input.
+    #
+    # CARLA sim-to-real notes (values below match real hardware):
+    #   - points_per_second: set to match real TiM571 (~12,150 pts/sec).
+    #     CARLA's zero-width rays produce sparser returns than the physical
+    #     beam divergence of 1.26 deg, but min-distance features are robust
+    #     to this sparsity.
+    #   - rotation_frequency: 15 Hz (real TiM571 native rate). carla_timestep
+    #     is 0.05s (20 Hz); at 15 Hz one full scan takes 0.067s = 1.33 sim
+    #     ticks. CARLA accumulates points across ticks and flushes on the
+    #     scan boundary, so scans arrive every ~1-2 ticks. The env reads the
+    #     latest available scan each step, so occasional empty ticks are
+    #     harmless -- the previous scan is reused via get_latest_lidar_scan().
+    #   - sensor_tick: 0.067s (1/15 Hz) to match real publish rate.
+    #   - FOV: CARLA sensor.lidar.ray_cast scans 360 deg; the rear 180 deg
+    #     is discarded in _get_obstacle_features() (x <= 0 mask), matching
+    #     the real sensor's forward-facing hemisphere.
     channels: 1                 # True 2D LiDAR: single horizontal scan plane
     range: 25.0                 # TiM571 max range (metres)
-    points_per_second: 2000000  # CARLA workaround: compensates for zero beam divergence.
-                                # 2M / 20 Hz = ~100k rays per scan -> ~0.004 deg angular step.
-    rotation_frequency: 20.0    # Matched to carla_timestep (0.05s = 20 Hz) so each tick
-                                # produces exactly one complete scan with no empty messages.
+    points_per_second: 12150    # Real TiM571 rate (~810 pts/scan at 15 Hz).
+                                # Min-distance features are density-invariant.
+    rotation_frequency: 15.0    # Real TiM571 native rate (Hz).
     upper_fov: 0.0              # Flat horizontal plane (2D LiDAR)
     lower_fov: 0.0              # Flat horizontal plane (2D LiDAR)
-    sensor_tick: 0.05           # Matches carla_timestep (20 Hz)
-    # @note CARLA sensor.lidar.ray_cast always scans 360 deg and does not collide
-    # with the parent actor. Real TiM571 scans 270 deg (rear blocked by car body).
-    # In CARLA, 360 deg is used; on the real robot, the physical 270 deg FOV applies.
-    mount:
-      x: 2.4    # Front bumper centre (longitudinal)
-      y: 0.0
-      z: 0.5    # Above bumper lip; clears ego mesh so scan plane avoids self-returns
+    sensor_tick: 0.067          # 1/15 Hz = 0.067s -- matches real publish rate.
 
   gnss:         # RTK-GNSS receiver (u-blox ZED-F9P or similar)
     # Base noise stddevs are for RTK-fixed conditions (~2 cm).
-    # Per-episode noise tier (from configs/carla/gnss_noise_profiles.yaml) scales these
+    # Per-episode noise tier (from gnss_noise_profiles.yaml) scales these
     # via gnss_noise_multiplier to simulate RTK float, standalone, and degraded states.
     # CARLA sensor.other.gnss outputs WGS84 lat/lon; navsat_transform_node in the
     # ros2-bridge converts to a local Odometry frame for the EKF.
@@ -118,10 +123,6 @@ carla_sensors:
     noise_lon_bias: 0.0         # Longitude bias (degrees)
     noise_lon_stddev: 0.0000002 # Longitude noise stddev (degrees) -- ~0.02 m at equator
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
-    mount:
-      x: 0.0    # Roof centre (longitudinal)
-      y: 0.0
-      z: 1.8    # Antenna height above vehicle origin (metres)
 
 # ---------------------------------------------------------------------------
 # Parking lot scenario configuration
@@ -141,7 +142,7 @@ parking_scenarios:
   bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
   bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
   num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
-  patrol_obstacle_stop_distance: 6.0  # Metres - patrol brakes if any vehicle within range (omnidirectional for ego, + 1.0 m bumper buffer in code)
+  patrol_obstacle_stop_distance: 5.0  # Metres ahead - patrol brakes if any vehicle is in forward cone within this range
   patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Patrol vehicle speed in m/s (applied directly via kinematic, no physics acceleration)
   patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
@@ -161,18 +162,3 @@ parking_scenarios:
     irregular_a:
       layout_file: configs/layouts/irregular_a.yaml
       ood: true    # Never sampled during training; held out for OOD evaluation
-
-# ---------------------------------------------------------------------------
-# Observation space flags
-# ---------------------------------------------------------------------------
-# include_covariance: when true, EKF covariance features (indices 3-11) are included
-#   in the observation. Covariance comes from the robot_localisation EKF fusing
-#   RTK-GNSS + IMU. Variation arises from per-episode GNSS noise tiers.
-# include_obstacle_obs: when true, 5 hemispheric obstacle clearance dims are
-#   appended (20-dim total). Fed by the 2D LiDAR (NOT the GNSS/IMU pipeline).
-include_covariance: true
-include_obstacle_obs: true
-
-# GNSS noise profiles for per-episode RTK fix-state sampling.
-# Training env loads this file at __init__ and samples a tier each reset().
-gnss_noise_profiles: configs/carla/gnss_noise_profiles.yaml

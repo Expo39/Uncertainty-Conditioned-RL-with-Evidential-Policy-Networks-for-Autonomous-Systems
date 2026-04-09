@@ -166,6 +166,9 @@ def make_env(
             use_extra_spawns=config.get("use_extra_spawns", False),
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             vis_output_path=vis_path,
+            real_world_deployment=config.get("real_world_deployment", False),
+            real_world_datum_path=config.get("real_world_datum", None),
+            actuation_calibration_path=config.get("actuation_calibration", None),
         )
         return env
 
@@ -198,6 +201,46 @@ def merge_configs(
     @return Merged configuration dictionary.
     """
     merged = {**env_config, **train_config}
+    return merged
+
+
+def load_env_config(env_config_path: str) -> Dict[str, Any]:
+    """
+    @brief Load and merge the environment config with the shared sensor config.
+
+    sensor_config.yaml (configs/deployment/sensor_config.yaml) is the single
+    source of truth for all parameters shared between simulation and the real
+    vehicle: sensor mounts, agent parameters (max_steps, action_repeat,
+    max_ego_speed_ms), observation flags, ROS 2 settings, and deployment flags.
+
+    env_config.yaml (configs/deployment/sim/env_config.yaml) contains only
+    CARLA-specific parameters: noise profiles, simulation timing, scenario
+    geometry. Keys in env_config take precedence over sensor_config on conflict.
+
+    Sensor mounts from sensor_config.sensors.*.mount are injected into
+    carla_sensors.*.mount so the CARLA spawner receives them.
+
+    @param env_config_path: Path to the CARLA environment config YAML.
+    @return Fully merged environment configuration dictionary.
+    """
+    with open(env_config_path) as f:
+        env_config: Dict[str, Any] = yaml.safe_load(f) or {}
+
+    # Resolve sensor_config.yaml relative to deployment/ (one level up from sim/).
+    sensor_cfg_path = Path(env_config_path).parent.parent / "sensor_config.yaml"
+    sensor_cfg: Dict[str, Any] = {}
+    if sensor_cfg_path.exists():
+        with open(sensor_cfg_path) as f:
+            sensor_cfg = yaml.safe_load(f) or {}
+
+    # sensor_config provides the base; env_config overrides with sim-specific keys.
+    merged: Dict[str, Any] = {**sensor_cfg, **env_config}
+
+    # Inject sensor mounts into carla_sensors so the CARLA spawner gets them.
+    for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
+        if "mount" in sensor_data and sensor_name in merged.get("carla_sensors", {}):
+            merged["carla_sensors"][sensor_name]["mount"] = sensor_data["mount"]
+
     return merged
 
 
@@ -535,7 +578,7 @@ def main() -> None:
     parser.add_argument(
         "--env-config",
         type=str,
-        default="configs/carla/env_config.yaml",
+        default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config (CARLA, sensors, parking scenarios)",
     )
     parser.add_argument(
@@ -577,8 +620,10 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Load and merge configs, then apply CLI overrides
-    config = merge_configs(load_config(args.train_config), load_config(args.env_config))
+    # Load and merge configs, then apply CLI overrides.
+    # load_env_config() merges sensor_config.yaml (shared keys) with env_config.yaml
+    # (CARLA-specific keys) so all consumers see a single unified dict.
+    config = merge_configs(load_config(args.train_config), load_env_config(args.env_config))
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:

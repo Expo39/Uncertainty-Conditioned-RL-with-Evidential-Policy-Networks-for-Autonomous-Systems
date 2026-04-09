@@ -10,6 +10,7 @@
 __all__ = [
     "train",
     "load_config",
+    "load_env_config",
     "merge_configs",
     "TrainResult",
 ]
@@ -25,6 +26,7 @@ def __getattr__(name):
         from uncertainty_rl.training.train_ppo import (  # noqa: E402
             TrainResult,
             load_config,
+            load_env_config,
             merge_configs,
             train,
         )
@@ -32,6 +34,7 @@ def __getattr__(name):
         attrs = {
             "train": train,
             "load_config": load_config,
+            "load_env_config": load_env_config,
             "merge_configs": merge_configs,
             "TrainResult": TrainResult,
         }

@@ -189,6 +189,18 @@ class _CovarianceSubscriber:
                 ],
                 dtype=np.float64,
             )
+            # Reject NaN/Inf writes: the EKF can diverge (e.g. Cholesky failure
+            # on the first prediction step before the first GNSS correction) and
+            # write NaN to every field. Treating these as "no data" causes the
+            # env to fall back to the CARLA ground-truth pose rather than feeding
+            # NaN observations directly into the policy.
+            if not np.all(np.isfinite(pose)) or not np.all(np.isfinite(features)):
+                logger.warning(
+                    "Rejecting EKF state write (seq=%d): contains NaN/Inf "
+                    "(EKF may still be initialising).",
+                    seq,
+                )
+                return False
             with self._lock:
                 self._latest_pose = pose
                 self._latest_uncertainty = features
@@ -295,6 +307,7 @@ class _CovarianceSubscriber:
         lon_stddev_deg: float,
         alt_stddev_m: float,
         metric_stddev_m: float,
+        tier_name: Optional[str] = None,
     ) -> None:
         """
         @brief Signal the GNSS noise tier to the ros2-bridge via a shared file.
@@ -307,15 +320,19 @@ class _CovarianceSubscriber:
         @param lon_stddev_deg: Extra longitude noise stddev (degrees).
         @param alt_stddev_m: Extra altitude noise stddev (metres).
         @param metric_stddev_m: Metric position stddev for covariance stamping.
+        @param tier_name: Optional tier name (e.g. 'rtk_fixed'). Used by
+               GnssNoiseRelayNode to seed the Markov chain at episode start.
         """
         self._gnss_noise_config_seq += 1
-        data = {
+        data: Dict[str, Any] = {
             "seq": self._gnss_noise_config_seq,
             "lat_stddev_deg": float(lat_stddev_deg),
             "lon_stddev_deg": float(lon_stddev_deg),
             "alt_stddev_m": float(alt_stddev_m),
             "metric_stddev_m": float(metric_stddev_m),
         }
+        if tier_name is not None:
+            data["tier_name"] = tier_name
         try:
             os.makedirs(self._gnss_noise_config_path.parent, exist_ok=True)
             with open(self._gnss_noise_config_tmp, "w") as f:

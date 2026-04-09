@@ -1,0 +1,91 @@
+# Sensor configuration shared between simulation and real-vehicle deployment.
+#
+# This file contains physical sensor properties and mount positions that are
+# identical in CARLA and on the real vehicle. It is the single source of truth
+# for anything that must match reality.
+#
+# CARLA-specific noise parameters and spawn blueprints live in carla/env_config.yaml.
+# Real-vehicle deployment flags (datum, actuation calibration) live alongside
+# this file in configs/deployment/.
+#
+# Mount positions are in vehicle body frame:
+#   x = longitudinal from rear axle midpoint (positive = forward)
+#   y = lateral (positive = left)
+#   z = vertical from ground plane (positive = up)
+#
+# @warning All mount values are UNMEASURED placeholders for the real vehicle.
+#          Update before deployment. IMU (rear passenger seat floor) has a
+#          large lever arm from the GNSS antenna (roof) -- accurate to ~2 cm
+#          or the EKF introduces ~5 cm * sin(heading_change) positional bias.
+
+# ---------------------------------------------------------------------------
+# Policy safety parameters (apply in both sim and real)
+# ---------------------------------------------------------------------------
+max_ego_speed_ms: 3.0 # Speed limit (m/s). Throttle cut above this in sim; safety
+                      # governor on real vehicle. 3 m/s = ~11 km/h.
+
+# ---------------------------------------------------------------------------
+# Observation space flags (identical in sim and real -- must match trained policy)
+# ---------------------------------------------------------------------------
+include_covariance: true      # Include EKF covariance features (obs indices 3-11)
+include_obstacle_obs: true    # Include 5 hemispheric LiDAR clearance dims (obs indices 15-19)
+
+# ---------------------------------------------------------------------------
+# ROS 2 / EKF pipeline settings (same node config in sim and real)
+# ---------------------------------------------------------------------------
+ros2:
+  covariance_topic: "/odometry/filtered"
+  covariance_timeout: 120.0
+  ekf_convergence_timeout: 15.0
+  publish_initial_pose: false  # Disabled: /initialpose resets EKF covariance to near-zero on velocity axes,
+                               # and the datum reset fires 0.5-2s later via subprocess, so navsat outputs
+                               # GPS in the old frame during that gap. EKF receives a large discontinuous
+                               # correction -> Cholesky fails -> permanent NaN. Let GNSS pull the EKF
+                               # to the spawn position naturally instead (handled by _calibrate_ekf_frame_offset).
+  initial_pose_topic: "/initialpose"
+
+# ---------------------------------------------------------------------------
+# Sensor physical specifications and mount positions
+# These values must match the real hardware -- update before deployment.
+# ---------------------------------------------------------------------------
+sensors:
+  imu:
+    # MEMS IMU (e.g. VectorNav VN-100 or equivalent).
+    # Planned location: rear passenger seat floor.
+    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
+    #          In CARLA the IMU is placed at the vehicle centre of mass (x=0, y=0, z=0.3).
+    mount:
+      x: 0.0    # TODO: measure from rear axle midpoint (metres, positive = forward)
+      y: 0.0    # TODO: measure lateral offset (metres, positive = left)
+      z: 0.3    # CARLA: centre-of-mass height. TODO: verify on real vehicle.
+
+  gnss:
+    # RTK-GNSS antenna (u-blox ZED-F9P or similar).
+    # Planned location: vehicle roof centre.
+    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
+    mount:
+      x: 0.0    # TODO: measure from rear axle midpoint (metres)
+      y: 0.0    # TODO: measure lateral offset (metres)
+      z: 1.6    # CARLA: antenna height above vehicle origin. TODO: verify on real vehicle.
+
+  lidar:
+    # 2D LiDAR: SICK TiM571. Obstacle detection only (NOT localisation).
+    # Physical spec: 1 channel, 270 deg FOV, 25 m range, 15 Hz, 0.33 deg resolution.
+    # Planned location: front bumper area.
+    range: 25.0           # Max range (metres)
+    channels: 1           # Single horizontal scan plane
+    fov_deg: 270.0        # Physical FOV (rear 90 deg blocked by car body)
+    frequency_hz: 15.0    # Native scan rate (Hz)
+    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
+    mount:
+      x: 2.4    # CARLA: front bumper centre. TODO: verify on real vehicle.
+      y: 0.0    # TODO: measure lateral offset (metres)
+      z: 0.5    # CARLA: above bumper lip. TODO: verify on real vehicle.
+
+# ---------------------------------------------------------------------------
+# Real-world deployment flags
+# ---------------------------------------------------------------------------
+real_world_deployment: false  # Set true to activate datum-based EKF calibration
+                              # and actuation calibration on the real vehicle.
+real_world_datum: configs/deployment/real/real_world_datum.yaml
+actuation_calibration: configs/deployment/real/actuation_calibration.yaml
