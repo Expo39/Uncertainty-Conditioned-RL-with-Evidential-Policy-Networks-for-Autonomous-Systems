@@ -404,10 +404,9 @@ def generate_launch_description() -> LaunchDescription:
                     "covariance_topic", "/ekf_uncertainty/covariance"
                 ),
                 "publish_rate": ros2_config.get("publish_rate", 10.0),
-                # When world_frame=odom, robot_localisation publishes twist in
-                # the odom (world-aligned) frame. The extractor rotates it into
-                # the vehicle body frame before writing to ekf_state.json.
-                "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", True),
+                # robot_localisation publishes twist in the child frame (body
+                # frame) per nav_msgs/Odometry convention. No rotation needed.
+                "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", False),
             }
         ],
     )

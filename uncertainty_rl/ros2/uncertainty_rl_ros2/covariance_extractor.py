@@ -63,12 +63,12 @@ class CovarianceExtractorNode(Node):
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
         self.declare_parameter("publish_rate", 10.0)  # Hz
-        # When world_frame=odom in robot_localisation, twist is in the odom
-        # (world-aligned) frame and must be rotated into the vehicle body frame.
-        # Applies to both simulation and real robot when using the same EKF config.
-        # Only false if robot_localisation is explicitly configured with
-        # twist_in_robot_frame: true. Set via ros2_config.yaml.
-        self.declare_parameter("twist_in_odom_frame", True)
+        # robot_localisation publishes twist in the child frame (body frame)
+        # per the nav_msgs/Odometry convention, regardless of world_frame
+        # setting. No rotation needed. This flag exists only as a safety
+        # valve for non-standard EKF configurations that genuinely output
+        # twist in the odom frame (none known). Default is False.
+        self.declare_parameter("twist_in_odom_frame", False)
         # Per-instance EKF state file path. Defaults to EKF_STATE_FILE env var
         # (set by docker-compose.parallel.yml for worker 1+), then falls back to
         # _DEFAULT_SHARED_PATH for worker 0 / single-instance deployment.

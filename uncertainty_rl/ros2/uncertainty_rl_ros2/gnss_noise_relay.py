@@ -196,6 +196,18 @@ class GnssNoiseRelayNode(Node):
         self._config_seq: int = -1  # Sequence number from config file
         self._callback_count: int = 0
 
+        # Auto-datum: when datum_lat == datum_lon == 0.0 the datum has not been
+        # set explicitly. On the first GNSS callback we latch the raw lat/lon
+        # (before noise injection) as the datum so the EKF odom frame is centred
+        # near CARLA world (0,0) in metres, not at quasi-UTM scale (~millions).
+        # This is equivalent to navsat_transform's "zero datum" mode and makes
+        # the odom->world rigid body transform near-identity, which is numerically
+        # stable and insensitive to EKF yaw drift.
+        self._auto_datum: bool = (
+            self._datum_lat == 0.0 and self._datum_lon == 0.0
+        )
+        self._datum_latched: bool = not self._auto_datum
+
         # RNG for noise injection and Markov transitions.
         self._rng = np.random.default_rng()
 
@@ -449,9 +461,32 @@ class GnssNoiseRelayNode(Node):
 
         self._pub.publish(out)
 
+        # -- Auto-datum: latch first raw GNSS reading as projection origin ------
+        # When datum was not set explicitly (0,0), use the raw pre-noise lat/lon
+        # from the first GNSS callback so the EKF odom frame is centred near
+        # CARLA world (0,0) in metres. Noise is added AFTER datum latching so
+        # the datum is always the clean simulation reference position.
+        if not self._datum_latched:
+            self._datum_lat = msg.latitude
+            self._datum_lon = msg.longitude
+            # Recompute scale factor now that datum latitude is known.
+            self._metres_per_deg_lon = (
+                111320.0 * math.cos(math.radians(self._datum_lat))
+            )
+            self._datum_latched = True
+            self.get_logger().info(
+                f"GnssNoiseRelay: auto-latched datum "
+                f"lat={self._datum_lat:.6f} lon={self._datum_lon:.6f}"
+            )
+
         # -- Flat-earth projection: lat/lon -> local XY (metres) ---------------
         # Replaces navsat_transform_node. Simple and accurate for parking-lot
         # scale distances (< 100 m from datum).
+        #
+        # The EKF odom frame is ROS right-handed convention (Y northward).
+        # CovarianceExtractorNode negates y when writing ekf_state.json to
+        # convert to CARLA left-handed convention (Y southward) for the
+        # training container and calibration code.
         local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
         local_y = (out.latitude - self._datum_lat) * self._metres_per_deg_lat
 
