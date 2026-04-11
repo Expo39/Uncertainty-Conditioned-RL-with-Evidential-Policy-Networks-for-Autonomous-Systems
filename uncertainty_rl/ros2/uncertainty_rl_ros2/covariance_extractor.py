@@ -334,9 +334,15 @@ class CovarianceExtractorNode(Node):
         msg.pose.pose.position.y = ros_y
         msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
         msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
-        msg.pose.covariance[0] = 0.1  # xx
-        msg.pose.covariance[7] = 0.1  # yy
-        msg.pose.covariance[35] = 0.05  # yaw-yaw
+        # Tight covariance forces the EKF to snap to the given spawn pose
+        # rather than treating it as a soft hint. Without tight covariance,
+        # the EKF blends the reset pose with its prior state, leaving a
+        # residual yaw error (~5 deg) that persists through calibration.
+        #   xx/yy: 0.01 m^2 = 10 cm stddev (RTK-fixed quality)
+        #   yaw-yaw: 1e-4 rad^2 = 0.57 deg stddev (effectively known heading)
+        msg.pose.covariance[0] = 0.01  # xx
+        msg.pose.covariance[7] = 0.01  # yy
+        msg.pose.covariance[35] = 1.0e-4  # yaw-yaw
         self._initial_pose_pub.publish(msg)
         self.get_logger().info(
             f"Published /set_pose: x={x:.2f} y={ros_y:.2f} "
