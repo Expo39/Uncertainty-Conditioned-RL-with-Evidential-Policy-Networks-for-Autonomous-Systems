@@ -41,6 +41,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import rclpy
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -233,6 +234,21 @@ class GnssNoiseRelayNode(Node):
         # Per-sample variance at 20 Hz: (0.0035 * sqrt(20))^2 = 2.45e-4 (rad/s)^2
         self.declare_parameter("imu_gyro_variance", 2.5e-4)
 
+        # GNSS-derived heading relay: simulates the course-over-ground (COG)
+        # heading output from a dual-antenna RTK-GNSS receiver
+        # (e.g. u-blox ZED-F9P in moving-baseline mode) or a single-antenna
+        # receiver computing heading from consecutive position fixes.
+        # In simulation, heading is derived purely from the noisy GNSS flat-earth
+        # XY positions -- the same data a real receiver uses for COG. No CARLA
+        # GT data is used, so this is fully sim-to-real safe.
+        # Only published when the vehicle has moved > min_move_m since the last
+        # fix (heading from a stationary receiver is undefined / noisy).
+        # Heading noise: ~1 deg stddev at speed (COG accuracy for RTK).
+        #   variance = (1 deg * pi/180)^2 = 3.0e-4 rad^2
+        self.declare_parameter("compass_output_topic", "/gnss/heading")
+        self.declare_parameter("compass_heading_variance", 3.0e-4)
+        self.declare_parameter("compass_min_move_m", 3.0)
+
         imu_input_topic = str(
             self.get_parameter("imu_input_topic").get_parameter_value().string_value
         )
@@ -242,6 +258,20 @@ class GnssNoiseRelayNode(Node):
         self._imu_gyro_variance: float = float(
             self.get_parameter("imu_gyro_variance").get_parameter_value().double_value
         )
+        compass_output_topic = str(
+            self.get_parameter("compass_output_topic").get_parameter_value().string_value
+        )
+        self._compass_heading_variance: float = float(
+            self.get_parameter(
+                "compass_heading_variance"
+            ).get_parameter_value().double_value
+        )
+        self._compass_min_move_m: float = float(
+            self.get_parameter("compass_min_move_m").get_parameter_value().double_value
+        )
+        # Previous noisy GNSS position (ROS frame) for COG heading computation.
+        self._prev_gnss_x: Optional[float] = None
+        self._prev_gnss_y: Optional[float] = None
 
         self._sub = self.create_subscription(
             NavSatFix, input_topic, self._gnss_callback, qos
@@ -255,6 +285,13 @@ class GnssNoiseRelayNode(Node):
         )
         self._imu_pub = self.create_publisher(Imu, imu_output_topic, qos)
 
+        # GNSS-derived heading: published from _gnss_callback when moving.
+        # PoseWithCovarianceStamped lets robot_localization use it as pose0,
+        # which is semantically correct for a heading-only sensor.
+        self._compass_pub = self.create_publisher(
+            PoseWithCovarianceStamped, compass_output_topic, qos
+        )
+
         self.get_logger().info(
             f"GnssNoiseRelay: {input_topic} -> {output_topic} "
             f"-> {odom_output_topic} (flat-earth, "
@@ -265,6 +302,11 @@ class GnssNoiseRelayNode(Node):
         self.get_logger().info(
             f"ImuCovarianceRelay: {imu_input_topic} -> {imu_output_topic} "
             f"(gyro_variance: {self._imu_gyro_variance:.2e} (rad/s)^2)"
+        )
+        self.get_logger().info(
+            f"CompassRelay (GNSS COG): -> {compass_output_topic} "
+            f"(heading_variance: {self._compass_heading_variance:.2e} rad^2, "
+            f"min_move: {self._compass_min_move_m:.2f}m)"
         )
 
     # ------------------------------------------------------------------
@@ -332,6 +374,11 @@ class GnssNoiseRelayNode(Node):
                 self._metric_stddev_m = float(
                     data.get("metric_stddev_m", self._base_metric_stddev)
                 )
+
+            # Reset previous GNSS position so the COG heading is not computed
+            # from the old episode's final position to the new spawn location.
+            self._prev_gnss_x = None
+            self._prev_gnss_y = None
 
             self.get_logger().info(
                 f"GNSS noise config updated (seq={seq}, tier={tier_name}): "
@@ -507,6 +554,65 @@ class GnssNoiseRelayNode(Node):
         odom_msg.pose.covariance = pose_cov
 
         self._odom_pub.publish(odom_msg)
+
+        # -- GNSS-derived heading (course over ground) -------------------------
+        # Compute bearing from the previous noisy GNSS fix to the current one.
+        # This is the same method a dual-antenna RTK-GNSS uses for COG heading.
+        # Only published when the vehicle has moved > _compass_min_move_m to
+        # avoid noisy headings from a stationary or barely-moving vehicle.
+        # Uses ROS convention (x=east, y=north, CCW positive) throughout so
+        # the EKF receives a standard ROS heading without any frame conversion.
+        if self._prev_gnss_x is not None:
+            dx = local_x - self._prev_gnss_x
+            dy = local_y - self._prev_gnss_y
+            dist = math.sqrt(dx * dx + dy * dy)
+            if dist >= self._compass_min_move_m:
+                # Bearing from previous GNSS fix to current in ROS odom frame
+                # (x=east, y=north, CCW positive). The EKF operates in ROS
+                # right-handed convention; the extractor negates its output
+                # to convert to CARLA frame. Send the raw ROS bearing here so
+                # the EKF receives the correct absolute heading without any
+                # pre-negation.
+                heading_ros = math.atan2(dy, dx)
+                heading_noisy = heading_ros + float(
+                    np.random.normal(
+                        0.0, math.sqrt(self._compass_heading_variance)
+                    )
+                )
+                heading_noisy = math.atan2(
+                    math.sin(heading_noisy), math.cos(heading_noisy)
+                )
+                half_h = heading_noisy / 2.0
+                # Publish as PoseWithCovarianceStamped (EKF pose0).
+                # Only orientation (yaw) is populated; x/y/z position covariance
+                # is set very large so the EKF ignores position from this source.
+                compass_msg = PoseWithCovarianceStamped()
+                compass_msg.header = out.header
+                compass_msg.header.frame_id = "odom"
+                compass_msg.pose.pose.orientation.x = 0.0
+                compass_msg.pose.pose.orientation.y = 0.0
+                compass_msg.pose.pose.orientation.z = math.sin(half_h)
+                compass_msg.pose.pose.orientation.w = math.cos(half_h)
+                # 6x6 pose covariance (row-major):
+                # xx(0), yy(7), zz(14), roll(21), pitch(28), yaw(35)
+                v_pos = 1.0e6    # large: position not provided
+                v_cov = self._compass_heading_variance
+                cov = [0.0] * 36
+                cov[0] = v_pos    # xx
+                cov[7] = v_pos    # yy
+                cov[14] = v_pos   # zz
+                cov[21] = v_pos   # roll-roll
+                cov[28] = v_pos   # pitch-pitch
+                cov[35] = v_cov   # yaw-yaw
+                compass_msg.pose.covariance = cov
+                self._compass_pub.publish(compass_msg)
+                # Update previous position only after publishing a heading.
+                self._prev_gnss_x = local_x
+                self._prev_gnss_y = local_y
+        else:
+            # First fix: initialise previous position, no heading yet.
+            self._prev_gnss_x = local_x
+            self._prev_gnss_y = local_y
 
 
 def main() -> None:
