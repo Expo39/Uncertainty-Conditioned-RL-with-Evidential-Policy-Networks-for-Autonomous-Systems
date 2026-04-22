@@ -57,8 +57,9 @@ class EvidentialDistribution(Distribution):
 
     The evidential network outputs NIG parameters (gamma, nu, alpha, beta).
     For sampling and log_prob, we approximate with Normal(gamma, std) where
-    std = sqrt(aleatoric) = sqrt(beta / (nu * (alpha - 1))), the NIG predictive std.
-    Epistemic uncertainty is not added to the action std -- it characterises
+    std = sqrt(aleatoric) = sqrt(beta / (alpha - 1)), the expected observation
+    noise std (Amini et al. 2020). Epistemic uncertainty Var[mu] =
+    beta / (nu * (alpha - 1)) is not added to the action std -- it characterises
     model uncertainty over gamma, not per-sample action noise.
     NIG parameters are cached for the evidential regularisation loss.
     """
@@ -103,13 +104,15 @@ class EvidentialDistribution(Distribution):
         self._alpha = alpha
         self._beta = beta
 
-        # Gaussian approximation: std = sqrt(beta / (nu*(alpha-1))) = sqrt(aleatoric).
-        # Epistemic uncertainty is not folded into action std -- it quantifies
-        # model uncertainty over gamma, not per-sample noise.
-        # Clamp aleatoric before sqrt to guard against numerical drift producing
-        # near-zero or negative values under GPU fp32 arithmetic, which would
-        # yield NaN/inf std and trigger a CUDA illegal memory access in Normal().
-        aleatoric = th.clamp(beta / (nu * (alpha - 1)), min=1e-6)
+        # Gaussian approximation: std = sqrt(aleatoric) = sqrt(beta / (alpha - 1)).
+        # Aleatoric = E[sigma^2] = beta/(alpha-1) is the expected observation noise
+        # (Amini et al. 2020). Epistemic = Var[mu] = beta/(nu*(alpha-1)) is not
+        # folded into action std -- it quantifies model uncertainty over gamma,
+        # not per-sample noise.
+        # Clamp before sqrt to guard against numerical drift producing near-zero
+        # or negative values under GPU fp32 arithmetic, which would yield NaN/inf
+        # std and trigger a CUDA illegal memory access in Normal().
+        aleatoric = th.clamp(beta / (alpha - 1), min=1e-6)
         std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
@@ -547,8 +550,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 flat = cast(EvidentialLayer, self.action_net)
                 gamma, nu, alpha, beta = flat(latent_pi)
 
-            epistemic = beta / (alpha - 1)
-            aleatoric = th.clamp(beta / (nu * (alpha - 1)), min=1e-6)
+            # Amini et al. 2020: aleatoric = E[sigma^2], epistemic = Var[mu].
+            aleatoric = th.clamp(beta / (alpha - 1), min=1e-6)
+            epistemic = beta / (nu * (alpha - 1))
             total = epistemic + aleatoric
 
             if deterministic:
@@ -694,10 +698,10 @@ class EvidentialPPO(PPO):
                     + th.mean(th.log(alpha / alpha_prior + 1.0))
                 )
 
-                # Log uncertainties
+                # Log uncertainties (Amini et al. 2020 definitions).
                 with th.no_grad():
-                    epistemic = (beta / (alpha - 1)).mean()
-                    aleatoric = (beta / (nu * (alpha - 1))).mean()
+                    aleatoric = (beta / (alpha - 1)).mean()
+                    epistemic = (beta / (nu * (alpha - 1))).mean()
                     epistemic_uncertainties.append(epistemic.item())
                     aleatoric_uncertainties.append(aleatoric.item())
 

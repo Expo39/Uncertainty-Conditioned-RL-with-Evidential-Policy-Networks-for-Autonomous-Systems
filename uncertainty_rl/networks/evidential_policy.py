@@ -187,11 +187,12 @@ class EvidentialPolicyNetwork(nn.Module):
         """
         gamma, nu, alpha, beta = self.forward(state)
 
-        # Compute uncertainties
-        epistemic_uncertainty = beta / (alpha - 1)  # Epistemic (model) uncertainty
-        aleatoric_uncertainty = beta / (
-            nu * (alpha - 1)
-        )  # Aleatoric (data) uncertainty
+        # Compute uncertainties (Amini et al. 2020, Section 3.2).
+        # Aleatoric = E[sigma^2] = beta/(alpha-1): irreducible noise.
+        # Epistemic = Var[mu]    = beta/(nu*(alpha-1)): model uncertainty,
+        #   shrinks as pseudo-observation count nu grows.
+        aleatoric_uncertainty = beta / (alpha - 1)
+        epistemic_uncertainty = beta / (nu * (alpha - 1))
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
 
         # For deterministic action, use mean
@@ -199,10 +200,9 @@ class EvidentialPolicyNetwork(nn.Module):
             action = gamma
         else:
             # Gaussian approximation of the NIG Student-t predictive distribution.
-            # Predictive std = sqrt(beta / (nu * (alpha - 1))) = sqrt(aleatoric).
-            # Using total_uncertainty would double-count: epistemic uncertainty is
-            # already captured by the spread of gamma across the posterior, not by
-            # inflating the per-sample action noise.
+            # Sampling std = sqrt(aleatoric) = sqrt(beta / (alpha - 1)).
+            # Epistemic uncertainty (Var[mu]) is not added to action noise --
+            # it quantifies model uncertainty over gamma, not per-sample noise.
             std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
             dist = Normal(gamma, std)
             action = dist.sample()
