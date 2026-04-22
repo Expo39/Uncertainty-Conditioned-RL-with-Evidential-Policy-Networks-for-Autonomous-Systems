@@ -17,19 +17,21 @@ def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
     """
     @brief Extract 2D covariance features from covariance matrix.
 
-    Extracts [std_x, std_y, std_yaw, cov_xx, cov_yy,
-    cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
-    for use as RL state input. This provides both marginal uncertainties
-    (standard deviations) and correlation structure (covariances).
+    Extracts [std_x, std_y, std_yaw, cov_xy, cov_xyaw, cov_yyaw]
+    for use as RL state input. Standard deviations capture marginal
+    uncertainty; off-diagonal terms capture correlation structure.
+    Diagonal variances (cov_xx, cov_yy, cov_yawyaw) are omitted because
+    they are redundant given the standard deviations above (var = std^2).
 
-    @param cov_matrix: Covariance matrix (3x3 for [x, y, yaw] or 6x6 for full 3D pose).
-    @return: 1D array of 9 covariance features.
+    @param cov_matrix: Covariance matrix (3x3 for [x, y, yaw] or 6x6 for
+                       full 3D pose).
+    @return: 1D array of 6 covariance features.
     @raises ValueError: If matrix shape is not 3x3 or 6x6.
 
     Example:
-        >>> cov_6d = np.eye(6) * 0.1  # 10cm std on all axes
+        >>> cov_6d = np.eye(6) * 0.1  # 10 cm std on all axes
         >>> features = extract_2d_covariance_features(cov_6d)
-        >>> assert features.shape == (9,)
+        >>> assert features.shape == (6,)
         >>> assert np.isclose(features[0], np.sqrt(0.1))  # std_x
     """
     # Extract 2D pose covariance (x, y, yaw)
@@ -51,38 +53,20 @@ def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
             f"Expected 3x3 or 6x6 covariance matrix, got shape {cov_matrix.shape}"
         )
 
-    # Extract standard deviations (marginal uncertainties)
     std_x = np.sqrt(cov_2d[0, 0])
     std_y = np.sqrt(cov_2d[1, 1])
     std_yaw = np.sqrt(cov_2d[2, 2])
+    cov_xy = cov_2d[0, 1]
+    cov_xyaw = cov_2d[0, 2]
+    cov_yyaw = cov_2d[1, 2]
 
-    # Extract full covariance terms (includes correlations)
-    cov_xx = cov_2d[0, 0]
-    cov_yy = cov_2d[1, 1]
-    cov_yawyaw = cov_2d[2, 2]
-    cov_xy = cov_2d[0, 1]  # Correlation between x and y
-    cov_xyaw = cov_2d[0, 2]  # Correlation between x and yaw
-    cov_yyaw = cov_2d[1, 2]  # Correlation between y and yaw
-
-    return np.array(
-        [
-            std_x,
-            std_y,
-            std_yaw,
-            cov_xx,
-            cov_yy,
-            cov_yawyaw,
-            cov_xy,
-            cov_xyaw,
-            cov_yyaw,
-        ]
-    )
+    return np.array([std_x, std_y, std_yaw, cov_xy, cov_xyaw, cov_yyaw])
 
 
 def get_covariance_dimension() -> int:
     """
     @brief Get the dimensionality of extracted covariance features.
-    @return: Number of covariance features (COVARIANCE_FEATURES_DIM = 9 for 2D case).
+    @return: Number of covariance features (COVARIANCE_FEATURES_DIM = 6 for 2D case).
 
     This is useful for defining observation space dimensions in Gymnasium environments.
     """
