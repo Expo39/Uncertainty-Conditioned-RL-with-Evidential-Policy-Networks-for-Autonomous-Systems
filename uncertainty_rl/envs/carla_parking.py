@@ -7,14 +7,15 @@ in CARLA simulator. The agent parks in one of three floor-plan geometries loaded
 from pre-computed layout YAMLs (configs/layouts/). Localisation uncertainty comes
 from the robot_localisation EKF node fusing RTK-GNSS and IMU, with per-episode
 GNSS noise tiers modelling RTK fix-state variation (fixed, float, standalone,
-degraded). 2D LiDAR provides obstacle detection only (obs indices 15-19).
+degraded). 2D LiDAR provides obstacle detection only (obs indices 12-16).
 
-The observation comprises up to 20 dimensions (default, include_obstacle_obs=true):
-  - indices  0-5:  EKF filtered pose (x, y, yaw, vx, vy, vyaw)
-  - indices  6-14: EKF covariance features (std_x, std_y, std_yaw,
-                   cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw)
-  - indices 15-17: target bay in ego body frame (dx, dy, dyaw)
-  - indices 18-19: nearest obstacle (distance_m, bearing_rad)
+The observation comprises up to 17 dimensions (default, include_obstacle_obs=true):
+  - indices  0-2:  EKF velocity (vx, vy, vyaw)
+  - indices  3-5:  EKF std devs (std_x, std_y, std_yaw)
+  - indices  6-8:  EKF off-diagonal cross-covariance (cov_xy, cov_xyaw, cov_yyaw)
+  - indices  9-11: target bay in ego body frame (dx, dy, dyaw)
+  - indices 12-16: hemispheric LiDAR clearance (left_dist, left_bearing,
+                   right_dist, right_bearing, forward_dist)
                    only present when include_obstacle_obs=true (default)
 
 Actual obs dim depends on include_covariance and include_obstacle_obs flags;
@@ -93,19 +94,20 @@ class CARLAParkingEnv(gym.Env):
     manoeuvre the ego vehicle into the target bay. Uncertainty is produced
     naturally by the robot_localisation EKF processing noisy CARLA sensors.
 
-    Observation space when include_covariance=True, include_obstacle_obs=True (20-dim):
+    Observation space when include_covariance=True, include_obstacle_obs=True (17-dim):
       [0-2]   EKF velocity: vx, vy, vyaw
-      [3-11]  EKF covariance features
-      [12-14] target bay in ego body frame
-      [15-19] obstacle awareness: left_dist, left_bearing, right_dist,
+      [3-5]   EKF std devs: std_x, std_y, std_yaw
+      [6-8]   EKF off-diagonal cross-covariance: cov_xy, cov_xyaw, cov_yyaw
+      [9-11]  target bay in ego body frame: dx, dy, dyaw
+      [12-16] obstacle awareness: left_dist, left_bearing, right_dist,
               right_bearing, forward_dist
 
-    When include_covariance=False (6-dim or 11-dim depending on include_obstacle_obs):
+    When include_covariance=False (8-dim or 3-dim depending on include_obstacle_obs):
       [0-2]   EKF velocity: vx, vy, vyaw
       [3-5]   target bay in ego body frame
       [6-10]  obstacle awareness (only when include_obstacle_obs=True)
 
-    Setting include_obstacle_obs=False removes obstacle dims (20->15 or 11->6).
+    Setting include_obstacle_obs=False removes obstacle dims (17->12 or 8->3).
     Set in train_config.yaml: include_obstacle_obs: false.
 
     @note Docker + ROS 2 required for training. No standalone fallback.
@@ -431,8 +433,8 @@ class CARLAParkingEnv(gym.Env):
         @return Integer observation dimension.
 
         Base: VEHICLE_STATE_DIM (3) + TARGET_POSE_DIM (3) = 6
-        With include_covariance: +COVARIANCE_FEATURES_DIM (9) = 15
-        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) = 20 (or 11 without cov)
+        With include_covariance: +COVARIANCE_FEATURES_DIM (6) = 12
+        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) = 17 (or 11 without cov)
         """
         dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
         if self._include_covariance:
@@ -865,11 +867,11 @@ class CARLAParkingEnv(gym.Env):
 
         Indices 0-2:   velocity (vx, vy, vyaw). EKF filtered when available,
                        falls back to CARLA ground truth (CI / unit tests).
-        Indices 3-11:  EKF covariance features log1p-transformed
+        Indices 3-8:   EKF covariance features log1p-transformed
                        (only when include_covariance=True).
-        Indices 12-14 (or 3-5 without covariance): relative target bay pose
+        Indices 9-11 (or 3-5 without covariance): relative target bay pose
                        (dx, dy, dyaw) in ego body frame.
-        Indices 15-19 (or 6-10 without covariance): hemispheric obstacle
+        Indices 12-16 (or 6-10 without covariance): hemispheric obstacle
                        clearance [left_dist, left_bearing, right_dist,
                        right_bearing, forward_dist]
                        (only when include_obstacle_obs=True).
@@ -949,7 +951,7 @@ class CARLAParkingEnv(gym.Env):
                 self._obs_buffer[6:11] = obstacle_features
             return cast(np.ndarray, self._obs_buffer.copy())
 
-        # -- EKF covariance features (indices 3-11) -----------------------
+        # -- EKF covariance features (indices 3-8) ------------------------
         # Use the uncertainty already fetched alongside the pose above (one
         # file read for both) rather than triggering a second read here.
         uncertainty = _prefetched_uncertainty
@@ -969,21 +971,20 @@ class CARLAParkingEnv(gym.Env):
                     self.steps,
                 )
 
-        # No obstacle obs:  [vel(3), cov(9), target(3)] = 15-dim
-        # With obstacle obs: [vel(3), cov(9), target(3), obstacle(5)] = 20-dim
+        # No obstacle obs:  [vel(3), cov(6), target(3)] = 12-dim
+        # With obstacle obs: [vel(3), cov(6), target(3), obstacle(5)] = 17-dim
         self._obs_buffer[0] = vx
         self._obs_buffer[1] = vy
         self._obs_buffer[2] = vyaw
-        # log1p compresses heavy tails from high-uncertainty conditions (rain, sensor
-        # noise) that would otherwise distort VecNormalize running statistics.
+        # log1p compresses heavy tails from high-uncertainty conditions.
         # np.sign preserves the sign of off-diagonal covariance terms (cov_xy,
         # cov_xyaw, cov_yyaw) which can be negative.
-        self._obs_buffer[3:12] = np.sign(uncertainty) * np.log1p(np.abs(uncertainty))
-        self._obs_buffer[12] = dx
-        self._obs_buffer[13] = dy
-        self._obs_buffer[14] = dyaw
+        self._obs_buffer[3:9] = np.sign(uncertainty) * np.log1p(np.abs(uncertainty))
+        self._obs_buffer[9] = dx
+        self._obs_buffer[10] = dy
+        self._obs_buffer[11] = dyaw
         if self._include_obstacle_obs:
-            self._obs_buffer[15:20] = obstacle_features
+            self._obs_buffer[12:17] = obstacle_features
         return cast(np.ndarray, self._obs_buffer.copy())
 
     def _get_obstacle_features(self) -> np.ndarray:
@@ -1434,8 +1435,10 @@ class CARLAParkingEnv(gym.Env):
 
         Applies the cached transform to the current EKF pose and compares
         against the CARLA ground-truth spawn position. If the reconstruction
-        error exceeds 2 m the transform is considered stale (the EKF odom
+        error exceeds 10 m the transform is considered stale (the EKF odom
         frame origin may have shifted, e.g. after an EKF /set_pose reset).
+        10 m tolerates standalone-tier EKF position uncertainty at episode
+        reset while still catching genuine frame shifts (tens of metres).
 
         @return True if the transform should be recomputed.
         """
@@ -1452,9 +1455,9 @@ class CARLAParkingEnv(gym.Env):
             (world_ex - carla_t.location.x) ** 2
             + (world_ey - carla_t.location.y) ** 2
         )
-        if err > 2.0:
+        if err > 10.0:
             logger.warning(
-                f"Odom transform stale (recon_err={err:.2f}m > 2.0m) -- "
+                f"Odom transform stale (recon_err={err:.2f}m > 10.0m) -- "
                 "EKF odom frame may have shifted. Recalibrating."
             )
             return True
@@ -1775,12 +1778,6 @@ class CARLAParkingEnv(gym.Env):
             tier = self._get_current_gnss_tier()
             if tier is not None:
                 self._cov_subscriber.publish_gnss_noise_config(
-                    lat_stddev_deg=float(tier.get("lat_stddev_deg", 0.0)),
-                    lon_stddev_deg=float(tier.get("lon_stddev_deg", 0.0)),
-                    alt_stddev_m=float(tier.get("alt_stddev_m", 0.0)),
-                    metric_stddev_m=float(tier.get("metric_stddev_m", 0.02)),
-                    # Pass tier_name so GnssNoiseRelayNode seeds the Markov
-                    # chain from the correct starting state each episode.
                     tier_name=str(tier.get("name", "")),
                 )
 
@@ -1974,7 +1971,7 @@ class CARLAParkingEnv(gym.Env):
                     (_world_ex - _t.location.x) ** 2 + (_world_ey - _t.location.y) ** 2
                 )
             # Obstacle features are always the last OBSTACLE_FEATURES_DIM dims;
-            # index 18 is only correct when include_covariance=True.
+            # index 15 is only correct when include_covariance=True.
             _obs_dist = (
                 float(state[-OBSTACLE_FEATURES_DIM])
                 if self._include_obstacle_obs

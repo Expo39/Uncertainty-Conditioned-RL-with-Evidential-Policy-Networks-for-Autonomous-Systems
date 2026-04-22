@@ -192,14 +192,14 @@ class TestObservationSpaceShape:
     @brief Verify obs space dim based on include_covariance flag.
     """
 
-    def test_21_dim_with_covariance(self) -> None:
+    def test_17_dim_with_covariance(self) -> None:
         """
-        @brief include_covariance=True -> 21-dim observation space (default).
+        @brief include_covariance=True -> 17-dim observation space (default).
         """
         from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 20
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 17
         env.close()
 
     def test_11_dim_without_covariance(self) -> None:

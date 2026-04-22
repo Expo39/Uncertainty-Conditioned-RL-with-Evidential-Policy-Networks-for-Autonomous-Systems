@@ -301,38 +301,25 @@ class _CovarianceSubscriber:
         except OSError as exc:
             logger.warning("Failed to write initial_pose.json: %s", exc)
 
-    def publish_gnss_noise_config(
-        self,
-        lat_stddev_deg: float,
-        lon_stddev_deg: float,
-        alt_stddev_m: float,
-        metric_stddev_m: float,
-        tier_name: Optional[str] = None,
-    ) -> None:
+    def publish_gnss_noise_config(self, tier_name: str) -> None:
         """
         @brief Signal the GNSS noise tier to the ros2-bridge via a shared file.
 
-        Writes gnss_noise_config.json with the current episode's RTK fix-state
-        noise parameters. The GnssNoiseRelayNode in the ros2-bridge container
-        reads this file and applies extra Gaussian noise to CARLA GNSS output.
+        Writes gnss_noise_config.json with the episode's RTK fix-state tier
+        name. GnssNoiseRelayNode reads this file and calls _apply_tier() to
+        look up the corresponding noise parameters from its own _tier_params
+        table, which is the single source of truth for stddev values.
 
-        @param lat_stddev_deg: Extra latitude noise stddev (degrees).
-        @param lon_stddev_deg: Extra longitude noise stddev (degrees).
-        @param alt_stddev_m: Extra altitude noise stddev (metres).
-        @param metric_stddev_m: Metric position stddev for covariance stamping.
-        @param tier_name: Optional tier name (e.g. 'rtk_fixed'). Used by
-               GnssNoiseRelayNode to seed the Markov chain at episode start.
+        The seq field is a monotonically increasing counter so the relay can
+        detect a new episode even when the tier name is unchanged.
+
+        @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed').
         """
         self._gnss_noise_config_seq += 1
         data: Dict[str, Any] = {
             "seq": self._gnss_noise_config_seq,
-            "lat_stddev_deg": float(lat_stddev_deg),
-            "lon_stddev_deg": float(lon_stddev_deg),
-            "alt_stddev_m": float(alt_stddev_m),
-            "metric_stddev_m": float(metric_stddev_m),
+            "tier_name": tier_name,
         }
-        if tier_name is not None:
-            data["tier_name"] = tier_name
         try:
             os.makedirs(self._gnss_noise_config_path.parent, exist_ok=True)
             with open(self._gnss_noise_config_tmp, "w") as f:
@@ -342,10 +329,8 @@ class _CovarianceSubscriber:
                 str(self._gnss_noise_config_path),
             )
             logger.info(
-                "GNSS noise config written: metric_stddev=%.3fm, "
-                "lat_stddev=%.10fdeg (seq=%d)",
-                metric_stddev_m,
-                lat_stddev_deg,
+                "GNSS noise config written: tier=%s (seq=%d)",
+                tier_name,
                 self._gnss_noise_config_seq,
             )
         except OSError as exc:

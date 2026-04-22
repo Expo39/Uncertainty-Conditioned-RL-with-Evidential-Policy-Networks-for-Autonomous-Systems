@@ -35,31 +35,33 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # encoded by dx/dy/dyaw (relative target pose).
 VEHICLE_STATE_DIM = 3
 
-# EKF localisation uncertainty features: [std_x, std_y, std_yaw, cov_xx, cov_yy,
-# cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw]
-COVARIANCE_FEATURES_DIM = 9
+# EKF localisation uncertainty features: [std_x, std_y, std_yaw,
+# cov_xy, cov_xyaw, cov_yyaw]
+# Diagonal variances (cov_xx, cov_yy, cov_yawyaw) are redundant given std devs
+# above (std = sqrt(var)); dropped to reduce obs dimensionality.
+COVARIANCE_FEATURES_DIM = 6
 
 # Relative target pose features: [dx, dy, dyaw] in ego body frame
 TARGET_POSE_DIM = 3
 
 # Hemispheric obstacle clearance features:
 # [left_dist, left_bearing, right_dist, right_bearing, forward_dist]
-# Replaces the old 2-dim nearest-only features with symmetrical left/right
-# clearance for bay entry guidance.
+# Distances and bearings to nearest LiDAR return in left/right hemispheres
+# and nearest return in the forward cone.
 # Appended to the observation when include_obstacle_obs=True.
 OBSTACLE_FEATURES_DIM = 5
 
 # Total observation dimension (with uncertainty conditioning and obstacle obs)
 # Indices  0-2:  velocity (vx, vy, vyaw)
-# Indices  3-11: EKF covariance features (when include_covariance=True)
-# Indices 12-14: relative target pose (dx, dy, dyaw)
-# Indices 15-19: hemispheric obstacle clearance (when include_obstacle_obs=True)
+# Indices  3-8:  EKF covariance features (when include_covariance=True)
+# Indices  9-11: relative target pose (dx, dy, dyaw)
+# Indices 12-16: hemispheric obstacle clearance (when include_obstacle_obs=True)
 TOTAL_OBS_DIM = (
     VEHICLE_STATE_DIM
     + COVARIANCE_FEATURES_DIM
     + TARGET_POSE_DIM
     + OBSTACLE_FEATURES_DIM
-)  # 20
+)  # 17
 
 # ============================================================================
 # Action Space Dimensions
