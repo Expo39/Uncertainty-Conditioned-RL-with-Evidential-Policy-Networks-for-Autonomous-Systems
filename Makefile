@@ -111,36 +111,36 @@ docker-train: ## Run training. Usage: make docker-train [LAYOUT=rectangle]
 	@echo "Training: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d --wait
+	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh
 
 docker-train-short: ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle]
 	@echo "Training (10k steps): layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d --wait
+	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
 
 docker-tune: ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle]
 	@echo "Tuning: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d --wait
+	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
 
 docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
 	@echo "Evaluation: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
-	bash scripts/multi_workers/workers_up.sh 1
 	$(DOCKER_COMPOSE) up -d --wait
+	bash scripts/multi_workers/workers_up.sh 1
 	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path checkpoints/final_model \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
-		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
+		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		--output-dir evaluation_results
 
@@ -340,7 +340,7 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 	$(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
-		--env-config $(CONFIG_DIR)/carla/env_config.yaml \
+		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)

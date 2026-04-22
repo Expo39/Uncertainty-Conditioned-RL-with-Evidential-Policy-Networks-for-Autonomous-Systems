@@ -184,21 +184,21 @@ class TestEvidentialPolicyNetwork:
         expected_total = unc["epistemic"] + unc["aleatoric"]
         torch.testing.assert_close(unc["total"], expected_total)
 
-    def test_epistemic_formula(self, state_batch: torch.Tensor) -> None:
+    def test_aleatoric_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Epistemic uncertainty must be beta / (alpha - 1).
+        @brief Aleatoric uncertainty must be beta / (alpha - 1) (Amini et al. 2020).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["alpha"] - 1)
-        torch.testing.assert_close(unc["epistemic"], expected)
+        torch.testing.assert_close(unc["aleatoric"], expected)
 
-    def test_aleatoric_formula(self, state_batch: torch.Tensor) -> None:
+    def test_epistemic_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Aleatoric uncertainty must be beta / (nu * (alpha - 1)).
+        @brief Epistemic uncertainty must be beta / (nu * (alpha - 1)) (Amini et al. 2020).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["nu"] * (unc["alpha"] - 1))
-        torch.testing.assert_close(unc["aleatoric"], expected)
+        torch.testing.assert_close(unc["epistemic"], expected)
 
     def test_uncertainties_are_positive(self, state_batch: torch.Tensor) -> None:
         """

@@ -46,7 +46,7 @@ target_kl: 0.02
 # Network architecture
 # ---------------------------------------------------------------------------
 # [256,256] for both actor and critic. The evidential actor head outputs
-# 4 x 3 = 12 NIG parameters. [256,256] gives enough capacity for the
+# 4 x 2 = 8 NIG parameters. [256,256] gives enough capacity for the
 # 20-dim state with its covariance, target pose, and obstacle features.
 net_arch: [256, 256]
 activation: "relu"  # Validated for evidential architectures. Options: relu, tanh, elu, leaky_relu

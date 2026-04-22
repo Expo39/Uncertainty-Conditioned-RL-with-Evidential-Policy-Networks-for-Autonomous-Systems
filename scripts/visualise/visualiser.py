@@ -317,6 +317,10 @@ class LiveVisualiser:
         self._origin = np.zeros(2)
         self._scale = 1.0
 
+        # Accumulated ego trail -- grows every frame, cleared on episode reset.
+        self._vis_trail: List[Tuple[float, float]] = []
+        self._vis_trail_episode_id: Optional[int] = None
+
         self._file_offset: int = 0
         self._exit_requested: bool = False
         self._fullscreen: bool = False
@@ -395,7 +399,8 @@ class LiveVisualiser:
                     self._screen = pygame.display.set_mode(
                         (_WINDOW_W, _WINDOW_H), flags
                     )
-                    self._static_episode_id = None  # Force static surface rebuild
+                    self._static_episode_id = None   # Force static surface rebuild
+                    self._vis_trail_episode_id = None  # Force trail reset
 
     # ------------------------------------------------------------------
     # JSONL ingestion
@@ -493,10 +498,15 @@ class LiveVisualiser:
 
         origin, scale = self._origin, self._scale
 
-        # Trail
-        trail = state.get("trajectory", [])
-        if len(trail) > 1:
-            pts = np.array(trail[-_TRAIL_MAX_POINTS:])
+        # Accumulated ego trail: clear on episode reset, then append current position.
+        if episode_id != self._vis_trail_episode_id:
+            self._vis_trail = []
+            self._vis_trail_episode_id = episode_id
+        ego_pos = state.get("ego", {})
+        if ego_pos:
+            self._vis_trail.append((float(ego_pos["x"]), float(ego_pos["y"])))
+        if len(self._vis_trail) > 1:
+            pts = np.array(self._vis_trail[-_TRAIL_MAX_POINTS:])
             spts = _world_to_screen(pts, origin, scale)
             if len(spts) >= 2:
                 trail_surf = pygame.Surface((_MAP_W, _WINDOW_H), pygame.SRCALPHA)
