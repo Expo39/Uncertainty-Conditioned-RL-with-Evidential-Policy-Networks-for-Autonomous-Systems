@@ -21,8 +21,8 @@
 # ---------------------------------------------------------------------------
 # Policy safety parameters (apply in both sim and real)
 # ---------------------------------------------------------------------------
-max_ego_speed_ms: 3.0 # Speed limit (m/s). Throttle cut above this in sim; safety
-                      # governor on real vehicle. 3 m/s = ~11 km/h.
+max_ego_speed_ms: 5.0 # Speed limit (m/s). Throttle cut above this in sim; safety
+                      # governor on real vehicle. 5 m/s = ~18 km/h.
 
 # ---------------------------------------------------------------------------
 # Observation space flags (identical in sim and real -- must match trained policy)

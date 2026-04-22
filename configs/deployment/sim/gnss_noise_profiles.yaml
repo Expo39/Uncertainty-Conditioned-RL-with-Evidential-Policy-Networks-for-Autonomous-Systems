@@ -16,6 +16,8 @@
 # Training weights favour conditions where parking IS achievable (70%
 # rtk_fixed + rtk_float) so the agent learns to park, while including enough
 # degraded episodes (30%) to learn when NOT to attempt parking.
+# When GNSS degrades mid-episode the EKF odom drifts; when it recovers the
+# EKF self-corrects via fresh GNSS fixes and dx/dy become accurate again.
 
 tiers:
   rtk_fixed:
