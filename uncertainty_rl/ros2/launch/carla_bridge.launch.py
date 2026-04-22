@@ -389,6 +389,9 @@ def generate_launch_description() -> LaunchDescription:
                     "imu_stamped", "/carla/ego_vehicle/imu/stamped"
                 ),
                 "imu_gyro_variance": gnss_relay_cfg.get("imu_gyro_variance", 1.0e-7),
+                "zupt_threshold_rad_s": gnss_relay_cfg.get(
+                    "zupt_threshold_rad_s", 0.03
+                ),
             }
         ],
     )
