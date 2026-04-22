@@ -337,11 +337,10 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
-    # -- GNSS noise relay node ---------------------------------------------
-    # Adds per-episode noise to CARLA GNSS, converts lat/lon to local XY via
-    # flat-earth projection, and publishes Odometry on /odometry/gps for the
-    # EKF. Replaces navsat_transform_node (eliminates datum service, startup
-    # delay, and circular EKF dependency that caused persistent NaN).
+    # -- Sensor relay node -------------------------------------------------
+    # Co-spins GnssNoiseRelayNode and ImuNoiseRelayNode in a single process.
+    # GNSS: adds per-episode noise, flat-earth projection -> /odometry/gps.
+    # IMU: stamps realistic angular_velocity_covariance -> /imu/stamped.
 
     gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
     carla_topics = ros2_config.get("carla_topics", {})
@@ -350,13 +349,14 @@ def generate_launch_description() -> LaunchDescription:
     datum_lat: float = float(env_config.get("gnss_datum_lat", 0.0))
     datum_lon: float = float(env_config.get("gnss_datum_lon", 0.0))
 
-    gnss_noise_relay_node = Node(
+    sensor_relay_node = Node(
         package="uncertainty_rl_ros2",
-        executable="gnss_noise_relay",
-        name="gnss_noise_relay",
+        executable="sensor_relay",
+        name="sensor_relay",
         parameters=[
             {
                 "use_sim_time": use_sim_time,
+                # GNSS relay parameters
                 "input_topic": gnss_relay_cfg.get(
                     "input_topic", "/carla/ego_vehicle/gnss"
                 ),
@@ -364,28 +364,31 @@ def generate_launch_description() -> LaunchDescription:
                 "base_metric_stddev_m": gnss_relay_cfg.get(
                     "base_metric_stddev_m", 0.02
                 ),
-                # Mid-episode Markov fix-state transitions (sim-to-real transfer).
-                # Disable for ablation runs that require a fixed tier per episode.
                 "enable_markov_transitions": gnss_relay_cfg.get(
                     "enable_markov_transitions", True
                 ),
-                # Flat-earth datum for GPS-to-local-XY conversion.
                 "datum_lat": datum_lat,
                 "datum_lon": datum_lon,
                 "odom_output_topic": gnss_relay_cfg.get(
                     "odom_output_topic", "/odometry/gps"
                 ),
-                # IMU covariance relay: stamp realistic angular_velocity_covariance
-                # so the EKF treats vyaw with finite (not infinite) reliability.
-                # CARLA bridge publishes zero covariance on all Imu fields.
+                "compass_min_move_m": gnss_relay_cfg.get(
+                    "compass_min_move_m", 0.5
+                ),
+                "compass_snr_factor": gnss_relay_cfg.get(
+                    "compass_snr_factor", 5.0
+                ),
+                "compass_heading_variance": gnss_relay_cfg.get(
+                    "compass_heading_variance", 1.0e-3
+                ),
+                # IMU relay parameters
                 "imu_input_topic": carla_topics.get(
                     "imu", "/carla/ego_vehicle/imu"
                 ),
                 "imu_output_topic": carla_topics.get(
                     "imu_stamped", "/carla/ego_vehicle/imu/stamped"
                 ),
-                # Gyro noise variance: (0.0035 rad/s/sqrt(Hz) * sqrt(20 Hz))^2
-                "imu_gyro_variance": gnss_relay_cfg.get("imu_gyro_variance", 2.5e-4),
+                "imu_gyro_variance": gnss_relay_cfg.get("imu_gyro_variance", 1.0e-7),
             }
         ],
     )
@@ -472,7 +475,7 @@ def generate_launch_description() -> LaunchDescription:
 
     actions.extend(
         [
-            gnss_noise_relay_node,
+            sensor_relay_node,
             ekf_node,
             covariance_extractor,
             pipeline_diag,

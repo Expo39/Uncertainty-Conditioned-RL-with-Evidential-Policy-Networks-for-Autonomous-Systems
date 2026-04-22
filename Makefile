@@ -5,7 +5,7 @@
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs
 .PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
-.PHONY: docker-build docker-build-no-cache docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
+.PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
@@ -69,9 +69,13 @@ docker-build: ## Build all Docker images (core + env-workers + inspect stacks). 
 	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml $(SERVICE)
 	$(DOCKER_COMPOSE_INSPECT) build $(SERVICE)
 
-docker-build-no-cache: ## Build images without cache (clean rebuild)
+docker-build-no-cache: docker-build-no-cache-core docker-build-no-cache-inspect ## Build all images without cache (core + inspect stacks)
+
+docker-build-no-cache-core: ## Build core + env-worker images without cache (carla, ros2-bridge, training)
 	$(DOCKER_COMPOSE) build --no-cache
 	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml --no-cache
+
+docker-build-no-cache-inspect: ## Build inspect-stack images without cache (ros2-bridge-inspect, training-inspect-*)
 	$(DOCKER_COMPOSE_INSPECT) build --no-cache
 
 docker-build-ros2: ## Rebuild only the ros2-bridge images without cache (fast: use after editing carla_bridge.launch.py or ros2 node code)

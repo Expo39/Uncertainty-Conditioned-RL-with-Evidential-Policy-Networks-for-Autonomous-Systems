@@ -235,13 +235,13 @@ def main() -> None:
     train_cfg = load_env_config("configs/deployment/sim/env_config.yaml")
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
-    print(
-        f"Mode: {args.mode}  |  Layout: {args.layout}",
-        end="",
-    )
-    if args.mode == "sensors":
-        print(f"  |  View: {args.view}", end="")
-    print()
+    if args.mode == "dryrun":
+        print(f"Mode: {args.mode}  |  Layout: sampled per episode (training distribution)")
+    else:
+        print(f"Mode: {args.mode}  |  Layout: {args.layout}", end="")
+        if args.mode == "sensors":
+            print(f"  |  View: {args.view}", end="")
+        print()
 
     if args.mode == "layout":
         env = _build_env(
@@ -296,14 +296,10 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
+        # Use parking_scenarios directly from config -- identical to training.
+        # No floor_plans override; layout sampling (random per episode across all
+        # configured layouts) and spawn point sampling must match training exactly.
         scenarios = dict(train_cfg.get("parking_scenarios", {}))
-        scenarios["floor_plans"] = {
-            args.layout: {
-                "weight": 1.0,
-                "always_empty": [],
-                "layout_file": f"configs/layouts/{args.layout}.yaml",
-            }
-        }
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
 
         env = CARLAParkingEnv(
@@ -313,10 +309,14 @@ def main() -> None:
             parking_scenarios_config=scenarios,
             carla_sensors_config=sensors_cfg,
             ros2_config=train_cfg.get("ros2", {}),
-            include_covariance=True,
-            include_obstacle_obs=True,
+            include_covariance=train_cfg.get("include_covariance", True),
+            include_obstacle_obs=train_cfg.get("include_obstacle_obs", True),
             max_steps=train_cfg.get("max_steps", 1000),
             max_ego_speed_ms=train_cfg.get("max_ego_speed_ms", 6.0),
+            carla_timestep=train_cfg.get("carla_timestep", 0.05),
+            action_repeat=train_cfg.get("action_repeat", 1),
+            no_rendering_mode=False,
+            use_extra_spawns=train_cfg.get("use_extra_spawns", False),
             gnss_noise_profiles_path=train_cfg.get("gnss_noise_profiles", None),
         )
         env.reset()

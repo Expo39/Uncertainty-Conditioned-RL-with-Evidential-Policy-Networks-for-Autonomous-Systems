@@ -17,7 +17,7 @@ package_name = "uncertainty_rl_ros2"
 setup(
     name=package_name,
     version="0.1.0",
-    packages=[package_name],
+    packages=[package_name, f"{package_name}.sensor_relay"],
     data_files=[
         (
             "share/ament_index/resource_index/packages",
@@ -40,7 +40,7 @@ setup(
             "covariance_extractor =" " uncertainty_rl_ros2.covariance_extractor:main",
             "covariance_monitor ="
             " uncertainty_rl_ros2.covariance_extractor:main_monitor",
-            "gnss_noise_relay = uncertainty_rl_ros2.gnss_noise_relay:main",
+            "sensor_relay = uncertainty_rl_ros2.sensor_relay.sensor_relay:main",
         ],
     },
 )

@@ -83,10 +83,10 @@ ekf:
   # override the EKF treats IMU as infinitely reliable, suppressing covariance
   # growth between GNSS fixes -- this does not match real hardware behaviour.
   #
-  # Values are based on a mid-grade MEMS IMU (e.g. VectorNav VN-100):
-  #   - Gyro noise density: ~0.0035 rad/s/sqrt(Hz) at 20 Hz
-  #     -> per-sample stddev = 0.0035 * sqrt(20) = ~0.016 rad/s
-  #     -> variance = 0.016^2 = ~2.5e-4 (rad/s)^2. Use 1e-3 for margin.
+  # Values are based on a mid-grade MEMS IMU (VectorNav VN-100 datasheet):
+  #   - Gyro noise density: 0.0035 deg/s/sqrt(Hz) = 6.11e-5 rad/s/sqrt(Hz)
+  #     -> per-sample stddev at 20 Hz = 6.11e-5 * sqrt(20) = 2.73e-4 rad/s
+  #     -> variance = (2.73e-4)^2 = 7.46e-8 (rad/s)^2. Use 1e-7 for margin.
   #   - Yaw orientation stddev: ~0.5 deg = 0.0087 rad
   #     -> variance = 0.0087^2 = ~7.6e-5. Use 1e-4 for margin.
   #
@@ -137,7 +137,7 @@ ekf:
   # Only yaw (row/col 5) and vyaw (row/col 11) are active in imu0_config,
   # so only those diagonal entries need non-trivial values.
   #   sigma_yaw   = 0.0087 rad  -> variance = 7.6e-5 rad^2
-  #   sigma_vyaw  = 0.016 rad/s -> variance = 2.5e-4 (rad/s)^2
+  #   sigma_vyaw  = 2.73e-4 rad/s -> variance = 7.46e-8 (rad/s)^2
   # x/y position process noise must reflect vehicle dynamics:
   #   max speed ~5 m/s, timestep 1/20 Hz -> max displacement 0.25m/step
   #   variance = 0.25^2 = 0.0625 m^2. Use 0.01 (conservative) so the EKF
@@ -156,7 +156,7 @@ ekf:
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,
-    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    2.5e-4, 0.0,    0.0,    0.0,
+    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-7, 0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6
@@ -171,6 +171,9 @@ ekf:
   pose0: "/gnss/heading"
   # 6-element list: [x, y, z, roll, pitch, yaw]
   pose0_config: [false, false, false, false, false, true]
+  # false = absolute heading mode: EKF uses atan2(dy,dx) ROS heading directly.
+  # differential:true accumulates heading *changes* between consecutive COG messages,
+  # which integrates small COG noise into a growing yaw drift while driving straight.
   pose0_differential: false
   pose0_relative: false
   pose0_rejection_threshold: 0.0
@@ -203,9 +206,41 @@ gnss_noise_relay:
   enable_markov_transitions: true
   # IMU angular velocity covariance (rad/s)^2 stamped onto relayed IMU messages.
   # CARLA bridge publishes zero covariance; this value gives the EKF finite
-  # reliability for vyaw. Based on mid-grade MEMS gyro (VectorNav VN-100):
-  #   noise density 0.0035 rad/s/sqrt(Hz) at 20 Hz -> variance = 2.5e-4
-  imu_gyro_variance: 2.5e-4
+  # reliability for vyaw. Based on VectorNav VN-100 datasheet (Table 3):
+  #   noise density 0.0035 deg/s/sqrt(Hz) = 6.11e-5 rad/s/sqrt(Hz)
+  #   per-sample variance at 20 Hz: (6.11e-5 * sqrt(20))^2 = 7.46e-8 (rad/s)^2
+  # CARLA simulation bias (~0.012 rad/s) is suppressed by ZUPT in ImuNoiseRelayNode
+  # rather than by inflating this variance, so the datasheet value is used here.
+  imu_gyro_variance: 1.0e-7
+  # GNSS course-over-ground (COG) heading parameters.
+  # The relay publishes an absolute yaw reference to the EKF (/gnss/heading)
+  # whenever the vehicle has moved more than compass_min_move_m since the last
+  # accepted COG fix. This is the EKF's only absolute yaw correction.
+  #
+  # compass_min_move_m must exceed the GNSS noise level so that genuine vehicle
+  # displacement dominates over positional noise in the atan2 heading estimate.
+  # At standalone tier (2 m stddev), consecutive noisy fixes jump ~0.1-4 m with
+  # random direction even when stationary -- compass_min_move_m=0.1 fires on
+  # pure noise and floods the EKF with contradictory headings at 20 Hz, driving
+  # yaw to a random average. 2.0 m ensures the baseline is large enough that
+  # the heading signal dominates noise at RTK-fixed (2 cm) and RTK-float (30 cm)
+  # tiers. At standalone tier, COG will rarely fire while stationary -- correct,
+  # since heading from COG is unreliable at that noise level anyway.
+  # At 1-2 m/s parking speed, a 2 m threshold fires every ~1-2 s -- sufficient
+  # for absolute yaw correction between GNSS fixes.
+  #
+  # compass_heading_variance: at 2.0 m baseline with 2 cm RTK-fixed noise,
+  # heading 1-sigma = atan(0.02/2.0) = 0.57 deg = 0.01 rad -> variance 1e-4.
+  # Use 1e-3 (1.8 deg) as conservative margin for RTK-float and to account for
+  # vehicle slip (heading != velocity vector during tight turns).
+  compass_min_move_m: 2.0
+  # Suppress COG when displacement < snr_factor * GNSS-reported position stddev
+  # (sqrt of position_covariance[0] from the NavSatFix message). Works in both
+  # sim and real deployment -- the RTK receiver's own accuracy estimate is used,
+  # not the simulated tier config. At standalone (2 m reported), requires 10 m
+  # genuine travel; at RTK-fixed (2 cm reported), requires 0.1 m.
+  compass_snr_factor: 5.0
+  compass_heading_variance: 1.0e-3
 
 # CovarianceExtractorNode configuration.
 # Subscribes to /odometry/filtered, extracts 3x3 [x, y, yaw] covariance submatrix,

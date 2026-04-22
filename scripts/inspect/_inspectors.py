@@ -17,10 +17,12 @@ Drawing helpers are imported from :mod:`scripts.inspect._drawing`.
 @note Requires the full Docker stack (CARLA server + training container).
 """
 
+import json
 import math
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
@@ -33,6 +35,26 @@ except ImportError:
 
 from scripts.inspect._drawing import _draw_layout_overlays, _draw_sensor_overlays
 from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+
+_GNSS_NOISE_CONFIG_PATH = Path("/workspace/outputs/gnss_noise_config.json")
+
+
+def _read_live_tier() -> str:
+    """
+    @brief Read the current GNSS tier name from gnss_noise_config.json.
+
+    Returns the ``tier_name`` field written by the training container at each
+    episode reset (and read by GnssNoiseRelayNode for noise injection).  The
+    file is updated by the Markov chain relay mid-episode so this reflects the
+    actively applied tier, not just the episode-start tier.
+
+    @return Tier name string, or 'unknown' if the file is absent or unreadable.
+    """
+    try:
+        with open(_GNSS_NOISE_CONFIG_PATH) as _f:
+            return str(json.load(_f).get("tier_name", "unknown"))
+    except Exception:
+        return "unknown"
 
 # ===========================================================================
 # Base class: CARLA connection + tick loop
@@ -878,7 +900,7 @@ class DryRunInspector(_Inspector):
         @brief Print key observation values to the console for diagnosis.
 
         Colour scheme:
-          WHITE  -- values that enter the model (obs indices 0-19)
+          WHITE  -- values that enter the model (obs indices 0-16)
           YELLOW -- ground truth (CARLA pose, GT target bay world coords)
           RED    -- derived/diagnostic values not fed to the model
                     (raw EKF odom pose, odom-frame target, recon check)
@@ -899,10 +921,17 @@ class DryRunInspector(_Inspector):
         Y = _YELLOW
         R = _RED
         X = _RESET
+        _CYAN = "\033[36m"
         lines = []
 
-        # Header
-        lines.append(f"--- ep={episode}  step={step} " + "-" * 40)
+        # Header -- live tier read from gnss_noise_config.json (reflects Markov
+        # transitions mid-episode, not just the episode-start tier).
+        _live_tier = _read_live_tier()
+        lines.append(
+            f"--- ep={episode}  step={step}  "
+            + _CYAN + f"tier={_live_tier}" + X
+            + " " + "-" * 28
+        )
 
         # WHITE -- velocity (indices 0-2)
         lines.append(
@@ -947,21 +976,18 @@ class DryRunInspector(_Inspector):
                     f"  yaw={wyaw:+.1f}deg  (compare to GT above)" + X
                 )
 
-        # WHITE -- EKF covariance split over two lines (indices 3-11)
-        if len(obs) >= 12:
+        # WHITE -- EKF covariance (indices 3-8): std devs + off-diagonal cross-cov
+        if len(obs) >= 9:
             lines.append(
                 W + f"cov  std=({obs[3]:.3f},{obs[4]:.3f},{obs[5]:.3f})"
-                f"  diag=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})" + X
-            )
-            lines.append(
-                W + f"     off=({obs[9]:.4f},{obs[10]:.4f},{obs[11]:.4f})" + X
+                f"  off=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})" + X
             )
 
-        # WHITE -- target in ego body frame (indices 12-14)
-        if len(obs) >= 15:
+        # WHITE -- target in ego body frame (indices 9-11)
+        if len(obs) >= 12:
             lines.append(
-                W + f"tgt  dx={obs[12]:+.2f}m  dy={obs[13]:+.2f}m"
-                f"  dyaw={math.degrees(obs[14]):+.1f}deg" + X
+                W + f"tgt  dx={obs[9]:+.2f}m  dy={obs[10]:+.2f}m"
+                f"  dyaw={math.degrees(obs[11]):+.1f}deg" + X
             )
 
         # YELLOW -- GT target world; RED -- odom projection + vehicle recon
@@ -997,12 +1023,12 @@ class DryRunInspector(_Inspector):
             f"  recon_err={err_m:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
 
-        # WHITE -- obstacle clearance (indices 15-19)
-        if len(obs) >= 20:
+        # WHITE -- obstacle clearance (indices 12-16)
+        if len(obs) >= 17:
             lines.append(
-                W + f"obs  L={obs[15]:.2f}m({math.degrees(obs[16]):+.1f}deg)"
-                f"  R={obs[17]:.2f}m({math.degrees(obs[18]):+.1f}deg)"
-                f"  F={obs[19]:.2f}m" + X
+                W + f"obs  L={obs[12]:.2f}m({math.degrees(obs[13]):+.1f}deg)"
+                f"  R={obs[14]:.2f}m({math.degrees(obs[15]):+.1f}deg)"
+                f"  F={obs[16]:.2f}m" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -1064,11 +1090,12 @@ class DryRunInspector(_Inspector):
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
         print(
-            "\nModel inputs per step (20-dim obs):"
+            "\nModel inputs per step (17-dim obs):"
             "\n  [0-2]   vel: vx vy vyaw"
-            "\n  [3-11]  cov: std(x,y,yaw)  diag(xx,yy,yawyaw)  off(xy,xyaw,yyaw)"
-            "\n  [12-14] tgt: dx dy dyaw (ego-relative)"
-            "\n  [15-19] obs: L(dist,bear)  R(dist,bear)  F(dist)"
+            "\n  [3-5]   cov: std(x,y,yaw)"
+            "\n  [6-8]   cov: off(xy,xyaw,yyaw)"
+            "\n  [9-11]  tgt: dx dy dyaw (ego-relative)"
+            "\n  [12-16] obs: L(dist,bear)  R(dist,bear)  F(dist)"
             "\n  bay/EKF lines are diagnostic only (not fed to model)"
             "\n  recon_err should be < 0.05m"
         )
@@ -1081,6 +1108,9 @@ class DryRunInspector(_Inspector):
                 obs, _ = self._env.reset()
                 episode += 1
                 step = 0
+                _rmse_pos_sq = 0.0
+                _rmse_yaw_sq = 0.0
+                _rmse_n = 0
                 print(f"\n--- Episode {episode}  [view: {self._view}] ---")
                 self._update_spectator()
                 self._draw_overlays(life_time=self._OVERLAY_LIFE)
@@ -1097,6 +1127,32 @@ class DryRunInspector(_Inspector):
                     obs, reward, terminated, truncated, info = self._env.step(action)
                     step += 1
                     total_steps += 1
+
+                    # Accumulate per-step EKF vs GT errors for episode RMSE.
+                    if self._env._cov_subscriber is not None and self._env.vehicle is not None:
+                        _ep = self._env._cov_subscriber.get_latest_pose()
+                        if _ep is not None:
+                            _tx, _ty, _cr, _sr, _rr = self._env._ekf_odom_offset
+                            _wx = _cr * float(_ep[0]) - _sr * (-float(_ep[1])) + _tx
+                            _wy = _sr * float(_ep[0]) + _cr * (-float(_ep[1])) + _ty
+                            _gt = self._env.vehicle.get_transform()
+                            _pos_err = math.sqrt(
+                                (_wx - _gt.location.x) ** 2
+                                + (_wy - _gt.location.y) ** 2
+                            )
+                            _ekf_wyaw = math.atan2(
+                                math.sin(float(_ep[2]) + _rr),
+                                math.cos(float(_ep[2]) + _rr),
+                            )
+                            _gt_yaw = math.radians(_gt.rotation.yaw)
+                            _yaw_err = math.atan2(
+                                math.sin(_ekf_wyaw - _gt_yaw),
+                                math.cos(_ekf_wyaw - _gt_yaw),
+                            )
+                            _rmse_pos_sq += _pos_err ** 2
+                            _rmse_yaw_sq += _yaw_err ** 2
+                            _rmse_n += 1
+
                     # Pace the dryrun at real-time speed. Each env.step() advances
                     # the simulation by action_repeat * carla_timestep seconds.
                     # Without this sleep the loop runs as fast as CARLA can tick,
@@ -1138,9 +1194,20 @@ class DryRunInspector(_Inspector):
                         "truncated" if truncated else "terminated",
                     )
                 )
+                _C = "\033[36m"
+                _R = "\033[0m"
+                if _rmse_n > 0:
+                    _pos_rmse = math.sqrt(_rmse_pos_sq / _rmse_n)
+                    _yaw_rmse = math.degrees(math.sqrt(_rmse_yaw_sq / _rmse_n))
+                    _rmse_str = (
+                        _C + f"pos_rmse={_pos_rmse:.3f}m  yaw_rmse={_yaw_rmse:.2f}deg" + _R
+                    )
+                else:
+                    _rmse_str = _C + "pos_rmse=n/a  yaw_rmse=n/a" + _R
                 print(
                     f"  Episode {episode} ended: {reason}"
-                    f"  steps={step}  total_steps={total_steps}"
+                    f"  steps={step}  total_steps={total_steps}  "
+                    + _rmse_str
                 )
                 if not _gt_done:
                     print("--- Final observation ---")

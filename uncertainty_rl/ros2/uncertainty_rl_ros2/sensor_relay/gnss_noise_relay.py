@@ -1,7 +1,7 @@
 """
 @file gnss_noise_relay.py
-@brief ROS 2 node that adds dynamic noise to CARLA GNSS, converts to local
-       Odometry via flat-earth projection, and stamps covariance.
+@brief ROS 2 node that adds dynamic noise to CARLA GNSS and converts to local
+       Odometry via flat-earth projection.
 
 This node subscribes to the raw NavSatFix from the CARLA GNSS sensor, adds
 Gaussian noise to lat/lon/alt, converts the noisy lat/lon to local XY via a
@@ -10,12 +10,8 @@ flat-earth projection, and publishes the result as nav_msgs/Odometry on
 replaces navsat_transform_node, eliminating the datum service, startup delay,
 and circular EKF dependency that caused persistent NaN output.
 
-It also relays the CARLA IMU topic with realistic angular_velocity_covariance
-stamped. CARLA's IMU bridge publishes zero covariance on all fields, which
-causes robot_localization to treat IMU measurements as infinitely reliable,
-suppressing EKF covariance growth entirely. This relay stamps a fixed gyro
-noise covariance (mid-grade MEMS IMU, e.g. VectorNav VN-100) so the EKF
-correctly inflates uncertainty between GNSS fixes.
+IMU covariance stamping is handled separately by ImuNoiseRelayNode
+(imu_noise_relay.py). The two nodes are launched together by carla_bridge.launch.py.
 
 The noise multiplier is signalled per-episode via a shared JSON file
 (gnss_noise_config.json) written by the training container at each reset().
@@ -45,7 +41,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Imu, NavSatFix
+from sensor_msgs.msg import NavSatFix
 
 # Ordered tier names -- index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
@@ -103,8 +99,11 @@ class GnssNoiseRelayNode(Node):
     # by the GNSS_NOISE_CONFIG_FILE environment variable for parallel workers.
     _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/gnss_noise_config.json"
 
-    # Check config file every N callbacks (~20 at 20 Hz = every 1 s).
-    _CONFIG_CHECK_INTERVAL: int = 20
+    # Check config file every N callbacks. Every callback (=1) minimises the
+    # window during which stale GNSS noise settings produce garbage COG headings
+    # after an episode reset. The file read is a single stat+open+json parse --
+    # negligible vs GNSS callback processing at 20 Hz.
+    _CONFIG_CHECK_INTERVAL: int = 1
 
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
         """
@@ -219,20 +218,7 @@ class GnssNoiseRelayNode(Node):
             depth=10,
         )
 
-        # IMU covariance relay: stamp realistic angular_velocity_covariance
-        # so the EKF treats vyaw with finite (not infinite) reliability.
-        # CARLA bridge publishes zero covariance on all Imu fields; robot_localization
-        # interprets zero as infinite reliability, suppressing covariance growth.
-        # Values match a mid-grade MEMS gyro (e.g. VectorNav VN-100):
-        #   vyaw stddev = 0.016 rad/s -> variance = 2.5e-4 (rad/s)^2
-        # On the real vehicle the IMU driver populates message covariance from
-        # hardware; robot_localization uses message values in preference to this
-        # relay's stamped values when they are non-zero.
-        self.declare_parameter("imu_input_topic", "/carla/ego_vehicle/imu")
-        self.declare_parameter("imu_output_topic", "/carla/ego_vehicle/imu/stamped")
-        # Gyro noise density for a mid-grade MEMS IMU (rad/s/sqrt(Hz)).
-        # Per-sample variance at 20 Hz: (0.0035 * sqrt(20))^2 = 2.45e-4 (rad/s)^2
-        self.declare_parameter("imu_gyro_variance", 2.5e-4)
+        # IMU covariance stamping is handled by ImuNoiseRelayNode (imu_noise_relay.py).
 
         # GNSS-derived heading relay: simulates the course-over-ground (COG)
         # heading output from a dual-antenna RTK-GNSS receiver
@@ -246,18 +232,23 @@ class GnssNoiseRelayNode(Node):
         # Heading noise: ~1 deg stddev at speed (COG accuracy for RTK).
         #   variance = (1 deg * pi/180)^2 = 3.0e-4 rad^2
         self.declare_parameter("compass_output_topic", "/gnss/heading")
-        self.declare_parameter("compass_heading_variance", 3.0e-4)
-        self.declare_parameter("compass_min_move_m", 3.0)
+        # Heading 1-sigma ~1.8 deg at 0.5 m baseline with RTK-fixed 2 cm fixes.
+        # See configs/ros2_config.yaml gnss_noise_relay.compass_heading_variance
+        # for the full derivation. Launch file overrides this via YAML.
+        self.declare_parameter("compass_heading_variance", 1.0e-3)
+        # 3.0 m is unreachable between 20 Hz fixes at parking speeds (1-2 m/s
+        # -> 0.05-0.10 m per fix), which starves the EKF of heading corrections
+        # and lets yaw drift unbounded on gyro alone. 0.5 m fires every ~0.5 s
+        # at 1 m/s. Launch file overrides this via YAML.
+        self.declare_parameter("compass_min_move_m", 0.5)
+        # COG is only reliable when displacement >> GNSS noise. Suppress heading
+        # publication when dist < compass_snr_factor * current metric_stddev_m.
+        # At standalone (2 m stddev) with factor=5, COG requires 10 m of genuine
+        # travel -- it will rarely fire while stationary, preventing the EKF from
+        # being poisoned by noise-driven random headings. At RTK-fixed (2 cm), the
+        # SNR gate is 0.1 m -- effectively always open.
+        self.declare_parameter("compass_snr_factor", 5.0)
 
-        imu_input_topic = str(
-            self.get_parameter("imu_input_topic").get_parameter_value().string_value
-        )
-        imu_output_topic = str(
-            self.get_parameter("imu_output_topic").get_parameter_value().string_value
-        )
-        self._imu_gyro_variance: float = float(
-            self.get_parameter("imu_gyro_variance").get_parameter_value().double_value
-        )
         compass_output_topic = str(
             self.get_parameter("compass_output_topic").get_parameter_value().string_value
         )
@@ -269,6 +260,9 @@ class GnssNoiseRelayNode(Node):
         self._compass_min_move_m: float = float(
             self.get_parameter("compass_min_move_m").get_parameter_value().double_value
         )
+        self._compass_snr_factor: float = float(
+            self.get_parameter("compass_snr_factor").get_parameter_value().double_value
+        )
         # Previous noisy GNSS position (ROS frame) for COG heading computation.
         self._prev_gnss_x: Optional[float] = None
         self._prev_gnss_y: Optional[float] = None
@@ -279,11 +273,6 @@ class GnssNoiseRelayNode(Node):
         self._pub = self.create_publisher(NavSatFix, output_topic, qos)
         # Odometry publisher: flat-earth converted position for the EKF.
         self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos)
-
-        self._imu_sub = self.create_subscription(
-            Imu, imu_input_topic, self._imu_callback, qos
-        )
-        self._imu_pub = self.create_publisher(Imu, imu_output_topic, qos)
 
         # GNSS-derived heading: published from _gnss_callback when moving.
         # PoseWithCovarianceStamped lets robot_localization use it as pose0,
@@ -300,13 +289,10 @@ class GnssNoiseRelayNode(Node):
             f"markov_transitions: {self._markov_enabled})"
         )
         self.get_logger().info(
-            f"ImuCovarianceRelay: {imu_input_topic} -> {imu_output_topic} "
-            f"(gyro_variance: {self._imu_gyro_variance:.2e} (rad/s)^2)"
-        )
-        self.get_logger().info(
             f"CompassRelay (GNSS COG): -> {compass_output_topic} "
             f"(heading_variance: {self._compass_heading_variance:.2e} rad^2, "
-            f"min_move: {self._compass_min_move_m:.2f}m)"
+            f"min_move: {self._compass_min_move_m:.2f}m, "
+            f"snr_factor: {self._compass_snr_factor:.1f}x)"
         )
 
     # ------------------------------------------------------------------
@@ -361,18 +347,13 @@ class GnssNoiseRelayNode(Node):
 
             self._config_seq = seq
 
-            # Prefer tier_name field (new format). Fall back to raw stddev
-            # fields for backwards compatibility with older training containers.
             tier_name: Optional[str] = data.get("tier_name")
             if tier_name and tier_name in _TIER_ORDER:
                 self._apply_tier(tier_name)
             else:
-                # Legacy path: read stddev fields directly.
-                self._extra_lat_stddev_deg = float(data.get("lat_stddev_deg", 0.0))
-                self._extra_lon_stddev_deg = float(data.get("lon_stddev_deg", 0.0))
-                self._extra_alt_stddev_m = float(data.get("alt_stddev_m", 0.0))
-                self._metric_stddev_m = float(
-                    data.get("metric_stddev_m", self._base_metric_stddev)
+                self.get_logger().warn(
+                    f"gnss_noise_config.json has unknown or missing tier_name"
+                    f" '{tier_name}', keeping current tier."
                 )
 
             # Reset previous GNSS position so the COG heading is not computed
@@ -387,13 +368,40 @@ class GnssNoiseRelayNode(Node):
         except (json.JSONDecodeError, OSError, ValueError) as exc:
             self.get_logger().warn(f"Failed to read GNSS noise config: {exc}")
 
+    def _write_active_tier(self, tier_name: str) -> None:
+        """
+        @brief Write the current active tier back to gnss_noise_config.json.
+
+        Called after every Markov transition so the training container's
+        _read_live_tier() reflects mid-episode changes.  The seq field is
+        intentionally preserved from the last episode reset -- writing a new
+        seq would cause _check_config_file() to re-read the file and reset
+        the Markov chain to the written tier (which is correct behaviour here,
+        but the seq guard would then wrongly reject the next genuine reset).
+        Instead we write seq=-1 so the guard ignores this file until the next
+        proper episode reset overwrites it with a higher seq.
+
+        @note Uses tmp-then-replace to avoid partial reads by the training container.
+        @param tier_name: Active RTK fix-state tier name.
+        """
+        tmp_path = self._config_path + ".markov.tmp"
+        try:
+            data = {"seq": self._config_seq, "tier_name": tier_name}
+            with open(tmp_path, "w") as f:
+                json.dump(data, f)
+            os.replace(tmp_path, self._config_path)
+        except OSError as exc:
+            self.get_logger().warn(f"Failed to write active tier to config: {exc}")
+
     def _step_markov(self) -> None:
         """
         @brief Advance the Markov chain by one step.
 
         Samples the next tier from the transition distribution of the current
-        tier. If the tier changes, calls _apply_tier() to update noise state
-        and logs the transition for traceability.
+        tier. If the tier changes, calls _apply_tier() to update noise state,
+        writes the new tier back to gnss_noise_config.json (so the inspector's
+        live tier display reflects mid-episode transitions), and logs the
+        transition for traceability.
         """
         row = self._transition_matrix[self._active_tier_idx]
         next_idx = int(self._rng.choice(len(_TIER_ORDER), p=row))
@@ -401,6 +409,7 @@ class GnssNoiseRelayNode(Node):
             from_name = _TIER_ORDER[self._active_tier_idx]
             to_name = _TIER_ORDER[next_idx]
             self._apply_tier(to_name)
+            self._write_active_tier(to_name)
             self.get_logger().info(
                 f"GNSS tier transition: {from_name} -> {to_name} "
                 f"(metric_stddev={self._metric_stddev_m:.3f}m)"
@@ -409,53 +418,6 @@ class GnssNoiseRelayNode(Node):
     # ------------------------------------------------------------------
     # Callbacks
     # ------------------------------------------------------------------
-
-    def _imu_callback(self, msg: Imu) -> None:
-        """
-        @brief Relay IMU with realistic angular_velocity_covariance stamped.
-
-        CARLA bridge publishes zero covariance on all Imu fields. robot_localization
-        interprets zero covariance as infinite sensor reliability, which pins the
-        EKF state to the IMU measurement with no uncertainty growth. This relay
-        stamps a diagonal angular_velocity_covariance matching a mid-grade MEMS
-        gyro so the EKF correctly inflates covariance between GNSS fixes.
-
-        Orientation and linear_acceleration covariance fields are left at zero:
-        - Orientation: disabled in imu0_config (CARLA publishes identity quaternion).
-        - Linear acceleration: disabled in imu0_config (zero covariance would make
-          acceleration infinitely reliable and override GNSS velocity corrections).
-
-        @param msg: Raw sensor_msgs/Imu from CARLA bridge.
-        """
-        out = Imu()
-        out.header = msg.header
-        out.orientation = msg.orientation
-        out.angular_velocity = msg.angular_velocity
-        out.linear_acceleration = msg.linear_acceleration
-
-        # Set orientation_covariance[0] = -1: the ROS convention for
-        # "this sensor does not provide orientation". A value of 0.0 (CARLA
-        # default) means infinite precision, which causes robot_localization
-        # to attempt a Mahalanobis check with a singular covariance and NaN
-        # the entire filter -- even when orientation is disabled in imu0_config.
-        out.orientation_covariance = [-1.0] + [0.0] * 8
-
-        # Stamp diagonal angular_velocity_covariance. Only the z/z element
-        # (index 8, vyaw) is active in imu0_config; set all diagonal elements
-        # to the gyro variance for correctness even though only vyaw is used.
-        v = self._imu_gyro_variance
-        out.angular_velocity_covariance = [
-            v,   0.0, 0.0,
-            0.0, v,   0.0,
-            0.0, 0.0, v,
-        ]
-
-        # Set linear_acceleration_covariance[0] = -1: same convention as above.
-        # Linear acceleration is disabled in imu0_config but a zero covariance
-        # would still trigger the singular-matrix NaN path in robot_localization.
-        out.linear_acceleration_covariance = [-1.0] + [0.0] * 8
-
-        self._imu_pub.publish(out)
 
     def _gnss_callback(self, msg: NavSatFix) -> None:
         """
@@ -566,13 +528,21 @@ class GnssNoiseRelayNode(Node):
             dx = local_x - self._prev_gnss_x
             dy = local_y - self._prev_gnss_y
             dist = math.sqrt(dx * dx + dy * dy)
-            if dist >= self._compass_min_move_m:
-                # Bearing from previous GNSS fix to current in ROS odom frame
-                # (x=east, y=north, CCW positive). The EKF operates in ROS
-                # right-handed convention; the extractor negates its output
-                # to convert to CARLA frame. Send the raw ROS bearing here so
-                # the EKF receives the correct absolute heading without any
-                # pre-negation.
+            # SNR gate: suppress COG when displacement < snr_factor * reported
+            # GNSS position stddev. Uses the message's own position_covariance[0]
+            # (xx variance) so this works identically in real-life deployment --
+            # the RTK receiver reports its own accuracy; no tier config needed.
+            gnss_pos_stddev = math.sqrt(out.position_covariance[0])
+            snr_min = self._compass_snr_factor * gnss_pos_stddev
+            if dist >= self._compass_min_move_m and dist >= snr_min:
+                # flat-earth projection gives ROS-convention XY (x=east, y=north):
+                # local_x = (lon-datum)*scale, local_y = (lat-datum)*111320.
+                # Moving south in CARLA (increasing CARLA y) decreases lat, so
+                # local_y decreases -- i.e. dy is negative for a southward move.
+                # atan2(dy, dx) on this ROS-frame displacement is already the
+                # correct ROS heading (CCW-positive from east). No sign flip here.
+                # CovarianceExtractorNode negates yaw when writing ekf_state.json
+                # to convert ROS -> CARLA convention.
                 heading_ros = math.atan2(dy, dx)
                 heading_noisy = heading_ros + float(
                     np.random.normal(
@@ -606,6 +576,11 @@ class GnssNoiseRelayNode(Node):
                 cov[35] = v_cov   # yaw-yaw
                 compass_msg.pose.covariance = cov
                 self._compass_pub.publish(compass_msg)
+                self.get_logger().info(
+                    f"COG: dx={dx:.3f} dy={dy:.3f} dist={dist:.3f}m "
+                    f"heading_ros={math.degrees(heading_ros):.1f}deg "
+                    f"heading_noisy={math.degrees(heading_noisy):.1f}deg"
+                )
                 # Update previous position only after publishing a heading.
                 self._prev_gnss_x = local_x
                 self._prev_gnss_y = local_y
