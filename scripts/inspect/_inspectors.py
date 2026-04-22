@@ -953,9 +953,8 @@ class DryRunInspector(_Inspector):
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None:
                 ekf_x = float(ekf_pose[0])
-                # ekf_y from the extractor is in ROS convention (northward+).
-                # Negate here for CARLA convention (southward+) so EKF(world)
-                # can be compared directly to GT which is in CARLA frame.
+                # Negate y: same sign correction as _get_state() and
+                # _calibrate_ekf_frame_offset() -- see carla_parking.py comment.
                 ekf_y = -float(ekf_pose[1])
                 ekf_yaw = float(ekf_pose[2])
                 lines.append(
@@ -990,37 +989,22 @@ class DryRunInspector(_Inspector):
                 f"  dyaw={math.degrees(obs[11]):+.1f}deg" + X
             )
 
-        # YELLOW -- GT target world; RED -- odom projection + vehicle recon
+        # YELLOW -- target bay world position (always from YAML)
         gt = self._env._target_bay
-        odom_t = self._env._target_bay_odom
-        tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
+        _, _, _, _, r = self._env._ekf_odom_offset
 
-        # Vehicle reconstruction error: transform current EKF pose to
-        # world frame and compare to GT vehicle position. This measures
-        # actual localisation + transform accuracy (unlike the bay
-        # round-trip which is always zero by construction).
-        err_m = 0.0
+        # EKF position quality: max(std_x, std_y) -- real-world compatible,
+        # no GT needed. Low = EKF has a good fix; high = degraded/drifting.
+        ekf_std = 0.0
         if self._env._cov_subscriber is not None:
-            ekf_pose = self._env._cov_subscriber.get_latest_pose()
-            if ekf_pose is not None and self._env.vehicle is not None:
-                ekf_x = float(ekf_pose[0])
-                ekf_y = -float(ekf_pose[1])
-                recon_veh_wx = cos_r * ekf_x - sin_r * ekf_y + tx
-                recon_veh_wy = sin_r * ekf_x + cos_r * ekf_y + ty
-                gt_veh = self._env.vehicle.get_transform()
-                err_m = math.sqrt(
-                    (recon_veh_wx - gt_veh.location.x) ** 2
-                    + (recon_veh_wy - gt_veh.location.y) ** 2
-                )
+            _, unc = self._env._cov_subscriber.get_latest_state()
+            if unc is not None:
+                ekf_std = float(max(unc[0], unc[1]))
 
         lines.append(
             Y + f"bay  world=({gt['x']:.2f},{gt['y']:.2f})"
-            f"  yaw={math.degrees(gt['yaw']):+.1f}deg" + X
-        )
-        lines.append(
-            R + f"     odom=({odom_t['x']:.2f},{odom_t['y']:.2f})"
-            f"  yaw={math.degrees(odom_t['yaw']):+.1f}deg"
-            f"  recon_err={err_m:.3f}m  r={math.degrees(r):+.1f}deg" + X
+            f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
+            f"  ekf_std={ekf_std:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
 
         # WHITE -- obstacle clearance (indices 12-16)

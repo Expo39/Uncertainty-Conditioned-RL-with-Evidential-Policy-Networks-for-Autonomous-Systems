@@ -212,6 +212,12 @@ gnss_noise_relay:
   # CARLA simulation bias (~0.012 rad/s) is suppressed by ZUPT in ImuNoiseRelayNode
   # rather than by inflating this variance, so the datasheet value is used here.
   imu_gyro_variance: 1.0e-7
+  # ZUPT threshold (rad/s): angular_velocity.z below this is clamped to zero.
+  # CARLA's physics engine produces ~0.012 rad/s gyro bias when stationary.
+  # 0.03 rad/s catches the CARLA bias while leaving parking turns (~0.1+ rad/s)
+  # unaffected. At deployment the real VN-100 bias (~0.003 rad/s) is well below
+  # this threshold so ZUPT behaves identically on real hardware.
+  zupt_threshold_rad_s: 0.03
   # GNSS course-over-ground (COG) heading parameters.
   # The relay publishes an absolute yaw reference to the EKF (/gnss/heading)
   # whenever the vehicle has moved more than compass_min_move_m since the last
@@ -233,14 +239,25 @@ gnss_noise_relay:
   # heading 1-sigma = atan(0.02/2.0) = 0.57 deg = 0.01 rad -> variance 1e-4.
   # Use 1e-3 (1.8 deg) as conservative margin for RTK-float and to account for
   # vehicle slip (heading != velocity vector during tight turns).
-  compass_min_move_m: 2.0
+  compass_min_move_m: 0.5
   # Suppress COG when displacement < snr_factor * GNSS-reported position stddev
   # (sqrt of position_covariance[0] from the NavSatFix message). Works in both
   # sim and real deployment -- the RTK receiver's own accuracy estimate is used,
-  # not the simulated tier config. At standalone (2 m reported), requires 10 m
-  # genuine travel; at RTK-fixed (2 cm reported), requires 0.1 m.
-  compass_snr_factor: 5.0
-  compass_heading_variance: 1.0e-3
+  # not the simulated tier config. At standalone (2 m reported), requires 4 m
+  # genuine travel; at RTK-fixed (2 cm reported), requires 0.04 m.
+  # Lowered from 5.0: at degraded tier (5 m stddev) snr_factor=5 requires 25 m
+  # of travel before any heading correction fires, causing unbounded yaw drift.
+  # 2.0 allows corrections at standalone after ~4 m travel -- sufficient for
+  # parking manoeuvres at 1-3 m/s while still suppressing noise-driven headings.
+  compass_snr_factor: 2.0
+  # Hard upper limit on GNSS position stddev above which COG heading is never
+  # published regardless of displacement. Covers rtk_fixed (~0.02 m) and
+  # rtk_float (~0.30 m); excludes standalone (>=0.15 m reported but actual
+  # noise ~2 m) and degraded. When GNSS is this noisy, the COG vector is too
+  # corrupted to be useful and actively injects yaw error into the EKF.
+  # IMU yaw-rate integration alone is more accurate over short parking episodes.
+  compass_max_pos_stddev_m: 0.5
+  compass_heading_variance: 5.0e-3  # ~4 deg 1-sigma; conservative for 0.5 m baseline
 
 # CovarianceExtractorNode configuration.
 # Subscribes to /odometry/filtered, extracts 3x3 [x, y, yaw] covariance submatrix,

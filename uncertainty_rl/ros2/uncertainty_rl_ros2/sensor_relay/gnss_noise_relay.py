@@ -248,6 +248,11 @@ class GnssNoiseRelayNode(Node):
         # being poisoned by noise-driven random headings. At RTK-fixed (2 cm), the
         # SNR gate is 0.1 m -- effectively always open.
         self.declare_parameter("compass_snr_factor", 5.0)
+        # Hard upper limit on GNSS position stddev above which COG heading is
+        # never published. When GNSS is this noisy the COG vector injects more
+        # yaw error than the IMU drift it would correct. IMU yaw-rate integration
+        # alone is more accurate over short parking episodes.
+        self.declare_parameter("compass_max_pos_stddev_m", 0.5)
 
         compass_output_topic = str(
             self.get_parameter("compass_output_topic").get_parameter_value().string_value
@@ -262,6 +267,11 @@ class GnssNoiseRelayNode(Node):
         )
         self._compass_snr_factor: float = float(
             self.get_parameter("compass_snr_factor").get_parameter_value().double_value
+        )
+        self._compass_max_pos_stddev_m: float = float(
+            self.get_parameter(
+                "compass_max_pos_stddev_m"
+            ).get_parameter_value().double_value
         )
         # Previous noisy GNSS position (ROS frame) for COG heading computation.
         self._prev_gnss_x: Optional[float] = None
@@ -292,7 +302,8 @@ class GnssNoiseRelayNode(Node):
             f"CompassRelay (GNSS COG): -> {compass_output_topic} "
             f"(heading_variance: {self._compass_heading_variance:.2e} rad^2, "
             f"min_move: {self._compass_min_move_m:.2f}m, "
-            f"snr_factor: {self._compass_snr_factor:.1f}x)"
+            f"snr_factor: {self._compass_snr_factor:.1f}x, "
+            f"max_pos_stddev: {self._compass_max_pos_stddev_m:.2f}m)"
         )
 
     # ------------------------------------------------------------------
@@ -354,6 +365,39 @@ class GnssNoiseRelayNode(Node):
                 self.get_logger().warn(
                     f"gnss_noise_config.json has unknown or missing tier_name"
                     f" '{tier_name}', keeping current tier."
+                )
+
+            # Re-latch the flat-earth datum to the vehicle spawn position.
+            # The training container writes datum_lat/datum_lon (the CARLA
+            # geolocation of the spawn point) alongside the tier at each
+            # episode reset. Re-latching the datum ensures the GNSS local
+            # frame is re-zeroed at the spawn, so local (0, 0) == vehicle
+            # spawn. This eliminates the drift that occurs when the EKF is
+            # reset via /set_pose to (0, 0) but GNSS continues reporting
+            # positions relative to a stale datum from a previous episode.
+            datum_lat = data.get("datum_lat")
+            datum_lon = data.get("datum_lon")
+            if datum_lat is not None and datum_lon is not None:
+                self._datum_lat = float(datum_lat)
+                self._datum_lon = float(datum_lon)
+                self._metres_per_deg_lon = (
+                    111320.0 * math.cos(math.radians(self._datum_lat))
+                )
+                self._datum_latched = True
+                self.get_logger().info(
+                    f"GNSS datum re-latched: lat={self._datum_lat:.7f} "
+                    f"lon={self._datum_lon:.7f}"
+                )
+            else:
+                # Fallback: reset auto-latch so the next GNSS callback
+                # re-latches to the current vehicle position. This is used
+                # when the training container does not provide geolocation
+                # (e.g. real-vehicle deployment without CARLA API).
+                self._datum_latched = False
+                self.get_logger().warn(
+                    "No datum_lat/datum_lon in GNSS noise config -- "
+                    "auto-latching datum on next GNSS callback. "
+                    "EKF may drift briefly at episode start."
                 )
 
             # Reset previous GNSS position so the COG heading is not computed
@@ -534,7 +578,11 @@ class GnssNoiseRelayNode(Node):
             # the RTK receiver reports its own accuracy; no tier config needed.
             gnss_pos_stddev = math.sqrt(out.position_covariance[0])
             snr_min = self._compass_snr_factor * gnss_pos_stddev
-            if dist >= self._compass_min_move_m and dist >= snr_min:
+            # Hard quality gate: suppress COG entirely when GNSS is too noisy.
+            # At standalone/degraded tiers the COG vector injects yaw error
+            # worse than IMU drift. Trust IMU alone when fix is poor.
+            gnss_too_noisy = gnss_pos_stddev > self._compass_max_pos_stddev_m
+            if not gnss_too_noisy and dist >= self._compass_min_move_m and dist >= snr_min:
                 # flat-earth projection gives ROS-convention XY (x=east, y=north):
                 # local_x = (lon-datum)*scale, local_y = (lat-datum)*111320.
                 # Moving south in CARLA (increasing CARLA y) decreases lat, so

@@ -301,25 +301,44 @@ class _CovarianceSubscriber:
         except OSError as exc:
             logger.warning("Failed to write initial_pose.json: %s", exc)
 
-    def publish_gnss_noise_config(self, tier_name: str) -> None:
+    def publish_gnss_noise_config(
+        self,
+        tier_name: str,
+        datum_lat: Optional[float] = None,
+        datum_lon: Optional[float] = None,
+    ) -> None:
         """
-        @brief Signal the GNSS noise tier to the ros2-bridge via a shared file.
+        @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
 
         Writes gnss_noise_config.json with the episode's RTK fix-state tier
-        name. GnssNoiseRelayNode reads this file and calls _apply_tier() to
-        look up the corresponding noise parameters from its own _tier_params
-        table, which is the single source of truth for stddev values.
+        name and the geolocation of the vehicle spawn point. GnssNoiseRelayNode
+        reads this file and calls _apply_tier() to look up the corresponding
+        noise parameters, and re-latches its flat-earth datum to datum_lat/lon
+        so the GNSS local frame is re-zeroed at the spawn position.
+
+        Re-latching the datum each episode ensures that GNSS Odometry (0, 0)
+        and /set_pose (0, 0) agree at episode reset, eliminating the systematic
+        EKF drift that occurs when /set_pose and GNSS use different origins.
 
         The seq field is a monotonically increasing counter so the relay can
         detect a new episode even when the tier name is unchanged.
 
         @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed').
+        @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
+               When provided, the relay re-latches the GNSS flat-earth datum.
+               When None, the relay falls back to auto-latching on the next
+               GNSS callback (real-vehicle mode without CARLA API).
+        @param datum_lon: Longitude (degrees) of vehicle spawn.
         """
         self._gnss_noise_config_seq += 1
         data: Dict[str, Any] = {
             "seq": self._gnss_noise_config_seq,
             "tier_name": tier_name,
         }
+        if datum_lat is not None:
+            data["datum_lat"] = datum_lat
+        if datum_lon is not None:
+            data["datum_lon"] = datum_lon
         try:
             os.makedirs(self._gnss_noise_config_path.parent, exist_ok=True)
             with open(self._gnss_noise_config_tmp, "w") as f:

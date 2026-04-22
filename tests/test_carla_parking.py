@@ -564,8 +564,7 @@ class TestLog1pCovarianceTransform:
         mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
         env.vehicle = mock_vehicle
         env.world = MagicMock()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-        env._target_bay_odom = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
 
         obs = env._get_state()
 
@@ -602,8 +601,7 @@ class TestLog1pCovarianceTransform:
         mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
         env.vehicle = mock_vehicle
         env.world = MagicMock()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-        env._target_bay_odom = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
 
         obs = env._get_state()
         np.testing.assert_array_equal(obs[6:15], np.zeros(9))

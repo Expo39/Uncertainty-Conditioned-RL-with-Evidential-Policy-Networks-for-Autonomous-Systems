@@ -107,9 +107,10 @@ class ImuNoiseRelayNode(Node):
         angular_velocity_covariance matching the VN-100 gyro so the EKF
         correctly inflates covariance between GNSS fixes.
 
-        The CARLA bridge already applies the CARLA left-handed to ROS
-        right-handed sign conversion on angular_velocity.z before publishing,
-        so angular_velocity is passed through unchanged.
+        The CARLA bridge converts angular_velocity from CARLA left-handed
+        (z-down, CW positive) to ROS right-handed (z-up, CCW positive)
+        convention before publishing. No further sign conversion is applied
+        here; angular_velocity is passed through as-is after ZUPT clamping.
 
         @param msg: Raw sensor_msgs/Imu from CARLA bridge.
         """
