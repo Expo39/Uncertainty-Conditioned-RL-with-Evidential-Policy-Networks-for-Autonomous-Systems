@@ -144,9 +144,11 @@ class SensorManager:
         """
         @brief Spawn all sensors attached to the ego vehicle.
 
-        Always spawns: IMU + GNSS + 2D LiDAR + collision sensor.
-        GNSS noise is scaled by gnss_noise_multiplier to simulate different
-        RTK fix states (fixed, float, standalone, degraded).
+        Always spawns: IMU + GNSS (front) + GNSS (rear, if gnss_rear in config)
+        + 2D LiDAR + collision sensor. GNSS noise is scaled by
+        gnss_noise_multiplier to simulate different RTK fix states
+        (fixed, float, standalone, degraded). The rear antenna feeds
+        GnssNoiseRelayNode's dual-antenna baseline heading on /gnss/heading.
 
         @param world: carla.World handle for the current episode.
         @param vehicle: Ego carla.Vehicle actor to attach sensors to.
@@ -165,6 +167,7 @@ class SensorManager:
 
         self._spawn_imu(world, vehicle)
         self._spawn_gnss(world, vehicle, gnss_noise_multiplier)
+        self._spawn_gnss_rear(world, vehicle, gnss_noise_multiplier)
         self._spawn_lidar_2d(world, vehicle)
         self._spawn_collision_sensor(world, vehicle)
 
@@ -373,6 +376,70 @@ class SensorManager:
             "Spawned GNSS sensor (noise_multiplier=%.1f, lat_stddev=%.10f deg).",
             noise_multiplier,
             base_lat * noise_multiplier,
+        )
+
+    def _spawn_gnss_rear(
+        self,
+        world: Any,
+        vehicle: Any,
+        noise_multiplier: float = 1.0,
+    ) -> None:
+        """
+        @brief Spawn the rear RTK-GNSS antenna for dual-antenna heading.
+
+        The rear antenna, together with the front antenna spawned in _spawn_gnss(),
+        forms a 1.5 m baseline along the vehicle longitudinal axis. GnssNoiseRelayNode
+        derives heading from atan2(dy, dx) of the noisy baseline vector.
+
+        Skipped silently when sensors_config has no gnss_rear section (backwards
+        compatible with configs that predate the dual-antenna architecture).
+
+        @param world: carla.World for the current episode.
+        @param vehicle: Ego vehicle actor to attach to.
+        @param noise_multiplier: Same tier multiplier as the front antenna.
+        """
+        gnss_rear_config = self._sensors_config.get("gnss_rear", {})
+        if not gnss_rear_config:
+            return
+
+        mount = gnss_rear_config.get("mount", {})
+
+        gnss_bp = world.get_blueprint_library().find("sensor.other.gnss")
+        gnss_bp.set_attribute("role_name", "gnss_rear")
+
+        base_lat = float(gnss_rear_config.get("noise_lat_stddev", 0.0000002))
+        base_lon = float(gnss_rear_config.get("noise_lon_stddev", 0.0000002))
+        base_alt = float(gnss_rear_config.get("noise_alt_stddev", 0.05))
+
+        for attr, value in [
+            ("noise_alt_bias", gnss_rear_config.get("noise_alt_bias", 0.0)),
+            ("noise_alt_stddev", base_alt * noise_multiplier),
+            ("noise_lat_bias", gnss_rear_config.get("noise_lat_bias", 0.0)),
+            ("noise_lat_stddev", base_lat * noise_multiplier),
+            ("noise_lon_bias", gnss_rear_config.get("noise_lon_bias", 0.0)),
+            ("noise_lon_stddev", base_lon * noise_multiplier),
+            ("sensor_tick", gnss_rear_config.get("sensor_tick", 0.05)),
+        ]:
+            gnss_bp.set_attribute(attr, str(value))
+
+        gnss_rear_transform = carla.Transform(
+            carla.Location(
+                x=float(mount.get("x", -1.5)),
+                y=float(mount.get("y", 0.0)),
+                z=float(mount.get("z", 1.6)),
+            )
+        )
+        gnss_rear_sensor = world.spawn_actor(
+            gnss_bp, gnss_rear_transform, attach_to=vehicle
+        )
+        # No-op listener to keep the CARLA stream open.
+        # The ROS bridge publishes NavSatFix on /carla/ego_vehicle/gnss_rear.
+        gnss_rear_sensor.listen(lambda _: None)
+        self._spawned_sensors.append(gnss_rear_sensor)
+        logger.debug(
+            "Spawned rear GNSS sensor at x=%.2f (noise_multiplier=%.1f).",
+            float(mount.get("x", -1.5)),
+            noise_multiplier,
         )
 
     def _spawn_collision_sensor(self, world: Any, vehicle: Any) -> None:

@@ -155,6 +155,20 @@ ekf:
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6
   ]
 
+  # Dual-GNSS baseline heading: absolute yaw correction step.
+  # Published by GnssNoiseRelayNode from the front+rear antenna baseline vector.
+  # Heading = atan2(dy, dx) on the noisy front-to-rear XY offset; variance derived
+  # from the independent noise component only (common-mode cancels on differencing).
+  # Uses PoseWithCovarianceStamped; only yaw is active (position cov = 1e6).
+  # Effective heading stddev: ~0.42 deg at rtk_fixed, ~11 deg at rtk_float,
+  # ~50 deg at standalone, ~125 deg at degraded.
+  pose0: "/gnss/heading"
+  # 6-element list: [x, y, z, roll, pitch, yaw]
+  pose0_config: [false, false, false, false, false, true]
+  pose0_differential: false
+  pose0_relative: false
+  pose0_rejection_threshold: 0.0
+
   # GNSS-derived odometry: correction step.
   # Published by GnssNoiseRelayNode with flat-earth projection (lat/lon -> XY).
   # Covariance diagonal matches the current RTK tier metric variance.
@@ -195,6 +209,16 @@ gnss_noise_relay:
   # unaffected. At deployment the real VN-100 bias (~0.003 rad/s) is well below
   # this threshold so ZUPT behaves identically on real hardware.
   zupt_threshold_rad_s: 0.03
+  # Dual-GNSS heading: two CARLA GNSS sensors (front at +0.75 m, rear at -0.75 m)
+  # on the vehicle longitudinal axis. Heading = atan2(dy, dx) of the noisy
+  # front-to-rear baseline vector. Per 20 Hz cycle, a common-mode noise draw is
+  # shared between both antennas (emulating atmospheric and satellite-clock errors
+  # common to nearby RTK antennas); independent per-antenna noise is added on top.
+  # Heading variance = 2 * sigma_indep^2 / baseline^2 (common-mode cancels).
+  rear_antenna_input_topic: /carla/ego_vehicle/gnss_rear
+  heading_output_topic: /gnss/heading
+  antenna_baseline_m: 1.5        # Front-to-rear distance (metres)
+  common_mode_fraction: 0.85     # Fraction of tier noise shared between antennas
 
 # CovarianceExtractorNode configuration.
 # Subscribes to /odometry/filtered, extracts 3x3 [x, y, yaw] covariance submatrix,
