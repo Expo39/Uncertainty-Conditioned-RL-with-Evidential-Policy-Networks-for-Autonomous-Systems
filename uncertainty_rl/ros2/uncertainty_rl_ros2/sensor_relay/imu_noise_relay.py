@@ -33,13 +33,13 @@ from sensor_msgs.msg import Imu
 class ImuNoiseRelayNode(Node):
     """
     @class ImuNoiseRelayNode
-    @brief Stamps realistic angular_velocity_covariance onto CARLA IMU messages.
+    @brief Stamps realistic covariance onto CARLA IMU messages.
 
     Subscribes to the raw CARLA IMU topic (zero covariance) and republishes
     with a diagonal angular_velocity_covariance derived from the VectorNav
-    VN-100 gyro noise density specification. Orientation and
-    linear_acceleration covariance sentinel values are also set so
-    robot_localization does not attempt Mahalanobis gating on those fields.
+    VN-100 gyro noise density specification. The orientation_covariance
+    sentinel (-1) is set so robot_localization does not attempt Mahalanobis
+    gating on the identity quaternion that CARLA always publishes.
     """
 
     def __init__(self, node_name: str = "imu_noise_relay") -> None:
@@ -147,9 +147,9 @@ class ImuNoiseRelayNode(Node):
             0.0, 0.0, v,
         ]
 
-        # Set linear_acceleration_covariance[0] = -1: same sentinel as above.
-        # Linear acceleration is disabled in imu0_config but zero covariance
-        # still triggers the singular-matrix NaN path in robot_localization.
+        # Set linear_acceleration_covariance[0] = -1: sentinel meaning "not
+        # provided". Replaced with real VN-100 accel variance in CP3 when
+        # ax/ay fusion is enabled in imu0_config.
         out.linear_acceleration_covariance = [-1.0] + [0.0] * 8
 
         self._pub.publish(out)
