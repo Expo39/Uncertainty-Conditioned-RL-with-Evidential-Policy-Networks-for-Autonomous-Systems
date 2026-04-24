@@ -372,15 +372,6 @@ def generate_launch_description() -> LaunchDescription:
                 "odom_output_topic": gnss_relay_cfg.get(
                     "odom_output_topic", "/odometry/gps"
                 ),
-                "compass_min_move_m": gnss_relay_cfg.get(
-                    "compass_min_move_m", 0.5
-                ),
-                "compass_snr_factor": gnss_relay_cfg.get(
-                    "compass_snr_factor", 5.0
-                ),
-                "compass_heading_variance": gnss_relay_cfg.get(
-                    "compass_heading_variance", 1.0e-3
-                ),
                 # IMU relay parameters
                 "imu_input_topic": carla_topics.get(
                     "imu", "/carla/ego_vehicle/imu"
