@@ -479,20 +479,44 @@ def _draw_sensor_overlays(
             draw_radials=False,
         )
 
-    # ---- GNSS (RTK antenna) ------------------------------------------------
-    gnss_m = sensors_cfg.get("gnss", {}).get("mount", {})
-    gnss_loc = _to_world(
-        float(gnss_m.get("x", 0.0)),
-        float(gnss_m.get("y", 0.0)),
-        float(gnss_m.get("z", 1.8)),
-    )
-    _draw_sensor_dot(
-        debug,
-        gnss_loc,
-        "GNSS",
-        _COL_GNSS,
-        life_time,
-        drop_line=side_view,
-        ground_z=ground_z,
-    )
+    # ---- GNSS antennas (data-driven: gnss = front, gnss_rear = rear) --------
+    # Iterate over any gnss* entries present in config so future additions
+    # (e.g. a third antenna) do not require another code change.
+    _gnss_labels = {
+        "gnss": "GNSS F",
+        "gnss_rear": "GNSS R",
+    }
+    _gnss_locs: List[Any] = []
+    for sensor_key in ("gnss", "gnss_rear"):
+        if sensor_key not in sensors_cfg:
+            continue
+        m = sensors_cfg[sensor_key].get("mount", {})
+        loc = _to_world(
+            float(m.get("x", 0.0)),
+            float(m.get("y", 0.0)),
+            float(m.get("z", 1.6)),
+        )
+        _gnss_locs.append(loc)
+        _draw_sensor_dot(
+            debug,
+            loc,
+            _gnss_labels.get(sensor_key, sensor_key.upper()),
+            _COL_GNSS,
+            life_time,
+            drop_line=side_view,
+            ground_z=ground_z,
+        )
+    # Draw baseline line between front and rear antennas when both are present.
+    if len(_gnss_locs) == 2:
+        _draw_dotted_segment(
+            debug,
+            _gnss_locs[0].x,
+            _gnss_locs[0].y,
+            _gnss_locs[1].x,
+            _gnss_locs[1].y,
+            _gnss_locs[0].z,
+            _COL_GNSS,
+            0.06,
+            life_time,
+        )
 
