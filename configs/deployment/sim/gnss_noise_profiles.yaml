@@ -27,35 +27,35 @@ tiers:
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
     metric_stddev_m: 0.02
-    weight: 1.0
+    weight: 0.4
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
   rtk_float:
     # RTK float solution: decimetre-level accuracy.
-    # Parking is tight; policy learns cautious approach.
+    # Parking is tight; uncertainty penalty starts biting.
     lat_stddev_deg: 0.0000027   # ~0.30 m stddev
     lon_stddev_deg: 0.0000027
     alt_stddev_m: 0.5
     metric_stddev_m: 0.30
-    weight: 0.0
+    weight: 0.3
     description: "RTK float (~30 cm). Marginal accuracy for 2.5 m bays."
 
   standalone:
     # Standalone GNSS (RTK lost): metre-level accuracy.
-    # Parking is not feasible; policy should abort or creep.
+    # Progress reward nearly zero; policy learns to wait.
     lat_stddev_deg: 0.000018    # ~2.0 m stddev
     lon_stddev_deg: 0.000018
     alt_stddev_m: 5.0
     metric_stddev_m: 2.0
-    weight: 0.0
+    weight: 0.2
     description: "Standalone GNSS (~2 m). RTK lost; parking unsafe."
 
   degraded:
     # Severely degraded GNSS (multipath, heavy obstruction).
-    # Policy must trigger safety handoff.
+    # Progress reward saturates to zero; policy learns hard abort.
     lat_stddev_deg: 0.000045    # ~5.0 m stddev
     lon_stddev_deg: 0.000045
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
-    weight: 0.0
+    weight: 0.1
     description: "Degraded GNSS (~5 m). Policy must abort/handoff."

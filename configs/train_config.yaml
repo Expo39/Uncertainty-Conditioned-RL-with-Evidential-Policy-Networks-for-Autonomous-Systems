@@ -105,12 +105,20 @@ policy_type: "evidential"
 # ---------------------------------------------------------------------------
 # Reward function
 # ---------------------------------------------------------------------------
-# Reward function: potential-based shaping (Ng et al. 1999).
-#   R = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD - 0.01/step
+# Reward function: uncertainty-scaled potential-based shaping (Ng et al. 1999).
+#   R = progress * (1 - uncertainty_scale) - 0.01/step
+#   where progress = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
+#   and uncertainty_scale = clip(max(std_x, std_y) / uncertainty_std_max, 0, 1)
 #   + collision: -10.0 + termination
 #   + success:   +10.0 + termination
 #   + out-of-bounds: -5.0 + termination
 # Implemented in CARLAParkingEnv._compute_reward().
+#
+# uncertainty_std_max: std at which progress reward reaches zero (metres).
+# At rtk_fixed (~0.016 m) scale ~ 0. At standalone (~2 m) scale ~ 1.
+# Set to match the standalone tier metric_stddev_m so progress saturates
+# to zero exactly when parking is infeasible.
+uncertainty_std_max: 2.0
 
 # ---------------------------------------------------------------------------
 # Logging and checkpointing

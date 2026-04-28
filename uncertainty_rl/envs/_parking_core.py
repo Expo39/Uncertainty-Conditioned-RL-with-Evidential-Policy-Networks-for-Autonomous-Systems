@@ -55,9 +55,9 @@ def compute_obs_dim(
     @param include_obstacle_obs: Whether hemispheric LiDAR features are included.
     @return Integer observation dimension.
 
-    Base: VEHICLE_STATE_DIM (3) + TARGET_POSE_DIM (3) = 6
-    With include_covariance: +COVARIANCE_FEATURES_DIM (6) -> 12
-    With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) -> 17 (or 11 without cov)
+    Base: VEHICLE_STATE_DIM (1) + TARGET_POSE_DIM (3) = 4
+    With include_covariance: +COVARIANCE_FEATURES_DIM (3) -> 7
+    With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) -> 12 (or 9 without cov)
     """
     dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
     if include_covariance:
@@ -86,12 +86,11 @@ def build_observation(
     (velocity, target) are set to zero. When uncertainty is None or all-zero,
     covariance dims are zeroed and a debug log is emitted.
 
-    Layout (include_covariance=True, include_obstacle_obs=True, 15-dim):
+    Layout (include_covariance=True, include_obstacle_obs=True, 12-dim):
       [0]     EKF yaw rate (vyaw)
       [1-3]   EKF std devs (std_x, std_y, std_yaw)
-      [4-6]   EKF off-diagonal cross-covariance (cov_xy, cov_xyaw, cov_yyaw)
-      [7-9]   target bay in ego body frame (dx, dy, dyaw)
-      [10-14] hemispheric LiDAR clearance (left_dist, left_bearing,
+      [4-6]   target bay in ego body frame (dx, dy, dyaw)
+      [7-11]  hemispheric LiDAR clearance (left_dist, left_bearing,
               right_dist, right_bearing, forward_dist)
 
     @param ekf_pose: 4-element array [x, y, yaw, vyaw] in world frame,
