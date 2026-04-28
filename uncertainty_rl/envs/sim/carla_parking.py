@@ -1488,6 +1488,7 @@ class CARLAParkingEnv(gym.Env):
                     tier_name=str(tier.get("name", "")),
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,
+                    spawn_yaw=-syaw,
                 )
 
         # Step 2: Publish spawn pose as local (0, 0, yaw) so /set_pose agrees
