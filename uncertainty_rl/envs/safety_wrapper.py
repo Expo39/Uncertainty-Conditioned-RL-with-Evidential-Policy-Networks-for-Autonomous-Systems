@@ -79,6 +79,42 @@ class SafetyWrapper(gym.Wrapper):
         self._current_epistemic = epistemic
         self._current_aleatoric = aleatoric
 
+    @staticmethod
+    def apply(
+        action: np.ndarray,
+        epistemic: float,
+        aleatoric: float,
+        aleatoric_scaling: float,
+        handoff_threshold: float,
+    ) -> Tuple[np.ndarray, bool]:
+        """
+        @brief Apply safety interception logic to a raw policy action.
+
+        Static method so it can be called by both SafetyWrapper.step() (sim eval)
+        and RealWorldInferenceLoop (real deployment) without duplicating logic.
+
+        @param action: Raw policy action [steering, longitudinal].
+        @param epistemic: Epistemic uncertainty from evidential actor.
+        @param aleatoric: Aleatoric uncertainty from evidential actor.
+        @param aleatoric_scaling: Scaling factor for longitudinal cap.
+        @param handoff_threshold: Epistemic level above which full stop is triggered.
+        @return Tuple (modulated_action, handoff_triggered).
+        """
+        modulated = action.copy()
+
+        # Aleatoric: cap longitudinal only -- steering is unrestricted.
+        # High aleatoric = unpredictable outcomes (e.g. pedestrian cutting across).
+        # Reducing speed lowers collision risk without compromising directional control.
+        aleatoric_scale = 1.0 / (1.0 + aleatoric_scaling * aleatoric)
+        modulated[1] = float(np.clip(modulated[1], -1.0, aleatoric_scale))
+
+        # Epistemic: full stop if above threshold (out-of-distribution state).
+        handoff = epistemic >= handoff_threshold
+        if handoff:
+            modulated = np.zeros_like(action)
+
+        return modulated, handoff
+
     def step(
         self,
         action: np.ndarray,
@@ -91,34 +127,27 @@ class SafetyWrapper(gym.Wrapper):
         self._step_count += 1
         info_extra: Dict[str, Any] = {}
 
-        # 1. Aleatoric: cap longitudinal (throttle) only -- not steering.
-        #    High aleatoric means action outcomes are unpredictable (e.g. pedestrian
-        #    cutting across, NPC braking suddenly). Reducing speed lowers collision
-        #    risk without compromising directional control.
-        #    Steering is intentionally left uncapped: the policy must retain full
-        #    authority to steer away from obstacles even under high uncertainty.
-        modulated_action = action.copy()
+        modulated_action, handoff = SafetyWrapper.apply(
+            action,
+            epistemic=self._current_epistemic,
+            aleatoric=self._current_aleatoric,
+            aleatoric_scaling=self._aleatoric_scaling,
+            handoff_threshold=self._handoff_threshold,
+        )
         aleatoric_scale = 1.0 / (
             1.0 + self._aleatoric_scaling * self._current_aleatoric
         )
-        # Clamp the upper bound of longitudinal -- braking is always unrestricted.
-        modulated_action[1] = np.clip(modulated_action[1], -1.0, aleatoric_scale)
         self._aleatoric_scale_sum += aleatoric_scale
-
         info_extra["aleatoric_scale"] = aleatoric_scale
+        info_extra["safety_handoff"] = handoff
 
-        # 2. Epistemic: safety handoff if extremely uncertain.
-        if self._current_epistemic >= self._handoff_threshold:
-            modulated_action = np.zeros_like(action)
-            info_extra["safety_handoff"] = True
+        if handoff:
             self._handoff_count += 1
             logger.info(
                 "Safety handoff triggered (epistemic=%.3f >= threshold=%.3f)",
                 self._current_epistemic,
                 self._handoff_threshold,
             )
-        else:
-            info_extra["safety_handoff"] = False
 
         obs, reward, terminated, truncated, info = self.env.step(modulated_action)
 

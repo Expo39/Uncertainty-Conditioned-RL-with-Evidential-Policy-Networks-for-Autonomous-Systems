@@ -38,7 +38,7 @@ Architecture:
           (manual override, geofence breach, success detection).
 
 @see uncertainty_rl.envs.safety_wrapper.SafetyWrapper
-@see uncertainty_rl.envs.real.real_world_deployment.RealWorldDeployment
+@see uncertainty_rl.envs.real.deployment_utils.RealWorldDeployment
 @see uncertainty_rl.evaluation.evaluate for the simulation equivalent.
 
 @author Antonio Galdes
@@ -49,6 +49,8 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
+
+from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 
 logger = logging.getLogger("uncertainty_rl.envs.real.inference_loop")
 
@@ -61,14 +63,12 @@ class RealWorldInferenceLoop:
     Intended usage at the deployment site:
 
         loop = RealWorldInferenceLoop.from_config(
-            model_path="outputs/checkpoints/best_model.zip",
             mission_path="configs/deployment/real/mission.yaml",
-            datum_path="configs/deployment/real/real_world_datum.yaml",
-            calibration_path="configs/deployment/real/actuation_calibration.yaml",
-            safety_aleatoric_scaling=0.5,
-            safety_handoff_threshold=5.0,
         )
         loop.run()
+
+    All parameters (model path, safety thresholds, max_steps, datum/calibration
+    paths) are read from configs/deployment/agent_config.yaml automatically.
 
     @note All TODO(AG) blocks mark where physical vehicle API calls must be
           inserted. Everything else (policy inference, uncertainty extraction,
@@ -121,7 +121,7 @@ class RealWorldInferenceLoop:
         try:
             import yaml as _yaml
 
-            from uncertainty_rl.envs.real.real_world_deployment import (
+            from uncertainty_rl.envs.real.deployment_utils import (
                 RealWorldDeployment,
             )
             from uncertainty_rl.networks.sb3_integration import EvidentialPPO
@@ -211,33 +211,30 @@ class RealWorldInferenceLoop:
         aleatoric: float,
     ) -> Tuple[np.ndarray, bool]:
         """
-        @brief Apply SafetyWrapper logic directly (mirrors SafetyWrapper.step()).
+        @brief Apply SafetyWrapper interception logic to a raw policy action.
 
-        Replicates the wrapper inline rather than wrapping a Gymnasium env
-        because the real-world loop does not use a Gymnasium env instance.
+        Delegates to SafetyWrapper.apply() -- the single source of truth for
+        safety interception logic used by both sim evaluation and real deployment.
 
         @param action: Raw policy action [steering, longitudinal].
         @param epistemic: Epistemic uncertainty from evidential actor.
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @return Tuple (modulated_action, handoff_triggered).
         """
-        modulated = action.copy()
-
-        # Aleatoric: cap longitudinal only -- steering is unrestricted.
-        aleatoric_scale = 1.0 / (1.0 + self._aleatoric_scaling * aleatoric)
-        modulated[1] = float(np.clip(modulated[1], -1.0, aleatoric_scale))
-
-        # Epistemic: full stop if above threshold.
-        handoff = epistemic >= self._handoff_threshold
+        modulated, handoff = SafetyWrapper.apply(
+            action,
+            epistemic=epistemic,
+            aleatoric=aleatoric,
+            aleatoric_scaling=self._aleatoric_scaling,
+            handoff_threshold=self._handoff_threshold,
+        )
         if handoff:
-            modulated = np.zeros_like(action)
             logger.warning(
                 "Safety handoff triggered (epistemic=%.3f >= threshold=%.3f). "
                 "Commanding full stop.",
                 epistemic,
                 self._handoff_threshold,
             )
-
         return modulated, handoff
 
     def run(self) -> Dict[str, Any]:

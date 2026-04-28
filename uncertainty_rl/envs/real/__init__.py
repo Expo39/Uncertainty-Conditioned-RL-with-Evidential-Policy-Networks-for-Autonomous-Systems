@@ -3,6 +3,6 @@
 @brief Real-world deployment environment package.
 """
 
-from uncertainty_rl.envs.real.real_world_deployment import RealWorldDeployment
+from uncertainty_rl.envs.real.deployment_utils import RealWorldDeployment
 
 __all__ = ["RealWorldDeployment"]

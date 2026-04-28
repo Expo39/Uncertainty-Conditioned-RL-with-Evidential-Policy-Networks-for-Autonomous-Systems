@@ -68,7 +68,7 @@ from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     wrap_angle_symmetric,
 )
-from uncertainty_rl.envs.real.real_world_deployment import RealWorldDeployment
+from uncertainty_rl.envs.real.deployment_utils import RealWorldDeployment
 from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
