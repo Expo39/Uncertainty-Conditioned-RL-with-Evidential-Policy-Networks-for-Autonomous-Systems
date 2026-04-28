@@ -38,6 +38,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
+from message_filters import ApproximateTimeSynchronizer, Subscriber
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
@@ -125,6 +126,10 @@ class GnssNoiseRelayNode(Node):
         # Enable/disable mid-episode Markov transitions. Disable for ablation
         # runs that require a fixed noise tier throughout each episode.
         self.declare_parameter("enable_markov_transitions", True)
+        # When false, no Gaussian noise is added to lat/lon. The relay becomes a
+        # pure flat-earth projector. Use for real deployment (real GNSS has its
+        # own error) or for dryrun diagnostics with ideal sensors.
+        self.declare_parameter("enable_gnss_noise", True)
 
         # Flat-earth projection datum (degrees). Noisy lat/lon are converted to
         # local XY metres relative to this origin: x = (lon - datum_lon) * scale,
@@ -161,6 +166,9 @@ class GnssNoiseRelayNode(Node):
             self.get_parameter("enable_markov_transitions")
             .get_parameter_value()
             .bool_value
+        )
+        self._gnss_noise_enabled: bool = bool(
+            self.get_parameter("enable_gnss_noise").get_parameter_value().bool_value
         )
 
         # Flat-earth datum and Odometry output.
@@ -244,11 +252,6 @@ class GnssNoiseRelayNode(Node):
         self._cm_noise_y: float = 0.0
         self._cm_noise_cycle_key: int = -1
 
-        # Rear antenna state: last projected local XY and stamp (seconds).
-        self._rear_local_x: Optional[float] = None
-        self._rear_local_y: Optional[float] = None
-        self._rear_stamp_sec: float = 0.0
-
         # Last front antenna local XY (for per-step trace diagnostics).
         self._front_local_x: Optional[float] = None
         self._front_local_y: Optional[float] = None
@@ -262,21 +265,35 @@ class GnssNoiseRelayNode(Node):
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
+        # robot_localization subscribes to pose0 with BEST_EFFORT reliability.
+        # A RELIABLE publisher and BEST_EFFORT subscriber are incompatible in
+        # ROS 2 -- no messages are delivered. Use BEST_EFFORT for the heading
+        # publisher so the QoS policies match and the EKF receives corrections.
+        qos_be = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
 
         # IMU covariance stamping is handled by ImuNoiseRelayNode (imu_noise_relay.py).
 
-        self._sub = self.create_subscription(
-            NavSatFix, input_topic, self._gnss_callback, qos
+        # Synchronised front + rear subscriptions so both readings come from the
+        # same CARLA tick. ApproximateTimeSynchronizer pairs messages whose
+        # timestamps are within `slop` seconds. At 20 Hz one tick = 50 ms;
+        # 30 ms slop accepts same-tick pairs while rejecting genuinely stale reads.
+        self._front_sub = Subscriber(self, NavSatFix, input_topic, qos_profile=qos)
+        self._rear_sub = Subscriber(self, NavSatFix, rear_antenna_topic, qos_profile=qos)
+        self._sync = ApproximateTimeSynchronizer(
+            [self._front_sub, self._rear_sub], queue_size=10, slop=0.03
         )
-        self._rear_sub = self.create_subscription(
-            NavSatFix, rear_antenna_topic, self._gnss_rear_callback, qos
-        )
+        self._sync.registerCallback(self._gnss_sync_callback)
         self._pub = self.create_publisher(NavSatFix, output_topic, qos)
-        # Odometry publisher: flat-earth converted position for the EKF.
-        self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos)
-        # Dual-GNSS heading publisher (EKF pose0 -- yaw only).
+        # Odometry and heading publishers use BEST_EFFORT to match
+        # robot_localization's odom0/pose0 subscriber QoS. A RELIABLE publisher
+        # paired with a BEST_EFFORT subscriber delivers no messages in ROS 2.
+        self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos_be)
         self._heading_pub = self.create_publisher(
-            PoseWithCovarianceStamped, heading_output_topic, qos
+            PoseWithCovarianceStamped, heading_output_topic, qos_be
         )
 
         # Effective heading stddev at rtk_fixed: sqrt(2*(1-0.85)) * 0.02 / 1.5
@@ -374,6 +391,10 @@ class GnssNoiseRelayNode(Node):
                     111320.0 * math.cos(math.radians(self._datum_lat))
                 )
                 self._datum_latched = True
+                # Reset front position cache after datum re-latch so stale
+                # readings projected into the old datum are not used.
+                self._front_local_x = None
+                self._front_local_y = None
                 self.get_logger().info(
                     f"GNSS datum re-latched: lat={self._datum_lat:.7f} "
                     f"lon={self._datum_lon:.7f}"
@@ -468,41 +489,22 @@ class GnssNoiseRelayNode(Node):
             self._cm_noise_cycle_key = cycle_key
         return self._cm_noise_x, self._cm_noise_y
 
-    def _gnss_rear_callback(self, msg: NavSatFix) -> None:
+    def _gnss_sync_callback(self, front_msg: NavSatFix, rear_msg: NavSatFix) -> None:
         """
-        @brief Process rear antenna GNSS fix: apply common-mode + independent noise, project to XY.
+        @brief Process synchronised front + rear GNSS fixes from the same CARLA tick.
 
-        Does not publish any ROS topics -- just stashes the noisy local XY and
-        timestamp so _gnss_callback can compute the baseline heading vector.
+        ApproximateTimeSynchronizer guarantees both messages share the same
+        simulation timestamp (within 30 ms slop), so the baseline vector
+        dx/dy is purely the physical antenna separation with no vehicle-motion
+        contamination regardless of speed.
 
-        @param msg: Raw NavSatFix from the rear CARLA GNSS sensor.
-        """
-        if not self._datum_latched:
-            return  # Cannot project until datum is set by the front callback.
+        Publishes:
+          - /gnss/noisy         (NavSatFix, front antenna with noise, diagnostics)
+          - /odometry/gps       (Odometry, flat-earth XY for EKF odom0)
+          - /gnss/heading       (PoseWithCovarianceStamped, baseline heading for EKF pose0)
 
-        stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        sigma_indep = self._metric_stddev_m * math.sqrt(
-            max(0.0, 1.0 - self._common_mode_fraction)
-        )
-
-        # Apply common-mode noise (shared with front antenna this cycle).
-        cm_x, cm_y = self._get_common_mode_noise(stamp_sec)
-
-        # Independent per-antenna receiver noise.
-        indep_lon = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
-        indep_lat = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
-
-        noisy_lon = msg.longitude + (cm_x + indep_lon) / self._metres_per_deg_lon
-        noisy_lat = msg.latitude + (cm_y + indep_lat) / self._metres_per_deg_lat
-
-        self._rear_local_x = (noisy_lon - self._datum_lon) * self._metres_per_deg_lon
-        self._rear_local_y = (noisy_lat - self._datum_lat) * self._metres_per_deg_lat
-        self._rear_stamp_sec = stamp_sec
-
-    def _gnss_callback(self, msg: NavSatFix) -> None:
-        """
-        @brief Process front antenna GNSS fix: step Markov, add noise, publish position + heading.
-        @param msg: Raw NavSatFix from CARLA front GNSS sensor.
+        @param front_msg: Raw NavSatFix from the front CARLA GNSS sensor.
+        @param rear_msg:  Raw NavSatFix from the rear CARLA GNSS sensor.
         """
         self._callback_count += 1
 
@@ -515,58 +517,18 @@ class GnssNoiseRelayNode(Node):
             self._step_markov()
 
         # Split tier noise into common-mode and independent components.
-        sigma_common = self._metric_stddev_m * math.sqrt(self._common_mode_fraction)
         sigma_indep = self._metric_stddev_m * math.sqrt(
             max(0.0, 1.0 - self._common_mode_fraction)
         )
 
-        stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-        cm_x, cm_y = self._get_common_mode_noise(stamp_sec)
-
-        # Independent noise for front antenna converted to deg for lat/lon.
-        indep_lon = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
-        indep_lat = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
-
-        # Build output message (copy header and status).
-        out = NavSatFix()
-        out.header = msg.header
-        out.status = msg.status
-
-        # Total noise per axis = common-mode + independent. Total stddev = metric_stddev_m,
-        # preserving the existing /odometry/gps position covariance unchanged.
-        extra_lon_m = cm_x + indep_lon
-        extra_lat_m = cm_y + indep_lat
-        out.longitude = msg.longitude + extra_lon_m / self._metres_per_deg_lon
-        out.latitude = msg.latitude + extra_lat_m / self._metres_per_deg_lat
-        out.altitude = msg.altitude + float(
-            self._rng.normal(0.0, self._extra_alt_stddev_m)
-            if self._extra_alt_stddev_m > 0.0
-            else 0.0
+        stamp_sec = (
+            front_msg.header.stamp.sec + front_msg.header.stamp.nanosec * 1e-9
         )
 
-        # Stamp position_covariance with metric variance (metres^2).
-        # Diagnostic / logging use only now that navsat_transform is removed.
-        metric_var = self._metric_stddev_m ** 2
-        alt_var = (self._extra_alt_stddev_m + 0.05) ** 2  # Base alt noise = 0.05 m
-        out.position_covariance = [
-            metric_var, 0.0, 0.0,
-            0.0, metric_var, 0.0,
-            0.0, 0.0, alt_var,
-        ]
-        # COVARIANCE_TYPE_DIAGONAL_KNOWN = 2
-        out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
-
-        self._pub.publish(out)
-
         # -- Auto-datum: latch first raw GNSS reading as projection origin ------
-        # When datum was not set explicitly (0,0), use the raw pre-noise lat/lon
-        # from the first GNSS callback so the EKF odom frame is centred near
-        # CARLA world (0,0) in metres. Noise is added AFTER datum latching so
-        # the datum is always the clean simulation reference position.
         if not self._datum_latched:
-            self._datum_lat = msg.latitude
-            self._datum_lon = msg.longitude
-            # Recompute scale factor now that datum latitude is known.
+            self._datum_lat = front_msg.latitude
+            self._datum_lon = front_msg.longitude
             self._metres_per_deg_lon = (
                 111320.0 * math.cos(math.radians(self._datum_lat))
             )
@@ -576,74 +538,124 @@ class GnssNoiseRelayNode(Node):
                 f"lat={self._datum_lat:.6f} lon={self._datum_lon:.6f}"
             )
 
-        # -- Flat-earth projection: lat/lon -> local XY (metres) ---------------
-        # Replaces navsat_transform_node. Simple and accurate for parking-lot
-        # scale distances (< 100 m from datum).
-        #
-        # The EKF odom frame is ROS right-handed convention (Y northward).
-        # CovarianceExtractorNode negates y when writing ekf_state.json to
-        # convert to CARLA left-handed convention (Y southward) for the
-        # training container and calibration code.
-        local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
-        local_y = (out.latitude - self._datum_lat) * self._metres_per_deg_lat
+        # -- Apply noise to front antenna ---------------------------------------
+        out = NavSatFix()
+        out.header = front_msg.header
+        out.status = front_msg.status
 
-        self._front_local_x = local_x
-        self._front_local_y = local_y
+        if self._gnss_noise_enabled:
+            cm_x, cm_y = self._get_common_mode_noise(stamp_sec)
+            indep_lon_f = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
+            indep_lat_f = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
+            out.longitude = front_msg.longitude + (cm_x + indep_lon_f) / self._metres_per_deg_lon
+            out.latitude = front_msg.latitude + (cm_y + indep_lat_f) / self._metres_per_deg_lat
+            out.altitude = front_msg.altitude + float(
+                self._rng.normal(0.0, self._extra_alt_stddev_m)
+                if self._extra_alt_stddev_m > 0.0
+                else 0.0
+            )
+        else:
+            out.longitude = front_msg.longitude
+            out.latitude = front_msg.latitude
+            out.altitude = front_msg.altitude
 
+        metric_var = self._metric_stddev_m ** 2
+        alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
+        out.position_covariance = [
+            metric_var, 0.0, 0.0,
+            0.0, metric_var, 0.0,
+            0.0, 0.0, alt_var,
+        ]
+        out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        self._pub.publish(out)
+
+        # -- Apply noise to rear antenna ----------------------------------------
+        if self._gnss_noise_enabled:
+            cm_x, cm_y = self._get_common_mode_noise(stamp_sec)
+            indep_lon_r = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
+            indep_lat_r = float(self._rng.normal(0.0, sigma_indep)) if sigma_indep > 0.0 else 0.0
+            rear_lon = rear_msg.longitude + (cm_x + indep_lon_r) / self._metres_per_deg_lon
+            rear_lat = rear_msg.latitude + (cm_y + indep_lat_r) / self._metres_per_deg_lat
+        else:
+            rear_lon = rear_msg.longitude
+            rear_lat = rear_msg.latitude
+
+        # -- Flat-earth projection: both antennas -> local XY -------------------
+        front_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
+        front_y = (out.latitude - self._datum_lat) * self._metres_per_deg_lat
+        rear_x = (rear_lon - self._datum_lon) * self._metres_per_deg_lon
+        rear_y = (rear_lat - self._datum_lat) * self._metres_per_deg_lat
+
+        self._front_local_x = front_x
+        self._front_local_y = front_y
+
+        # -- Publish GNSS odometry (EKF odom0) ----------------------------------
         odom_msg = Odometry()
         odom_msg.header = out.header
         odom_msg.header.frame_id = "odom"
         odom_msg.child_frame_id = "ego_vehicle"
-        odom_msg.pose.pose.position.x = local_x
-        odom_msg.pose.pose.position.y = local_y
+        odom_msg.pose.pose.position.x = front_x
+        odom_msg.pose.pose.position.y = front_y
 
-        # 6x6 pose covariance (row-major). Set xx (index 0) and yy (index 7)
-        # to the GNSS metric variance so the EKF weights GNSS measurements
-        # according to the current RTK tier quality.
+        # Floor at RTK-fixed variance -- never 1e-12 (see heading_variance comment above).
+        _rtk_fixed_var = 0.02 ** 2
+        xy_var = metric_var if self._gnss_noise_enabled else _rtk_fixed_var
         pose_cov = [0.0] * 36
-        pose_cov[0] = metric_var   # xx
-        pose_cov[7] = metric_var   # yy
-        pose_cov[35] = 1.0e6       # yaw-yaw: large = "no yaw info from GNSS"
+        pose_cov[0] = xy_var   # xx
+        pose_cov[7] = xy_var   # yy
+        pose_cov[35] = 1.0e6
         odom_msg.pose.covariance = pose_cov
-
         self._odom_pub.publish(odom_msg)
 
-        # -- Dual-GNSS baseline heading ----------------------------------------
-        # Compute heading from the front-to-rear noisy baseline vector.
-        # Heading variance from independent noise only: common-mode cancels on
-        # differencing. sigma_heading = sqrt(2) * sigma_indep / baseline.
-        if (
-            self._rear_local_x is not None
-            and abs(stamp_sec - self._rear_stamp_sec) < 0.05
-        ):
-            dx = local_x - self._rear_local_x
-            dy = local_y - self._rear_local_y
-            heading = math.atan2(dy, dx)
-            self._last_heading_raw = heading
+        # -- Dual-GNSS baseline heading (EKF pose0) -----------------------------
+        # Both readings are from the same CARLA tick so the baseline vector is
+        # purely the physical antenna separation: no vehicle-motion contamination.
+        dx = front_x - rear_x   # east positive
+        dy = front_y - rear_y   # raw flat-earth dy
+        # CARLA +Y is south, which maps to INCREASING latitude in CARLA's GNSS.
+        # This inverts the flat-earth Y axis: dy is negated relative to true
+        # geographic north. Negate dy so heading follows ROS convention:
+        # 0=east, +90=north (CARLA yaw=-90), -90=south (CARLA yaw=+90).
+        # At yaw=0 CARLA (east): dx=+1.5, dy~0 -> heading=0. OK.
+        # At yaw=-90 CARLA (north): dy<0 (inverted), -dy>0 -> heading=+90. OK.
+        heading = math.atan2(-dy, dx)
+        if self._callback_count % 100 == 0:
+            self.get_logger().info(
+                f"[heading_dbg] dx={dx:.4f} dy={dy:.4f} "
+                f"heading={math.degrees(heading):.2f}deg"
+            )
+        self._last_heading_raw = heading
 
-            heading_variance = (
-                2.0 * sigma_indep ** 2 / (self._antenna_baseline_m ** 2)
-            ) if sigma_indep > 0.0 else 1.0e-6
+        # Minimum heading variance from RTK-fixed position noise (sigma~0.02m, baseline 1.5m).
+        # Never use 1e-12: a near-zero measurement variance collapses the EKF yaw covariance
+        # to near-zero, making the Kalman gain also near-zero so yaw corrections are ignored.
+        _RTK_FIXED_SIGMA_M = 0.02
+        _min_heading_var = 2.0 * _RTK_FIXED_SIGMA_M ** 2 / (self._antenna_baseline_m ** 2)
+        if not self._gnss_noise_enabled or sigma_indep == 0.0:
+            heading_variance = _min_heading_var
+        else:
+            heading_variance = max(
+                _min_heading_var,
+                2.0 * sigma_indep ** 2 / (self._antenna_baseline_m ** 2),
+            )
 
-            half_h = heading / 2.0
-            heading_msg = PoseWithCovarianceStamped()
-            heading_msg.header = out.header
-            heading_msg.header.frame_id = "odom"
-            heading_msg.pose.pose.orientation.x = 0.0
-            heading_msg.pose.pose.orientation.y = 0.0
-            heading_msg.pose.pose.orientation.z = math.sin(half_h)
-            heading_msg.pose.pose.orientation.w = math.cos(half_h)
-            # 6x6 pose covariance: position fields set very large (no position
-            # info from this source); only yaw-yaw (index 35) is informative.
-            h_cov = [0.0] * 36
-            h_cov[0] = 1.0e6   # xx
-            h_cov[7] = 1.0e6   # yy
-            h_cov[14] = 1.0e6  # zz
-            h_cov[21] = 1.0e6  # roll-roll
-            h_cov[28] = 1.0e6  # pitch-pitch
-            h_cov[35] = heading_variance  # yaw-yaw
-            heading_msg.pose.covariance = h_cov
-            self._heading_pub.publish(heading_msg)
+        half_h = heading / 2.0
+        heading_msg = PoseWithCovarianceStamped()
+        heading_msg.header = out.header
+        heading_msg.header.frame_id = "odom"
+        heading_msg.pose.pose.orientation.x = 0.0
+        heading_msg.pose.pose.orientation.y = 0.0
+        heading_msg.pose.pose.orientation.z = math.sin(half_h)
+        heading_msg.pose.pose.orientation.w = math.cos(half_h)
+        h_cov = [0.0] * 36
+        h_cov[0] = 1.0e6
+        h_cov[7] = 1.0e6
+        h_cov[14] = 1.0e6
+        h_cov[21] = 1.0e6
+        h_cov[28] = 1.0e6
+        h_cov[35] = heading_variance
+        heading_msg.pose.covariance = h_cov
+        self._heading_pub.publish(heading_msg)
 
 
 def main() -> None:

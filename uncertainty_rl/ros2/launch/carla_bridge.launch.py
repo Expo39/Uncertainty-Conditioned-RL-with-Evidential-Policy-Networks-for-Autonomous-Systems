@@ -358,6 +358,7 @@ def generate_launch_description() -> LaunchDescription:
     # IMU: stamps realistic angular_velocity_covariance -> /imu/stamped.
 
     gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
+    imu_relay_cfg = ros2_config.get("imu_noise_relay", {})
     carla_topics = ros2_config.get("carla_topics", {})
 
     # Datum lat/lon for flat-earth projection (from env_config.yaml).
@@ -371,14 +372,13 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": use_sim_time,
-                # GNSS relay parameters
+                # GNSS relay parameters (from gnss_noise_relay section)
                 "input_topic": gnss_relay_cfg.get(
                     "input_topic", "/carla/ego_vehicle/gnss"
                 ),
                 "output_topic": gnss_relay_cfg.get("output_topic", "/gnss/noisy"),
-                "base_metric_stddev_m": gnss_relay_cfg.get(
-                    "base_metric_stddev_m", 0.02
-                ),
+                "base_metric_stddev_m": gnss_relay_cfg.get("base_metric_stddev_m", 0.02),
+                "enable_gnss_noise": gnss_relay_cfg.get("enable_gnss_noise", True),
                 "enable_markov_transitions": gnss_relay_cfg.get(
                     "enable_markov_transitions", True
                 ),
@@ -387,25 +387,27 @@ def generate_launch_description() -> LaunchDescription:
                 "odom_output_topic": gnss_relay_cfg.get(
                     "odom_output_topic", "/odometry/gps"
                 ),
-                # Dual-GNSS heading parameters
                 "rear_antenna_input_topic": gnss_relay_cfg.get(
                     "rear_antenna_input_topic", "/carla/ego_vehicle/gnss_rear"
                 ),
                 "heading_output_topic": gnss_relay_cfg.get(
                     "heading_output_topic", "/gnss/heading"
                 ),
-                "antenna_baseline_m": gnss_relay_cfg.get("antenna_baseline_m", 1.5),
+                "antenna_baseline_m": gnss_relay_cfg.get("antenna_baseline_m", 2.25),
                 "common_mode_fraction": gnss_relay_cfg.get("common_mode_fraction", 0.85),
-                # IMU relay parameters
-                "imu_input_topic": carla_topics.get(
-                    "imu", "/carla/ego_vehicle/imu"
+                # IMU relay parameters (from imu_noise_relay section)
+                "imu_input_topic": imu_relay_cfg.get(
+                    "imu_input_topic", "/carla/ego_vehicle/imu"
                 ),
-                "imu_output_topic": carla_topics.get(
-                    "imu_stamped", "/carla/ego_vehicle/imu/stamped"
+                "imu_output_topic": imu_relay_cfg.get(
+                    "imu_output_topic", "/carla/ego_vehicle/imu/stamped"
                 ),
-                "imu_gyro_variance": gnss_relay_cfg.get("imu_gyro_variance", 1.0e-7),
-                "zupt_threshold_rad_s": gnss_relay_cfg.get(
-                    "zupt_threshold_rad_s", 0.03
+                "enable_imu_noise": imu_relay_cfg.get("enable_imu_noise", True),
+                "imu_gyro_variance": imu_relay_cfg.get("imu_gyro_variance", 1.0e-7),
+                "imu_accel_variance": imu_relay_cfg.get("imu_accel_variance", 3.76e-5),
+                "zupt_threshold_rad_s": imu_relay_cfg.get("zupt_threshold_rad_s", 0.03),
+                "accel_zupt_threshold_ms2": imu_relay_cfg.get(
+                    "accel_zupt_threshold_ms2", 0.2
                 ),
             }
         ],

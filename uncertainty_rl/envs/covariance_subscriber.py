@@ -124,6 +124,20 @@ class _CovarianceSubscriber:
         # Monotonically increasing counter for gnss_noise_config.json writes.
         self._gnss_noise_config_seq: int = 0
 
+        # Remove stale JSON files from previous sessions so the ros2-bridge
+        # nodes do not pick up old state on startup.
+        for stale in [
+            self._ekf_state_path,
+            self._initial_pose_path,
+            self._initial_pose_tmp,
+            self._gnss_noise_config_path,
+            self._gnss_noise_config_tmp,
+        ]:
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+
         logger.info(
             "Covariance reader: ekf_file=%s, initial_pose_file=%s",
             self._ekf_state_path,
