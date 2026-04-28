@@ -35,11 +35,11 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # directly and is reliable; linear velocity has no correction source.
 VEHICLE_STATE_DIM = 1
 
-# EKF localisation uncertainty features: [std_x, std_y, std_yaw,
-# cov_xy, cov_xyaw, cov_yyaw]
-# Diagonal variances (cov_xx, cov_yy, cov_yawyaw) are redundant given std devs
-# above (std = sqrt(var)); dropped to reduce obs dimensionality.
-COVARIANCE_FEATURES_DIM = 6
+# EKF localisation uncertainty features: [std_x, std_y, std_yaw]
+# Standard deviations from the covariance diagonal. Off-diagonal terms
+# (cov_xy, cov_xyaw, cov_yyaw) are dropped: they scale with the same GNSS
+# degradation as the diagonal stds and carry no independent information.
+COVARIANCE_FEATURES_DIM = 3
 
 # Relative target pose features: [dx, dy, dyaw] in ego body frame
 TARGET_POSE_DIM = 3
@@ -53,15 +53,15 @@ OBSTACLE_FEATURES_DIM = 5
 
 # Total observation dimension (with uncertainty conditioning and obstacle obs)
 # Index   0:     yaw rate (vyaw)
-# Indices 1-6:   EKF covariance features (when include_covariance=True)
-# Indices 7-9:   relative target pose (dx, dy, dyaw)
-# Indices 10-14: hemispheric obstacle clearance (when include_obstacle_obs=True)
+# Indices 1-3:   EKF covariance features (std_x, std_y, std_yaw) (when include_covariance=True)
+# Indices 4-6:   relative target pose (dx, dy, dyaw)
+# Indices 7-11:  hemispheric obstacle clearance (when include_obstacle_obs=True)
 TOTAL_OBS_DIM = (
     VEHICLE_STATE_DIM
     + COVARIANCE_FEATURES_DIM
     + TARGET_POSE_DIM
     + OBSTACLE_FEATURES_DIM
-)  # 17
+)  # 12
 
 # ============================================================================
 # Action Space Dimensions

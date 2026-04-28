@@ -25,7 +25,7 @@ inspect:
 carla_host: "uncertainty-rl-carla-0"  # Container name for worker 0 (resolved via shared bridge network). Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
-max_steps: 1000  # Episode length in agent decisions.
+max_steps: 1500  # Episode length in agent decisions.
                  # Lot diagonal ~79m (65x45m). At 3m/s cruise ~26s traversal +
                  # ~15-20s slow approach and parking manoeuvre = ~45s typical.
                  # 1000 steps * 0.05s = 50s sim time.

@@ -975,18 +975,17 @@ class DryRunInspector(_Inspector):
                     f"  yaw={wyaw:+.1f}deg" + X
                 )
 
-        # WHITE -- EKF covariance (indices 1-6): std devs + off-diagonal cross-cov
-        if len(obs) >= 7:
+        # WHITE -- EKF covariance (indices 1-3): std devs
+        if len(obs) >= 4:
             lines.append(
-                W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})"
-                f"  off=({obs[4]:.4f},{obs[5]:.4f},{obs[6]:.4f})" + X
+                W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})" + X
             )
 
-        # WHITE -- target in ego body frame (indices 7-9)
-        if len(obs) >= 10:
+        # WHITE -- target in ego body frame (indices 4-6)
+        if len(obs) >= 7:
             lines.append(
-                W + f"tgt  dx={obs[7]:+.2f}m  dy={obs[8]:+.2f}m"
-                f"  dyaw={math.degrees(obs[9]):+.1f}deg" + X
+                W + f"tgt  dx={obs[4]:+.2f}m  dy={obs[5]:+.2f}m"
+                f"  dyaw={math.degrees(obs[6]):+.1f}deg" + X
             )
 
         # YELLOW -- target bay world position (always from YAML)
@@ -1007,12 +1006,12 @@ class DryRunInspector(_Inspector):
             f"  ekf_std={ekf_std:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
 
-        # WHITE -- obstacle clearance (indices 10-14)
-        if len(obs) >= 15:
+        # WHITE -- obstacle clearance (indices 7-11)
+        if len(obs) >= 12:
             lines.append(
-                W + f"obs  L={obs[10]:.2f}m({math.degrees(obs[11]):+.1f}deg)"
-                f"  R={obs[12]:.2f}m({math.degrees(obs[13]):+.1f}deg)"
-                f"  F={obs[14]:.2f}m" + X
+                W + f"obs  L={obs[7]:.2f}m({math.degrees(obs[8]):+.1f}deg)"
+                f"  R={obs[9]:.2f}m({math.degrees(obs[10]):+.1f}deg)"
+                f"  F={obs[11]:.2f}m" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -1074,14 +1073,12 @@ class DryRunInspector(_Inspector):
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
         print(
-            "\nModel inputs per step (15-dim obs):"
-            "\n  [0]     vel: vyaw"
-            "\n  [1-3]   cov: std(x,y,yaw)"
-            "\n  [4-6]   cov: off(xy,xyaw,yyaw)"
-            "\n  [7-9]   tgt: dx dy dyaw (ego-relative)"
-            "\n  [10-14] obs: L(dist,bear)  R(dist,bear)  F(dist)"
+            "\nModel inputs per step (12-dim obs):"
+            "\n  [0]    vel: vyaw"
+            "\n  [1-3]  cov: std(x,y,yaw)"
+            "\n  [4-6]  tgt: dx dy dyaw (ego-relative)"
+            "\n  [7-11] obs: L(dist,bear)  R(dist,bear)  F(dist)"
             "\n  bay/EKF lines are diagnostic only (not fed to model)"
-            "\n  recon_err should be < 0.05m"
         )
 
         try:

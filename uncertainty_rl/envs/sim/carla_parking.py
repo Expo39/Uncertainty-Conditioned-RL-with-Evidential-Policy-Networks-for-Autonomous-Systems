@@ -145,6 +145,7 @@ class CARLAParkingEnv(gym.Env):
         real_world_deployment: bool = False,
         real_world_datum_path: Optional[str] = None,
         actuation_calibration_path: Optional[str] = None,
+        uncertainty_std_max: float = 2.0,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -182,6 +183,10 @@ class CARLAParkingEnv(gym.Env):
                YAML are included in the spawn pool. If False (default), only the
                primary spawn is used. With RTK-GNSS the odom frame is UTM-aligned
                regardless of spawn location, so extra spawns are safe to enable.
+        @param uncertainty_std_max: EKF std (metres) at which progress reward
+               reaches zero. Progress is scaled by (1 - clip(std/max, 0, 1))
+               so parking attempts under high uncertainty yield no reward.
+               Default 2.0 m matches the standalone tier metric_stddev_m.
         @param gnss_noise_profiles_path: Path to GNSS noise profiles YAML. If
                provided, the env samples an RTK fix-state tier each reset() and
                spawns the GNSS sensor with the corresponding noise multiplier.
@@ -214,6 +219,8 @@ class CARLAParkingEnv(gym.Env):
         self._max_ego_speed_ms = max_ego_speed_ms
         self._use_extra_spawns = use_extra_spawns
         self._gnss_noise_multiplier_override = gnss_noise_multiplier_override
+
+        self._uncertainty_std_max: float = max(uncertainty_std_max, 1e-6)
 
         # Per-step uncertainty estimates set externally (by policy or wrapper).
         # Used for uncertainty-aware reward shaping when enabled.
@@ -783,9 +790,20 @@ class CARLAParkingEnv(gym.Env):
             return 10.0, True, True, diag
 
         progress = (self._prev_distance - position_error) / OUT_OF_BOUNDS_THRESHOLD
-        reward = progress - 0.01
         self._prev_distance = position_error
+
+        # Scale progress reward by localisation quality. std_x/std_y are at
+        # obs indices 1 and 2; read directly from the pre-built obs buffer so
+        # the reward sees the same values the policy sees.
+        std_x = float(self._obs_buffer[1]) if self._include_covariance else 0.0
+        std_y = float(self._obs_buffer[2]) if self._include_covariance else 0.0
+        uncertainty_scale = float(
+            np.clip(max(std_x, std_y) / self._uncertainty_std_max, 0.0, 1.0)
+        )
+        reward = progress * (1.0 - uncertainty_scale) - 0.01
+
         diag["progress_reward"] = float(progress)
+        diag["uncertainty_scale"] = uncertainty_scale
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
