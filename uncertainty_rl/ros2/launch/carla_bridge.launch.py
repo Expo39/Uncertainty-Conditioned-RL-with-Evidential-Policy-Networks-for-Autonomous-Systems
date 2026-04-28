@@ -209,10 +209,14 @@ def generate_launch_description() -> LaunchDescription:
     sensor_config = _load_yaml(
         "/workspace/configs/deployment/sensor_config.yaml", "SENSOR_CONFIG_PATH"
     )
-    # Merge: sensor_config provides shared keys, env_config overrides with
-    # CARLA-specific keys. Matches load_env_config() in train_ppo.py.
+    agent_config = _load_yaml(
+        "/workspace/configs/deployment/agent_config.yaml", "AGENT_CONFIG_PATH"
+    )
+    # Merge: sensor_config < agent_config < env_config (env wins on conflict).
+    # Matches the three-layer merge in load_env_config() in train_ppo.py.
     env_config = {
         **sensor_config,
+        **agent_config,
         **_load_yaml("/workspace/configs/deployment/sim/env_config.yaml"),
     }
 

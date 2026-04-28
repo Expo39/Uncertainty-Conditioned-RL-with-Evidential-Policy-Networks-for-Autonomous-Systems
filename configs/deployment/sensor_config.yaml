@@ -1,12 +1,17 @@
 # Sensor configuration shared between simulation and real-vehicle deployment.
 #
-# This file contains physical sensor properties and mount positions that are
-# identical in CARLA and on the real vehicle. It is the single source of truth
-# for anything that must match reality.
+# This file contains physical sensor specifications and mount positions that
+# are identical in CARLA and on the real vehicle. It is the single source of
+# truth for anything describing the physical sensor suite.
 #
-# CARLA-specific noise parameters and spawn blueprints live in carla/env_config.yaml.
-# Real-vehicle deployment flags (datum, actuation calibration) live alongside
-# this file in configs/deployment/.
+# What lives here:
+#   - Sensor physical specs (range, FOV, frequency)
+#   - Sensor mount positions in vehicle body frame
+#
+# What does NOT live here:
+#   - Agent/policy parameters -> agent_config.yaml
+#   - CARLA-specific noise parameters and blueprints -> deployment/sim/env_config.yaml
+#   - Real-vehicle datum / actuation calibration -> deployment/real/
 #
 # Mount positions are in vehicle body frame:
 #   x = longitudinal from rear axle midpoint (positive = forward)
@@ -18,35 +23,6 @@
 #          large lever arm from the GNSS antenna (roof) -- accurate to ~2 cm
 #          or the EKF introduces ~5 cm * sin(heading_change) positional bias.
 
-# ---------------------------------------------------------------------------
-# Policy safety parameters (apply in both sim and real)
-# ---------------------------------------------------------------------------
-max_ego_speed_ms: 5.0 # Speed limit (m/s). Throttle cut above this in sim; safety
-                      # governor on real vehicle. 5 m/s = ~18 km/h.
-
-# ---------------------------------------------------------------------------
-# Observation space flags (identical in sim and real -- must match trained policy)
-# ---------------------------------------------------------------------------
-include_covariance: true      # Include EKF covariance features (obs indices 3-11)
-include_obstacle_obs: true    # Include 5 hemispheric LiDAR clearance dims (obs indices 15-19)
-
-# ---------------------------------------------------------------------------
-# ROS 2 / EKF pipeline settings (same node config in sim and real)
-# ---------------------------------------------------------------------------
-ros2:
-  covariance_topic: "/odometry/filtered"
-  covariance_timeout: 120.0
-  ekf_convergence_timeout: 15.0
-  publish_initial_pose: true   # Publishes /set_pose at each episode reset so the EKF starts from the
-                               # known vehicle spawn pose. navsat_transform has been removed (replaced by
-                               # flat-earth projection in GnssNoiseRelayNode), so there is no datum reset
-                               # race condition. The EKF resets cleanly via the /set_pose topic.
-  initial_pose_topic: "/set_pose"
-
-# ---------------------------------------------------------------------------
-# Sensor physical specifications and mount positions
-# These values must match the real hardware -- update before deployment.
-# ---------------------------------------------------------------------------
 sensors:
   imu:
     # MEMS IMU (e.g. VectorNav VN-100 or equivalent).
@@ -91,11 +67,3 @@ sensors:
       x: 2.4    # CARLA: front bumper centre. TODO: verify on real vehicle.
       y: 0.0    # TODO: measure lateral offset (metres)
       z: 0.5    # CARLA: above bumper lip. TODO: verify on real vehicle.
-
-# ---------------------------------------------------------------------------
-# Real-world deployment flags
-# ---------------------------------------------------------------------------
-real_world_deployment: false  # Set true to activate datum-based EKF calibration
-                              # and actuation calibration on the real vehicle.
-real_world_datum: configs/deployment/real/real_world_datum.yaml
-actuation_calibration: configs/deployment/real/actuation_calibration.yaml

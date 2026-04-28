@@ -115,6 +115,12 @@ def make_env(
     """
 
     def _init() -> gym.Env:
+        # SafetyWrapper is deliberately NOT applied here. The policy must learn
+        # freely during training without any safety interception -- applying the
+        # wrapper during training would cause the policy to learn to rely on it
+        # (reward hacking). The wrapper is applied exclusively at evaluation and
+        # deployment time (see evaluate.py and envs/real/inference_loop.py).
+
         # Each worker connects to its own CARLA server on a separate port and host.
         # Port stride is 1000 so worker ports (2000, 3000, ...) never collide
         # with CARLA's 3-port block (world+streaming+RPC on base, base+1, base+2).
@@ -207,16 +213,17 @@ def merge_configs(
 
 def load_env_config(env_config_path: str) -> Dict[str, Any]:
     """
-    @brief Load and merge the environment config with the shared sensor config.
+    @brief Load and merge the environment config with shared deployment configs.
 
-    sensor_config.yaml (configs/deployment/sensor_config.yaml) is the single
-    source of truth for all parameters shared between simulation and the real
-    vehicle: sensor mounts, agent parameters (max_steps, action_repeat,
-    max_ego_speed_ms), observation flags, ROS 2 settings, and deployment flags.
+    Three-layer merge (lowest to highest precedence):
+      1. sensor_config.yaml  -- physical sensor specs and mount positions
+      2. agent_config.yaml   -- shared agent/policy parameters (speed cap, safety
+                                thresholds, obs flags, ROS 2 settings, deployment flags)
+      3. env_config.yaml     -- CARLA-specific overrides (noise, timing, scenarios)
 
-    env_config.yaml (configs/deployment/sim/env_config.yaml) contains only
-    CARLA-specific parameters: noise profiles, simulation timing, scenario
-    geometry. Keys in env_config take precedence over sensor_config on conflict.
+    Both sensor_config.yaml and agent_config.yaml live in configs/deployment/.
+    env_config.yaml lives in configs/deployment/sim/ and its keys take precedence
+    over the shared configs on conflict.
 
     Sensor mounts from sensor_config.sensors.*.mount are injected into
     carla_sensors.*.mount so the CARLA spawner receives them.
@@ -227,15 +234,22 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
     with open(env_config_path) as f:
         env_config: Dict[str, Any] = yaml.safe_load(f) or {}
 
-    # Resolve sensor_config.yaml relative to deployment/ (one level up from sim/).
-    sensor_cfg_path = Path(env_config_path).parent.parent / "sensor_config.yaml"
+    deployment_dir = Path(env_config_path).parent.parent
+
     sensor_cfg: Dict[str, Any] = {}
+    sensor_cfg_path = deployment_dir / "sensor_config.yaml"
     if sensor_cfg_path.exists():
         with open(sensor_cfg_path) as f:
             sensor_cfg = yaml.safe_load(f) or {}
 
-    # sensor_config provides the base; env_config overrides with sim-specific keys.
-    merged: Dict[str, Any] = {**sensor_cfg, **env_config}
+    agent_cfg: Dict[str, Any] = {}
+    agent_cfg_path = deployment_dir / "agent_config.yaml"
+    if agent_cfg_path.exists():
+        with open(agent_cfg_path) as f:
+            agent_cfg = yaml.safe_load(f) or {}
+
+    # Merge: sensor_config < agent_config < env_config (env wins on conflict).
+    merged: Dict[str, Any] = {**sensor_cfg, **agent_cfg, **env_config}
 
     # Inject sensor mounts into carla_sensors so the CARLA spawner gets them.
     for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
