@@ -9,12 +9,12 @@ from the robot_localisation EKF node fusing RTK-GNSS and IMU, with per-episode
 GNSS noise tiers modelling RTK fix-state variation (fixed, float, standalone,
 degraded). 2D LiDAR provides obstacle detection only (obs indices 12-16).
 
-The observation comprises up to 17 dimensions (default, include_obstacle_obs=true):
-  - indices  0-2:  EKF velocity (vx, vy, vyaw)
-  - indices  3-5:  EKF std devs (std_x, std_y, std_yaw)
-  - indices  6-8:  EKF off-diagonal cross-covariance (cov_xy, cov_xyaw, cov_yyaw)
-  - indices  9-11: target bay in ego body frame (dx, dy, dyaw)
-  - indices 12-16: hemispheric LiDAR clearance (left_dist, left_bearing,
+The observation comprises up to 15 dimensions (default, include_obstacle_obs=true):
+  - index   0:     EKF yaw rate (vyaw)
+  - indices 1-3:   EKF std devs (std_x, std_y, std_yaw)
+  - indices 4-6:   EKF off-diagonal cross-covariance (cov_xy, cov_xyaw, cov_yyaw)
+  - indices 7-9:   target bay in ego body frame (dx, dy, dyaw)
+  - indices 10-14: hemispheric LiDAR clearance (left_dist, left_bearing,
                    right_dist, right_bearing, forward_dist)
                    only present when include_obstacle_obs=true (default)
 
@@ -98,20 +98,20 @@ class CARLAParkingEnv(gym.Env):
     manoeuvre the ego vehicle into the target bay. Uncertainty is produced
     naturally by the robot_localisation EKF processing noisy CARLA sensors.
 
-    Observation space when include_covariance=True, include_obstacle_obs=True (17-dim):
-      [0-2]   EKF velocity: vx, vy, vyaw
-      [3-5]   EKF std devs: std_x, std_y, std_yaw
-      [6-8]   EKF off-diagonal cross-covariance: cov_xy, cov_xyaw, cov_yyaw
-      [9-11]  target bay in ego body frame: dx, dy, dyaw
-      [12-16] obstacle awareness: left_dist, left_bearing, right_dist,
+    Observation space when include_covariance=True, include_obstacle_obs=True (15-dim):
+      [0]     EKF yaw rate: vyaw
+      [1-3]   EKF std devs: std_x, std_y, std_yaw
+      [4-6]   EKF off-diagonal cross-covariance: cov_xy, cov_xyaw, cov_yyaw
+      [7-9]   target bay in ego body frame: dx, dy, dyaw
+      [10-14] obstacle awareness: left_dist, left_bearing, right_dist,
               right_bearing, forward_dist
 
-    When include_covariance=False (8-dim or 3-dim depending on include_obstacle_obs):
-      [0-2]   EKF velocity: vx, vy, vyaw
-      [3-5]   target bay in ego body frame
-      [6-10]  obstacle awareness (only when include_obstacle_obs=True)
+    When include_covariance=False (6-dim or 1-dim depending on include_obstacle_obs):
+      [0]     EKF yaw rate: vyaw
+      [1-3]   target bay in ego body frame
+      [4-8]   obstacle awareness (only when include_obstacle_obs=True)
 
-    Setting include_obstacle_obs=False removes obstacle dims (17->12 or 8->3).
+    Setting include_obstacle_obs=False removes obstacle dims (15->10 or 6->1).
     Set in train_config.yaml: include_obstacle_obs: false.
 
     @note Docker + ROS 2 required for training. No standalone fallback.
@@ -822,10 +822,7 @@ class CARLAParkingEnv(gym.Env):
             wy = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
             wyaw = ekf_odom_yaw + r
             world_pose = np.array(
-                [wx, wy, wyaw,
-                 float(raw_ekf_pose[3]),
-                 float(raw_ekf_pose[4]),
-                 float(raw_ekf_pose[5])],
+                [wx, wy, wyaw, float(raw_ekf_pose[3])],
                 dtype=np.float32,
             )
         else:
@@ -835,11 +832,10 @@ class CARLAParkingEnv(gym.Env):
                 self.steps,
             )
             t = self.vehicle.get_transform()
-            v = self.vehicle.get_velocity()
             av = self.vehicle.get_angular_velocity()
             world_pose = np.array(
                 [t.location.x, t.location.y, math.radians(t.rotation.yaw),
-                 v.x, v.y, math.radians(av.z)],
+                 math.radians(av.z)],
                 dtype=np.float32,
             )
 

@@ -32,7 +32,6 @@ import yaml
 
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
-    MAX_PARKING_SPEED,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
@@ -87,15 +86,15 @@ def build_observation(
     (velocity, target) are set to zero. When uncertainty is None or all-zero,
     covariance dims are zeroed and a debug log is emitted.
 
-    Layout (include_covariance=True, include_obstacle_obs=True, 17-dim):
-      [0-2]   EKF velocity (vx, vy, vyaw) -- clipped to physical range
-      [3-5]   EKF std devs (std_x, std_y, std_yaw)
-      [6-8]   EKF off-diagonal cross-covariance (cov_xy, cov_xyaw, cov_yyaw)
-      [9-11]  target bay in ego body frame (dx, dy, dyaw)
-      [12-16] hemispheric LiDAR clearance (left_dist, left_bearing,
+    Layout (include_covariance=True, include_obstacle_obs=True, 15-dim):
+      [0]     EKF yaw rate (vyaw)
+      [1-3]   EKF std devs (std_x, std_y, std_yaw)
+      [4-6]   EKF off-diagonal cross-covariance (cov_xy, cov_xyaw, cov_yyaw)
+      [7-9]   target bay in ego body frame (dx, dy, dyaw)
+      [10-14] hemispheric LiDAR clearance (left_dist, left_bearing,
               right_dist, right_bearing, forward_dist)
 
-    @param ekf_pose: 6-element array [x, y, yaw, vx, vy, vyaw] in world frame,
+    @param ekf_pose: 4-element array [x, y, yaw, vyaw] in world frame,
                      or None if EKF is not yet available.
     @param uncertainty: COVARIANCE_FEATURES_DIM-element array of covariance
                         features, or None if unavailable.
@@ -113,9 +112,7 @@ def build_observation(
         x = float(ekf_pose[0])
         y = float(ekf_pose[1])
         yaw = float(ekf_pose[2])
-        vx = float(np.clip(ekf_pose[3], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
-        vy = float(np.clip(ekf_pose[4], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
-        vyaw = float(np.clip(ekf_pose[5], -math.pi, math.pi))
+        vyaw = float(np.clip(ekf_pose[3], -math.pi, math.pi))
 
         dx, dy, dyaw = _compute_relative_target_pose(
             x, y, yaw,
@@ -124,39 +121,35 @@ def build_observation(
             float(target_bay["yaw"]),
         )
     else:
-        vx = vy = vyaw = 0.0
+        vyaw = 0.0
         dx = dy = dyaw = 0.0
 
     if not include_covariance:
-        obs_buffer[0] = vx
-        obs_buffer[1] = vy
-        obs_buffer[2] = vyaw
-        obs_buffer[3] = dx
-        obs_buffer[4] = dy
-        obs_buffer[5] = dyaw
+        obs_buffer[0] = vyaw
+        obs_buffer[1] = dx
+        obs_buffer[2] = dy
+        obs_buffer[3] = dyaw
         if include_obstacle_obs:
-            obs_buffer[6:6 + OBSTACLE_FEATURES_DIM] = obstacle_features
+            obs_buffer[4:4 + OBSTACLE_FEATURES_DIM] = obstacle_features
         return obs_buffer.copy()
 
-    # With covariance: [vel(3), cov(6), target(3), obstacle(5)]
-    obs_buffer[0] = vx
-    obs_buffer[1] = vy
-    obs_buffer[2] = vyaw
+    # With covariance: [vyaw(1), cov(6), target(3), obstacle(5)]
+    obs_buffer[0] = vyaw
 
     if uncertainty is not None:
         unc = uncertainty.astype(np.float32)
         if not np.any(unc):
             logger.debug("[obs] EKF covariance all-zeros -- policy sees no uncertainty")
-        obs_buffer[3:3 + COVARIANCE_FEATURES_DIM] = unc
+        obs_buffer[1:1 + COVARIANCE_FEATURES_DIM] = unc
     # else: covariance dims remain zero (EKF not yet publishing)
 
-    cov_end = 3 + COVARIANCE_FEATURES_DIM  # index 9
+    cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 7
     obs_buffer[cov_end] = dx
     obs_buffer[cov_end + 1] = dy
     obs_buffer[cov_end + 2] = dyaw
 
     if include_obstacle_obs:
-        tgt_end = cov_end + TARGET_POSE_DIM  # index 12
+        tgt_end = cov_end + TARGET_POSE_DIM  # index 10
         obs_buffer[tgt_end:tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
 
     return obs_buffer.copy()
