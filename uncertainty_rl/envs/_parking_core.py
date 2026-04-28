@@ -171,9 +171,10 @@ def extract_obstacle_features(
 
     @note Self-returns closer than 1.0 m and the rear hemisphere (x <= 0) are
           discarded -- matching the ~270 deg FOV of a front-bumper-mounted LiDAR.
+    @note When a scan produces no valid returns (empty tick or all-rear points),
+          the buffer is left unchanged so the previous step's values are held.
+          This prevents spurious zero spikes at the 15 Hz / 20 Hz scan boundary.
     """
-    out[:] = 0.0
-
     if scan is None or len(scan) == 0:
         return out
 
@@ -184,23 +185,30 @@ def extract_obstacle_features(
     if not np.any(valid):
         return out
 
+    # Only zero the buffer once we know we have valid returns to write
+    out[:] = 0.0
+
     dists = dists[valid]
     scan = scan[valid]
     bearings = np.arctan2(scan[:, 1], scan[:, 0])
 
-    left_mask = scan[:, 1] > 0.0
+    _15 = math.radians(15.0)
+
+    # Non-overlapping sectors: left (+15,+90], forward (-15,+15), right (-90,-15)
+    left_mask = bearings > _15
     if np.any(left_mask):
         idx = int(np.argmin(dists[left_mask]))
         out[0] = float(dists[left_mask][idx])
         out[1] = float(bearings[left_mask][idx])
 
-    right_mask = scan[:, 1] < 0.0
+    right_mask = bearings < -_15
     if np.any(right_mask):
         idx = int(np.argmin(dists[right_mask]))
         out[2] = float(dists[right_mask][idx])
         out[3] = float(bearings[right_mask][idx])
 
-    forward_mask = np.abs(bearings) <= math.radians(30.0)
+    # Forward: nearest return within +-15 deg of straight ahead
+    forward_mask = np.abs(bearings) <= _15
     if np.any(forward_mask):
         out[4] = float(np.min(dists[forward_mask]))
 

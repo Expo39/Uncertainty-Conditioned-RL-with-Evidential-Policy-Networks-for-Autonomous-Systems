@@ -2,10 +2,12 @@
 # Contains ONLY settings specific to the CARLA simulator: connection details,
 # simulation timing, sensor noise parameters, and parking lot scenario geometry.
 #
-# Keys shared between simulation and real-vehicle deployment (sensor mounts,
-# agent parameters, ROS 2 settings, observation flags, deployment flags) live
-# in configs/deployment/sensor_config.yaml -- the single source of truth.
-# Consumers merge both files before constructing the environment.
+# Keys shared between simulation and real-vehicle deployment are split across
+# two single-source-of-truth files in configs/deployment/:
+#   sensor_config.yaml -- physical sensor specs and mount positions
+#   agent_config.yaml  -- agent/policy parameters, obs flags, ROS 2 settings,
+#                         safety wrapper thresholds, deployment flags
+# Consumers merge all three files before constructing the environment.
 
 # Debug mode -- set true to emit per-step diagnostics and show a second HUD line
 # in the visualiser. Off by default to avoid I/O overhead during training runs.
@@ -64,6 +66,7 @@ gnss_datum_lon: 0.0  # degrees east  (0.0 = auto-detect from first GNSS reading)
 #
 # Sensor mount positions live in configs/deployment/sensor_config.yaml.
 # Noise parameters (CARLA-specific) live here only.
+# Agent parameters (speed cap, safety thresholds) live in configs/deployment/agent_config.yaml.
 # ---------------------------------------------------------------------------
 carla_sensors:
   imu:
@@ -116,11 +119,8 @@ carla_sensors:
     # No noise fields -- same as gnss (front). All noise injected by GnssNoiseRelayNode.
     # CARLA role_name: "gnss_rear" -- the CARLA ROS bridge spawns this as a distinct
     # sensor and publishes on /carla/ego_vehicle/gnss_rear.
+    # Mount position lives in sensor_config.yaml (injected by load_env_config()).
     sensor_tick: 0.05
-    mount:
-      x: -1.5    # 1.5 m rearward of vehicle centre -- matches sensor_config.yaml gnss_rear
-      y: 0.0
-      z: 1.6     # Same roof height as front antenna
 
 # ---------------------------------------------------------------------------
 # Parking lot scenario configuration
@@ -139,7 +139,7 @@ parking_scenarios:
   perimeter_cone_spacing: 2.0          # Metres between perimeter markers
   bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
   bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
-  num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
+  num_patrol_vehicles_max: 0           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
   patrol_obstacle_stop_distance: 5.0  # Metres ahead - patrol brakes if any vehicle is in forward cone within this range
   patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Patrol vehicle speed in m/s (applied directly via kinematic, no physics acceleration)

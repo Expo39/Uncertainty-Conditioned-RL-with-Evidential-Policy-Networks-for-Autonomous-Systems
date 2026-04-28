@@ -1,0 +1,56 @@
+# Agent configuration shared between simulation and real-vehicle deployment.
+#
+# This file contains all non-sensor parameters that are identical in CARLA
+# simulation and on the real vehicle. It is the single source of truth for
+# agent behaviour, observation flags, ROS 2 pipeline settings, safety policy
+# parameters, and deployment flags.
+#
+# What lives here:
+#   - Policy safety parameters (speed cap, SafetyWrapper thresholds)
+#   - Observation space flags (must match the trained policy)
+#   - ROS 2 / EKF pipeline settings (same node config in sim and real)
+#   - Real-world deployment flags
+#
+# What does NOT live here:
+#   - Sensor physical specs and mount positions -> sensor_config.yaml
+#   - CARLA-specific simulation parameters -> deployment/sim/env_config.yaml
+#   - Real-vehicle datum / actuation calibration -> deployment/real/
+
+# ---------------------------------------------------------------------------
+# Policy safety parameters (apply in both sim eval and real deployment)
+# Training runs WITHOUT the SafetyWrapper -- the policy learns freely.
+# The wrapper is applied exclusively at evaluation and deployment time.
+# ---------------------------------------------------------------------------
+max_ego_speed_ms: 5.0  # Speed limit (m/s). Throttle cut above this in sim;
+                       # safety governor on real vehicle. 5 m/s = ~18 km/h.
+
+# SafetyWrapper parameters.
+# aleatoric_scaling: higher = more aggressive longitudinal cap under outcome noise.
+# handoff_threshold: epistemic uncertainty above this triggers full stop + handoff.
+safety_aleatoric_scaling: 0.5
+safety_handoff_threshold: 5.0
+
+# ---------------------------------------------------------------------------
+# Observation space flags (must match the trained policy -- identical in sim and real)
+# ---------------------------------------------------------------------------
+include_covariance: true      # Include EKF covariance features (obs indices 3-11)
+include_obstacle_obs: true    # Include 5 hemispheric LiDAR clearance dims (obs indices 15-19)
+
+# ---------------------------------------------------------------------------
+# ROS 2 / EKF pipeline settings (same node config in sim and real)
+# ---------------------------------------------------------------------------
+ros2:
+  covariance_topic: "/odometry/filtered"
+  covariance_timeout: 120.0
+  ekf_convergence_timeout: 15.0
+  publish_initial_pose: true   # Publishes /set_pose at each episode reset so the EKF
+                               # starts from the known vehicle spawn pose.
+  initial_pose_topic: "/set_pose"
+
+# ---------------------------------------------------------------------------
+# Real-world deployment flags
+# ---------------------------------------------------------------------------
+real_world_deployment: false  # Set true to activate datum-based EKF calibration
+                              # and actuation calibration on the real vehicle.
+real_world_datum: configs/deployment/real/real_world_datum.yaml
+actuation_calibration: configs/deployment/real/actuation_calibration.yaml

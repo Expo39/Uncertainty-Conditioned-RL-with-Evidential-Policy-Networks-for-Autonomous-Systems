@@ -36,9 +36,11 @@ except ImportError:
 
 try:
     from uncertainty_rl.envs import CARLAParkingEnv
+    from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
     from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 except ImportError:
     CARLAParkingEnv = None  # type: ignore[assignment,misc]
+    SafetyWrapper = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
@@ -213,8 +215,15 @@ def make_eval_env(
         else False
     )
 
-    def _init() -> CARLAParkingEnv:
-        return CARLAParkingEnv(
+    # SafetyWrapper parameters from agent_config.yaml (single source of truth,
+    # shared between sim evaluation and real-world deployment).
+    # Training runs WITHOUT the wrapper -- the policy learns freely.
+    # Evaluation always uses the wrapper so safety behaviour is active.
+    aleatoric_scaling: float = float(config.get("safety_aleatoric_scaling", 0.5))
+    handoff_threshold: float = float(config.get("safety_handoff_threshold", 5.0))
+
+    def _init() -> gym.Env:
+        base_env: gym.Env = CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
             carla_port=config.get("carla_port", 2000),
             town=config.get("town", "FlatPlane"),
@@ -232,6 +241,15 @@ def make_eval_env(
             ),
             gnss_noise_multiplier_override=gnss_override,
             debug=debug,
+        )
+        # SafetyWrapper intercepts actions at eval time:
+        #   - Aleatoric high -> longitudinal capped (slower driving).
+        #   - Epistemic >= threshold -> full stop + episode truncation.
+        # The wrapper is NOT applied during training (see train_ppo.py).
+        return SafetyWrapper(
+            base_env,
+            aleatoric_scaling=aleatoric_scaling,
+            handoff_threshold=handoff_threshold,
         )
 
     env = DummyVecEnv([_init])
@@ -288,12 +306,15 @@ def evaluate_agent(
                     obs_tensor, deterministic=deterministic
                 )
                 action = action_tensor.cpu().numpy()
-                metrics.epistemic_uncertainties.append(
-                    float(uncertainty_dict["epistemic"].mean().item())
-                )
-                metrics.aleatoric_uncertainties.append(
-                    float(uncertainty_dict["aleatoric"].mean().item())
-                )
+                epistemic = float(uncertainty_dict["epistemic"].mean().item())
+                aleatoric = float(uncertainty_dict["aleatoric"].mean().item())
+                metrics.epistemic_uncertainties.append(epistemic)
+                metrics.aleatoric_uncertainties.append(aleatoric)
+
+                # Feed uncertainty into SafetyWrapper before stepping.
+                # The wrapper uses these to cap longitudinal (aleatoric) and
+                # trigger safety handoff (epistemic). Must be called every step.
+                env.env_method("set_uncertainty", epistemic, aleatoric)
             else:
                 action, _states = model.predict(obs, deterministic=deterministic)
 

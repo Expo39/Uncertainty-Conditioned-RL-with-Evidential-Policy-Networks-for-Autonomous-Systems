@@ -91,12 +91,18 @@ class SafetyWrapper(gym.Wrapper):
         self._step_count += 1
         info_extra: Dict[str, Any] = {}
 
-        # 1. Aleatoric: scale action magnitude (noisy outcomes -> gentler).
-        #    Always active. Higher aleatoric = smaller actions = slower driving.
+        # 1. Aleatoric: cap longitudinal (throttle) only -- not steering.
+        #    High aleatoric means action outcomes are unpredictable (e.g. pedestrian
+        #    cutting across, NPC braking suddenly). Reducing speed lowers collision
+        #    risk without compromising directional control.
+        #    Steering is intentionally left uncapped: the policy must retain full
+        #    authority to steer away from obstacles even under high uncertainty.
+        modulated_action = action.copy()
         aleatoric_scale = 1.0 / (
             1.0 + self._aleatoric_scaling * self._current_aleatoric
         )
-        modulated_action = action * aleatoric_scale
+        # Clamp the upper bound of longitudinal -- braking is always unrestricted.
+        modulated_action[1] = np.clip(modulated_action[1], -1.0, aleatoric_scale)
         self._aleatoric_scale_sum += aleatoric_scale
 
         info_extra["aleatoric_scale"] = aleatoric_scale

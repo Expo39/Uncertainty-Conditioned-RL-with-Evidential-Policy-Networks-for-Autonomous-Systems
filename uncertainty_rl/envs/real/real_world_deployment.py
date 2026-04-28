@@ -30,6 +30,8 @@ Typical usage inside CARLAParkingEnv:
 @see configs/real_world_datum.yaml
 @see configs/actuation_calibration.yaml
 @see documentation/design/sim_to_real_transfer.md
+@see uncertainty_rl.envs.real.inference_loop.RealWorldInferenceLoop for the
+     full real-world control loop (policy inference + SafetyWrapper + actuation).
 
 @author Antonio Galdes
 """
