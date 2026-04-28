@@ -143,8 +143,7 @@ class SensorManager:
         """
         @brief Spawn all sensors attached to the ego vehicle.
 
-        Always spawns: IMU + GNSS (front) + GNSS (rear, if gnss_rear in config)
-        + 2D LiDAR + collision sensor.
+        Always spawns: IMU + GNSS + 2D LiDAR + collision sensor.
 
         All sensor noise is injected by the ROS relay nodes (ImuNoiseRelayNode,
         GnssNoiseRelayNode) and configured entirely from ros2_config.yaml.
@@ -165,7 +164,6 @@ class SensorManager:
 
         self._spawn_imu(world, vehicle)
         self._spawn_gnss(world, vehicle)
-        self._spawn_gnss_rear(world, vehicle)
         self._spawn_lidar_2d(world, vehicle)
         self._spawn_collision_sensor(world, vehicle)
 
@@ -345,50 +343,6 @@ class SensorManager:
         gnss_sensor.listen(lambda _: None)
         self._spawned_sensors.append(gnss_sensor)
         logger.debug("Spawned front GNSS sensor (CARLA noise zeroed; relay owns noise).")
-
-    def _spawn_gnss_rear(self, world: Any, vehicle: Any) -> None:
-        """
-        @brief Spawn rear RTK-GNSS antenna for dual-antenna heading baseline.
-
-        Skipped silently when sensors_config has no gnss_rear section.
-
-        @param world: carla.World for the current episode.
-        @param vehicle: Ego vehicle actor to attach to.
-        """
-        gnss_rear_config = self._sensors_config.get("gnss_rear", {})
-        if not gnss_rear_config:
-            return
-
-        mount = gnss_rear_config.get("mount", {})
-
-        gnss_bp = world.get_blueprint_library().find("sensor.other.gnss")
-        gnss_bp.set_attribute("role_name", "gnss_rear")
-        for attr in [
-            "noise_alt_bias", "noise_alt_stddev",
-            "noise_lat_bias", "noise_lat_stddev",
-            "noise_lon_bias", "noise_lon_stddev",
-        ]:
-            gnss_bp.set_attribute(attr, "0.0")
-        gnss_bp.set_attribute(
-            "sensor_tick", str(gnss_rear_config.get("sensor_tick", 0.05))
-        )
-
-        gnss_rear_transform = carla.Transform(
-            carla.Location(
-                x=float(mount.get("x", -1.5)),
-                y=float(mount.get("y", 0.0)),
-                z=float(mount.get("z", 1.6)),
-            )
-        )
-        gnss_rear_sensor = world.spawn_actor(
-            gnss_bp, gnss_rear_transform, attach_to=vehicle
-        )
-        gnss_rear_sensor.listen(lambda _: None)
-        self._spawned_sensors.append(gnss_rear_sensor)
-        logger.debug(
-            "Spawned rear GNSS sensor at x=%.2f (CARLA noise zeroed; relay owns noise).",
-            float(mount.get("x", -1.5)),
-        )
 
     def _spawn_collision_sensor(self, world: Any, vehicle: Any) -> None:
         """

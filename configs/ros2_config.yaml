@@ -3,16 +3,19 @@
 # Pipeline summary:
 #
 #   /carla/ego_vehicle/gnss  (NavSatFix, raw CARLA GNSS with base RTK noise)
-#       -> GnssNoiseRelayNode  (adds per-episode noise, flat-earth -> local XY)
-#       -> /odometry/gps  (Odometry with metric covariance from RTK tier)
+#       -> GnssNoiseRelayNode  (adds per-episode noise, flat-earth -> local XY,
+#                               derives COG heading from successive noisy fixes)
+#       -> /odometry/gps    (Odometry with metric covariance from RTK tier)
+#       -> /gnss/heading    (PoseWithCovarianceStamped, COG yaw for EKF pose0)
 #
 #   /carla/ego_vehicle/imu  (sensor_msgs/Imu)
 #       -> ImuNoiseRelayNode  (stamps angular_velocity_covariance + linear_acceleration_covariance)
 #       -> /carla/ego_vehicle/imu/stamped
 #       -> EKF imu0: vyaw PREDICTION step between GNSS fixes
 #
-#   robot_localisation EKF fuses both:
+#   robot_localisation EKF fuses all three:
 #       odom0 = /odometry/gps   (x, y from GNSS via flat-earth projection)
+#       pose0 = /gnss/heading   (yaw from COG heading)
 #       imu0  = /carla/ego_vehicle/imu/stamped  (vyaw)
 #       output = /odometry/filtered  (pose + 6x6 covariance)
 #
@@ -136,14 +139,12 @@ ekf:
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6
   ]
 
-  # Dual-GNSS baseline heading: absolute yaw correction step.
-  # Published by GnssNoiseRelayNode from the front+rear antenna baseline vector.
-  # Baseline: front (vehicle centre, 0 m) to rear (-1.5 m) = 1.5 m physical separation.
-  # Heading = atan2(dy, dx) on the front-minus-rear vector; variance derived
-  # from the independent noise component only (common-mode cancels on differencing).
+  # COG heading: absolute yaw correction step.
+  # Published by GnssNoiseRelayNode from successive noisy GNSS positions.
+  # Heading = atan2(dy, dx) from two flat-earth-projected fixes; variance derived
+  # from sigma_pos^2 / speed^2 (error propagation of atan2 from noisy positions).
+  # Only updated when GNSS-derived speed >= cog_min_speed_ms (default 0.3 m/s).
   # Uses PoseWithCovarianceStamped; only yaw is active (position cov = 1e6).
-  # Effective heading stddev at 1.5 m baseline:
-  #   rtk_fixed ~0.74 deg, rtk_float ~11.1 deg, standalone ~74 deg, degraded ~185 deg.
   pose0: "/gnss/heading"
   # 6-element list: [x, y, z, roll, pitch, yaw]
   pose0_config: [false, false, false, false, false, true]
@@ -175,26 +176,21 @@ gnss_noise_relay:
   odom_output_topic: "/odometry/gps" # Odometry with flat-earth XY (EKF odom0)
 
   # Noise enable flags. Set all false for real deployment or ideal-sensor testing.
-  enable_gnss_noise: true           # false = pure flat-earth projector, no added noise
-  enable_markov_transitions: true   # false = constant tier per episode
+  enable_gnss_noise: false           # false = pure flat-earth projector, no added noise
+  enable_markov_transitions: false   # false = constant tier per episode
 
   # Base 1-sigma position error for RTK-fixed conditions (metres).
   # Tier multipliers scale this: rtk_fixed=1x, rtk_float=15x, standalone=100x, degraded=250x.
   # Ignored when enable_gnss_noise: false.
   base_metric_stddev_m: 0.02
 
-  # Dual-GNSS heading baseline.
-  # Front antenna at vehicle centre (0 m), rear at -1.5 m along vehicle longitudinal axis.
-  # Total physical baseline = 1.5 m. Used for heading variance computation:
-  #   heading_stddev = sqrt(2) * sigma_indep / baseline
-  # At rtk_fixed: sqrt(2)*0.02*sqrt(0.15)/1.5 = 0.74 deg stddev.
-  rear_antenna_input_topic: /carla/ego_vehicle/gnss_rear
+  # COG heading output topic (PoseWithCovarianceStamped, EKF pose0).
   heading_output_topic: /gnss/heading
-  antenna_baseline_m: 1.5       # front (vehicle centre, 0 m) to rear (-1.5 m) = 1.5 m
-  # Fraction of per-tier noise shared between both antennas (common-mode).
-  # Common-mode cancels on baseline differencing; only independent noise remains.
-  # 85% is conservative for nearby RTK antennas sharing sky view and corrections.
-  common_mode_fraction: 0.85
+  # Minimum GNSS-derived speed (m/s) to update the COG heading estimate.
+  # Below this threshold the last valid heading is re-published unchanged.
+  # At parking approach speeds (~1-6 m/s) COG is reliable; at near-standstill
+  # the IMU vyaw integration handles heading continuity.
+  cog_min_speed_ms: 0.3
 
 # ---------------------------------------------------------------------------
 # ImuNoiseRelayNode parameters.
@@ -208,7 +204,7 @@ imu_noise_relay:
   # Noise enable flag. Set false for real deployment (real IMU driver stamps its
   # own covariance, which robot_localization uses in preference to process noise)
   # or for ideal-sensor dryrun testing.
-  enable_imu_noise: true
+  enable_imu_noise: false
 
   # Gyro noise: VN-100 datasheet noise density 0.0035 deg/s/sqrt(Hz).
   #   Per-sample variance at 20 Hz: (6.11e-5 * sqrt(20))^2 = 7.46e-8 (rad/s)^2
