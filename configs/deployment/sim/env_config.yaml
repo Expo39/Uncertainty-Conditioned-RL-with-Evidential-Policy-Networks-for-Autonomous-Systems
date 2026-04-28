@@ -67,12 +67,9 @@ gnss_datum_lon: 0.0  # degrees east  (0.0 = auto-detect from first GNSS reading)
 # ---------------------------------------------------------------------------
 carla_sensors:
   imu:
-    noise_accel_stddev_x: 0.1   # Accelerometer noise (m/s^2)
-    noise_accel_stddev_y: 0.1
-    noise_accel_stddev_z: 0.1
-    noise_gyro_stddev_x: 0.01   # Gyroscope noise (rad/s)
-    noise_gyro_stddev_y: 0.01
-    noise_gyro_stddev_z: 0.01
+    # No noise fields -- all IMU noise is injected by ImuNoiseRelayNode
+    # and configured from ros2_config.yaml (imu_gyro_variance, imu_accel_variance,
+    # enable_imu_noise). CARLA-side noise is zeroed in _sensor_manager.py.
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
 
   lidar:        # 2D LiDAR (SICK TiM571) -- obstacle detection only, NOT localisation.
@@ -110,33 +107,15 @@ carla_sensors:
     sensor_tick: 0.067          # 1/15 Hz = 0.067s -- matches real publish rate.
 
   gnss:         # Front (primary) RTK-GNSS receiver (u-blox ZED-F9P or similar)
-    # Base noise stddevs are for RTK-fixed conditions (~2 cm).
-    # Per-episode noise tier (from gnss_noise_profiles.yaml) scales these
-    # via gnss_noise_multiplier to simulate RTK float, standalone, and degraded states.
-    # CARLA sensor.other.gnss outputs WGS84 lat/lon; GnssNoiseRelayNode converts
-    # to local Odometry frame via flat-earth projection.
-    noise_alt_bias: 0.0         # Altitude bias (metres)
-    noise_alt_stddev: 0.05      # Altitude noise stddev (metres) -- base RTK-fixed value
-    noise_lat_bias: 0.0         # Latitude bias (degrees)
-    noise_lat_stddev: 0.0000002 # Latitude noise stddev (degrees) -- ~0.02 m at equator
-    noise_lon_bias: 0.0         # Longitude bias (degrees)
-    noise_lon_stddev: 0.0000002 # Longitude noise stddev (degrees) -- ~0.02 m at equator
+    # No noise fields -- all GNSS noise is injected by GnssNoiseRelayNode
+    # and configured from ros2_config.yaml (base_metric_stddev_m, gnss_noise_profiles.yaml
+    # tiers, enable_markov_transitions). CARLA-side noise is zeroed in _sensor_manager.py.
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
 
   gnss_rear:    # Rear RTK-GNSS antenna -- heading baseline only, not localisation.
-    # Identical noise config to gnss (front). GnssNoiseRelayNode applies a shared
-    # common-mode noise draw to both antennas per 20 Hz cycle (emulating atmospheric
-    # and satellite-clock errors common to nearby RTK antennas), so the effective
-    # heading variance is ~sqrt(2*(1-common_mode_fraction)) tighter than naive
-    # independent differencing would predict.
+    # No noise fields -- same as gnss (front). All noise injected by GnssNoiseRelayNode.
     # CARLA role_name: "gnss_rear" -- the CARLA ROS bridge spawns this as a distinct
     # sensor and publishes on /carla/ego_vehicle/gnss_rear.
-    noise_alt_bias: 0.0
-    noise_alt_stddev: 0.05
-    noise_lat_bias: 0.0
-    noise_lat_stddev: 0.0000002
-    noise_lon_bias: 0.0
-    noise_lon_stddev: 0.0000002
     sensor_tick: 0.05
     mount:
       x: -1.5    # 1.5 m rearward of vehicle centre -- matches sensor_config.yaml gnss_rear

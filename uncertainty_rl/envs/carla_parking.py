@@ -1349,7 +1349,6 @@ class CARLAParkingEnv(gym.Env):
             self.world,
             self.vehicle,
             self._npc_controller.patrol_npc_ids,
-            gnss_noise_multiplier=self._current_gnss_multiplier,
         )
 
     def _wait_for_covariance(self) -> None:
