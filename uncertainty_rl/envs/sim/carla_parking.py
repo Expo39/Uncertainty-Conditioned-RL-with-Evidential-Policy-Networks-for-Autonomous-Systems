@@ -45,26 +45,30 @@ try:
 except ImportError:
     carla = None  # Running without CARLA (CI or tests)
 
-from uncertainty_rl.envs._lot_spawner import LotSpawner
-from uncertainty_rl.envs._npc_controller import NPCController
-from uncertainty_rl.envs._sensor_manager import SensorManager
+from uncertainty_rl.envs.sim._lot_spawner import LotSpawner
+from uncertainty_rl.envs.sim._npc_controller import NPCController
+from uncertainty_rl.envs.sim._sensor_manager import SensorManager
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
+from uncertainty_rl.envs._parking_core import (
+    _layout_cache as _shared_layout_cache,
+    build_observation,
+    compute_obs_dim,
+    extract_obstacle_features,
+    load_floor_plan,
+    wait_for_ekf,
+)
 from uncertainty_rl.utils.constants import (
-    COVARIANCE_FEATURES_DIM,
-    MAX_PARKING_SPEED,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
     SUCCESS_THRESHOLD_VELOCITY,
-    TARGET_POSE_DIM,
-    VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     wrap_angle_symmetric,
 )
-from uncertainty_rl.envs.real_world_deployment import RealWorldDeployment
+from uncertainty_rl.envs.real.real_world_deployment import RealWorldDeployment
 from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
@@ -114,10 +118,6 @@ class CARLAParkingEnv(gym.Env):
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
-
-    # Class-level layout cache shared across all instances to avoid re-reading
-    # the same YAML from disk on every episode reset.
-    _layout_cache: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -430,17 +430,8 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Compute the observation dimension based on active feature flags.
         @return Integer observation dimension.
-
-        Base: VEHICLE_STATE_DIM (3) + TARGET_POSE_DIM (3) = 6
-        With include_covariance: +COVARIANCE_FEATURES_DIM (6) = 12
-        With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) = 17 (or 11 without cov)
         """
-        dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
-        if self._include_covariance:
-            dim += COVARIANCE_FEATURES_DIM
-        if self._include_obstacle_obs:
-            dim += OBSTACLE_FEATURES_DIM
-        return dim
+        return compute_obs_dim(self._include_covariance, self._include_obstacle_obs)
 
     # ------------------------------------------------------------------
     # ROS 2 initialisation
@@ -575,60 +566,32 @@ class CARLAParkingEnv(gym.Env):
     def _load_floor_plan(self) -> None:
         """
         @brief Select and load a floor plan layout YAML for this episode.
-
-        During training (eval_mode=False), only floor plans with ood=false are
-        eligible. During evaluation (eval_mode=True), all plans are eligible.
-
-        @warning Raises RuntimeError if no eligible floor plans are configured.
+        @see _parking_core.load_floor_plan
         """
-        eligible = {}
-        for name, cfg in self._floor_plans_config.items():
-            is_ood = cfg.get("ood", False)
-            if self._eval_mode or not is_ood:
-                eligible[name] = cfg
-
-        if not eligible:
-            raise RuntimeError(
-                "No eligible floor plans found. "
-                "Check parking_scenarios.floor_plans in train_config.yaml."
-            )
-
-        name = random.choice(list(eligible.keys()))
-        layout_file = eligible[name].get("layout_file", "")
-
-        layout_path = Path(layout_file)
-        if not layout_path.exists():
-            raise FileNotFoundError(
-                f"Floor plan layout file not found: {layout_path}. "
-                f"Run 'make generate-layouts' to create it."
-            )
-
-        cache_key = str(layout_path.resolve())
-        if cache_key in CARLAParkingEnv._layout_cache:
-            self._current_layout = CARLAParkingEnv._layout_cache[cache_key]
-        else:
-            with open(layout_path, "r") as fh:
-                self._current_layout = yaml.safe_load(fh)
-            CARLAParkingEnv._layout_cache[cache_key] = self._current_layout
-            logger.debug(f"Cached floor plan layout: {layout_path}")
-
+        name, layout = load_floor_plan(
+            self._floor_plans_config,
+            self._eval_mode,
+            _shared_layout_cache,
+        )
         self._current_floor_plan_name = name
-        logger.info(f"Loaded floor plan: {name} from {layout_path}")
+        self._current_layout = layout
+        logger.info("Loaded floor plan: %s", name)
 
     def _sample_target_bay(self) -> None:
         """
         @brief Stratified sample of target bay: 1/3 per type, then uniform within type.
 
         Bay types: perpendicular, angled, parallel.
+        Always-empty bays are excluded from target selection.
 
-        @note Sets self._target_bay with world-frame coordinates.
+        @note Sim-only. In real-world deployment the target bay is assigned
+              externally via RealWorldDeployment.set_target_bay().
         """
-        bays = self._current_layout.get("bays", [])
+        bays = [
+            b for b in self._current_layout.get("bays", [])
+            if not b.get("always_empty", False)
+        ]
 
-        # Exclude always-empty bays before sampling the target
-        bays = [b for b in bays if not b.get("always_empty", False)]
-
-        # Group by bay type
         by_type: Dict[str, List[Dict[str, Any]]] = {}
         for bay in bays:
             bay_type = bay.get("bay_type", "perpendicular")
@@ -637,7 +600,6 @@ class CARLAParkingEnv(gym.Env):
         if not by_type:
             raise RuntimeError("No eligible bays found in floor plan layout.")
 
-        # Stratified: sample type uniformly, then bay uniformly within type
         bay_type = random.choice(list(by_type.keys()))
         target = random.choice(by_type[bay_type])
 
@@ -655,8 +617,11 @@ class CARLAParkingEnv(gym.Env):
             "bay_id": target.get("id", target.get("bay_id", "")),
         }
         logger.info(
-            f"Target bay: type={bay_type}, id={self._target_bay['bay_id']}, "
-            f"x={self._target_bay['x']:.1f}, y={self._target_bay['y']:.1f}"
+            "Target bay: type=%s, id=%s, x=%.1f, y=%.1f",
+            self._target_bay.get("bay_type", ""),
+            self._target_bay.get("bay_id", ""),
+            self._target_bay["x"],
+            self._target_bay["y"],
         )
 
     # ------------------------------------------------------------------
@@ -764,60 +729,35 @@ class CARLAParkingEnv(gym.Env):
 
     def _compute_reward(self) -> Tuple[float, bool, bool, Dict[str, float]]:
         """
-        @brief Compute reward and termination flags for the current step.
-        @return Tuple of (reward, terminated, success, diagnostics) where
-                diagnostics contains per-step scalars for TensorBoard logging:
-                pos_error (m), orientation_error (rad), speed (m/s),
-                collision (0/1), progress_reward (shaping term only).
+        @brief Compute reward and termination flags using CARLA ground truth.
 
-        Uses CARLA ground truth transform (not EKF pose) for position and
-        orientation errors. Potential-based reward shaping (Ng et al. 1999)
-        ensures the success bonus is never dominated by the distance penalty.
+        Sim-only: uses vehicle.get_transform() for GT position and orientation.
+        Potential-based shaping (Ng et al. 1999). Terminal events: collision
+        (-10), success (+10). Time penalty: -0.01/step.
 
-        Reward structure:
-          - Progress: (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
-            Positive when closing on target, negative when moving away.
-            OUT_OF_BOUNDS_THRESHOLD used as a fixed normalisation scale only.
-          - Time penalty: -0.01 per step to discourage stalling.
-          - Collision: -10.0 + termination.
-          - Success: +10.0 + termination.
-
-        Termination conditions (priority order):
-          1. Collision: physical contact detected by collision sensor.
-             Perimeter cones are physics-solid props (set_simulate_physics(False)
-             after settling) so driving into them registers as a collision.
-          2. Success: position < SUCCESS_THRESHOLD_POSITION,
-             yaw < SUCCESS_THRESHOLD_ORIENTATION,
-             velocity < SUCCESS_THRESHOLD_VELOCITY
-          3. Time limit handled externally via truncated flag in step()
+        @return Tuple of (reward, terminated, success, diagnostics).
         """
         if self.vehicle is None:
-            _empty: Dict[str, float] = {
+            return 0.0, False, False, {
                 "pos_error": 0.0,
                 "orientation_error": 0.0,
                 "speed": 0.0,
                 "collision": 0.0,
                 "progress_reward": 0.0,
             }
-            return 0.0, False, False, _empty
 
         transform = self.vehicle.get_transform()
         velocity = self.vehicle.get_velocity()
-
         x = transform.location.x
         y = transform.location.y
         yaw = math.radians(transform.rotation.yaw)
+        speed = math.sqrt(velocity.x ** 2 + velocity.y ** 2)
 
-        vx = velocity.x
-        vy = velocity.y
-        speed = math.sqrt(vx * vx + vy * vy)
-
-        target_x = self._target_bay["x"]
-        target_y = self._target_bay["y"]
-        target_yaw = self._target_bay["yaw"]
+        target_x = float(self._target_bay["x"])
+        target_y = float(self._target_bay["y"])
+        target_yaw = float(self._target_bay["yaw"])
 
         position_error = math.sqrt((x - target_x) ** 2 + (y - target_y) ** 2)
-        # Both nose-in and nose-out are valid -- use the smaller of the two errors.
         orientation_error = abs(wrap_angle_symmetric(yaw - target_yaw))
 
         diag: Dict[str, float] = {
@@ -828,14 +768,11 @@ class CARLAParkingEnv(gym.Env):
             "progress_reward": 0.0,
         }
 
-        # Check collision (penalty + termination).  Flag set by SensorManager
-        # collision callback; consume_collision() reads and resets atomically.
         if self._sensor_manager.consume_collision():
             self._prev_distance = position_error
             diag["collision"] = 1.0
             return -10.0, True, False, diag
 
-        # Success condition
         success = (
             position_error < SUCCESS_THRESHOLD_POSITION
             and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
@@ -845,14 +782,10 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return 10.0, True, True, diag
 
-        # Potential-based progress reward (Ng et al. 1999)
-        # Positive when closing on the target, negative when drifting away.
-        # Normalised by a fixed scale factor to keep rewards in a consistent range.
         progress = (self._prev_distance - position_error) / OUT_OF_BOUNDS_THRESHOLD
-        reward = progress - 0.01  # 0.01/step time penalty
+        reward = progress - 0.01
         self._prev_distance = position_error
         diag["progress_reward"] = float(progress)
-
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -861,214 +794,70 @@ class CARLAParkingEnv(gym.Env):
 
     def _get_state(self) -> np.ndarray:
         """
-        @brief Build the observation vector.
-        @return Float32 array of shape (_compute_obs_dim(),).
+        @brief Build the observation vector from EKF pose and sim sensors.
 
-        Indices 0-2:   velocity (vx, vy, vyaw). EKF filtered when available,
-                       falls back to CARLA ground truth (CI / unit tests).
-        Indices 3-8:   EKF covariance features log1p-transformed
-                       (only when include_covariance=True).
-        Indices 9-11 (or 3-5 without covariance): relative target bay pose
-                       (dx, dy, dyaw) in ego body frame.
-        Indices 12-16 (or 6-10 without covariance): hemispheric obstacle
-                       clearance [left_dist, left_bearing, right_dist,
-                       right_bearing, forward_dist]
-                       (only when include_obstacle_obs=True).
+        Resolves EKF odom -> world transform (sim-specific), then delegates
+        obs construction to build_observation() in _parking_core.
+
+        Falls back to CARLA ground truth when EKF is unavailable (CI/tests).
         """
         if self.vehicle is None or self.world is None:
             return np.zeros(self._compute_obs_dim(), dtype=np.float32)
 
-        # -- Pose (indices 0-5) and covariance (indices 6-14) ----------------
-        # Read the shared JSON file once for both pose and uncertainty to avoid
-        # a second stat + JSON parse later in the covariance section below.
-        # Prefer EKF filtered estimate for sim-to-real transfer; fall back to
-        # CARLA ground truth when rclpy is unavailable (CI / unit tests).
-        ekf_pose: Optional[np.ndarray] = None
-        _prefetched_uncertainty: Optional[np.ndarray] = None
+        # Read EKF pose + uncertainty in one file read.
+        raw_ekf_pose: Optional[np.ndarray] = None
+        uncertainty: Optional[np.ndarray] = None
         if self._cov_subscriber is not None:
-            ekf_pose, _prefetched_uncertainty = self._cov_subscriber.get_latest_state()
+            raw_ekf_pose, uncertainty = self._cov_subscriber.get_latest_state()
 
-        if ekf_pose is not None:
-            # Reconstruct vehicle world position from EKF odom using the
-            # odom->world transform computed at episode start. When GNSS
-            # degrades the EKF odom drifts and so does vehicle_world; when
-            # GNSS recovers the EKF self-corrects and vehicle_world is
-            # accurate again. target_bay_world (from YAML) is always correct.
-            ekf_odom_x = float(ekf_pose[0])
-            # ekf_state.json y has the wrong sign relative to CARLA world y:
-            # the EKF runs in ROS convention (y northward) and the extractor
-            # negates on write, but the EKF output itself is already southward-
-            # positive (matching CARLA) so the negation double-flips.  Negate
-            # here to restore the correct CARLA-convention sign before applying
-            # the odom->world transform (which was computed with the same sign).
-            ekf_odom_y = -float(ekf_pose[1])
-            ekf_odom_yaw = float(ekf_pose[2])
+        # Resolve EKF odom pose -> world frame.
+        world_pose: Optional[np.ndarray] = None
+        if raw_ekf_pose is not None:
+            ekf_odom_x = float(raw_ekf_pose[0])
+            # y sign correction: see _calibrate_ekf_frame_offset for full explanation.
+            ekf_odom_y = -float(raw_ekf_pose[1])
+            ekf_odom_yaw = float(raw_ekf_pose[2])
             tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
-            x = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
-            y = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
-            yaw = ekf_odom_yaw + r
-            # Clamp EKF velocities to physically plausible range.
-            # The IMU prediction step can integrate large noise spikes
-            # before the first GNSS correction at episode start,
-            # producing transient velocity readings in the hundreds of m/s.
-            # MAX_PARKING_SPEED (15 m/s) is the translational cap; pi rad/s
-            # (180 deg/s) is a generous upper bound for parking yaw rates.
-            vx = float(np.clip(ekf_pose[3], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
-            vy = float(np.clip(ekf_pose[4], -MAX_PARKING_SPEED, MAX_PARKING_SPEED))
-            vyaw = float(np.clip(ekf_pose[5], -math.pi, math.pi))
+            wx = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
+            wy = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
+            wyaw = ekf_odom_yaw + r
+            world_pose = np.array(
+                [wx, wy, wyaw,
+                 float(raw_ekf_pose[3]),
+                 float(raw_ekf_pose[4]),
+                 float(raw_ekf_pose[5])],
+                dtype=np.float32,
+            )
         else:
-            # Fallback: EKF not yet initialised or ROS 2 unavailable (CI / unit tests)
+            # CI / tests fallback: use CARLA GT (no EKF available)
             self._debug_logger._logger.debug(
-                "[state] EKF pose unavailable at step %d -- using CARLA ground truth",
+                "[state] EKF pose unavailable at step %d -- using CARLA GT",
                 self.steps,
             )
-            transform = self.vehicle.get_transform()
-            velocity = self.vehicle.get_velocity()
-            angular_vel = self.vehicle.get_angular_velocity()
-            x = transform.location.x
-            y = transform.location.y
-            yaw = math.radians(transform.rotation.yaw)
-            vx = velocity.x
-            vy = velocity.y
-            vyaw = math.radians(angular_vel.z)
+            t = self.vehicle.get_transform()
+            v = self.vehicle.get_velocity()
+            av = self.vehicle.get_angular_velocity()
+            world_pose = np.array(
+                [t.location.x, t.location.y, math.radians(t.rotation.yaw),
+                 v.x, v.y, math.radians(av.z)],
+                dtype=np.float32,
+            )
 
-        # Relative target pose in ego body frame (world frame throughout).
-        dx, dy, dyaw = _compute_relative_target_pose(
-            x,
-            y,
-            yaw,
-            self._target_bay["x"],
-            self._target_bay["y"],
-            self._target_bay["yaw"],
+        obstacle_features = extract_obstacle_features(
+            self._sensor_manager.get_latest_lidar_scan()
+            if self._include_obstacle_obs else None,
+            self._obstacle_features_buffer,
         )
 
-        # -- Obstacle features (computed once, used in both branches) ------
-        if self._include_obstacle_obs:
-            obstacle_features = self._get_obstacle_features()
-        else:
-            obstacle_features = np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
-
-        if not self._include_covariance:
-            # Without covariance: [vel(3), target(3)] = 6-dim
-            # With obstacle obs:  [vel(3), target(3), obstacle(5)] = 11-dim
-            self._obs_buffer[0] = vx
-            self._obs_buffer[1] = vy
-            self._obs_buffer[2] = vyaw
-            self._obs_buffer[3] = dx
-            self._obs_buffer[4] = dy
-            self._obs_buffer[5] = dyaw
-            if self._include_obstacle_obs:
-                self._obs_buffer[6:11] = obstacle_features
-            return cast(np.ndarray, self._obs_buffer.copy())
-
-        # -- EKF covariance features (indices 3-8) ------------------------
-        # Use the uncertainty already fetched alongside the pose above (one
-        # file read for both) rather than triggering a second read here.
-        uncertainty = _prefetched_uncertainty
-
-        if uncertainty is None:
-            self._debug_logger._logger.debug(
-                "[state] EKF covariance unavailable at step %d -- zeroing features",
-                self.steps,
-            )
-            uncertainty = np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32)
-        else:
-            uncertainty = uncertainty.astype(np.float32)
-            if not np.any(uncertainty):
-                self._debug_logger._logger.debug(
-                    "[state] EKF covariance all-zeros at step %d "
-                    "-- uncertainty signal absent",
-                    self.steps,
-                )
-
-        # No obstacle obs:  [vel(3), cov(6), target(3)] = 12-dim
-        # With obstacle obs: [vel(3), cov(6), target(3), obstacle(5)] = 17-dim
-        self._obs_buffer[0] = vx
-        self._obs_buffer[1] = vy
-        self._obs_buffer[2] = vyaw
-        # log1p compresses heavy tails from high-uncertainty conditions.
-        # np.sign preserves the sign of off-diagonal covariance terms (cov_xy,
-        # cov_xyaw, cov_yyaw) which can be negative.
-        self._obs_buffer[3:9] = np.sign(uncertainty) * np.log1p(np.abs(uncertainty))
-        self._obs_buffer[9] = dx
-        self._obs_buffer[10] = dy
-        self._obs_buffer[11] = dyaw
-        if self._include_obstacle_obs:
-            self._obs_buffer[12:17] = obstacle_features
-        return cast(np.ndarray, self._obs_buffer.copy())
-
-    def _get_obstacle_features(self) -> np.ndarray:
-        """
-        @brief Extract hemispheric obstacle clearance features from the LiDAR scan.
-        @return Float32 array of shape (OBSTACLE_FEATURES_DIM,):
-                [left_dist, left_bearing, right_dist, right_bearing, forward_dist]
-
-        left_dist/bearing:    nearest return in left hemisphere (y > 0, bearing > 0).
-        right_dist/bearing:   nearest return in right hemisphere (y < 0, bearing < 0).
-        forward_dist:         nearest return in forward cone (|bearing| <= 30 deg).
-
-        Distances in metres. Bearings in radians (0 = forward, +ve = left).
-        Returns zeros for any hemisphere with no valid returns.
-        Returns zeros when no LiDAR scan is available (sensor not yet ticked).
-        """
-        scan = self._sensor_manager.get_latest_lidar_scan()
-
-        if scan is None or len(scan) == 0:
-            self._obstacle_features_buffer[:] = 0.0
-            return self._obstacle_features_buffer
-
-        dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
-
-        # Strip self-returns: any return closer than 1.0 m is the car's own body.
-        _MIN_DIST = 1.0
-        valid = dists >= _MIN_DIST
-
-        # Discard rear hemisphere (x <= 0). Front-bumper-mounted 2D LiDAR
-        # is physically blocked rearward on the real robot; discarding
-        # replicates the ~270 deg FOV and removes CARLA self-returns.
-        valid = valid & (scan[:, 0] > 0.0)
-
-        if not np.any(valid):
-            self._obstacle_features_buffer[:] = 0.0
-            return self._obstacle_features_buffer
-
-        dists = dists[valid]
-        scan = scan[valid]
-        bearings = np.arctan2(scan[:, 1], scan[:, 0])
-
-        # -- Left hemisphere (y > 0, bearing > 0) ----------------------------
-        left_mask = scan[:, 1] > 0.0
-        if np.any(left_mask):
-            idx = int(np.argmin(dists[left_mask]))
-            left_dists = dists[left_mask]
-            left_bearings = bearings[left_mask]
-            self._obstacle_features_buffer[0] = float(left_dists[idx])
-            self._obstacle_features_buffer[1] = float(left_bearings[idx])
-        else:
-            self._obstacle_features_buffer[0] = 0.0
-            self._obstacle_features_buffer[1] = 0.0
-
-        # -- Right hemisphere (y < 0, bearing < 0) ---------------------------
-        right_mask = scan[:, 1] < 0.0
-        if np.any(right_mask):
-            idx = int(np.argmin(dists[right_mask]))
-            right_dists = dists[right_mask]
-            right_bearings = bearings[right_mask]
-            self._obstacle_features_buffer[2] = float(right_dists[idx])
-            self._obstacle_features_buffer[3] = float(right_bearings[idx])
-        else:
-            self._obstacle_features_buffer[2] = 0.0
-            self._obstacle_features_buffer[3] = 0.0
-
-        # -- Forward cone (|bearing| <= 30 deg) ------------------------------
-        _FORWARD_HALF_ANGLE = math.radians(30.0)
-        forward_mask = np.abs(bearings) <= _FORWARD_HALF_ANGLE
-        if np.any(forward_mask):
-            self._obstacle_features_buffer[4] = float(np.min(dists[forward_mask]))
-        else:
-            self._obstacle_features_buffer[4] = 0.0
-
-        return self._obstacle_features_buffer
+        return build_observation(
+            world_pose,
+            uncertainty,
+            self._target_bay,
+            obstacle_features,
+            self._include_covariance,
+            self._include_obstacle_obs,
+            self._obs_buffer,
+        )
 
     # ------------------------------------------------------------------
     # Visualisation
@@ -1353,59 +1142,19 @@ class CARLAParkingEnv(gym.Env):
 
     def _wait_for_covariance(self) -> None:
         """
-        @brief Block until all EKF inputs are present and covariance is available.
-
-        Checks two conditions before allowing an episode to start:
-          1. LiDAR scan received by SensorManager (obstacle detection ready).
-          2. EKF state file written by CovarianceExtractorNode (EKF output).
-
-        Ticks the CARLA simulation while waiting. Raises RuntimeError naming
-        the specific missing input if either condition is not met within the
-        configured covariance_timeout.
+        @brief Block until LiDAR scan and EKF state are both available.
+        @see _parking_core.wait_for_ekf
         """
         if self._cov_subscriber is None:
             return
 
-        start = time.monotonic()
-        tick_interval = 0.05  # 20 Hz -- matches simulation timestep
-
-        while True:
-            lidar_ready = self._sensor_manager.get_latest_lidar_scan() is not None
-            ekf_ready = self._cov_subscriber.has_data
-
-            if lidar_ready and ekf_ready:
-                break
-
-            elapsed = time.monotonic() - start
-            if elapsed > self._covariance_timeout:
-                missing = []
-                if not lidar_ready:
-                    missing.append(
-                        "LiDAR scan (check CARLA sensor spawned and "
-                        "CARLA ROS bridge is publishing on "
-                        "/carla/ego_vehicle/lidar)"
-                    )
-                if not ekf_ready:
-                    missing.append(
-                        "EKF covariance (check ros2-bridge container is "
-                        "healthy and CovarianceExtractorNode is writing "
-                        "ekf_state.json)"
-                    )
-                raise RuntimeError(
-                    f"EKF inputs not ready after {self._covariance_timeout:.0f}s. "
-                    f"Missing: {'; '.join(missing)}"
-                )
-
-            if self.world is not None:
-                self.world.tick(10.0)
-            time.sleep(tick_interval)
-
-        logger.debug(
-            f"EKF inputs ready after {time.monotonic() - start:.2f}s "
-            f"(lidar + covariance)."
+        tick_fn = (lambda: self.world.tick(10.0)) if self.world is not None else None
+        wait_for_ekf(
+            has_lidar=lambda: self._sensor_manager.get_latest_lidar_scan() is not None,
+            has_ekf=lambda: self._cov_subscriber.has_data,  # type: ignore[union-attr]
+            timeout=self._covariance_timeout,
+            tick_fn=tick_fn,
         )
-
-
 
     def _calibrate_ekf_frame_offset(self) -> None:
         """
@@ -1560,7 +1309,6 @@ class CARLAParkingEnv(gym.Env):
             if self.world is not None:
                 self.world.tick(10.0)
             time.sleep(tick_interval)
-
 
     def _cleanup_actors(self, skip_ego: bool = False) -> None:
         """

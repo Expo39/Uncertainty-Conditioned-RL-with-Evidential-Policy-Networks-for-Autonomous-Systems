@@ -34,7 +34,7 @@ except ImportError:
     sys.exit(1)
 
 from scripts.inspect._drawing import _draw_layout_overlays, _draw_sensor_overlays
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
 _GNSS_NOISE_CONFIG_PATH = Path("/workspace/outputs/gnss_noise_config.json")
 
@@ -972,7 +972,7 @@ class DryRunInspector(_Inspector):
                 wyaw = math.degrees(wyaw_rad)
                 lines.append(
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
-                    f"  yaw={wyaw:+.1f}deg  (compare to GT above)" + X
+                    f"  yaw={wyaw:+.1f}deg" + X
                 )
 
         # WHITE -- EKF covariance (indices 3-8): std devs + off-diagonal cross-cov

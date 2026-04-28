@@ -84,10 +84,13 @@ WORKDIR /workspace
 # All other project files (uncertainty_rl/, configs/, tests/, scripts/) are
 # provided at runtime via bind-mounts and do not need to be baked in.
 COPY pyproject.toml /workspace/pyproject.toml
-# Copy the package source so that pip install -e produces a valid editable install
-# with a populated MAPPING.  The bind-mount in docker-compose.yml shadows this at
-# runtime with the live host source, so hot-reload still works as before.
-COPY uncertainty_rl/ /workspace/uncertainty_rl/
+# Minimal stub so pip install -e resolves the package at build time.
+# The real source is provided at runtime via the bind-mount in docker-compose.yml,
+# which overlays /workspace/uncertainty_rl with the live host files.
+# No COPY uncertainty_rl/ -- avoids busting the pip install layer on every .py edit.
+RUN mkdir -p /workspace/uncertainty_rl && \
+    echo '__version__ = "0.1.0"\n__author__ = "Antonio Galdes"' \
+    > /workspace/uncertainty_rl/__init__.py
 
 # Install CARLA Python API (system-level dependency, not on PyPI reliably)
 RUN pip install --no-cache-dir carla==0.9.16

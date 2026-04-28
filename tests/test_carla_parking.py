@@ -196,7 +196,7 @@ class TestObservationSpaceShape:
         """
         @brief include_covariance=True -> 17-dim observation space (default).
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
         assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 17
@@ -209,7 +209,7 @@ class TestObservationSpaceShape:
         Without covariance but with obstacle obs:
         pose(6) + target(3) + obstacle(2) = 11.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
         expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 11
@@ -220,7 +220,7 @@ class TestObservationSpaceShape:
         """
         @brief include_covariance=False, include_obstacle_obs=False -> 9-dim.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(
             max_steps=5, include_covariance=False, include_obstacle_obs=False
@@ -233,7 +233,7 @@ class TestObservationSpaceShape:
         """
         @brief Action space must be 3-dim: [steering, throttle, brake].
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         assert env.action_space.shape == (ACTION_DIM,)
@@ -243,7 +243,7 @@ class TestObservationSpaceShape:
         """
         @brief steering [-1,1], longitudinal [-1,1].
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         np.testing.assert_array_equal(env.action_space.low, [-1.0, -1.0])
@@ -267,7 +267,7 @@ class TestGymnasiumAPIContract:
         """
         @brief reset() -> (np.ndarray, dict).
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         result = env.reset()
@@ -281,7 +281,7 @@ class TestGymnasiumAPIContract:
         """
         @brief reset() obs shape must be (21,) when include_covariance=True (default).
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
         obs, _ = env.reset()
@@ -292,7 +292,7 @@ class TestGymnasiumAPIContract:
         """
         @brief reset() observation shape must be (9,) when include_covariance=False.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
         obs, _ = env.reset()
@@ -304,7 +304,7 @@ class TestGymnasiumAPIContract:
         """
         @brief Observation must be float32.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         obs, _ = env.reset()
@@ -315,7 +315,7 @@ class TestGymnasiumAPIContract:
         """
         @brief step() -> (obs, reward, terminated, truncated, info).
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         env.reset()
@@ -334,7 +334,7 @@ class TestGymnasiumAPIContract:
         """
         @brief truncated=True after max_steps, steps counter does not exceed max.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=3)
         env.reset()
@@ -358,7 +358,7 @@ class TestBaySampling:
     """
 
     def _make_env_with_layout(self, layout: Dict[str, Any]) -> Any:
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         env._current_layout = layout
@@ -540,7 +540,7 @@ class TestLog1pCovarianceTransform:
         """
         from unittest.mock import MagicMock
 
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
         from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
@@ -583,7 +583,7 @@ class TestLog1pCovarianceTransform:
         """
         from unittest.mock import MagicMock
 
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
 
@@ -697,7 +697,7 @@ def _make_env_for_reward() -> Any:
            for exercising _compute_reward() without a real CARLA server.
     @return Configured env instance with mock vehicle and sensor manager.
     """
-    from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+    from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
     env = CARLAParkingEnv(max_steps=100)
 
@@ -754,7 +754,7 @@ class TestComputeReward:
         @brief When vehicle is None (CARLA not connected), reward is 0 and not
                terminated.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         env.vehicle = None
@@ -960,7 +960,7 @@ class TestComputeReward:
         """
         @brief When vehicle is None, diag is all zeros (no crash on missing vehicle).
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         env.vehicle = None
@@ -988,7 +988,7 @@ class TestStepInfoDict:
         @brief info dict must have steps, success, collision, timeout, floor_plan,
                pos_error, orientation_error, speed, and progress_reward.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
         # vehicle=None: step() skips CARLA calls but still builds the full info dict.
@@ -1012,7 +1012,7 @@ class TestStepInfoDict:
         """
         @brief info['timeout'] is True when the episode is truncated by max_steps.
         """
-        from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=1)
         env.vehicle = None
