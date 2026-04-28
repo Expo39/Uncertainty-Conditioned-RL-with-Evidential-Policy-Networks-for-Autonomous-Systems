@@ -11,8 +11,8 @@ Orchestrates the full sensor-to-covariance pipeline:
 1. CARLA ROS bridge (passive; publishes sensor data from CARLA to ROS 2 topics)
 2. Static TF publishers (sensor frames to vehicle body)
 3. GnssNoiseRelayNode (adds per-episode noise to GNSS, converts lat/lon to local
-   XY via flat-earth projection, publishes Odometry on /odometry/gps; also relays
-   IMU with realistic angular_velocity_covariance stamped)
+   XY via flat-earth projection, publishes Odometry on /odometry/gps and COG
+   heading on /gnss/heading; ImuNoiseRelayNode stamps IMU covariance)
 4. robot_localisation EKF (fuses IMU/stamped + GNSS odometry -> /odometry/filtered)
 5. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
    ekf_state.json for the training container)
@@ -150,9 +150,8 @@ def _build_sensor_tf_nodes(
     imu_mount = sensors_config.get("imu", {}).get("mount", {})
     lidar_mount = sensors_config.get("lidar", {}).get("mount", {})
     gnss_mount = sensors_config.get("gnss", {}).get("mount", {})
-    gnss_rear_mount = sensors_config.get("gnss_rear", {}).get("mount", {})
 
-    nodes = [
+    return [
         # ego_vehicle -> ego_vehicle/imu
         _static_tf(
             "body_to_imu_tf",
@@ -173,7 +172,7 @@ def _build_sensor_tf_nodes(
             float(lidar_mount.get("z", 0.5)),
             use_sim_time=use_sim_time,
         ),
-        # ego_vehicle -> ego_vehicle/gnss (front primary antenna)
+        # ego_vehicle -> ego_vehicle/gnss (primary antenna)
         _static_tf(
             "body_to_gnss_tf",
             "ego_vehicle",
@@ -184,20 +183,6 @@ def _build_sensor_tf_nodes(
             use_sim_time=use_sim_time,
         ),
     ]
-    # ego_vehicle -> ego_vehicle/gnss_rear (rear heading-baseline antenna)
-    if gnss_rear_mount:
-        nodes.append(
-            _static_tf(
-                "body_to_gnss_rear_tf",
-                "ego_vehicle",
-                "ego_vehicle/gnss_rear",
-                float(gnss_rear_mount.get("x", -0.75)),
-                float(gnss_rear_mount.get("y", 0.0)),
-                float(gnss_rear_mount.get("z", 1.6)),
-                use_sim_time=use_sim_time,
-            )
-        )
-    return nodes
 
 
 def generate_launch_description() -> LaunchDescription:
@@ -391,14 +376,10 @@ def generate_launch_description() -> LaunchDescription:
                 "odom_output_topic": gnss_relay_cfg.get(
                     "odom_output_topic", "/odometry/gps"
                 ),
-                "rear_antenna_input_topic": gnss_relay_cfg.get(
-                    "rear_antenna_input_topic", "/carla/ego_vehicle/gnss_rear"
-                ),
                 "heading_output_topic": gnss_relay_cfg.get(
                     "heading_output_topic", "/gnss/heading"
                 ),
-                "antenna_baseline_m": gnss_relay_cfg.get("antenna_baseline_m", 2.25),
-                "common_mode_fraction": gnss_relay_cfg.get("common_mode_fraction", 0.85),
+                "cog_min_speed_ms": gnss_relay_cfg.get("cog_min_speed_ms", 0.3),
                 # IMU relay parameters (from imu_noise_relay section)
                 "imu_input_topic": imu_relay_cfg.get(
                     "imu_input_topic", "/carla/ego_vehicle/imu"

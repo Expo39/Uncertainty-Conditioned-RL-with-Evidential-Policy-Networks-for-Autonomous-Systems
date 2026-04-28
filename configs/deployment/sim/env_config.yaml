@@ -58,10 +58,11 @@ gnss_datum_lon: 0.0  # degrees east  (0.0 = auto-detect from first GNSS reading)
 
 # ---------------------------------------------------------------------------
 # CARLA sensor noise configuration
-# Sensors: RTK-GNSS + IMU (localisation) + 2D LiDAR (obstacle detection).
-# RTK-GNSS provides cm-level accuracy under nominal conditions; degradation
-# is modelled via per-episode noise tiers (see gnss_noise_profiles.yaml).
-# 2D LiDAR feeds obstacle clearance observations (obs indices 15-19) only --
+# Sensors: single RTK-GNSS + IMU (localisation) + 2D LiDAR (obstacle detection).
+# RTK-GNSS provides position fixes; COG heading is derived by GnssNoiseRelayNode
+# from successive noisy fixes. Degradation is modelled via per-episode noise tiers
+# (see gnss_noise_profiles.yaml).
+# 2D LiDAR feeds obstacle clearance observations (obs indices 10-14) only --
 # it does NOT participate in localisation.
 #
 # Sensor mount positions live in configs/deployment/sensor_config.yaml.
@@ -115,12 +116,6 @@ carla_sensors:
     # tiers, enable_markov_transitions). CARLA-side noise is zeroed in _sensor_manager.py.
     sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
 
-  gnss_rear:    # Rear RTK-GNSS antenna -- heading baseline only, not localisation.
-    # No noise fields -- same as gnss (front). All noise injected by GnssNoiseRelayNode.
-    # CARLA role_name: "gnss_rear" -- the CARLA ROS bridge spawns this as a distinct
-    # sensor and publishes on /carla/ego_vehicle/gnss_rear.
-    # Mount position lives in sensor_config.yaml (injected by load_env_config()).
-    sensor_tick: 0.05
 
 # ---------------------------------------------------------------------------
 # Parking lot scenario configuration

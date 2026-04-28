@@ -34,25 +34,14 @@ sensors:
       y: 0.0    # TODO: measure lateral offset (metres, positive = left)
       z: 0.3    # CARLA: centre-of-mass height. TODO: verify on real vehicle.
 
-  # Dual-antenna RTK-GNSS. Both antennas on the vehicle longitudinal axis,
-  # symmetric about the vehicle centre. Body frame: x = forward, y = left.
-  # Front antenna (+x) is the primary localisation source; heading is derived
-  # from the front-to-rear baseline vector via atan2(dy, dx).
   gnss:
-    # Front (primary) RTK-GNSS antenna. Localisation source for /odometry/gps.
+    # Single RTK-GNSS antenna. Localisation source for /odometry/gps.
+    # COG heading is derived from successive noisy fixes in GnssNoiseRelayNode.
     # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
     mount:
-      x: 0.0    # slightly forward of vehicle centre -- places antenna on roof
+      x: 0.0    # Slightly forward of vehicle centre -- places antenna on roof
       y: 0.0    # Longitudinal axis -- no lateral offset
       z: 1.6    # CARLA: antenna height above vehicle origin. TODO: verify on real vehicle.
-
-  gnss_rear:
-    # Rear RTK-GNSS antenna. Used only for heading computation (baseline vector).
-    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
-    mount:
-      x: -1.5   # 1.5 m rearward of vehicle centre -- 1.5 m baseline from front antenna
-      y: 0.0    # Longitudinal axis -- no lateral offset
-      z: 1.6    # Same roof height as front antenna
 
   lidar:
     # 2D LiDAR: SICK TiM571. Obstacle detection only (NOT localisation).
