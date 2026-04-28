@@ -27,7 +27,7 @@ tiers:
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
     metric_stddev_m: 0.02
-    weight: 0.4
+    weight: 1.0
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
   rtk_float:
@@ -37,7 +37,7 @@ tiers:
     lon_stddev_deg: 0.0000027
     alt_stddev_m: 0.5
     metric_stddev_m: 0.30
-    weight: 0.3
+    weight: 0.0
     description: "RTK float (~30 cm). Marginal accuracy for 2.5 m bays."
 
   standalone:
@@ -47,7 +47,7 @@ tiers:
     lon_stddev_deg: 0.000018
     alt_stddev_m: 5.0
     metric_stddev_m: 2.0
-    weight: 0.2
+    weight: 0.0
     description: "Standalone GNSS (~2 m). RTK lost; parking unsafe."
 
   degraded:
@@ -57,5 +57,5 @@ tiers:
     lon_stddev_deg: 0.000045
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
-    weight: 0.1
+    weight: 0.0
     description: "Degraded GNSS (~5 m). Policy must abort/handoff."
