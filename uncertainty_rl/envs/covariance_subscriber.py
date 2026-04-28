@@ -197,8 +197,6 @@ class _CovarianceSubscriber:
                     data["x"],
                     data["y"],
                     data["yaw"],
-                    data["vx"],
-                    data["vy"],
                     data["vyaw"],
                 ],
                 dtype=np.float64,
@@ -233,7 +231,7 @@ class _CovarianceSubscriber:
         redundant stat + JSON parse when both values are needed (e.g. _get_state).
 
         @return Tuple of (pose, uncertainty) where:
-                pose: shape (6,) = [x, y, yaw, vx, vy, vyaw], or None.
+                pose: shape (4,) = [x, y, yaw, vyaw], or None.
                 uncertainty: shape (9,) uncertainty feature vector, or None.
         """
         self._read_file()
@@ -270,7 +268,7 @@ class _CovarianceSubscriber:
 
         @note Use get_latest_state() when uncertainty is also needed to avoid
               a second file read.
-        @return Array of shape (6,) = [x, y, yaw, vx, vy, vyaw] or None.
+        @return Array of shape (4,) = [x, y, yaw, vyaw] or None.
         """
         self._read_file()
         with self._lock:

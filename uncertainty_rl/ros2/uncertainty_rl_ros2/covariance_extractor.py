@@ -63,11 +63,7 @@ class CovarianceExtractorNode(Node):
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
         self.declare_parameter("publish_rate", 10.0)  # Hz
-        # robot_localisation publishes twist in the child frame (body frame)
-        # per the nav_msgs/Odometry convention, regardless of world_frame
-        # setting. No rotation needed. This flag exists only as a safety
-        # valve for non-standard EKF configurations that genuinely output
-        # twist in the odom frame (none known). Default is False.
+        # Kept for launch file compatibility; no longer used.
         self.declare_parameter("twist_in_odom_frame", False)
         # Per-instance EKF state file path. Defaults to EKF_STATE_FILE env var
         # (set by docker-compose.parallel.yml for worker 1+), then falls back to
@@ -81,9 +77,6 @@ class CovarianceExtractorNode(Node):
         odom_topic: str = str(self.get_parameter("odom_topic").value)
         covariance_topic: str = str(self.get_parameter("covariance_topic").value)
         publish_rate: float = float(self.get_parameter("publish_rate").value)
-        self._twist_in_odom_frame: bool = bool(
-            self.get_parameter("twist_in_odom_frame").value
-        )
         # Instance-specific file paths derived from the ekf_state_file parameter.
         ekf_path: str = str(self.get_parameter("ekf_state_file").value)
         self._SHARED_PATH: str = ekf_path
@@ -109,9 +102,7 @@ class CovarianceExtractorNode(Node):
         # Latest extracted state: pose tuple + pre-serialised covariance list.
         # Both updated atomically at the end of odom_callback so publish_covariance
         # never sees a partially-updated state.
-        self._latest_pose: Optional[Tuple[float, float, float, float, float, float]] = (
-            None
-        )
+        self._latest_pose: Optional[Tuple[float, float, float, float]] = None
         self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
         # Monotonically increasing counter written into ekf_state.json so the
@@ -155,8 +146,7 @@ class CovarianceExtractorNode(Node):
 
         self.get_logger().info(
             f"CovarianceExtractor: {odom_topic} -> {covariance_topic} "
-            f"at {publish_rate} Hz "
-            f"(twist_in_odom_frame={self._twist_in_odom_frame}), "
+            f"at {publish_rate} Hz, "
             f"initial_pose_file={self._initial_pose_path}"
         )
 
@@ -194,23 +184,8 @@ class CovarianceExtractorNode(Node):
         yaw = -math.atan2(siny_cosp, cosy_cosp)
 
         # -- Velocity -----------------------------------------------------------
-        # Negate vy_raw and vyaw: y-axis flip applies to lateral velocity and
-        # yaw rate too.
-        vx_raw = msg.twist.twist.linear.x
-        vy_raw = -msg.twist.twist.linear.y
+        # vyaw negated for y-axis flip (left-hand to right-hand convention).
         vyaw = -msg.twist.twist.angular.z
-
-        if self._twist_in_odom_frame:
-            # When world_frame=odom, robot_localisation publishes twist in the
-            # odom (world-aligned) frame. Rotate into vehicle body frame so the
-            # policy sees forward/lateral speed consistently.
-            cos_yaw = math.cos(yaw)
-            sin_yaw = math.sin(yaw)
-            vx = cos_yaw * vx_raw + sin_yaw * vy_raw
-            vy = -sin_yaw * vx_raw + cos_yaw * vy_raw
-        else:
-            vx = vx_raw
-            vy = vy_raw
 
         # -- Covariance ---------------------------------------------------------
         # Extract 3x3 [x, y, yaw] submatrix from the 6x6 pose covariance.
@@ -235,8 +210,6 @@ class CovarianceExtractorNode(Node):
             "x": float(x),
             "y": float(y),
             "yaw": float(yaw),
-            "vx": float(vx),
-            "vy": float(vy),
             "vyaw": float(vyaw),
             "covariance": cov_flat,
         }
@@ -247,7 +220,7 @@ class CovarianceExtractorNode(Node):
         if math.isnan(x) or math.isnan(y) or math.isnan(yaw):
             self.get_logger().warn(
                 f"EKF output contains NaN (seq={self._write_seq}): "
-                f"x={x} y={y} yaw={yaw} vx={vx} vy={vy} vyaw={vyaw} "
+                f"x={x} y={y} yaw={yaw} vyaw={vyaw} "
                 f"cov_diag=[{cov_flat[0]:.4f},{cov_flat[4]:.4f},{cov_flat[8]:.4f}]. "
                 "Check for: (1) sensor with zero covariance reaching the EKF on an "
                 "enabled axis, (2) huge time delta on first predict() call."
@@ -259,7 +232,7 @@ class CovarianceExtractorNode(Node):
 
         # -- Update state atomically -------------------------------------------
         # Both attributes are written here; publish_covariance only reads them.
-        self._latest_pose = (x, y, yaw, vx, vy, vyaw)
+        self._latest_pose = (x, y, yaw, vyaw)
         self._latest_cov_flat = cov_flat
 
         # -- Periodic log -------------------------------------------------------
@@ -278,7 +251,7 @@ class CovarianceExtractorNode(Node):
         """
         @brief Publish the latest covariance as a CovarianceEstimate message.
 
-        Uses semantic fields (x, y, yaw, vx, vy, vyaw, covariance) instead of
+        Uses semantic fields (x, y, yaw, vyaw, covariance) instead of
         a flat array. Includes a timestamped header for latency measurement and
         ordering. The covariance flat list is pre-computed in odom_callback to
         avoid redundant numpy serialisation on every publish tick.
@@ -286,7 +259,7 @@ class CovarianceExtractorNode(Node):
         if self._latest_pose is None or self._latest_cov_flat is None:
             return
 
-        x, y, yaw, vx, vy, vyaw = self._latest_pose
+        x, y, yaw, vyaw = self._latest_pose
 
         msg = CovarianceEstimate()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -294,8 +267,6 @@ class CovarianceExtractorNode(Node):
         msg.x = x
         msg.y = y
         msg.yaw = yaw
-        msg.vx = vx
-        msg.vy = vy
         msg.vyaw = vyaw
         msg.covariance = self._latest_cov_flat
 
@@ -405,7 +376,7 @@ class CovarianceMonitorNode(Node):
 
         self.get_logger().info(
             f"Pose: ({msg.x:.2f}, {msg.y:.2f}, {math.degrees(msg.yaw):.1f}deg) | "
-            f"Vel: ({msg.vx:.2f}, {msg.vy:.2f}, {math.degrees(msg.vyaw):.2f}deg/s) | "
+            f"vyaw={math.degrees(msg.vyaw):.2f}deg/s | "
             f"Uncertainty: std_x={std_x:.4f}m, "
             f"std_y={std_y:.4f}m, std_yaw={math.degrees(std_yaw):.2f}deg"
         )

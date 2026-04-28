@@ -29,11 +29,11 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # State Space Dimensions
 # ============================================================================
 
-# Core vehicle state: [vx, vy, vyaw]
-# x, y, yaw removed: absolute odom position accumulates across episodes and
-# carries no consistent signal for the policy. Navigation intent is fully
-# encoded by dx/dy/dyaw (relative target pose).
-VEHICLE_STATE_DIM = 3
+# Core vehicle state: [vyaw]
+# Absolute position (x, y, yaw) and linear velocity (vx, vy) are excluded.
+# Navigation intent is encoded by dx/dy/dyaw. vyaw is from the IMU gyro
+# directly and is reliable; linear velocity has no correction source.
+VEHICLE_STATE_DIM = 1
 
 # EKF localisation uncertainty features: [std_x, std_y, std_yaw,
 # cov_xy, cov_xyaw, cov_yyaw]
@@ -52,10 +52,10 @@ TARGET_POSE_DIM = 3
 OBSTACLE_FEATURES_DIM = 5
 
 # Total observation dimension (with uncertainty conditioning and obstacle obs)
-# Indices  0-2:  velocity (vx, vy, vyaw)
-# Indices  3-8:  EKF covariance features (when include_covariance=True)
-# Indices  9-11: relative target pose (dx, dy, dyaw)
-# Indices 12-16: hemispheric obstacle clearance (when include_obstacle_obs=True)
+# Index   0:     yaw rate (vyaw)
+# Indices 1-6:   EKF covariance features (when include_covariance=True)
+# Indices 7-9:   relative target pose (dx, dy, dyaw)
+# Indices 10-14: hemispheric obstacle clearance (when include_obstacle_obs=True)
 TOTAL_OBS_DIM = (
     VEHICLE_STATE_DIM
     + COVARIANCE_FEATURES_DIM

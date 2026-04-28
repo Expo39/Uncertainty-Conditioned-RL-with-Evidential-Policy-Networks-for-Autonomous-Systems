@@ -26,8 +26,6 @@ def _write_ekf_json(
     x: float,
     y: float,
     yaw: float,
-    vx: float,
-    vy: float,
     vyaw: float,
     cov_flat: list,
     seq: int = 1,
@@ -38,8 +36,6 @@ def _write_ekf_json(
     @param x: EKF x position.
     @param y: EKF y position.
     @param yaw: EKF yaw in radians.
-    @param vx: Forward velocity.
-    @param vy: Lateral velocity.
     @param vyaw: Yaw rate.
     @param cov_flat: Flat 9-element 3x3 covariance list.
     @param seq: Monotonic write sequence counter (default 1).
@@ -49,8 +45,6 @@ def _write_ekf_json(
         "x": x,
         "y": y,
         "yaw": yaw,
-        "vx": vx,
-        "vy": vy,
         "vyaw": vyaw,
         "covariance": cov_flat,
     }
@@ -113,7 +107,7 @@ class TestReadFileValid:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.005]
-            _write_ekf_json(path, 1.0, 2.0, 0.5, 0.3, 0.1, 0.05, cov, seq=1)
+            _write_ekf_json(path, 1.0, 2.0, 0.5, 0.05, cov, seq=1)
 
             with (
                 patch.object(mod, "_ROS2_AVAILABLE", False),
@@ -134,7 +128,7 @@ class TestReadFileValid:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.04, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.01]
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -148,14 +142,14 @@ class TestReadFileValid:
 
     def test_populates_pose_array(self) -> None:
         """
-        @brief _read_file() populates _latest_pose with shape (6,).
+        @brief _read_file() populates _latest_pose with shape (4,).
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01] * 9
-            _write_ekf_json(path, 3.0, -1.5, 1.2, 2.0, 0.1, 0.3, cov, seq=1)
+            _write_ekf_json(path, 3.0, -1.5, 1.2, 0.3, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -165,7 +159,7 @@ class TestReadFileValid:
                 _patch_read_file_path(sub, mod, path)
                 sub._read_file()
                 assert sub._latest_pose is not None
-                assert sub._latest_pose.shape == (6,)
+                assert sub._latest_pose.shape == (4,)
 
     def test_pose_values_match_file(self) -> None:
         """
@@ -176,7 +170,7 @@ class TestReadFileValid:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01] * 9
-            _write_ekf_json(path, 5.0, -3.0, 0.78, 1.5, -0.2, 0.4, cov, seq=1)
+            _write_ekf_json(path, 5.0, -3.0, 0.78, 0.4, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -188,7 +182,7 @@ class TestReadFileValid:
                 pose = sub._latest_pose
                 assert pose is not None
                 np.testing.assert_allclose(
-                    pose, [5.0, -3.0, 0.78, 1.5, -0.2, 0.4], rtol=1e-5
+                    pose, [5.0, -3.0, 0.78, 0.4], rtol=1e-5
                 )
 
     def test_updates_last_read_seq(self) -> None:
@@ -199,7 +193,7 @@ class TestReadFileValid:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=42)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=42)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -276,8 +270,6 @@ class TestReadFileMissing:
                         "x": 1.0,
                         "y": 2.0,
                         "yaw": 0.0,
-                        "vx": 0.0,
-                        "vy": 0.0,
                         "vyaw": 0.0,
                     }
                 )
@@ -405,8 +397,6 @@ class TestStalenessGuard:
                 "x": 1.0,
                 "y": 2.0,
                 "yaw": 0.3,
-                "vx": 0.0,
-                "vy": 0.0,
                 "vyaw": 0.0,
                 "covariance": [0.01] * 9,
             }
@@ -544,7 +534,7 @@ class TestGetLatest:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.04, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.01]
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -637,7 +627,7 @@ class TestHasData:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.02] * 9
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),

@@ -13,9 +13,7 @@ float64 x        # Position X (metres, CARLA world frame)
 float64 y        # Position Y (metres, CARLA world frame)
 float64 yaw      # Heading (rad, wrapped to [-pi, pi])
 
-# EKF-filtered 2D velocity estimate (from msg.twist.twist)
-float64 vx       # Longitudinal velocity (m/s)
-float64 vy       # Lateral velocity (m/s)
+# EKF yaw rate (from msg.twist.twist.angular.z)
 float64 vyaw     # Yaw rate (rad/s), body frame
 
 # 3x3 covariance submatrix for [x, y, yaw], row-major order.

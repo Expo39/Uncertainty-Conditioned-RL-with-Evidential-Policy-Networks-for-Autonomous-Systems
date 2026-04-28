@@ -47,24 +47,22 @@ ekf:
   publish_tf: true
 
   # IMU sensor: prediction step.
-  # Enabled: vyaw (index 11) + ax (index 12) + ay (index 13).
+  # Enabled: vyaw (index 11) only.
   # Orientation (index 5) disabled: CARLA IMU always publishes identity quaternion
   # (orientation field is zero regardless of vehicle heading). Enabling it pins
   # the EKF yaw to zero with infinite confidence (zero covariance field in the
   # Imu message), suppressing all heading estimation from vyaw integration.
-  # Linear acceleration enabled: ImuNoiseRelayNode now stamps VN-100 datasheet
-  # accel variance (3.76e-5 (m/s^2)^2) so robot_localization weights ax/ay
-  # correctly. Provides inertial position prediction between GNSS fixes and
-  # enables accel ZUPT to pin vx/vy near zero at standstill.
+  # ax/ay (indices 12,13) disabled: linear velocity (vx/vy) has no correction
+  # source (no wheel odometry), so accel integration produces unreliable estimates
+  # that degrade at high GNSS uncertainty tiers. vx/vy excluded from observation.
   # Use the covariance-stamped IMU topic published by ImuNoiseRelayNode.
   imu0: "/carla/ego_vehicle/imu/stamped"
   # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   # Orientation (index 5) disabled: CARLA IMU publishes identity quaternion at all times.
   # vyaw (index 11): yaw rate for prediction step.
-  # ax (index 12), ay (index 13): linear acceleration for inertial position prediction.
   imu0_config: [false, false, false, false, false, false,
                 false, false, false, false, false, true,
-                true,  true,  false]
+                false, false, false]
 
   # ImuNoiseRelayNode stamps VN-100 datasheet variances onto every relayed
   # sensor_msgs/Imu message (angular_velocity_covariance and
@@ -82,10 +80,9 @@ ekf:
   # Initial state estimate covariance (15x15, row-major).
   # Must be non-zero -- a zero initial covariance is singular and causes the
   # EKF Cholesky decomposition to produce NaN on the first prediction step.
-  # Active states: x(0), y(1), yaw(5), vx(6), vy(7), vyaw(11), ax(12), ay(13).
-  # Inactive states (z, roll, pitch, vz, vroll, vpitch, az) use 1e-9 (near-zero,
-  # non-singular placeholder; two_d_mode suppresses them entirely).
-  # ax/ay (12,13) use 1.0 -- neutral uninformative prior (~1 m/s^2 uncertainty).
+  # Active states: x(0), y(1), yaw(5), vx(6), vy(7), vyaw(11).
+  # Inactive states (z, roll, pitch, vz, vroll, vpitch, ax, ay, az) use 1e-9
+  # (near-zero, non-singular placeholder; two_d_mode suppresses them entirely).
   initial_estimate_covariance: [
     0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
@@ -115,15 +112,11 @@ ekf:
   # process_noise_covariance parameter (diagonal shorthand not documented
   # but supported). Use the full 225-element form for clarity.
   #
-  # Active states after CP3: yaw (5), vyaw (11), ax (12), ay (13).
+  # Active states: yaw (5), vyaw (11).
   #   sigma_yaw: Q_yaw must be larger than R_heading (3.56e-4 rad^2 at rtk_fixed)
   #     so the Kalman gain K = P/(P+R) is high enough for heading corrections to
   #     dominate IMU vyaw integration. Q_yaw = 5e-3 -> K ~ 0.93 at rtk_fixed.
   #   sigma_vyaw  = 2.73e-4 rad/s -> variance = 7.46e-8 (rad/s)^2
-  #   ax, ay process noise: Q ~ 100 * R where R = imu_accel_variance = 3.76e-5
-  #     -> Q_ax = Q_ay = 5.0e-3. Governs how fast the EKF trusts accel vs its
-  #     own dynamics; start high (trusts accel quickly) and tune downward if
-  #     position becomes noisy between GNSS fixes.
   # x/y process noise: max speed ~5 m/s, timestep 1/20 Hz -> 0.01 m^2.
   process_noise_covariance: [
     1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
