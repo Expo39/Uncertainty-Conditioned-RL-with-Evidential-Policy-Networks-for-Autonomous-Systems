@@ -24,7 +24,7 @@ CONTAINER="uncertainty-rl-training-inspect-dryrun"
 cleanup() {
     echo ""
     echo "Stopping inspect containers..."
-    ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun down 2>/dev/null || true
+    ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun down --timeout 3 2>/dev/null || true
     xhost -local:docker 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM

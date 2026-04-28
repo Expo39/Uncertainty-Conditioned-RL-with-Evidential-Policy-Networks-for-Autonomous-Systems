@@ -42,7 +42,7 @@ from scripts.colours import (
     HEX_TARGET_BAY,
     hex_to_carla_color,
 )
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.geometry import zone_bbox
 
 # ---------------------------------------------------------------------------

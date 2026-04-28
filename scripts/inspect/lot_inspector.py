@@ -66,7 +66,7 @@ from scripts.inspect._inspectors import (
     SensorInspector,
     _Inspector,
 )
-from uncertainty_rl.envs.carla_parking import CARLAParkingEnv
+from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
 # Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
 warnings.filterwarnings(
