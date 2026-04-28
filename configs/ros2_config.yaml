@@ -175,8 +175,8 @@ gnss_noise_relay:
   odom_output_topic: "/odometry/gps" # Odometry with flat-earth XY (EKF odom0)
 
   # Noise enable flags. Set all false for real deployment or ideal-sensor testing.
-  enable_gnss_noise: false           # false = pure flat-earth projector, no added noise
-  enable_markov_transitions: false   # false = constant tier per episode
+  enable_gnss_noise: true           # false = pure flat-earth projector, no added noise
+  enable_markov_transitions: true   # false = constant tier per episode
 
   # Base 1-sigma position error for RTK-fixed conditions (metres).
   # Tier multipliers scale this: rtk_fixed=1x, rtk_float=15x, standalone=100x, degraded=250x.
@@ -208,7 +208,7 @@ imu_noise_relay:
   # Noise enable flag. Set false for real deployment (real IMU driver stamps its
   # own covariance, which robot_localization uses in preference to process noise)
   # or for ideal-sensor dryrun testing.
-  enable_imu_noise: false
+  enable_imu_noise: true
 
   # Gyro noise: VN-100 datasheet noise density 0.0035 deg/s/sqrt(Hz).
   #   Per-sample variance at 20 Hz: (6.11e-5 * sqrt(20))^2 = 7.46e-8 (rad/s)^2

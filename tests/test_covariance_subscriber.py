@@ -121,7 +121,7 @@ class TestReadFileValid:
 
     def test_populates_uncertainty_array(self) -> None:
         """
-        @brief _read_file() populates _latest_uncertainty with shape (9,).
+        @brief _read_file() populates _latest_uncertainty with shape (3,).
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
 
@@ -138,7 +138,7 @@ class TestReadFileValid:
                 _patch_read_file_path(sub, mod, path)
                 sub._read_file()
                 assert sub._latest_uncertainty is not None
-                assert sub._latest_uncertainty.shape == (9,)
+                assert sub._latest_uncertainty.shape == (3,)
 
     def test_populates_pose_array(self) -> None:
         """
@@ -569,14 +569,14 @@ class TestGetLatest:
 
     def test_get_latest_pose_shape(self) -> None:
         """
-        @brief get_latest_pose() returns an array of shape (6,).
+        @brief get_latest_pose() returns an array of shape (4,).
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01] * 9
-            _write_ekf_json(path, 1.0, 2.0, 0.5, 1.0, 0.0, 0.1, cov, seq=1)
+            _write_ekf_json(path, 1.0, 2.0, 0.5, 1.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -587,7 +587,7 @@ class TestGetLatest:
                 pose = sub.get_latest_pose()
 
         assert pose is not None
-        assert pose.shape == (6,)
+        assert pose.shape == (4,)
 
     def test_get_latest_pose_none_when_no_file(self) -> None:
         """
