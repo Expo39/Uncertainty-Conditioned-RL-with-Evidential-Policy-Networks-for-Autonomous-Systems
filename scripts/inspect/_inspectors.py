@@ -933,9 +933,9 @@ class DryRunInspector(_Inspector):
             + " " + "-" * 28
         )
 
-        # WHITE -- velocity (indices 0-2)
+        # WHITE -- yaw rate (index 0)
         lines.append(
-            W + f"vel  vx={obs[0]:+.2f}  vy={obs[1]:+.2f}  vyaw={math.degrees(obs[2]):+.1f}deg/s" + X
+            W + f"vel  vyaw={math.degrees(obs[0]):+.1f}deg/s" + X
         )
 
         # YELLOW -- CARLA ground truth
@@ -975,18 +975,18 @@ class DryRunInspector(_Inspector):
                     f"  yaw={wyaw:+.1f}deg" + X
                 )
 
-        # WHITE -- EKF covariance (indices 3-8): std devs + off-diagonal cross-cov
-        if len(obs) >= 9:
+        # WHITE -- EKF covariance (indices 1-6): std devs + off-diagonal cross-cov
+        if len(obs) >= 7:
             lines.append(
-                W + f"cov  std=({obs[3]:.3f},{obs[4]:.3f},{obs[5]:.3f})"
-                f"  off=({obs[6]:.4f},{obs[7]:.4f},{obs[8]:.4f})" + X
+                W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})"
+                f"  off=({obs[4]:.4f},{obs[5]:.4f},{obs[6]:.4f})" + X
             )
 
-        # WHITE -- target in ego body frame (indices 9-11)
-        if len(obs) >= 12:
+        # WHITE -- target in ego body frame (indices 7-9)
+        if len(obs) >= 10:
             lines.append(
-                W + f"tgt  dx={obs[9]:+.2f}m  dy={obs[10]:+.2f}m"
-                f"  dyaw={math.degrees(obs[11]):+.1f}deg" + X
+                W + f"tgt  dx={obs[7]:+.2f}m  dy={obs[8]:+.2f}m"
+                f"  dyaw={math.degrees(obs[9]):+.1f}deg" + X
             )
 
         # YELLOW -- target bay world position (always from YAML)
@@ -1007,12 +1007,12 @@ class DryRunInspector(_Inspector):
             f"  ekf_std={ekf_std:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
 
-        # WHITE -- obstacle clearance (indices 12-16)
-        if len(obs) >= 17:
+        # WHITE -- obstacle clearance (indices 10-14)
+        if len(obs) >= 15:
             lines.append(
-                W + f"obs  L={obs[12]:.2f}m({math.degrees(obs[13]):+.1f}deg)"
-                f"  R={obs[14]:.2f}m({math.degrees(obs[15]):+.1f}deg)"
-                f"  F={obs[16]:.2f}m" + X
+                W + f"obs  L={obs[10]:.2f}m({math.degrees(obs[11]):+.1f}deg)"
+                f"  R={obs[12]:.2f}m({math.degrees(obs[13]):+.1f}deg)"
+                f"  F={obs[14]:.2f}m" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -1074,12 +1074,12 @@ class DryRunInspector(_Inspector):
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
         print(
-            "\nModel inputs per step (17-dim obs):"
-            "\n  [0-2]   vel: vx vy vyaw"
-            "\n  [3-5]   cov: std(x,y,yaw)"
-            "\n  [6-8]   cov: off(xy,xyaw,yyaw)"
-            "\n  [9-11]  tgt: dx dy dyaw (ego-relative)"
-            "\n  [12-16] obs: L(dist,bear)  R(dist,bear)  F(dist)"
+            "\nModel inputs per step (15-dim obs):"
+            "\n  [0]     vel: vyaw"
+            "\n  [1-3]   cov: std(x,y,yaw)"
+            "\n  [4-6]   cov: off(xy,xyaw,yyaw)"
+            "\n  [7-9]   tgt: dx dy dyaw (ego-relative)"
+            "\n  [10-14] obs: L(dist,bear)  R(dist,bear)  F(dist)"
             "\n  bay/EKF lines are diagnostic only (not fed to model)"
             "\n  recon_err should be < 0.05m"
         )
