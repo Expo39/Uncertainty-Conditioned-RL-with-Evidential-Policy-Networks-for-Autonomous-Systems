@@ -27,6 +27,10 @@ class EvidentialLayer(nn.Module):
     distribution for epistemic and aleatoric uncertainty quantification.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, input_dim: int, output_dim: int) -> None:
         """
         @brief Constructor for EvidentialLayer.
@@ -90,6 +94,10 @@ class EvidentialPolicyNetwork(nn.Module):
 
     @see EvidentialActorCriticPolicy in sb3_integration.py for the RL path.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -250,6 +258,10 @@ class UncertaintyConditionedActor(nn.Module):
     This network explicitly uses uncertainty information in the state to make
     more cautious decisions under high uncertainty.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,

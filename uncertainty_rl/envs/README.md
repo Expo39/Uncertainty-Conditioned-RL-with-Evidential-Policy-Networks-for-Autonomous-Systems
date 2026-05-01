@@ -142,6 +142,9 @@ Each floor plan has 15 bays - 5 of each type:
 | `CARLAParkingEnv` | `sim/carla_parking.py` | Main Gymnasium env |
 | `_CovarianceSubscriber` | `covariance_subscriber.py` | File-based EKF state reader (no DDS) |
 | `SafetyWrapper` | `safety_wrapper.py` | Action modulation at eval time based on evidential uncertainty |
+| `LotSpawner` | `sim/_lot_spawner.py` | Per-episode static actor spawning (cones, parked vehicles) |
+| `NPCController` | `sim/_npc_controller.py` | Patrol vehicle and pedestrian lifecycle and per-step updates |
+| `SensorManager` | `sim/_sensor_manager.py` | Sensor spawning, callbacks, and cleanup |
 
 ### Module-level helpers (`_parking_core.py`)
 
