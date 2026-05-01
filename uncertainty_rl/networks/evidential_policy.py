@@ -40,14 +40,9 @@ class EvidentialLayer(nn.Module):
         # Output 4 parameters per action: gamma, nu, alpha, beta
         self.linear = nn.Linear(input_dim, output_dim * 4)
 
-        # NIG hyperprior initialisation: start near a stable prior rather than
-        # random Kaiming init, which can give near-zero nu (undefined precision)
-        # or alpha near 1 (infinite variance) at step 0.
-        # Bias layout (contiguous blocks of output_dim): [gamma | nu | alpha | beta]
-        # softplus(0.9) + 1e-6 ~ 0.97  => nu ~ 0.97 (reasonable initial precision)
-        # softplus(0.9) + 1.0  ~ 1.97  => alpha ~ 1.97 (well-defined finite variance)
-        # softplus(0.0) + 1e-6 ~ 0.69  => beta ~ 0.69 (moderate scale)
-        # Weights scaled by 0.01 so outputs are dominated by biases at init.
+        # Bias layout [gamma | nu | alpha | beta] keeps NIG parameters in a stable
+        # prior region at step 0. Weights scaled by 0.01 so biases dominate init.
+        # See documentation/detailed_notes/evidential_nig_initialisation.md for derivation.
         with torch.no_grad():
             self.linear.weight.mul_(0.01)
             n = self.output_dim
@@ -83,8 +78,6 @@ class EvidentialLayer(nn.Module):
         # causes the regularisation term |actions - gamma| * (2*nu + alpha) to explode.
         # Upper bounds are conservative: max=100.0 gives a regularisation term ceiling
         # of ~300 per sample, which is reasonable for clipping by lambda_reg=0.001.
-        # (Amini et al. 2020 supervised regression assumes a ground-truth target, which
-        # RL policies do not have.)
         nu = torch.clamp(nu, max=100.0)
         alpha = torch.clamp(alpha, max=100.0)
         beta = torch.clamp(beta, max=100.0)
@@ -96,12 +89,6 @@ class EvidentialPolicyNetwork(nn.Module):
     """
     @class EvidentialPolicyNetwork
     @brief Standalone evidential policy network for testing and experiments.
-
-    Full MLP backbone + EvidentialLayer in a single self-contained module.
-    Used in unit tests and standalone experiments. NOT used in the RL training
-    pipeline -- the SB3 integration (EvidentialActorCriticPolicy) wires
-    EvidentialLayer and UncertaintyConditionedActor directly into SB3's
-    ActorCriticPolicy to keep the PPO surrogate objective intact.
 
     @see EvidentialActorCriticPolicy in sb3_integration.py for the RL path.
     """
@@ -186,11 +173,7 @@ class EvidentialPolicyNetwork(nn.Module):
                 epistemic and aleatoric uncertainty estimates.
         """
         gamma, nu, alpha, beta = self.forward(state)
-
-        # Compute uncertainties (Amini et al. 2020, Section 3.2).
-        # Aleatoric = E[sigma^2] = beta/(alpha-1): irreducible noise.
-        # Epistemic = Var[mu]    = beta/(nu*(alpha-1)): model uncertainty,
-        #   shrinks as pseudo-observation count nu grows.
+        
         aleatoric_uncertainty = beta / (alpha - 1)
         epistemic_uncertainty = beta / (nu * (alpha - 1))
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
@@ -199,8 +182,6 @@ class EvidentialPolicyNetwork(nn.Module):
         if deterministic:
             action = gamma
         else:
-            # Gaussian approximation of the NIG Student-t predictive distribution.
-            # Sampling std = sqrt(aleatoric) = sqrt(beta / (alpha - 1)).
             # Epistemic uncertainty (Var[mu]) is not added to action noise --
             # it quantifies model uncertainty over gamma, not per-sample noise.
             std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
@@ -239,14 +220,8 @@ class EvidentialPolicyNetwork(nn.Module):
         @return Dictionary containing loss components.
 
         @note This is a standalone supervised regression loss used in unit tests
-              and standalone experiments. It is NOT used during RL training.
-              In the RL pipeline (EvidentialPPO), the NLL is handled by
-              EvidentialDistribution.log_prob() and the regularisation term is
-              computed inline in EvidentialPPO.train() -- keeping them separate
-              so PPO's clipped surrogate objective controls the NLL contribution.
+              and standalone experiments. 
         """
-        # NIG-NLL (Amini et al. 2020, eq. 9).
-        # Omega = 2*beta*(1 + nu) is the scale term that appears in both log terms.
         omega = 2 * beta * (1 + nu)
         nll = (
             0.5 * torch.log(torch.pi / nu)
