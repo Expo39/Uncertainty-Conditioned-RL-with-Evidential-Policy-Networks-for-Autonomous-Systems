@@ -2,36 +2,19 @@
 @file deployment_utils.py
 @brief Real-world deployment utilities for the autonomous parking system.
 
-This module owns everything that is specific to deploying the trained policy
-on a real vehicle rather than in CARLA simulation:
+Owns two real-vehicle-specific concerns:
+  - Loading the surveyed lot datum (UTM easting/northing -> lot layout frame)
+    and exposing it as reference_pose() for EKF frame calibration.
+  - Loading and applying per-actuator gain/deadband/bias calibration.
 
-  - Loading the surveyed lot datum (UTM easting/northing -> lot layout frame).
-  - Computing the EKF odom-frame-to-lot-layout-frame rigid transform from the
-    datum, replacing the CARLA ground-truth path in carla_parking.py.
-  - Loading and applying per-actuator gain/deadband/bias calibration so the
-    policy's normalised [-1, 1] outputs drive the physical vehicle correctly.
+EKF frame calibration (odom-to-world transform computation) is performed by
+calibrate_ekf_frame_offset() in envs/_parking_core.py, which is hardware-
+agnostic. Both CARLAParkingEnv (sim) and RealWorldInferenceLoop (real-world)
+call it with their respective get_pose callables; only the reference position
+source differs (layout YAML spawn vs. surveyed datum).
 
-None of this code has any CARLA dependency. It is imported by
-uncertainty_rl.envs.sim.carla_parking only when real_world_deployment=True.
-
-Typical usage inside CARLAParkingEnv:
-
-    self._deployment = RealWorldDeployment.from_config(
-        datum_path="configs/real_world_datum.yaml",
-        calibration_path="configs/actuation_calibration.yaml",
-    )
-
-    # At episode reset, instead of calling vehicle.get_transform():
-    world_x, world_y, world_yaw = self._deployment.reference_pose()
-
-    # In step(), before sending to CARLA/vehicle:
-    steer_cmd, long_cmd = self._deployment.calibrate_action(steer, longitudinal)
-
-@see configs/real_world_datum.yaml
-@see configs/actuation_calibration.yaml
-@see documentation/design/sim_to_real_transfer.md
-@see uncertainty_rl.envs.real.inference_loop.RealWorldInferenceLoop for the
-     full real-world control loop (policy inference + SafetyWrapper + actuation).
+@see documentation/detailed_notes/real_world_deployment.md
+@see uncertainty_rl.envs._parking_core.calibrate_ekf_frame_offset
 
 @author Antonio Galdes
 """
@@ -225,8 +208,8 @@ class RealWorldDeployment:
         the parking lot) expressed in the lot layout coordinate frame -- the
         same frame used in configs/layouts/*.yaml and the bird's-eye PNGs.
 
-        Used by CARLAParkingEnv._calibrate_ekf_frame_offset() as the
-        ground-truth pose when CARLA is not available.
+        Used as the world_x/y/yaw reference when calling
+        calibrate_ekf_frame_offset() from _parking_core.
 
         @return Tuple (x_m, y_m, yaw_rad) in lot layout frame.
         @warning Returns (0, 0, 0) if datum was not loaded. Check logs.

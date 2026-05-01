@@ -142,9 +142,9 @@ Each floor plan has 15 bays - 5 of each type:
 | `CARLAParkingEnv` | `sim/carla_parking.py` | Main Gymnasium env |
 | `_CovarianceSubscriber` | `covariance_subscriber.py` | File-based EKF state reader (no DDS) |
 | `SafetyWrapper` | `safety_wrapper.py` | Action modulation at eval time based on evidential uncertainty |
-| `LotSpawner` | `sim/_lot_spawner.py` | Per-episode static actor spawning (cones, parked vehicles) |
-| `NPCController` | `sim/_npc_controller.py` | Patrol vehicle and pedestrian lifecycle and per-step updates |
-| `SensorManager` | `sim/_sensor_manager.py` | Sensor spawning, callbacks, and cleanup |
+| `LotSpawner` | `sim/helpers/_lot_spawner.py` | Per-episode static actor spawning (cones, parked vehicles) |
+| `NPCController` | `sim/helpers/_npc_controller.py` | Patrol vehicle and pedestrian lifecycle and per-step updates |
+| `SensorManager` | `sim/helpers/_sensor_manager.py` | Sensor spawning, callbacks, and cleanup |
 
 ### Module-level helpers (`_parking_core.py`)
 
@@ -155,3 +155,4 @@ Each floor plan has 15 bays - 5 of each type:
 | `extract_obstacle_features` | Hemispheric LiDAR clearance features (5-element buffer) |
 | `load_floor_plan` | Select and cache a floor plan YAML for one episode |
 | `wait_for_ekf` | Block until LiDAR and EKF data are both available |
+| `calibrate_ekf_frame_offset` | Compute odom-to-world 2D rigid body transform via EKF convergence loop; returns (tx, ty, cos_r, sin_r, r) |
