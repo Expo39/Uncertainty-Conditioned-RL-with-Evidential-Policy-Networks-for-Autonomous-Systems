@@ -384,20 +384,20 @@ class NPCController:
             fwd_y = math.sin(npc_yaw)
             blocked = False
 
-            # Ego vehicle: forward-cone stop only -- do not stop if ego can pass.
-            # Lateral threshold = patrol half-width (1.0 m) + ego half-width (1.0 m) + 0.3 m margin.
+            # Ego vehicle: angular cone stop.
+            # Uses cos(heading_error) = fwd_proj / dist rather than a rectangular
+            # lateral cutoff so the detection zone is a true cone. A 60-degree
+            # half-angle (cos = 0.5) catches approaches up to 45 degrees off-axis
+            # that the old lateral threshold missed.
             if vehicle is not None and vehicle.is_alive:
                 ego_to_x = vehicle.get_location().x - t.location.x
                 ego_to_y = vehicle.get_location().y - t.location.y
-                ego_fwd_proj = ego_to_x * fwd_x + ego_to_y * fwd_y
-                ego_lat = abs(ego_to_x * fwd_y - ego_to_y * fwd_x)
                 ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
-                if (
-                    ego_fwd_proj > 0.0
-                    and ego_dist < self._patrol_obstacle_distance
-                    and ego_lat < 2.3
-                ):
-                    blocked = True
+                if ego_dist < self._patrol_obstacle_distance:
+                    ego_fwd_proj = ego_to_x * fwd_x + ego_to_y * fwd_y
+                    # cos(60 deg) = 0.5 -- stop for any ego within 60 deg of forward
+                    if ego_fwd_proj / ego_dist > 0.5:
+                        blocked = True
 
             for other in all_vehicles:
                 if blocked:
@@ -437,15 +437,18 @@ class NPCController:
                         break
 
             if blocked:
+                # Zero velocity directly -- brake=1.0 through physics takes
+                # several metres to stop at patrol speed and still slides into
+                # the ego. The patrol is an obstacle, not a dynamics demo.
+                npc.set_target_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
                 control = carla.VehicleControl()
                 control.throttle = 0.0
                 control.brake = 1.0
                 control.steer = 0.0
                 npc.apply_control(control)
-                # Log every 20 steps so patrol stalls are visible without spam
                 if steps % 20 == 0:
                     logger.debug(
-                        "[patrol] npc %d braking (blocked)  wp=%d  step=%d",
+                        "[patrol] npc %d stopped (blocked)  wp=%d  step=%d",
                         npc.id,
                         self._patrol_waypoint_indices[i],
                         steps,

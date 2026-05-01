@@ -775,10 +775,12 @@ class CARLAParkingEnv(gym.Env):
             "progress_reward": 0.0,
         }
 
-        if self._sensor_manager.consume_collision():
+        collision_detected, collision_ego_fault = self._sensor_manager.consume_collision()
+        if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
-            return -10.0, True, False, diag
+            reward = -10.0 if collision_ego_fault else 0.0
+            return reward, True, False, diag
 
         success = (
             position_error < SUCCESS_THRESHOLD_POSITION

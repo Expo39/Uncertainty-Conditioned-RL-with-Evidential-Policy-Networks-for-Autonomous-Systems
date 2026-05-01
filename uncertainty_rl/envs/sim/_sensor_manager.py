@@ -16,7 +16,7 @@ import logging
 import math
 import threading
 import time
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
@@ -43,12 +43,15 @@ class SensorManager:
     stale references between episodes.
     """
 
-    # Impulse threshold (N*s) below which a dynamic-actor collision is ignored.
-    # A pedestrian walking into a stationary ego produces ~1-10 N*s impulse;
-    # the ego driving into a pedestrian at parking speeds (~1-3 m/s) produces
-    # ~50-200 N*s. Threshold set to 50.0 to catch ego-at-fault impacts while
-    # filtering incidental contact from a pedestrian bumping a stopped vehicle.
-    _DYNAMIC_COLLISION_IMPULSE_THRESHOLD: float = 50.0
+    # Ego speed (m/s) below which the ego is considered stationary for fault
+    # determination. Used for pedestrian collisions only. Impulse is not used
+    # because it reflects relative velocity: both actors moving toward each other
+    # can produce high impulse even when the ego is barely moving, and a fast ego
+    # catching a pedestrian from behind produces low impulse. Ego speed is the
+    # correct proxy -- if the ego was not meaningfully moving, it is not at fault.
+    # 0.3 m/s is well below any intentional parking speed (1-3 m/s) and above
+    # sensor noise / physics jitter on a stopped vehicle.
+    _EGO_FAULT_SPEED_THRESHOLD_MS: float = 0.3
     # Bytes per LiDAR point in CARLA raw buffer: 4 float32 fields
     # (x, y, z, intensity)
     _LIDAR_BYTES_PER_POINT: int = 16
@@ -76,12 +79,17 @@ class SensorManager:
 
         # Collision state -- set by _on_collision(), consumed by CARLAParkingEnv.
         self._collision_detected: bool = False
+        self._collision_ego_fault: bool = False
         self._collision_impulse: float = 0.0
 
         # Reference to the NPC controller's patrol IDs set (shared by reference).
         # Populated by spawn() via the patrol_npc_ids argument.
         # Allows _on_collision to distinguish patrol vehicles from parked cars.
         self._patrol_npc_ids: Set[int] = set()
+
+        # Ego vehicle actor -- stored at spawn() so _on_collision can query
+        # ego speed for pedestrian fault determination.
+        self._ego_vehicle: Optional[Any] = None
 
     # ------------------------------------------------------------------
     # Public interface
@@ -100,15 +108,20 @@ class SensorManager:
         """@brief Impulse magnitude (N*s) of the last collision event."""
         return self._collision_impulse
 
-    def consume_collision(self) -> bool:
+    def consume_collision(self) -> Tuple[bool, bool]:
         """
         @brief Read and clear the collision flag.
-        @return True if a collision occurred since the last call.
+        @return Tuple of (detected, ego_fault). detected is True if any
+                collision occurred. ego_fault is True only when the ego
+                was responsible (high impulse). Callers should terminate
+                on detected but only penalise on ego_fault.
         """
         detected = self._collision_detected
+        ego_fault = self._collision_ego_fault
         self._collision_detected = False
+        self._collision_ego_fault = False
         self._collision_impulse = 0.0
-        return detected
+        return detected, ego_fault
 
     def get_latest_lidar_scan(self) -> Optional[np.ndarray]:
         """
@@ -161,6 +174,7 @@ class SensorManager:
 
         # Store the shared reference -- mutations from NPCController are visible
         self._patrol_npc_ids = patrol_npc_ids
+        self._ego_vehicle = vehicle
 
         self._spawn_imu(world, vehicle)
         self._spawn_gnss(world, vehicle)
@@ -199,8 +213,10 @@ class SensorManager:
             except Exception:
                 pass
         self._spawned_sensors.clear()
+        self._ego_vehicle = None
 
         self._collision_detected = False
+        self._collision_ego_fault = False
         self._collision_impulse = 0.0
 
         # Clear stale scan so previous episode points are not used at the
@@ -217,6 +233,7 @@ class SensorManager:
         clean, without the destroy/respawn cycle that stresses the ROS bridge.
         """
         self._collision_detected = False
+        self._collision_ego_fault = False
         self._collision_impulse = 0.0
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
@@ -377,9 +394,9 @@ class SensorManager:
         Records the collision so CARLAParkingEnv._compute_reward() can apply
         the penalty.
 
-        Dynamic actors (pedestrians, patrol NPCs) only set the flag when the
-        ego vehicle was moving at the time (impulse > threshold), preventing
-        a parked/slow ego from being penalised when a pedestrian walks into it.
+        Dynamic actors (pedestrians, patrol NPCs) always terminate the episode.
+        Fault is determined by ego speed: penalty is withheld when the ego was
+        stationary at the moment of contact. Static objects always penalise.
 
         @param event: carla.CollisionEvent with other_actor and normal_impulse
                       fields.
@@ -388,33 +405,31 @@ class SensorManager:
         impulse = event.normal_impulse
         impulse_magnitude = math.sqrt(impulse.x**2 + impulse.y**2 + impulse.z**2)
 
-        is_pedestrian = other.type_id.startswith("walker.pedestrian")
-        is_patrol = other.id in self._patrol_npc_ids
-        is_dynamic = is_pedestrian or is_patrol
+        is_dynamic = (
+            other.type_id.startswith("walker.pedestrian")
+            or other.id in self._patrol_npc_ids
+        )
+
+        self._collision_detected = True
+        self._collision_impulse = impulse_magnitude
 
         if is_dynamic:
-            # Only penalise dynamic actor collisions when ego was at fault
-            # (impulse above threshold indicates ego was moving into them).
-            # A pedestrian walking into a stationary ego produces near-zero impulse.
-            if impulse_magnitude > self._DYNAMIC_COLLISION_IMPULSE_THRESHOLD:
-                self._collision_detected = True
-                self._collision_impulse = impulse_magnitude
-                logger.debug(
-                    "[collision] dynamic  actor=%s  impulse=%.1f N*s",
-                    other.type_id,
-                    impulse_magnitude,
-                )
-            else:
-                logger.debug(
-                    "[collision] dynamic IGNORED (low impulse)  actor=%s  "
-                    "impulse=%.1f N*s",
-                    other.type_id,
-                    impulse_magnitude,
-                )
+            # Fault determined by ego speed, not impulse. Impulse reflects relative
+            # velocity and misfires when both actors are moving.
+            ego_speed = 0.0
+            if self._ego_vehicle is not None:
+                v = self._ego_vehicle.get_velocity()
+                ego_speed = math.sqrt(v.x**2 + v.y**2)
+            self._collision_ego_fault = ego_speed > self._EGO_FAULT_SPEED_THRESHOLD_MS
+            logger.debug(
+                "[collision] dynamic  actor=%s  ego_speed=%.2f m/s  ego_fault=%s",
+                other.type_id,
+                ego_speed,
+                self._collision_ego_fault,
+            )
         else:
-            # Static objects (cones, parked cars, walls, perimeter): always penalise
-            self._collision_detected = True
-            self._collision_impulse = impulse_magnitude
+            # Static objects (cones, parked cars, walls, perimeter): always penalise.
+            self._collision_ego_fault = True
             logger.debug(
                 "[collision] static  actor=%s  impulse=%.1f N*s",
                 other.type_id,
