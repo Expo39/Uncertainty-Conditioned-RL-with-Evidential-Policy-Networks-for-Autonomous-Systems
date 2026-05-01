@@ -2,37 +2,13 @@
 @file actuation_calibration.py
 @brief Actuation calibration layer for sim-to-real transfer.
 
-Maps the policy's normalised action output [steering, longitudinal] to
-physical actuator commands for the real vehicle. In simulation this is a
-pass-through (identity mapping). On the real vehicle, each actuator has a
-different gain, deadband, and saturation characteristic that must be measured
-via a calibration run before deployment.
+Maps normalised policy actions [steering, longitudinal] to physical actuator
+commands. In simulation the mapping is identity. For real-world deployment,
+per-actuator gain, deadband, and bias are loaded from
+configs/deployment/real/actuation_calibration.yaml.
 
-The calibration is defined in a YAML file (configs/actuation_calibration.yaml)
-and loaded at env construction time. When the file is absent or
-real_world_deployment=False, the identity mapping is used.
-
-Mapping model (per actuator):
-    output = gain * clip(input - deadband_offset, deadband, 1.0) + bias
-
-where:
-    gain            -- scale factor (1.0 = no change)
-    deadband        -- minimum input magnitude to produce non-zero output
-    deadband_offset -- shift applied before deadband test (for asymmetric response)
-    bias            -- constant offset added to non-zero outputs
-    min_output      -- clamp lower bound on final output
-    max_output      -- clamp upper bound on final output
-
-All parameters default to identity (gain=1.0, deadband=0.0, bias=0.0,
-min/max = [-1, 1]) so the layer is a safe no-op until calibrated.
-
-@note To populate: perform a calibration run on the real vehicle, measure
-      the steering angle and throttle/brake response to known policy outputs,
-      and fit the gain/deadband/bias values. Record the procedure in
-      documentation/design/actuation_calibration.md.
-
-@see uncertainty_rl.envs.carla_parking.CARLAParkingEnv.step()
-
+@see documentation/detailed_notes/real_world_deployment.md for calibration
+     procedure and parameter derivation.
 @author Antonio Galdes
 """
 
