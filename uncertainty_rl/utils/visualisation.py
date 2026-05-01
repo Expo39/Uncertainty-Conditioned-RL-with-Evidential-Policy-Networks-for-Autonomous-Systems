@@ -37,6 +37,10 @@ class VisStateWriter:
     Close the visualiser window at any time -- training is unaffected.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, output_path: Path) -> None:
         """
         @brief Initialise the writer.

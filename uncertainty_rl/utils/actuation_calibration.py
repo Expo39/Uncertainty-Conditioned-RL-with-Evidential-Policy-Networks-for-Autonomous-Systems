@@ -23,6 +23,10 @@ class ActuatorMap:
     @brief Single-actuator mapping from policy output to physical command.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, params: Dict[str, Any]) -> None:
         """
         @brief Construct from a parameter dict (one actuator block in the YAML).
@@ -66,8 +70,13 @@ class ActuationCalibration:
 
     @note All parameters default to identity. The calibration YAML is populated
           from a measured calibration run on the real vehicle before deployment.
-    @see documentation/design/actuation_calibration.md (to be written at deployment)
+    @see documentation/detailed_notes/real_world_deployment.md for calibration
+         procedure and parameter derivation.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,

@@ -31,10 +31,6 @@ class NPCController:
     cleanup() at the start of each episode reset, then spawn_patrol() and
     spawn_pedestrians() to populate the episode, then update_patrol() and
     update_pedestrians() once per world tick.
-
-    All CARLA world/vehicle handles are passed as parameters -- this class
-    never stores them across calls to avoid holding stale references between
-    episodes.
     """
 
     # Number of sectors to divide each zone into for respawn placement.
@@ -50,6 +46,10 @@ class NPCController:
     _BOUNDARY_MARGIN: float = 1.0
     # Zone clustering radius (metres): zones within this distance share one pedestrian
     _CLUSTER_RADIUS: float = 12.0
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -88,11 +88,11 @@ class NPCController:
         self._pedestrian_resample_steps = pedestrian_resample_steps
         self._pedestrian_max_lifetime = pedestrian_max_lifetime
 
-        # Blueprint lists -- refreshed each reset via refresh_blueprints()
+        # Blueprint lists - refreshed each reset via refresh_blueprints()
         self._car_blueprints: List[Any] = []
         self._walker_blueprints: List[Any] = []
 
-        # Cached all-vehicle list for patrol obstacle checks -- rebuilt after
+        # Cached all-vehicle list for patrol obstacle checks - rebuilt after
         # all vehicles are spawned via set_vehicle_cache()
         self._all_vehicle_actors: List[Any] = []
 
@@ -160,6 +160,8 @@ class NPCController:
 
         Uses a proportional heading controller rather than the Traffic Manager,
         since the lot is off-road and TM requires CARLA road network.
+        See documentation/detailed_notes/layout/patrol_paths.md for controller
+        design rationale and waypoint derivation.
 
         @param world: Live CARLA world handle.
         @param vehicle: Ego vehicle actor (used for ego-safe spawn distance check).
@@ -179,9 +181,7 @@ class NPCController:
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"])) for wp in waypoints_raw
         ]
-        # Drop a closing duplicate (e.g. rectangle layout repeats waypoint 0 at the end)
-        # so the cyclic modulo wrap works correctly and first_target_idx is never the
-        # same location as start_idx.
+        # Drop a closing duplicate
         if len(waypoints) > 1 and waypoints[-1] == waypoints[0]:
             waypoints = waypoints[:-1]
 
@@ -190,9 +190,6 @@ class NPCController:
         z = float(current_layout.get("origin", {}).get("z", 0.3)) + 0.1
 
         # Build a list of candidate start indices safely away from the ego spawn.
-        # The forward-cone check in update_patrol() is direction-dependent and
-        # cannot prevent a patrol that spawns on top of the ego or approaches it
-        # from behind before the first tick.
         ego_loc = vehicle.get_location() if vehicle is not None else None
         min_spawn_dist = self._patrol_obstacle_distance + 4.5
         safe_indices = list(range(len(waypoints)))
@@ -266,10 +263,9 @@ class NPCController:
         ]
 
         # Group zones into spatial clusters so that adjacent corridor segments
-        # do not each spawn their own pedestrian.  Two zones belong to the same
-        # cluster when their centres are within _CLUSTER_RADIUS metres of each
+        # do not each spawn their own pedestrian. Two zones belong to the same
+        # cluster when their centres are within CLUSTER_RADIUS metres of each
         # other (union-find via greedy single-linkage).
-
         cluster_id: List[int] = list(range(len(zones)))
         for i in range(len(zones)):
             for j in range(i + 1, len(zones)):
@@ -389,17 +385,14 @@ class NPCController:
             blocked = False
 
             # Ego vehicle: angular cone stop.
-            # Uses cos(heading_error) = fwd_proj / dist rather than a rectangular
-            # lateral cutoff so the detection zone is a true cone. A 60-degree
-            # half-angle (cos = 0.5) catches approaches up to 45 degrees off-axis
-            # that the old lateral threshold missed.
+            # Uses cos(heading_error) = fwd_proj / dist.
             if vehicle is not None and vehicle.is_alive:
                 ego_to_x = vehicle.get_location().x - t.location.x
                 ego_to_y = vehicle.get_location().y - t.location.y
                 ego_dist = math.sqrt(ego_to_x * ego_to_x + ego_to_y * ego_to_y)
                 if ego_dist < self._patrol_obstacle_distance:
                     ego_fwd_proj = ego_to_x * fwd_x + ego_to_y * fwd_y
-                    # cos(60 deg) = 0.5 -- stop for any ego within 60 deg of forward
+                    # cos(60 deg) = 0.5 - stop for any ego within 60 deg of forward
                     if ego_fwd_proj / ego_dist > 0.5:
                         blocked = True
 
@@ -442,8 +435,7 @@ class NPCController:
 
             if blocked:
                 # enable_constant_velocity bypasses physics entirely and pins
-                # velocity to zero immediately -- set_target_velocity defers
-                # to the physics engine and takes multiple ticks to converge.
+                # velocity to zero immediately.
                 if not self._patrol_pinned[i]:
                     npc.enable_constant_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
                     self._patrol_pinned[i] = True
@@ -474,13 +466,6 @@ class NPCController:
         """
         @brief Advance pedestrians one step with avoidance, zone confinement,
                and periodic heading re-randomisation.
-
-        Priority order each step:
-          1. Ego/patrol avoidance -- walk away from nearby threats.
-             Avoidance always wins, even at the zone boundary, so a pedestrian
-             is never forced back toward the ego by the boundary logic.
-          2. Zone boundary -- steer toward zone centre when near an edge.
-          3. Periodic random re-heading every pedestrian_resample_steps steps.
 
         @param vehicle: Ego vehicle actor (used for avoidance distance check).
         """
@@ -657,15 +642,10 @@ class NPCController:
         destroyed, a new one is spawned within an allowed set of sectors of the
         same zone, and the lifetime counter is reset.
 
-        Sectors are slices along the zone's longest axis, ranked by distance
-        from the ego (farthest first). As the ego approaches, the closest
-        sectors are progressively excluded so the pedestrian always respawns
-        away from the ego. At least one sector is always available.
-
         @param idx: Index into pedestrian_actors / _pedestrian_zones.
         @param vehicle: Ego vehicle actor (used for sector selection).
         """
-        # _respawn_pedestrian needs world access -- infer from current actors.
+        # _respawn_pedestrian needs world access - infer from current actors.
         # The zone dict and walker blueprints are all we need.
         zone = self._pedestrian_zones[idx]
         old = self.pedestrian_actors[idx]
@@ -673,7 +653,7 @@ class NPCController:
             world = old.get_world()
             old.destroy()
         else:
-            # Cannot respawn without a world reference -- mark as gone
+            # Cannot respawn without a world reference - mark as gone
             self.pedestrian_actors[idx] = None
             logger.debug(
                 "[pedestrian] respawn idx=%d SKIPPED (no world reference)", idx
@@ -720,11 +700,7 @@ class NPCController:
             sectors.sort(key=_sector_dist, reverse=True)  # farthest first
 
             # Exclude the closest sectors based on how close the ego is to the
-            # nearest sector (not the zone centre -- avoids the symmetric case
-            # where all sectors are equidistant and the ranking is arbitrary).
-            # ego closer to nearest sector -> more sectors excluded.
-            # ego_dist >= threshold -> all n sectors available (0 excluded).
-            # ego_dist -> 0         -> n-1 sectors excluded (1 always remains).
+            # nearest sector.
             nearest_dist = _sector_dist(sectors[-1])  # sectors sorted far->near
             excluded = int(
                 (n - 1) * max(0.0, 1.0 - nearest_dist / self._RESPAWN_SECTOR_THRESHOLD)
