@@ -8,7 +8,7 @@ a SensorManager instance and delegates sensor lifecycle calls to it.
 
 Sensor roles:
   - RTK-GNSS + IMU: localisation via robot_localisation EKF.
-  - 2D LiDAR: obstacle detection only (obs indices 15-19). NOT localisation.
+  - 2D LiDAR: obstacle detection only (obs indices 7-11). NOT localisation.
   - Collision sensor: terminal reward signal.
 """
 
@@ -38,23 +38,21 @@ class SensorManager:
     sensors to the new ego vehicle. Sensor data is accessible via properties
     and consume methods.
 
-    All CARLA world/vehicle handles are passed as parameters -- this class
+    All CARLA world/vehicle handles are passed as parameters - this class
     does not store world or vehicle references across calls to avoid holding
     stale references between episodes.
     """
 
     # Ego speed (m/s) below which the ego is considered stationary for fault
-    # determination. Used for pedestrian collisions only. Impulse is not used
-    # because it reflects relative velocity: both actors moving toward each other
-    # can produce high impulse even when the ego is barely moving, and a fast ego
-    # catching a pedestrian from behind produces low impulse. Ego speed is the
-    # correct proxy -- if the ego was not meaningfully moving, it is not at fault.
-    # 0.3 m/s is well below any intentional parking speed (1-3 m/s) and above
-    # sensor noise / physics jitter on a stopped vehicle.
+    # determination.
     _EGO_FAULT_SPEED_THRESHOLD_MS: float = 0.3
     # Bytes per LiDAR point in CARLA raw buffer: 4 float32 fields
     # (x, y, z, intensity)
     _LIDAR_BYTES_PER_POINT: int = 16
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -72,12 +70,11 @@ class SensorManager:
         self._spawned_sensors: List[Any] = []
 
         # Latest LiDAR point cloud in vehicle frame ([N, 3] float32).
-        # Updated by _lidar_callback(). Used by
-        # CARLAParkingEnv._get_obstacle_features().
+        # Updated by _lidar_callback(); read via get_latest_lidar_scan().
         self._latest_lidar_scan: Optional[np.ndarray] = None
         self._lidar_scan_lock = threading.Lock()
 
-        # Collision state -- set by _on_collision(), consumed by CARLAParkingEnv.
+        # Collision state - set by _on_collision(), consumed by CARLAParkingEnv.
         self._collision_detected: bool = False
         self._collision_ego_fault: bool = False
         self._collision_impulse: float = 0.0
@@ -87,7 +84,7 @@ class SensorManager:
         # Allows _on_collision to distinguish patrol vehicles from parked cars.
         self._patrol_npc_ids: Set[int] = set()
 
-        # Ego vehicle actor -- stored at spawn() so _on_collision can query
+        # Ego vehicle actor - stored at spawn() so _on_collision can query
         # ego speed for pedestrian fault determination.
         self._ego_vehicle: Optional[Any] = None
 
@@ -113,8 +110,8 @@ class SensorManager:
         @brief Read and clear the collision flag.
         @return Tuple of (detected, ego_fault). detected is True if any
                 collision occurred. ego_fault is True only when the ego
-                was responsible (high impulse). Callers should terminate
-                on detected but only penalise on ego_fault.
+                was responsible (moving above threshold at moment of contact).
+                Callers should terminate on detected but only penalise on ego_fault.
         """
         detected = self._collision_detected
         ego_fault = self._collision_ego_fault
@@ -158,11 +155,6 @@ class SensorManager:
 
         Always spawns: IMU + GNSS + 2D LiDAR + collision sensor.
 
-        All sensor noise is injected by the ROS relay nodes (ImuNoiseRelayNode,
-        GnssNoiseRelayNode) and configured entirely from ros2_config.yaml.
-        CARLA-side sensor noise attributes are zeroed so noise is never
-        double-counted and can be toggled at runtime without restarting CARLA.
-
         @param world: carla.World handle for the current episode.
         @param vehicle: Ego carla.Vehicle actor to attach sensors to.
         @param patrol_npc_ids: Mutable set of patrol vehicle actor IDs owned by
@@ -172,7 +164,7 @@ class SensorManager:
         if vehicle is None or world is None:
             return
 
-        # Store the shared reference -- mutations from NPCController are visible
+        # Store the shared reference - mutations from NPCController are visible
         self._patrol_npc_ids = patrol_npc_ids
         self._ego_vehicle = vehicle
 
@@ -181,20 +173,20 @@ class SensorManager:
         self._spawn_lidar_2d(world, vehicle)
         self._spawn_collision_sensor(world, vehicle)
 
+    # ------------------------------------------------------------------
+    # Cleanup
+    # ------------------------------------------------------------------
+
     def cleanup(self) -> None:
         """
         @brief Stop and destroy all spawned sensors; reset collision and scan state.
 
-        Called at the start of each episode reset before new sensors are spawned.
+        Two-phase teardown: stop() closes the CARLA data stream, a short sleep
+        lets the ROS bridge _update_thread see the closure, then destroy() removes
+        the actor. Skipping the sleep races the bridge and can cause double-destroy
+        exceptions on episode reset.
 
-        Two-phase teardown:
-        1. Stop all sensors (closes the underlying data stream).
-        2. Brief sleep so the CARLA ROS bridge's _update_thread can process the
-           stream closure before we call destroy().  Without this pause the bridge
-           thread races to call sensor.stop() on a file descriptor the env has
-           already closed, producing a "Bad file descriptor" crash that kills the
-           bridge's update thread and hangs world.tick() in sync mode.
-        3. Destroy all sensors.
+        Called at the start of each episode reset before new sensors are spawned.
         """
         alive = [s for s in self._spawned_sensors if s is not None and s.is_alive]
         for sensor in alive:
@@ -247,7 +239,6 @@ class SensorManager:
         @brief Spawn IMU sensor at centre-of-mass height.
 
         Noise parameters and mount position come from sensors_config.imu.
-        Mount defaults: x=0.0, y=0.0, z=0.3 (centre-of-mass height).
 
         @param world: carla.World for the current episode.
         @param vehicle: Ego vehicle actor to attach to.
@@ -286,9 +277,8 @@ class SensorManager:
         """
         @brief Spawn 2D LiDAR sensor at front bumper height for obstacle detection.
 
-        Single-channel horizontal scan (SICK TiM 5xx / Hokuyo style). Feeds
-        obstacle clearance features (obs indices 15-19) only -- NOT used for
-        localisation (that role belongs to RTK-GNSS + IMU).
+        Single-channel horizontal scan. Feeds obstacle clearance features
+        (obs indices 7-11) only - NOT used for localisation.
 
         Config key: sensors_config.lidar. Mount defaults: x=2.4, z=0.5.
 
@@ -340,7 +330,7 @@ class SensorManager:
 
         gnss_bp = world.get_blueprint_library().find("sensor.other.gnss")
         gnss_bp.set_attribute("role_name", "gnss")
-        # Zero all CARLA-side noise -- GnssNoiseRelayNode owns all noise injection.
+        # Zero all CARLA-side noise - GnssNoiseRelayNode owns all noise injection.
         for attr in [
             "noise_alt_bias", "noise_alt_stddev",
             "noise_lat_bias", "noise_lat_stddev",
@@ -375,8 +365,6 @@ class SensorManager:
         bp = world.get_blueprint_library().find("sensor.other.collision")
         # Set role_name so the CARLA ROS bridge (register_all_sensors=True) can
         # namespace this sensor's topic distinctly from other ego_vehicle topics.
-        # Without this, the bridge reuses "carla/ego_vehicle/front" and crashes
-        # with a type-incompatible publisher error.
         bp.set_attribute("role_name", "collision")
         sensor = world.spawn_actor(bp, carla.Transform(), attach_to=vehicle)
         sensor.listen(self._on_collision)
@@ -393,10 +381,6 @@ class SensorManager:
         Fires when the ego vehicle makes physical contact with any actor.
         Records the collision so CARLAParkingEnv._compute_reward() can apply
         the penalty.
-
-        Dynamic actors (pedestrians, patrol NPCs) always terminate the episode.
-        Fault is determined by ego speed: penalty is withheld when the ego was
-        stationary at the moment of contact. Static objects always penalise.
 
         @param event: carla.CollisionEvent with other_actor and normal_impulse
                       fields.
@@ -438,15 +422,10 @@ class SensorManager:
 
     def _lidar_callback(self, lidar_data: Any) -> None:
         """
-        @brief CARLA LiDAR sensor callback -- caches point cloud for obstacle features.
+        @brief CARLA LiDAR sensor callback - caches point cloud for obstacle features.
 
         Converts the raw measurement to a (N, 3) float32 numpy array in vehicle
         frame (x-forward, y-left, z-up). Thread-safe via _lidar_scan_lock.
-
-        @note CARLA ray_cast encodes each point as 4 float32 values (x, y, z,
-              intensity) in a flat byte buffer. CARLA uses a left-handed coordinate
-              system; y is negated to convert to the ROS right-handed convention
-              (positive y = left).
 
         @param lidar_data: carla.LidarMeasurement from the ray_cast sensor.
         """
@@ -457,7 +436,7 @@ class SensorManager:
             return
 
         arr = np.frombuffer(raw, dtype=np.float32).reshape(n_points, 4)
-        # Negate y: CARLA left-handed (y rightward) -> vehicle frame (y leftward).
+
         points_xyz = arr[:, :3].copy()
         points_xyz[:, 1] *= -1.0
 

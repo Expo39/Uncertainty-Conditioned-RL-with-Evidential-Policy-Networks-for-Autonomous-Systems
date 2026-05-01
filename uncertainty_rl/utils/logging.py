@@ -37,6 +37,10 @@ class DebugLogger:
         state["debug"] = self._debug_logger.step_debug_dict()
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, debug: bool = False) -> None:
         """
         @brief Construct a DebugLogger.

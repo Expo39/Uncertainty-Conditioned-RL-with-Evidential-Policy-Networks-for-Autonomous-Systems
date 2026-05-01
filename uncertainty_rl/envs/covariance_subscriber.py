@@ -42,6 +42,10 @@ class _CovarianceSubscriber:
     that file on demand - no DDS subscription needed.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
         covariance_topic: str = "/odometry/filtered",
@@ -119,6 +123,10 @@ class _CovarianceSubscriber:
             self._ekf_state_path,
             self._initial_pose_path,
         )
+
+    # ------------------------------------------------------------------
+    # EKF state read interface
+    # ------------------------------------------------------------------
 
     def invalidate(self) -> None:
         """
@@ -247,6 +255,10 @@ class _CovarianceSubscriber:
             if self._latest_pose is not None:
                 return cast(np.ndarray, self._latest_pose.copy())
             return None
+
+    # ------------------------------------------------------------------
+    # Episode signal writers
+    # ------------------------------------------------------------------
 
     def publish_initial_pose(self, x: float, y: float, yaw: float) -> None:
         """

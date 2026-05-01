@@ -35,6 +35,10 @@ class SafetyWrapper(gym.Wrapper):
           uses it, so the policy learns freely during training.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
         env: gym.Env,

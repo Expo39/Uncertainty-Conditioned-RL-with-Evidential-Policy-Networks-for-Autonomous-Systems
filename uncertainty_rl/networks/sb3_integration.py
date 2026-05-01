@@ -56,6 +56,10 @@ class EvidentialDistribution(Distribution):
     @brief SB3-compatible distribution using Gaussian approximation of NIG predictive.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, action_dim: int) -> None:
         """
         @brief Initialise the evidential distribution.
@@ -208,6 +212,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     applies to the actor only.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(
         self,
         observation_space: spaces.Space,
@@ -348,6 +356,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         # Set up optimiser
         optimizer_kwargs = dict(lr=cast(float, lr_schedule(1)), **self.optimizer_kwargs)
         self.optimizer = self.optimizer_class(self.parameters(), **optimizer_kwargs)
+
+    # ------------------------------------------------------------------
+    # SB3 overrides
+    # ------------------------------------------------------------------
 
     def _get_nig_from_obs(
         self, obs: th.Tensor
@@ -507,6 +519,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
         return values, log_prob, entropy
 
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
+
     def get_action_with_uncertainty(
         self,
         obs: th.Tensor,
@@ -586,6 +602,10 @@ class EvidentialPPO(PPO):
     Logs epistemic and aleatoric uncertainty to TensorBoard alongside
     standard PPO metrics.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
