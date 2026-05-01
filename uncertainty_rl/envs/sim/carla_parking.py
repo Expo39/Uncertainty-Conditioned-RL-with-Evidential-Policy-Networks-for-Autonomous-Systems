@@ -405,6 +405,7 @@ class CARLAParkingEnv(gym.Env):
         # Episode state
         self._episode_id: int = 0
         self.steps = 0
+        self._actors_frozen: bool = False
         # Previous distance to target for potential-based reward shaping
         self._prev_distance: float = 0.0
 
@@ -1104,6 +1105,8 @@ class CARLAParkingEnv(gym.Env):
         if self.vehicle is None or self.world is None:
             return
 
+        self.vehicle.disable_constant_velocity()
+
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
         primary = self._current_layout.get("spawn_transform", {})
         extras: List[Any] = (
@@ -1326,6 +1329,31 @@ class CARLAParkingEnv(gym.Env):
                 self.world.tick(10.0)
             time.sleep(tick_interval)
 
+    def _freeze_all_actors(self) -> None:
+        """
+        @brief Zero velocity on all moving actors immediately on episode end.
+
+        Called as soon as terminated or truncated is True so actors do not
+        continue on their last command while reset() tears down the episode.
+        Uses set_target_velocity for instant stops rather than brake control,
+        which takes multiple ticks to converge through physics.
+        """
+        zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
+
+        if self.vehicle is not None and self.vehicle.is_alive:
+            self.vehicle.enable_constant_velocity(zero)
+
+        for npc in self._npc_controller.patrol_npcs:
+            if npc is not None and npc.is_alive:
+                # NPCs are destroyed in cleanup so the pin does not carry over.
+                npc.enable_constant_velocity(zero)
+
+        for walker in self._npc_controller.pedestrian_actors:
+            if walker is not None and walker.is_alive:
+                ctrl = carla.WalkerControl()
+                ctrl.speed = 0.0
+                walker.apply_control(ctrl)
+
     def _cleanup_actors(self, skip_ego: bool = False) -> None:
         """
         @brief Destroy episode actors.
@@ -1395,8 +1423,11 @@ class CARLAParkingEnv(gym.Env):
         # episode -- only skip sensor/ego-vehicle destruction when reusing.
         self._cleanup_actors(skip_ego=reuse_vehicle)
 
-        # Flush pending destroy commands (NPCs/cones/statics) before spawning.
-        self.world.tick(10.0)
+        # Flush pending destroy commands before spawning. Skipped when actors
+        # were already frozen at step() termination -- no commands in-flight.
+        if not self._actors_frozen:
+            self.world.tick(10.0)
+        self._actors_frozen = False
 
         # When covariance is included in the observation, synchronous mode must
         # be active so the EKF runs in lock-step with the simulation.  A world
@@ -1696,6 +1727,10 @@ class CARLAParkingEnv(gym.Env):
             )
 
         truncated = self.steps >= self.max_steps
+
+        if (terminated or truncated) and self.world is not None:
+            self._freeze_all_actors()
+            self._actors_frozen = True
 
         # Distinguish termination cause for vis state writer.
         # Both collision and OOB set terminated=True; success is the third path.
