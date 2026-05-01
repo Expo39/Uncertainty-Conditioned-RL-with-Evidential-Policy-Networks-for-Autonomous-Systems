@@ -243,6 +243,118 @@ def load_floor_plan(
     return name, layout_cache[cache_key]
 
 
+def calibrate_ekf_frame_offset(
+    world_x: float,
+    world_y: float,
+    world_yaw: float,
+    get_pose: Callable[[], Optional[np.ndarray]],
+    timeout: float,
+    tick_fn: Optional[Callable[[], None]] = None,
+    tick_interval: float = 0.05,
+    pos_stable_threshold: float = 0.5,
+    yaw_stable_threshold: float = 0.1,
+    min_stable_readings: int = 3,
+) -> Tuple[float, float, float, float, float]:
+    """
+    @brief Compute the odom-to-world 2D rigid body transform by waiting for
+           the EKF pose to converge, then returning (tx, ty, cos_r, sin_r, r).
+
+    @param world_x: Known world-frame x of the reference point (metres).
+    @param world_y: Known world-frame y of the reference point (metres).
+    @param world_yaw: Known world-frame yaw at the reference point (radians).
+    @param get_pose: Returns current EKF pose array or None if unavailable.
+    @param timeout: Maximum wait time in seconds.
+    @param tick_fn: Optional callable invoked each poll iteration (e.g. CARLA tick).
+    @param tick_interval: Sleep duration between iterations (seconds).
+    @param pos_stable_threshold: Max tx/ty change (m) to count as stable.
+    @param yaw_stable_threshold: Max rotation change (rad) to count as stable.
+    @param min_stable_readings: Consecutive stable readings required.
+    @return (tx, ty, cos_r, sin_r, r) offset tuple, or identity if timed out
+            before any pose was received.
+
+    @note See documentation/detailed_notes/ekf_pipeline.md for derivation.
+    """
+    import time
+
+    start = time.monotonic()
+    prev_tx: Optional[float] = None
+    prev_ty: Optional[float] = None
+    prev_r: Optional[float] = None
+    stable_count = 0
+    last_offset: Optional[Tuple[float, float, float, float, float]] = None
+
+    while True:
+        ekf_pose = get_pose()
+        elapsed = time.monotonic() - start
+
+        if ekf_pose is None:
+            if elapsed > timeout:
+                logger.warning(
+                    "EKF pose unavailable after %.0fs - odom transform will be identity.",
+                    timeout,
+                )
+                return (0.0, 0.0, 1.0, 0.0, 0.0)
+            if tick_fn is not None:
+                tick_fn()
+            time.sleep(tick_interval)
+            continue
+
+        # ekf_state.json y is negated relative to CARLA world y (ROS REP-103
+        # vs CARLA left-handed axes). Negate here to match _get_state().
+        ekf_x = float(ekf_pose[0])
+        ekf_y = -float(ekf_pose[1])
+        ekf_yaw = float(ekf_pose[2])
+
+        r = math.atan2(
+            math.sin(world_yaw - ekf_yaw),
+            math.cos(world_yaw - ekf_yaw),
+        )
+        cos_r = math.cos(r)
+        sin_r = math.sin(r)
+        tx = world_x - (cos_r * ekf_x - sin_r * ekf_y)
+        ty = world_y - (sin_r * ekf_x + cos_r * ekf_y)
+        last_offset = (tx, ty, cos_r, sin_r, r)
+
+        if prev_tx is not None:
+            dtx = abs(tx - prev_tx)
+            dty = abs(ty - prev_ty)  # type: ignore[operator]
+            dr = abs(math.atan2(
+                math.sin(r - prev_r),  # type: ignore[arg-type]
+                math.cos(r - prev_r),  # type: ignore[arg-type]
+            ))
+            stable_count = stable_count + 1 if (
+                dtx < pos_stable_threshold
+                and dty < pos_stable_threshold
+                and dr < yaw_stable_threshold
+            ) else 0
+
+        prev_tx, prev_ty, prev_r = tx, ty, r
+
+        if stable_count >= min_stable_readings:
+            logger.info(
+                "EKF converged after %.2fs: rotation=%.1fdeg tx=%.3fm ty=%.3fm"
+                " (ref=(%.2f,%.2f) EKF odom=(%.2f,%.2f))",
+                elapsed, math.degrees(r), tx, ty, world_x, world_y, ekf_x, ekf_y,
+            )
+            return last_offset
+
+        if elapsed > timeout:
+            logger.warning(
+                "EKF convergence timeout (%.0fs) - transform still unstable"
+                " after %d stable readings. Using best available transform.",
+                timeout, stable_count,
+            )
+            return last_offset  # type: ignore[return-value]
+
+        logger.debug(
+            "Waiting for EKF convergence: stable=%d/%d elapsed=%.1fs",
+            stable_count, min_stable_readings, elapsed,
+        )
+        if tick_fn is not None:
+            tick_fn()
+        time.sleep(tick_interval)
+
+
 def wait_for_ekf(
     has_lidar: Callable[[], bool],
     has_ekf: Callable[[], bool],
