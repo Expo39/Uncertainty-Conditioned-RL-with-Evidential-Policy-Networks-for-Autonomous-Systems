@@ -21,8 +21,8 @@ action, uncertainty_dict = network.get_action(state_tensor)
 
 ### Uncertainty Formulae
 
-- **Epistemic** (model uncertainty): `beta / (alpha - 1)`
-- **Aleatoric** (data uncertainty): `beta / (nu * (alpha - 1))`
+- **Aleatoric** (data uncertainty, E[sigma^2]): `beta / (alpha - 1)`
+- **Epistemic** (model uncertainty, Var[mu]): `beta / (nu * (alpha - 1))`
 
 ### NIG Parameter Clamping
 
@@ -34,8 +34,8 @@ During RL training, unbounded growth of nu, alpha, beta causes the regularisatio
 - `softplus + offset` on nu, alpha, beta ensures finite variance and positivity.
 - NIG parameters clamped to max 100.0 for RL stability.
 - LayerNorm used (not BatchNorm).
-- `EvidentialPolicyNetwork` is a standalone test harness only -- NOT used in the RL training pipeline.
-- `compute_evidential_loss` is a supervised regression loss for unit tests only -- NOT the training loss.
+- `EvidentialPolicyNetwork` is a standalone test harness only - NOT used in the RL training pipeline.
+- `compute_evidential_loss` is a supervised regression loss for unit tests only - NOT the training loss.
 
 ## Module: `sb3_integration.py`
 
@@ -43,7 +43,7 @@ During RL training, unbounded growth of nu, alpha, beta causes the regularisatio
 
 | Class | Purpose |
 |-------|---------|
-| `EvidentialDistribution` | SB3 `Distribution` subclass: Gaussian approximation of NIG predictive. `std = sqrt(aleatoric)` only -- epistemic uncertainty is not added to action noise. Caches NIG params for the regularisation loss. |
+| `EvidentialDistribution` | SB3 `Distribution` subclass: Gaussian approximation of NIG predictive. `std = sqrt(aleatoric)` only - epistemic uncertainty is not added to action noise. Caches NIG params for the regularisation loss. |
 | `EvidentialActorCriticPolicy` | SB3 `ActorCriticPolicy` subclass with evidential actor head and standard critic. Supports flat MLP (`use_uncertainty_conditioning=False`) and dual-encoder (`True`) modes. |
 | `EvidentialPPO` | SB3 `PPO` subclass adding evidential regularisation to the PPO loss. Uses **prior-anchoring log-penalty** (not Amini et al. 2020 supervised term). Linearly anneals `lambda_reg` from 0 over `lambda_reg_warmup_steps`. |
 
@@ -57,7 +57,7 @@ reg = mean(log(nu / nu_prior + 1)) + mean(log(alpha / alpha_prior + 1))
 Replaces the Amini et al. 2020 supervised term `|actions - gamma| * (2*nu + alpha)`, which is ill-defined in RL:
 - Supervised term assumes ground-truth action targets (don't exist in RL)
 - In RL, `|actions - gamma|` is just policy sampling noise, not prediction error
-- Unbounded growth with lack of signal → regularisation loss explodes
+- Unbounded growth with lack of signal - regularisation loss explodes
 
 Log-penalty approach:
 - Bounded (finite for all nu, alpha values)
@@ -69,22 +69,22 @@ Log-penalty approach:
 | `use_uncertainty_conditioning` | Actor | Obs split |
 |-------------------------------|-------|-----------|
 | `False` | Flat MLP extractor + `EvidentialLayer` | Full obs -> MLP latent |
-| `True` | `UncertaintyConditionedActor` (dual-encoder) | `obs[:6]` = vehicle state, `obs[6:15]` = covariance features |
+| `True` | `UncertaintyConditionedActor` (dual-encoder) | `obs[:1]` = vyaw (VEHICLE_STATE_DIM), `obs[1:4]` = covariance (COVARIANCE_FEATURES_DIM) |
 
 ### Sampling std
 
 ```
-std = sqrt(beta / (nu * (alpha - 1)))  # aleatoric only
+std = sqrt(beta / (alpha - 1))  # aleatoric std only
 ```
 
-Epistemic uncertainty (`beta / (alpha - 1)`) quantifies model uncertainty over `gamma` and is NOT added to action noise.
+Epistemic uncertainty (`beta / (nu * (alpha - 1))`) quantifies model uncertainty over `gamma` and is NOT added to action noise.
 
 ### TensorBoard Logs (evidential-specific)
 
-- `train/evidential_reg_loss` -- prior-anchoring regularisation term: `mean(log(nu/nu_prior+1)) + mean(log(alpha/alpha_prior+1))`
-- `train/epistemic_uncertainty` -- mean `beta / (alpha - 1)` per update
-- `train/aleatoric_uncertainty` -- mean `beta / (nu * (alpha - 1))` per update
-- `train/lambda_reg` -- current annealed regularisation weight
+- `train/evidential_reg_loss` - prior-anchoring regularisation term: `mean(log(nu/nu_prior+1)) + mean(log(alpha/alpha_prior+1))`
+- `train/epistemic_uncertainty` - mean `beta / (nu * (alpha - 1))` per update
+- `train/aleatoric_uncertainty` - mean `beta / (alpha - 1)` per update
+- `train/lambda_reg` - current annealed regularisation weight
 
 ### Python Logging
 
