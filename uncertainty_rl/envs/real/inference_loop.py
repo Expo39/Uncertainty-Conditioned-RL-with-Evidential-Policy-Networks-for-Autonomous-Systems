@@ -160,13 +160,17 @@ class RealWorldInferenceLoop:
         @return Observation vector matching the trained policy's obs space.
 
         @todo(AG) Implement:
-            1. Read EKF filtered pose + covariance from /odometry/filtered
-               (via rclpy subscription or shared JSON written by CovarianceExtractorNode).
-            2. Parse 2D LiDAR scan for hemispheric clearance features.
-            3. Compute dx/dy/dyaw relative to target bay in ego body frame
-               (use RealWorldDeployment.reference_pose() for EKF frame offset).
-            4. Assemble and return the obs vector in the same order as
-               CARLAParkingEnv._get_state() (see envs/sim/carla_parking.py).
+            1. At mission start (once): call calibrate_ekf_frame_offset() from
+               envs/_parking_core with get_pose=cov_subscriber.get_latest_pose
+               and world_x/y/yaw from self._deployment.reference_pose().
+               Store the returned (tx, ty, cos_r, sin_r, r) offset tuple.
+            2. Each step: read EKF pose + covariance via _CovarianceSubscriber
+               (shared JSON file written by CovarianceExtractorNode - no DDS).
+               Apply the stored offset to convert odom -> lot layout frame.
+            3. Parse 2D LiDAR scan for hemispheric clearance features via
+               extract_obstacle_features() from envs/_parking_core.
+            4. Assemble obs vector with build_observation() from envs/_parking_core,
+               matching CARLAParkingEnv._get_state() exactly.
         """
         raise NotImplementedError(
             "Physical observation pipeline not yet implemented. "
