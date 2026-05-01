@@ -102,6 +102,9 @@ class NPCController:
         self._patrol_waypoint_indices: List[int] = []
         self._patrol_waypoint_directions: List[int] = []
         self._patrol_waypoints_cache: List[Tuple[float, float]] = []
+        # Tracks which patrol NPCs are currently pinned via enable_constant_velocity
+        # so disable_constant_velocity() is called before re-applying throttle.
+        self._patrol_pinned: List[bool] = []
 
         # Per-episode pedestrian state
         self.pedestrian_actors: List[Any] = []
@@ -230,6 +233,7 @@ class NPCController:
                 self.patrol_npc_ids.add(actor.id)
                 self._patrol_waypoint_indices.append(first_target_idx)
                 self._patrol_waypoint_directions.append(direction)
+                self._patrol_pinned.append(False)
 
         logger.debug("Spawned %d patrol NPC vehicles.", len(self.patrol_npcs))
 
@@ -437,23 +441,24 @@ class NPCController:
                         break
 
             if blocked:
-                # Zero velocity directly -- brake=1.0 through physics takes
-                # several metres to stop at patrol speed and still slides into
-                # the ego. The patrol is an obstacle, not a dynamics demo.
-                npc.set_target_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
-                control = carla.VehicleControl()
-                control.throttle = 0.0
-                control.brake = 1.0
-                control.steer = 0.0
-                npc.apply_control(control)
+                # enable_constant_velocity bypasses physics entirely and pins
+                # velocity to zero immediately -- set_target_velocity defers
+                # to the physics engine and takes multiple ticks to converge.
+                if not self._patrol_pinned[i]:
+                    npc.enable_constant_velocity(carla.Vector3D(x=0.0, y=0.0, z=0.0))
+                    self._patrol_pinned[i] = True
                 if steps % 20 == 0:
                     logger.debug(
-                        "[patrol] npc %d stopped (blocked)  wp=%d  step=%d",
+                        "[patrol] npc %d pinned (blocked)  wp=%d  step=%d",
                         npc.id,
                         self._patrol_waypoint_indices[i],
                         steps,
                     )
             else:
+                if self._patrol_pinned[i]:
+                    npc.disable_constant_velocity()
+                    self._patrol_pinned[i] = False
+
                 vel = npc.get_velocity()
                 speed = math.sqrt(vel.x**2 + vel.y**2)
                 speed_ratio = speed / max(self._patrol_max_speed, 0.1)
@@ -633,6 +638,7 @@ class NPCController:
         self._patrol_waypoint_indices.clear()
         self._patrol_waypoint_directions.clear()
         self._patrol_waypoints_cache = []
+        self._patrol_pinned.clear()
         self._pedestrian_headings.clear()
         self._pedestrian_heading_steps.clear()
         self._pedestrian_lifetime_steps.clear()
