@@ -80,7 +80,7 @@ labels 12pt, legend 10pt. Colours: blue = epistemic, red = aleatoric. Uncertaint
 
 | Class | Purpose |
 |-------|---------|
-| `ActuatorMap` | Single-actuator mapping: `output = gain * clip(input - deadband_offset, deadband, 1.0) + bias` |
+| `ActuatorMap` | Single-actuator mapping: `shifted = input - deadband_offset`; if inside deadband, `output = bias`; else `output = clip(gain * shifted + bias, min_output, max_output)` |
 | `ActuationCalibration` | Wraps steering and longitudinal `ActuatorMap`; identity in simulation, calibrated for real deployment |
 
 Load via `ActuationCalibration.from_config(path)`. Returns identity if the file is absent.
