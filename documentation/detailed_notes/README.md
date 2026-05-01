@@ -31,6 +31,8 @@ at the top level of this directory.
 | File | Extracted from | Topic |
 |------|---------------|-------|
 | `evidential_nig_initialisation.md` | `networks/evidential_policy.py` `EvidentialLayer.__init__` | NIG hyperprior bias derivation and ortho_init interaction |
+| `observation_space.md` | `envs/_parking_core.py`, `envs/CLAUDE.md` | 12-dim obs layout, LiDAR sector boundaries, covariance features |
+| `ros2_architecture.md` | `envs/covariance_subscriber.py`, `ros2/` | DDS-bypass via shared JSON, atomicity, sequence-number guard |
 
 ## See also
 
