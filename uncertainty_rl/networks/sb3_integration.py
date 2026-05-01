@@ -54,14 +54,6 @@ class EvidentialDistribution(Distribution):
     """
     @class EvidentialDistribution
     @brief SB3-compatible distribution using Gaussian approximation of NIG predictive.
-
-    The evidential network outputs NIG parameters (gamma, nu, alpha, beta).
-    For sampling and log_prob, we approximate with Normal(gamma, std) where
-    std = sqrt(aleatoric) = sqrt(beta / (alpha - 1)), the expected observation
-    noise std (Amini et al. 2020). Epistemic uncertainty Var[mu] =
-    beta / (nu * (alpha - 1)) is not added to the action std -- it characterises
-    model uncertainty over gamma, not per-sample action noise.
-    NIG parameters are cached for the evidential regularisation loss.
     """
 
     def __init__(self, action_dim: int) -> None:
@@ -104,11 +96,6 @@ class EvidentialDistribution(Distribution):
         self._alpha = alpha
         self._beta = beta
 
-        # Gaussian approximation: std = sqrt(aleatoric) = sqrt(beta / (alpha - 1)).
-        # Aleatoric = E[sigma^2] = beta/(alpha-1) is the expected observation noise
-        # (Amini et al. 2020). Epistemic = Var[mu] = beta/(nu*(alpha-1)) is not
-        # folded into action std -- it quantifies model uncertainty over gamma,
-        # not per-sample noise.
         # Clamp before sqrt to guard against numerical drift producing near-zero
         # or negative values under GPU fp32 arithmetic, which would yield NaN/inf
         # std and trigger a CUDA illegal memory access in Normal().
@@ -238,9 +225,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param lambda_reg: Evidential regularisation weight.
         @param use_uncertainty_conditioning: If True, replace the flat MLP actor
                with UncertaintyConditionedActor (dual-encoder). The observation
-               is split into vehicle state (indices 0-5) and covariance features
-               (indices 6-14) and processed through separate encoder branches
-               before fusion. Requires include_covariance=True in the env config.
+               is split at VEHICLE_STATE_DIM (index 0 = vyaw) and
+               COVARIANCE_FEATURES_DIM (indices 1-3 = std_x/y/yaw) and processed
+               through separate encoder branches before fusion.
+               Requires include_covariance=True in the env config.
         """
         self.lambda_reg = lambda_reg
         self.use_uncertainty_conditioning = use_uncertainty_conditioning
@@ -262,8 +250,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @brief Build MLP extractor with LayerNorm after each hidden Linear layer.
 
         Calls the parent implementation then injects nn.LayerNorm into the
-        policy and value MLP sequences. This matches the LayerNorm architecture
-        used in EvidentialPolicyNetwork for RL training stability (Dohare et al. 2024).
+        policy and value MLP sequences.
         """
         super()._build_mlp_extractor()
         self.mlp_extractor.policy_net = _insert_layernorm(self.mlp_extractor.policy_net)
@@ -550,7 +537,6 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 flat = cast(EvidentialLayer, self.action_net)
                 gamma, nu, alpha, beta = flat(latent_pi)
 
-            # Amini et al. 2020: aleatoric = E[sigma^2], epistemic = Var[mu].
             aleatoric = th.clamp(beta / (alpha - 1), min=1e-6)
             epistemic = beta / (nu * (alpha - 1))
             total = epistemic + aleatoric
@@ -636,8 +622,8 @@ class EvidentialPPO(PPO):
         @brief PPO training step with evidential regularisation.
 
         Reproduces the standard PPO training loop but adds the evidential
-        regularisation term: lambda_reg * mean(|actions - gamma| * (2*nu + alpha))
-        to the combined loss. Also logs epistemic and aleatoric uncertainty.
+        regularisation term to the combined loss. Also logs epistemic and 
+        aleatoric uncertainty.
         """
         self.policy.set_training_mode(True)
         self._update_learning_rate(self.policy.optimizer)
@@ -664,6 +650,10 @@ class EvidentialPPO(PPO):
         aleatoric_uncertainties: List[float] = []
 
         assert self.rollout_buffer is not None
+        ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
+        # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
+        _nu_prior = 1.24
+        _alpha_prior = 2.24
         continue_training = True
         for epoch in range(self.n_epochs):
             approx_kl_divs: List[float] = []
@@ -678,27 +668,16 @@ class EvidentialPPO(PPO):
                 )
                 values = values.flatten()
 
-                # Evidential regularisation from cached NIG params.
-                # Prior-anchoring log-penalty: prevents NIG evidence parameters from
-                # drifting far from their initialisation priors without coupling to
-                # action noise (unlike the Amini et al. 2020 supervised regression term
-                # |target - gamma| * (2*nu + alpha), which is ill-defined in RL where
-                # there is no ground-truth action target).
-                ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
+                # Prior-anchoring log-penalty on NIG evidence parameters.
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
-                # NIG hyperprior initialisation targets (from EvidentialLayer.__init__)
-                nu_prior = 1.24  # softplus(0.9) + 1e-6
-                alpha_prior = 2.24  # softplus(0.9) + 1.0
-
-                # Log penalty: bounded, encourages nu/alpha to stay near priors
                 evidential_reg = (
-                    th.mean(th.log(nu / nu_prior + 1.0))
-                    + th.mean(th.log(alpha / alpha_prior + 1.0))
+                    th.mean(th.log(nu / _nu_prior + 1.0))
+                    + th.mean(th.log(alpha / _alpha_prior + 1.0))
                 )
 
-                # Log uncertainties (Amini et al. 2020 definitions).
+                # Log uncertainties 
                 with th.no_grad():
                     aleatoric = (beta / (alpha - 1)).mean()
                     epistemic = (beta / (nu * (alpha - 1))).mean()
@@ -788,7 +767,7 @@ class EvidentialPPO(PPO):
             self.rollout_buffer.returns.flatten(),
         )
 
-        # Standard PPO logs. `loss` is the last-batch tensor -- SB3 convention.
+        # Standard PPO logs. `loss` is the last-batch tensor - SB3 convention.
         self.logger.record("train/entropy_loss", np.mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
         self.logger.record("train/value_loss", np.mean(value_losses))

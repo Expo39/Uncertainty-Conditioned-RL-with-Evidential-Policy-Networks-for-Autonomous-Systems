@@ -30,7 +30,7 @@ at the top level of this directory.
 
 | File | Extracted from | Topic |
 |------|---------------|-------|
-| *(files added as checkpoints progress)* | | |
+| `evidential_nig_initialisation.md` | `networks/evidential_policy.py` `EvidentialLayer.__init__` | NIG hyperprior bias derivation and ortho_init interaction |
 
 ## See also
 
