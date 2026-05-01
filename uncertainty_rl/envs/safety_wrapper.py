@@ -8,8 +8,8 @@ outputs. Training runs WITHOUT the wrapper (the policy learns freely).
 Evaluation runs WITH the wrapper (safety layer active).
 
 Two uncertainty types produce two distinct responses:
-- Aleatoric (outcome noise): scale down action magnitude (gentler driving).
-- Epistemic (novelty/ignorance): graduated from caution to full handoff.
+- Aleatoric (outcome noise): cap the forward longitudinal limit (slower driving).
+- Epistemic (novelty/ignorance): full stop when above handoff_threshold.
 """
 
 import logging
@@ -46,10 +46,9 @@ class SafetyWrapper(gym.Wrapper):
         @param env: The underlying CARLAParkingEnv instance.
         @param aleatoric_scaling: Controls how aggressively aleatoric
             uncertainty scales actions. Higher = more conservative.
-            action *= 1.0 / (1.0 + aleatoric_scaling * aleatoric).
         @param handoff_threshold: Epistemic uncertainty level above which
             the wrapper triggers a full safety handoff (zero action).
-            Set high -- only extreme cases should trigger this.
+            Set high - only extreme cases should trigger this.
         """
         super().__init__(env)
         self._aleatoric_scaling = aleatoric_scaling
@@ -102,7 +101,7 @@ class SafetyWrapper(gym.Wrapper):
         """
         modulated = action.copy()
 
-        # Aleatoric: cap longitudinal only -- steering is unrestricted.
+        # Aleatoric: cap longitudinal only - steering is unrestricted.
         # High aleatoric = unpredictable outcomes (e.g. pedestrian cutting across).
         # Reducing speed lowers collision risk without compromising directional control.
         aleatoric_scale = 1.0 / (1.0 + aleatoric_scaling * aleatoric)
@@ -156,8 +155,6 @@ class SafetyWrapper(gym.Wrapper):
         info["epistemic"] = self._current_epistemic
         info["aleatoric"] = self._current_aleatoric
 
-        # On handoff, truncate the episode (correct action when uncertain).
-        # No reward penalty -- handoff is the RIGHT thing to do.
         if info_extra.get("safety_handoff", False):
             truncated = True
 
