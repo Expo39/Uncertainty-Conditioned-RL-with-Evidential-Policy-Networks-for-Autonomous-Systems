@@ -703,7 +703,7 @@ def _make_env_for_reward() -> Any:
 
     # Mock sensor manager -- no collision by default
     mock_sm = MagicMock()
-    mock_sm.consume_collision.return_value = False
+    mock_sm.consume_collision.return_value = (False, False)
     env._sensor_manager = mock_sm
 
     # Default target bay at origin
@@ -763,17 +763,31 @@ class TestComputeReward:
         assert terminated is False
         assert success is False
 
-    def test_collision_returns_minus_ten_and_terminates(self) -> None:
+    def test_collision_ego_fault_returns_minus_ten_and_terminates(self) -> None:
         """
-        @brief Collision flag -> reward = -10.0, terminated = True, success = False.
+        @brief Ego-fault collision -> reward = -10.0, terminated = True, success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
-        env._sensor_manager.consume_collision.return_value = True
+        env._sensor_manager.consume_collision.return_value = (True, True)
 
         reward, terminated, success, diag = env._compute_reward()
 
         assert reward == pytest.approx(-10.0)
+        assert terminated is True
+        assert success is False
+
+    def test_collision_pedestrian_fault_terminates_no_penalty(self) -> None:
+        """
+        @brief Pedestrian-fault collision -> reward = 0.0, terminated = True, success = False.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
+        env._sensor_manager.consume_collision.return_value = (True, False)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert reward == pytest.approx(0.0)
         assert terminated is True
         assert success is False
 
@@ -926,7 +940,7 @@ class TestComputeReward:
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
-        env._sensor_manager.consume_collision.return_value = True
+        env._sensor_manager.consume_collision.return_value = (True, True)
 
         _, _, _, diag = env._compute_reward()
 
