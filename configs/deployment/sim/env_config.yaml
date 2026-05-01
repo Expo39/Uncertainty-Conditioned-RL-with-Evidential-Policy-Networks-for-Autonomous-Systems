@@ -134,7 +134,7 @@ parking_scenarios:
   perimeter_cone_spacing: 2.0          # Metres between perimeter markers
   bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
   bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
-  num_patrol_vehicles_max: 0           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
+  num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
   patrol_obstacle_stop_distance: 5.0  # Metres ahead - patrol brakes if any vehicle is in forward cone within this range
   patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
   patrol_max_speed_ms: 3.0            # Patrol vehicle speed in m/s (applied directly via kinematic, no physics acceleration)
