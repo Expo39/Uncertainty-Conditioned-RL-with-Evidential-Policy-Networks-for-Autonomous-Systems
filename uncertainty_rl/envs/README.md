@@ -2,55 +2,53 @@
 
 Gymnasium-compatible CARLA parking environment with real EKF covariance from `robot_localisation` embedded in the observation space.
 
-## Module: `carla_parking.py`
+## Module: `sim/carla_parking.py`
 
 ### Class: `CARLAParkingEnv`
 
 A `gymnasium.Env` subclass that places an ego vehicle in a configurable open-space parking lot (FlatPlane generated OpenDRIVE world) and requires it to navigate to a target parking bay while accounting for localisation uncertainty from the robot\_localisation EKF.
 
-**Requires the full Docker stack** (carla-server + ros2-bridge + training containers) for training. No standalone fallback - Docker + ROS 2 are always required.
+**Requires the full Docker stack** (carla-server + ros2-bridge + training containers) for training. No standalone fallback.
 
-### Constructor Parameters
+### Constructor Parameters (key subset)
 
-```python
-CARLAParkingEnv(
-    carla_host="localhost",
-    carla_port=2000,
-    town="FlatPlane",
-    max_steps=500,
-    render_mode=None,
-    ros2_config={"covariance_topic": "/odometry/filtered", "covariance_timeout": 10.0},
-    carla_sensors_config={"imu": {...}, "gnss": {...}, "lidar": {...}},
-    parking_scenarios_config={...},  # parking_scenarios section from carla/env_config.yaml
-    include_covariance=True,
-    include_obstacle_obs=True,
-    gnss_noise_profiles_path="configs/gnss_noise_profiles.yaml",
-    map_load_sleep=5.0,   # seconds to wait after FlatPlane OpenDRIVE load (from config)
-)
-```
+All parameters are optional with defaults. Full signature in `sim/carla_parking.py`.
 
-### State Space (17-dimensional default)
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `carla_host` | `"localhost"` | CARLA server hostname |
+| `carla_port` | `2000` | CARLA server port |
+| `max_steps` | `500` | Episode step limit |
+| `ros2_config` | `None` | EKF file paths and timeout |
+| `carla_sensors_config` | `None` | Sensor noise parameters |
+| `parking_scenarios_config` | `None` | Floor plans, bay occupancy, NPC counts |
+| `include_covariance` | `True` | Include EKF std devs in obs (indices 1-3) |
+| `include_obstacle_obs` | `True` | Include LiDAR clearance in obs (indices 7-11) |
+| `eval_mode` | `False` | When True, OOD floor plans are eligible |
+| `action_repeat` | `1` | Repeat each action N simulation steps |
+| `gnss_noise_profiles_path` | `None` | Path to `gnss_noise_profiles.yaml` |
+| `uncertainty_std_max` | `2.0` | Denominator for uncertainty reward scaling |
 
-**All 17 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation. This ensures identical inputs in simulation and on the real vehicle.
+### State Space (12-dimensional default)
 
-Absolute EKF position (x, y, yaw) is excluded: it accumulates across episodes in the EKF odom frame and carries no consistent signal for the policy. Navigation intent is fully encoded by dx/dy/dyaw (indices 9-11).
+**All 12 dimensions are available at the real-world deployment site without retraining.** CARLA ground truth is used only for reward computation - never in the observation.
+
+Absolute EKF position (x, y, yaw) is excluded: it accumulates across episodes in the EKF odom frame and carries no consistent signal for the policy. Navigation intent is fully encoded by dx/dy/dyaw (indices 4-6).
 
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|
-| 0-2 | vx, vy, vyaw | EKF filtered pose | Velocity estimate in ego body frame (noisy) |
-| 3-5 | std\_x, std\_y, std\_yaw | EKF covariance | Standard deviations (log1p-transformed) |
-| 6-8 | cov\_xy, cov\_xyaw, cov\_yyaw | EKF covariance | Off-diagonal elements (log1p-transformed) |
-| 9-11 | dx, dy, dyaw | Target bay (relative) | Target bay pose in ego body frame |
-| 12-13 | left\_dist, left\_bearing | LiDAR scan | Nearest obstacle in left hemisphere (y > 0) |
-| 14-15 | right\_dist, right\_bearing | LiDAR scan | Nearest obstacle in right hemisphere (y < 0) |
-| 16 | forward\_dist | LiDAR scan | Nearest obstacle in forward cone (bearing within +/-30 deg) |
+| 0 | vyaw | EKF filtered pose | Yaw rate estimate (rad/s) |
+| 1-3 | std_x, std_y, std_yaw | EKF covariance | Standard deviations (COVARIANCE_FEATURES_DIM=3) |
+| 4-6 | dx, dy, dyaw | Target bay (relative) | Target bay pose in ego body frame |
+| 7-8 | left\_dist, left\_bearing | LiDAR scan | Nearest obstacle in left hemisphere (bearing > +15 deg) |
+| 9-10 | right\_dist, right\_bearing | LiDAR scan | Nearest obstacle in right hemisphere (bearing < -15 deg) |
+| 11 | forward\_dist | LiDAR scan | Nearest obstacle in forward cone (bearing within +/-15 deg) |
 
 **Ablation flags:**
-- `include_covariance=False` drops indices 3-8 (6 dims less).
-- `include_obstacle_obs=False` drops indices 12-16 (5 dims less).
-- Obs dims: 17 (default), 12 (no obstacle), 11 (no covariance), 6 (neither).
-
-Covariance features are log1p-transformed to compress heavy tails from high-uncertainty conditions (rain, sensor noise) that would otherwise distort VecNormalize running statistics.
+- `include_covariance=False` drops indices 1-3 (3 dims less).
+- `include_obstacle_obs=False` drops indices 7-11 (5 dims less).
+- Obs dims: 12 (default), 9 (no covariance), 7 (no obstacle obs), 4 (neither).
+- Use `compute_obs_dim()` from `envs/_parking_core.py` to compute the active dimension.
 
 ### Target Pose Computation
 
@@ -62,33 +60,35 @@ dy   = -sin(yaw_ego) * (x_target - x_ego) + cos(yaw_ego) * (y_target - y_ego)
 dyaw = angle_wrap(yaw_target - yaw_ego)
 ```
 
-### Action Space (3-dimensional)
+### Action Space (2-dimensional)
 
 | Action | Range | Description |
 |--------|-------|-------------|
 | Steering | [-1, 1] | Left/right |
-| Throttle | [0, 1] | Acceleration (forward only - no reverse) |
-| Brake | [0, 1] | Deceleration |
+| Longitudinal | [-1, 1] | Forward/brake |
 
 ### Reward Function
 
-Potential-based shaping (Ng et al. 1999):
+Potential-based shaping (Ng et al. 1999) with localisation-quality scaling:
 
 ```
-progress = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
-reward   = progress - 0.01  # 0.01/step time penalty
+progress          = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
+uncertainty_scale = clip(max(std_x, std_y) / uncertainty_std_max, 0, 1)
+reward            = progress * (1 - uncertainty_scale) - 0.01
 ```
 
-Terminal rewards: collision = -10.0, success = +10.0, out-of-bounds = -5.0.
+Progress reward is attenuated when localisation uncertainty is high (large std_x/std_y).
+When `include_covariance=False`, `uncertainty_scale` is always 0 (no attenuation).
+
+Terminal rewards: collision = -10.0, success = +10.0.
 
 Success: position error < 0.5 m, orientation error < 10 deg, velocity < 0.1 m/s.
 
 ### Termination Conditions
 
-1. **Collision** (physical contact detected by collision sensor): terminated, -10.0 penalty.
-2. **Successful park**: terminated, +10.0 bonus.
-3. **Out of bounds** (>20 m from target): terminated, -5.0 penalty.
-4. **Time limit** (500 steps): truncated.
+1. **Collision** (physical contact detected by collision sensor): `terminated=True`, -10.0 penalty (ego-fault only; non-ego-fault collision gives 0.0).
+2. **Successful park**: `terminated=True`, +10.0 bonus.
+3. **Time limit** (`max_steps` steps, default 500): `truncated=True`, no terminal reward.
 
 ---
 
@@ -116,16 +116,12 @@ Each floor plan has 15 bays - 5 of each type:
 | Angled (45 deg) | 2.5 m | 5.4 m | 3.6 m |
 | Parallel (forward pull-in) | 2.5 m | 8.0 m | 4.0 m |
 
-### Stratified Bay Sampling
-
-Each episode: sample bay type uniformly (1/3 each), then sample one bay of that type. Target bay is always kept empty. Adjacent bays (same type, index +/-1) are always kept empty for manoeuvring clearance. All other eligible bays are independently filled with ~70% probability.
-
 ### Dynamic Actors
 
-- **NPC patrol vehicles** (0-3 per episode): scripted proportional controller cycling through layout waypoints. No Traffic Manager - FlatPlane has no OpenDRIVE road network.
-- **Pedestrians** (0-4 per episode): random-walk via `WalkerControl`. No NavMesh required.
-- **Perimeter cones**: `static.prop.constructioncone` at 2 m spacing along floor plan edges. LiDAR-visible, physics-blocking, `set_simulate_physics(False)`.
-- **Static parked vehicles**: spawned at occupied bay positions, `set_simulate_physics(False)`.
+- **NPC patrol vehicles** (0-3 per episode): scripted proportional controller cycling through layout waypoints.
+- **Pedestrians** (0-4 per episode): random-walk via `WalkerControl`.
+- **Perimeter cones**: `static.prop.constructioncone` at 2 m spacing along floor plan edges.
+- **Static parked vehicles**: spawned at occupied bay positions.
 
 ### Uncertainty Sources
 
@@ -141,14 +137,18 @@ Each episode: sample bay type uniformly (1/3 each), then sample one bay of that 
 
 ## Key Classes
 
-| Class | Purpose |
-|-------|---------|
-| `CARLAParkingEnv` | Main Gymnasium env |
-| `_CovarianceSubscriber` | rclpy daemon thread - subscribes to EKF covariance, caches pose + uncertainty |
+| Class | File | Purpose |
+|-------|------|---------|
+| `CARLAParkingEnv` | `sim/carla_parking.py` | Main Gymnasium env |
+| `_CovarianceSubscriber` | `covariance_subscriber.py` | File-based EKF state reader (no DDS) |
+| `SafetyWrapper` | `safety_wrapper.py` | Action modulation at eval time based on evidential uncertainty |
 
-### Module-level helpers
+### Module-level helpers (`_parking_core.py`)
 
 | Function | Purpose |
 |----------|---------|
-| `_interpolate_cone_positions` | Adaptive cone spacing along polygon edges |
-| `_compute_relative_target_pose` | Body-frame transform (dx, dy, dyaw) |
+| `compute_obs_dim` | Active obs dimension from include_covariance / include_obstacle_obs flags |
+| `build_observation` | Fill pre-allocated obs buffer from EKF state, uncertainty, and LiDAR |
+| `extract_obstacle_features` | Hemispheric LiDAR clearance features (5-element buffer) |
+| `load_floor_plan` | Select and cache a floor plan YAML for one episode |
+| `wait_for_ekf` | Block until LiDAR and EKF data are both available |

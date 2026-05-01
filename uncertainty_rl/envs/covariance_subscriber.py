@@ -6,15 +6,6 @@ Reads the latest EKF state from a shared JSON file written by the
 CovarianceExtractorNode in the ros2-bridge container. This avoids DDS
 cross-distro serialisation issues between ROS 2 Humble (training container)
 and Jazzy (ros2-bridge container).
-
-The file is written atomically (via rename) by the extractor node at the
-EKF publish rate (~20 Hz) to /workspace/outputs/ekf_state.json, which is
-on a Docker shared volume visible to both containers.
-
-The /set_pose signal for EKF state reset is also file-based: the
-training container writes initial_pose.json and the CovarianceExtractorNode
-in ros2-bridge reads it and publishes on /set_pose. Similarly, GNSS noise tier
-config is signalled via gnss_noise_config.json for the GnssNoiseRelayNode.
 """
 
 import json
@@ -29,19 +20,13 @@ import numpy as np
 
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
-# Default shared file path (Docker volume mount: outputs/ is rw in both containers).
-# Individual _CovarianceSubscriber instances override this via ros2_config["ekf_state_file"]
-# so that parallel CARLA workers each read from their own ros2-bridge's output file.
+# Default shared file path
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
-# File-based /set_pose signal.  The training container writes this file at
-# episode reset; the CovarianceExtractorNode (ros2-bridge, Jazzy) watches it
-# and publishes /set_pose locally.  Same DDS-bypass pattern as ekf_state.json.
+# File-based /set_pose signal
 _INITIAL_POSE_PATH = Path("/workspace/outputs/initial_pose.json")
 
-# File-based GNSS noise config signal.  The training container writes this at
-# episode reset with the current noise tier; the GnssNoiseRelayNode (ros2-bridge)
-# reads it and applies dynamic noise to CARLA GNSS output.
+# File-based GNSS noise config signal
 _GNSS_NOISE_CONFIG_PATH = Path("/workspace/outputs/gnss_noise_config.json")
 
 logger = logging.getLogger(__name__)
@@ -54,11 +39,7 @@ class _CovarianceSubscriber:
 
     The CovarianceExtractorNode (ros2-bridge, Jazzy) writes the latest EKF
     pose, velocity, and 3x3 covariance to a shared file. This class reads
-    that file on demand -- no DDS subscription needed.
-
-    The /set_pose signal is also file-based: this class writes
-    initial_pose.json and the extractor node reads it and publishes
-    /set_pose within the ros2-bridge container (same DDS domain).
+    that file on demand - no DDS subscription needed.
     """
 
     def __init__(
@@ -69,9 +50,9 @@ class _CovarianceSubscriber:
     ) -> None:
         """
         @brief Initialise the covariance reader.
-        @param covariance_topic: Unused -- EKF state is read from the shared
+        @param covariance_topic: Unused - EKF state is read from the shared
                JSON file, not via DDS. Accepted for call-site compatibility.
-        @param node_name: Unused -- no rclpy Node. Accepted for compatibility.
+        @param node_name: Unused - no rclpy Node. Accepted for compatibility.
         @param ros2_config: Optional ROS 2 config dict from train_config.yaml.
         """
         self._lock = threading.Lock()
@@ -80,17 +61,12 @@ class _CovarianceSubscriber:
         # Sequence number of the last-seen write from the extractor node.
         # invalidate() records the current seq; _read_file() only accepts a
         # file whose `seq` field is strictly greater than _valid_after_seq.
-        # This is clock-skew-proof -- mtime comparisons across Docker container
-        # clocks are unreliable on some host configurations.
         self._valid_after_seq: int = 0
         self._last_read_seq: int = 0
         # Monotonically increasing counter for initial_pose.json writes.
         self._initial_pose_seq: int = 0
 
-        # Per-worker EKF state file path. Priority order:
-        #   1. ros2_config["ekf_state_file"] -- set by make_env() for rank > 0
-        #   2. EKF_STATE_FILE env var -- set by docker-compose.parallel.yml
-        #   3. _EKF_STATE_PATH module constant -- single-instance default
+        # Per-worker EKF state file path
         config = ros2_config or {}
         ekf_state_file: str = config.get(
             "ekf_state_file",
@@ -98,7 +74,7 @@ class _CovarianceSubscriber:
         )
         self._ekf_state_path: Path = Path(ekf_state_file)
 
-        # Initial pose file path (shared volume, same dir as EKF state).
+        # Initial pose file path 
         self._initial_pose_path: Path = Path(
             config.get(
                 "initial_pose_file",
@@ -109,7 +85,7 @@ class _CovarianceSubscriber:
             ".json.tmp"
         )
 
-        # GNSS noise config file path (shared volume, same dir as EKF state).
+        # GNSS noise config file path
         self._gnss_noise_config_path: Path = Path(
             config.get(
                 "gnss_noise_config_file",
@@ -183,8 +159,6 @@ class _CovarianceSubscriber:
             if not self._ekf_state_path.exists():
                 return False
             data = json.loads(self._ekf_state_path.read_text())
-            # seq field added in extractor v2; fall back to mtime guard for
-            # old extractor images that predate the seq field.
             seq: int = int(data.get("seq", 0))
             with self._lock:
                 valid_after_seq = self._valid_after_seq
@@ -201,9 +175,7 @@ class _CovarianceSubscriber:
                 ],
                 dtype=np.float64,
             )
-            # Reject NaN/Inf writes: the EKF can diverge (e.g. Cholesky failure
-            # on the first prediction step before the first GNSS correction) and
-            # write NaN to every field. Treating these as "no data" causes the
+            # Reject NaN/Inf writes. Treating these as "no data" causes the
             # env to fall back to the CARLA ground-truth pose rather than feeding
             # NaN observations directly into the policy.
             if not np.all(np.isfinite(pose)) or not np.all(np.isfinite(features)):
@@ -232,7 +204,7 @@ class _CovarianceSubscriber:
 
         @return Tuple of (pose, uncertainty) where:
                 pose: shape (4,) = [x, y, yaw, vyaw], or None.
-                uncertainty: shape (9,) uncertainty feature vector, or None.
+                uncertainty: shape (COVARIANCE_FEATURES_DIM,) feature vector, or None.
         """
         self._read_file()
         with self._lock:
@@ -250,11 +222,11 @@ class _CovarianceSubscriber:
 
     def get_latest_uncertainty(self) -> Optional[np.ndarray]:
         """
-        @brief Get the most recent 9-element uncertainty feature vector.
+        @brief Get the most recent uncertainty feature vector.
 
         @note Use get_latest_state() when pose is also needed to avoid a
               second file read.
-        @return Array of shape (9,) or None if no data available.
+        @return Array of shape (COVARIANCE_FEATURES_DIM,) or None if no data available.
         """
         self._read_file()
         with self._lock:
@@ -325,18 +297,10 @@ class _CovarianceSubscriber:
 
         Writes gnss_noise_config.json with the episode's RTK fix-state tier
         name, the geolocation of the vehicle spawn point, and the spawn yaw.
-        GnssNoiseRelayNode reads this file and:
-          - Calls _apply_tier() to set the noise parameters.
-          - Re-latches its flat-earth datum to datum_lat/lon.
-          - Seeds the COG heading from spawn_yaw so the EKF receives a correct
-            heading from tick 1, before any vehicle motion.
-
+        
         Re-latching the datum each episode ensures that GNSS Odometry (0, 0)
         and /set_pose (0, 0) agree at episode reset, eliminating the systematic
         EKF drift that occurs when /set_pose and GNSS use different origins.
-
-        The seq field is a monotonically increasing counter so the relay can
-        detect a new episode even when the tier name is unchanged.
 
         @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed').
         @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
@@ -390,7 +354,7 @@ class _CovarianceSubscriber:
         with self._lock:
             if self._latest_uncertainty is not None:
                 return True
-        # Nothing cached -- attempt a read.
+        # Nothing cached - attempt a read.
         self._read_file()
         with self._lock:
             return self._latest_uncertainty is not None

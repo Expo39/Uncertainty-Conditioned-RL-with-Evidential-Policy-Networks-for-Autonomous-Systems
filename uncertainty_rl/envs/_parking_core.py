@@ -5,20 +5,6 @@
 Pure functions used by both the CARLA simulation environment (envs/sim/) and
 the real-world deployment environment (envs/real/). No CARLA imports, no
 ROS 2 imports, no hardware dependencies.
-
-Covers:
-  - Observation vector construction from EKF pose, covariance, and LiDAR.
-  - Hemispheric LiDAR obstacle feature extraction.
-  - Floor plan loading from layout YAML.
-  - EKF readiness wait loop (hardware-agnostic, caller provides tick function).
-
-NOT included here (sim-only):
-  - compute_parking_reward  -- requires GT position, training/sim only.
-  - sample_target_bay       -- random bay selection, sim only; real world
-                               receives a target bay from dispatch via
-                               RealWorldDeployment.set_target_bay().
-
-@author Antonio Galdes
 """
 
 import logging
@@ -39,6 +25,10 @@ from uncertainty_rl.utils.constants import (
 from uncertainty_rl.utils.geometry import _compute_relative_target_pose
 
 logger = logging.getLogger(__name__)
+
+# Sector boundary for hemispheric LiDAR feature extraction (radians).
+# Left: bearing > _SECTOR_BOUNDARY; forward: |bearing| <= _SECTOR_BOUNDARY; right: < -_SECTOR_BOUNDARY.
+_SECTOR_BOUNDARY: float = math.radians(15.0)
 
 # Shared layout cache: keyed by resolved absolute path string so multiple env
 # instances in the same process share the parsed YAML without re-reading disk.
@@ -83,15 +73,9 @@ def build_observation(
     for providing a pre-allocated buffer of the correct shape.
 
     When ekf_pose is None (EKF not yet initialised), all pose-derived dims
-    (velocity, target) are set to zero. When uncertainty is None or all-zero,
-    covariance dims are zeroed and a debug log is emitted.
-
-    Layout (include_covariance=True, include_obstacle_obs=True, 12-dim):
-      [0]     EKF yaw rate (vyaw)
-      [1-3]   EKF std devs (std_x, std_y, std_yaw)
-      [4-6]   target bay in ego body frame (dx, dy, dyaw)
-      [7-11]  hemispheric LiDAR clearance (left_dist, left_bearing,
-              right_dist, right_bearing, forward_dist)
+    (velocity, target) are set to zero. When uncertainty is None, covariance
+    dims remain zero. When uncertainty is present but all-zero, a debug log
+    is emitted (EKF may still be initialising).
 
     @param ekf_pose: 4-element array [x, y, yaw, vyaw] in world frame,
                      or None if EKF is not yet available.
@@ -132,23 +116,23 @@ def build_observation(
             obs_buffer[4:4 + OBSTACLE_FEATURES_DIM] = obstacle_features
         return obs_buffer.copy()
 
-    # With covariance: [vyaw(1), cov(6), target(3), obstacle(5)]
+    # With covariance: [vyaw(1), cov(3), target(3), obstacle(5)]
     obs_buffer[0] = vyaw
 
     if uncertainty is not None:
         unc = uncertainty.astype(np.float32)
         if not np.any(unc):
-            logger.debug("[obs] EKF covariance all-zeros -- policy sees no uncertainty")
+            logger.debug("[obs] EKF covariance all-zeros - policy sees no uncertainty")
         obs_buffer[1:1 + COVARIANCE_FEATURES_DIM] = unc
     # else: covariance dims remain zero (EKF not yet publishing)
 
-    cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 7
+    cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 4
     obs_buffer[cov_end] = dx
     obs_buffer[cov_end + 1] = dy
     obs_buffer[cov_end + 2] = dyaw
 
     if include_obstacle_obs:
-        tgt_end = cov_end + TARGET_POSE_DIM  # index 10
+        tgt_end = cov_end + TARGET_POSE_DIM  # index 7
         obs_buffer[tgt_end:tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
 
     return obs_buffer.copy()
@@ -170,10 +154,7 @@ def extract_obstacle_features(
             forward_dist]. Any hemisphere with no valid returns gets 0.0.
 
     @note Self-returns closer than 1.0 m and the rear hemisphere (x <= 0) are
-          discarded -- matching the ~270 deg FOV of a front-bumper-mounted LiDAR.
-    @note When a scan produces no valid returns (empty tick or all-rear points),
-          the buffer is left unchanged so the previous step's values are held.
-          This prevents spurious zero spikes at the 15 Hz / 20 Hz scan boundary.
+          discarded - matching the ~270 deg FOV of a front-bumper-mounted LiDAR.
     """
     if scan is None or len(scan) == 0:
         return out
@@ -192,23 +173,20 @@ def extract_obstacle_features(
     scan = scan[valid]
     bearings = np.arctan2(scan[:, 1], scan[:, 0])
 
-    _15 = math.radians(15.0)
-
-    # Non-overlapping sectors: left (+15,+90], forward (-15,+15), right (-90,-15)
-    left_mask = bearings > _15
+    # Non-overlapping sectors: left (> +15 deg), forward (+/-15 deg), right (< -15 deg)
+    left_mask = bearings > _SECTOR_BOUNDARY
     if np.any(left_mask):
         idx = int(np.argmin(dists[left_mask]))
         out[0] = float(dists[left_mask][idx])
         out[1] = float(bearings[left_mask][idx])
 
-    right_mask = bearings < -_15
+    right_mask = bearings < -_SECTOR_BOUNDARY
     if np.any(right_mask):
         idx = int(np.argmin(dists[right_mask]))
         out[2] = float(dists[right_mask][idx])
         out[3] = float(bearings[right_mask][idx])
 
-    # Forward: nearest return within +-15 deg of straight ahead
-    forward_mask = np.abs(bearings) <= _15
+    forward_mask = np.abs(bearings) <= _SECTOR_BOUNDARY
     if np.any(forward_mask):
         out[4] = float(np.min(dists[forward_mask]))
 
@@ -225,9 +203,6 @@ def load_floor_plan(
 
     During training (eval_mode=False), only floor plans with ood=false are
     eligible. During evaluation (eval_mode=True), all plans are eligible.
-
-    Uses the shared layout_cache to avoid re-reading the same YAML on every
-    episode reset. Pass the module-level _layout_cache or a per-class dict.
 
     @param floor_plans_config: Dict mapping plan names to config dicts, from
                                parking_scenarios.floor_plans in train_config.yaml.
@@ -279,7 +254,7 @@ def wait_for_ekf(
     @brief Block until LiDAR and EKF data are both available.
 
     Hardware-agnostic: the caller provides lambdas for the readiness checks
-    and an optional tick function (e.g. world.tick() in sim, no-op in real).
+    and an optional tick function.
 
     @param has_lidar: Returns True when at least one LiDAR scan has arrived.
     @param has_ekf: Returns True when the EKF state file has been written.

@@ -14,10 +14,14 @@ Core novel component - evidential deep learning policy networks for uncertainty-
 
 ### Key Interface
 
+During evaluation and deployment, use `EvidentialActorCriticPolicy.get_action_with_uncertainty()`:
+
 ```python
-action, uncertainty_dict = network.get_action(state_tensor)
+action, uncertainty_dict = policy.get_action_with_uncertainty(obs_tensor)
 # uncertainty_dict keys: epistemic, aleatoric, total, gamma, nu, alpha, beta
 ```
+
+`EvidentialPolicyNetwork.get_action()` provides the same interface but is a standalone test harness only - not used in the RL training pipeline.
 
 ### Uncertainty Formulae
 
@@ -26,7 +30,7 @@ action, uncertainty_dict = network.get_action(state_tensor)
 
 ### NIG Parameter Clamping
 
-During RL training, unbounded growth of nu, alpha, beta causes the regularisation term to explode. We enforce **upper bounds of 100.0** on all three parameters in `EvidentialLayer.forward()`. This differs from supervised regression (Amini et al. 2020), where ground-truth targets exist. In RL, `|actions - gamma|` is just policy noise, not prediction error, so clamping prevents the reg loss from diverging.
+During RL training, unbounded growth of nu, alpha, beta destabilises both the NLL loss and the prior-anchoring log-penalty regularisation used by `EvidentialPPO`. Upper bounds of **100.0** are enforced on all three parameters in `EvidentialLayer.forward()`.
 
 ### Constraints
 
@@ -45,7 +49,7 @@ During RL training, unbounded growth of nu, alpha, beta causes the regularisatio
 |-------|---------|
 | `EvidentialDistribution` | SB3 `Distribution` subclass: Gaussian approximation of NIG predictive. `std = sqrt(aleatoric)` only - epistemic uncertainty is not added to action noise. Caches NIG params for the regularisation loss. |
 | `EvidentialActorCriticPolicy` | SB3 `ActorCriticPolicy` subclass with evidential actor head and standard critic. Supports flat MLP (`use_uncertainty_conditioning=False`) and dual-encoder (`True`) modes. |
-| `EvidentialPPO` | SB3 `PPO` subclass adding evidential regularisation to the PPO loss. Uses **prior-anchoring log-penalty** (not Amini et al. 2020 supervised term). Linearly anneals `lambda_reg` from 0 over `lambda_reg_warmup_steps`. |
+| `EvidentialPPO` | SB3 `PPO` subclass adding evidential regularisation to the PPO loss. Uses **prior-anchoring log-penalty**. Linearly anneals `lambda_reg` from 0 over `lambda_reg_warmup_steps`. |
 
 ### Evidential Regularisation Loss
 
@@ -54,7 +58,9 @@ During RL training, unbounded growth of nu, alpha, beta causes the regularisatio
 reg = mean(log(nu / nu_prior + 1)) + mean(log(alpha / alpha_prior + 1))
 ```
 
-Replaces the Amini et al. 2020 supervised term `|actions - gamma| * (2*nu + alpha)`, which is ill-defined in RL:
+`nu_prior = 1.24`, `alpha_prior = 2.24` (hardcoded constants in `EvidentialPPO.train()`).
+
+Replaces `|actions - gamma| * (2*nu + alpha)`, which is ill-defined in RL:
 - Supervised term assumes ground-truth action targets (don't exist in RL)
 - In RL, `|actions - gamma|` is just policy sampling noise, not prediction error
 - Unbounded growth with lack of signal - regularisation loss explodes
@@ -66,10 +72,10 @@ Log-penalty approach:
 
 ### Actor Modes
 
-| `use_uncertainty_conditioning` | Actor | Obs split |
+| `use_uncertainty_conditioning` | Actor | Obs input |
 |-------------------------------|-------|-----------|
-| `False` | Flat MLP extractor + `EvidentialLayer` | Full obs -> MLP latent |
-| `True` | `UncertaintyConditionedActor` (dual-encoder) | `obs[:1]` = vyaw (VEHICLE_STATE_DIM), `obs[1:4]` = covariance (COVARIANCE_FEATURES_DIM) |
+| `False` | Flat MLP extractor + `EvidentialLayer` | Full obs vector |
+| `True` | `UncertaintyConditionedActor` (dual-encoder) | `obs[:1]` (vyaw) + `obs[1:4]` (std_x/y/yaw) only - indices 4+ are not used |
 
 ### Sampling std
 
