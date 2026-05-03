@@ -1,6 +1,6 @@
 # scripts/layouts/
 
-Parking lot floor plan modules. Each module defines one lot geometry in **local frame**
+Floor plan modules live in `floor_plans/`. Each module defines one lot geometry in **local frame**
 (origin at lot corner (0,0)). The orchestrator `generate_layouts.py` (this folder) applies a
 world-frame transform and writes `configs/layouts/<name>.yaml` + `outputs/layouts/<name>.png`.
 
@@ -10,7 +10,7 @@ Never write world-frame coordinates in a layout module - always work in local fr
 
 ## Floor Plans
 
-### `rectangle.py` - Standard Rectangle (60x45 m, Training)
+### `floor_plans/rectangle.py` - Standard Rectangle (60x45 m, Training)
 
 Axis-aligned rectangle. Mixed bay layout designed to maximise training diversity across
 all three bay types in a single floor plan.
@@ -39,7 +39,7 @@ all three bay types in a single floor plan.
 
 ---
 
-### `trapezoid.py` - Trapezoid (front=48, rear=30, depth=44 m, Training)
+### `floor_plans/trapezoid.py` - Trapezoid (front=48, rear=30, depth=44 m, Training)
 
 Wider at the entrance end (y=0..48) and narrower at the rear (y=9..39), giving
 non-parallel top and bottom walls. Produces a subtly different LiDAR wall signature
@@ -65,7 +65,7 @@ compared to the rectangle, encouraging generalisation to non-rectangular geometr
 
 ---
 
-### `irregular_a.py` - Nine-sided Irregular Polygon (~80x50 m, OOD)
+### `floor_plans/irregular_a.py` - Nine-sided Irregular Polygon (~80x50 m, OOD)
 
 Inspired by a shed-style building footprint. Never sampled during training - held out
 for out-of-distribution evaluation only. Combines three OOD features the agent has not
