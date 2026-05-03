@@ -4,8 +4,7 @@
 
 This module provides comprehensive evaluation of trained agents under varying
 physical conditions (sensor noise, traffic density) that produce different
-EKF uncertainty levels. Replaces the previous noise-level sweep with a
-condition-based sweep driven by eval_config.yaml.
+EKF uncertainty levels.
 """
 
 import argparse
@@ -52,13 +51,9 @@ class EvaluationMetrics:
     @class EvaluationMetrics
     @brief Container for evaluation metrics.
 
-    @var success_rate: Percentage of successful parking attempts.
-    @var average_reward: Mean episode reward.
-    @var average_steps: Mean number of steps to completion.
-    @var position_errors: List of final position errors.
-    @var orientation_errors: List of final orientation errors.
-    @var epistemic_uncertainties: Epistemic uncertainty values during episodes.
-    @var aleatoric_uncertainties: Aleatoric uncertainty values during episodes.
+    Fields cover per-condition success rate, reward, step counts, final pose
+    errors (reserved; not populated by current env), and per-step evidential
+    uncertainty estimates (evidential policy only).
     """
 
     success_rate: float = 0.0
@@ -116,9 +111,6 @@ def _scale_sensor_noise(
     @param base_sensors: Base sensor config from train_config.yaml.
     @param imu_multiplier: Multiplier for all IMU noise stddev values.
     @return New sensor config dict with scaled noise values.
-
-    @note Only IMU noise is scaled here. GNSS noise is controlled separately
-          via gnss_noise_multiplier passed to the env constructor.
     """
     scaled = copy.deepcopy(base_sensors)
 
@@ -200,7 +192,7 @@ def make_eval_env(
         include_covariance = bool(env_config.get("include_covariance", True))
         include_obstacle_obs = bool(env_config.get("include_obstacle_obs", True))
 
-    # debug: per-step DebugLogger diagnostics -- off by default, same as training.
+    # debug: per-step DebugLogger diagnostics - off by default, same as training.
     debug: bool = bool(config.get("debug", False))
 
     # GNSS noise multiplier override: locks tier for this eval condition.
@@ -208,22 +200,16 @@ def make_eval_env(
         "gnss_noise_multiplier", None
     )
 
-    # Forward use_extra_spawns from env_config (defaults to False).
     use_extra_spawns: bool = bool(
-        env_config.get("use_extra_spawns", False)
-        if env_config is not None
-        else False
+        env_config.get("use_extra_spawns", False) if env_config is not None else False
     )
 
-    # SafetyWrapper parameters from agent_config.yaml (single source of truth,
-    # shared between sim evaluation and real-world deployment).
-    # Training runs WITHOUT the wrapper -- the policy learns freely.
-    # Evaluation always uses the wrapper so safety behaviour is active.
+    # SafetyWrapper parameters from agent_config.yaml
     aleatoric_scaling: float = float(config.get("safety_aleatoric_scaling", 0.5))
     handoff_threshold: float = float(config.get("safety_handoff_threshold", 5.0))
 
-    def _init() -> gym.Env:
-        base_env: gym.Env = CARLAParkingEnv(
+    def _init() -> Any:
+        base_env: Any = CARLAParkingEnv(
             carla_host=config.get("carla_host", "localhost"),
             carla_port=config.get("carla_port", 2000),
             town=config.get("town", "FlatPlane"),
@@ -242,10 +228,7 @@ def make_eval_env(
             gnss_noise_multiplier_override=gnss_override,
             debug=debug,
         )
-        # SafetyWrapper intercepts actions at eval time:
-        #   - Aleatoric high -> longitudinal capped (slower driving).
-        #   - Epistemic >= threshold -> full stop + episode truncation.
-        # The wrapper is NOT applied during training (see train_ppo.py).
+        
         return SafetyWrapper(
             base_env,
             aleatoric_scaling=aleatoric_scaling,
@@ -312,8 +295,6 @@ def evaluate_agent(
                 metrics.aleatoric_uncertainties.append(aleatoric)
 
                 # Feed uncertainty into SafetyWrapper before stepping.
-                # The wrapper uses these to cap longitudinal (aleatoric) and
-                # trigger safety handoff (epistemic). Must be called every step.
                 env.env_method("set_uncertainty", epistemic, aleatoric)
             else:
                 action, _states = model.predict(obs, deterministic=deterministic)
