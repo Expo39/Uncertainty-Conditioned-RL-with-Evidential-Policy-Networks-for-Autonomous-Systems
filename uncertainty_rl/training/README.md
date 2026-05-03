@@ -24,7 +24,7 @@ Config-driven PPO training loop with:
 
 Optuna hyperparameter tuning orchestrator with:
 
-- **`sample_hyperparams()`**: Samples from YAML-driven search space (12 PPO + evidential parameters, all bounds configured in `configs/training/tuning_config.yaml`)
+- **`sample_hyperparams()`**: Samples from YAML-driven search space (8 PPO + evidential parameters, all bounds configured in `configs/training/tuning_config.yaml`)
 - **`TrialEvalCallback`**: SB3 callback that reads training metrics from `EnvDiagnosticsCallback` and reports to Optuna for pruning decisions
 - **`objective()`**: Optuna objective function that runs a short training trial (150k steps default), evaluates `env/mean_progress_reward`, and handles CARLA crashes gracefully
 - **`apply_best_params()`**: Writes best trial hyperparameters back to `configs/train_config.yaml`. Creates timestamped backup in `configs/backups/`
@@ -47,10 +47,10 @@ python uncertainty_rl/training/train_ppo.py \
 
 | `policy_type` | Agent | Policy | Observation |
 |---------------|-------|--------|-------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 20-dim (full method) or 11-dim (output\_uncertainty) |
-| `"standard"` | `PPO` | `MlpPolicy` | 20-dim (input\_uncertainty) or 11-dim (vanilla\_ppo) |
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | 12-dim (full method) or 7-dim (cov off) |
+| `"standard"` | `PPO` | `MlpPolicy` | 12-dim (obs on) or 7-dim (cov off) |
 
-The `include_covariance` and `include_obstacle_obs` flags (from baseline YAML) control observation dimensionality. `include_obstacle_obs: true` in all 4 baselines so obstacle dims are not the experimental variable.
+The `include_covariance` and `include_obstacle_obs` flags (from baseline YAML) control observation dimensionality. Default (both true): 12-dim. See `uncertainty_rl.utils.constants` for exact breakdowns.
 
 ### Key Config Parameters (from `configs/train_config.yaml`)
 
@@ -61,7 +61,7 @@ The `include_covariance` and `include_obstacle_obs` flags (from baseline YAML) c
 | `n_steps` | 2048 | ~4 episodes per PPO update (single CARLA env) |
 | `n_epochs` | 5 | Fewer epochs to avoid policy drift |
 | `net_arch` | [256, 256] | Both actor and critic |
-| `target_kl` | 0.02 | Early epoch stopping; 0.02 for noisy weather-randomised landscape |
+| `target_kl` | 0.02 | Early epoch stopping to limit policy drift per update |
 | `total_timesteps` | 1,000,000 | |
 | `evidential.lambda_reg` | 0.01 | NIG regularisation coefficient |
 | `parking_scenarios.*` | see YAML | Floor plan files, bay occupancy, cone spacing, NPC counts |
@@ -70,13 +70,13 @@ See `configs/train_config.yaml` for the full parameter list with per-parameter j
 
 ## Hyperparameter Tuning (Optuna)
 
-Optuna-based systematic search of 12 hyperparameters (PPO + evidential settings). Tuning bounds and study settings live in `configs/training/tuning_config.yaml`; best params are written back to `configs/train_config.yaml` after the study completes.
+Optuna-based systematic search of 8 hyperparameters (PPO + evidential settings). Tuning bounds and study settings live in `configs/training/tuning_config.yaml`; best params are written back to `configs/train_config.yaml` after the study completes.
 
 ```bash
 # 1. Edit tuning settings (optional): n_trials, timesteps_per_trial, seed
 vim configs/training/tuning_config.yaml
 
-# 2. Run tuning (typically 15-18 hours for 50 trials on RTX 4070 Ti Super)
+# 2. Run tuning
 make docker-tune
 
 # 3. Best params are now in configs/train_config.yaml
@@ -92,16 +92,14 @@ All bounds and options are defined in `configs/training/tuning_config.yaml` (YAM
 |-----------|-------|------|
 | `learning_rate` | [1e-5, 2e-3] | log scale |
 | `n_steps` | {1024, 2048, 4096} | categorical |
-| `batch_size` | {64, 128, 256, 512} | categorical (constrained ≤ n_steps) |
+| `batch_size` | {64, 128, 256} | categorical (constrained <= n_steps) |
 | `n_epochs` | {3, 5, 10} | categorical |
 | `gamma` | [0.97, 0.999] | log scale (via 1 - (1-gamma)) |
 | `ent_coef` | [1e-6, 0.01] | log scale |
-| `clip_range` | {0.1, 0.2, 0.3} | categorical |
-| `max_grad_norm` | [0.3, 1.0] | uniform |
-| `target_kl` | [0.01, 0.05] | uniform |
-| `net_arch` | {[128,128], [256,256]} | categorical |
-| `evidential.lambda_reg` | 0.0 or [1e-5, 0.01] | log scale + zero option |
+| `evidential.lambda_reg` | [1e-5, 0.01] | log scale |
 | `evidential.lambda_reg_warmup_steps` | [10000, 100000] | log scale |
+
+See `documentation/detailed_notes/hyperparameter_search.md` for search space design rationale.
 
 ### Study Configuration
 
@@ -126,7 +124,7 @@ make docker-tune
 
 ## Ablation Study
 
-The 2x2 ablation (4 baselines x N seeds) runs `train_ppo.py` once per baseline config. Each baseline YAML in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` -- all baselines share identical PPO hyperparameters.
+The 2x2 ablation (4 baselines x N seeds) runs `train_ppo.py` once per baseline config. Each baseline YAML in `configs/baselines/` overrides only the keys that differ from `train_config.yaml` - all baselines share identical PPO hyperparameters.
 
 ```bash
 make docker-train    # Single training run
