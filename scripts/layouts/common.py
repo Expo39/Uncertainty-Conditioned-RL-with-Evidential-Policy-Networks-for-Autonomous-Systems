@@ -1,54 +1,32 @@
 """
 @file common.py
-@brief Shared geometry helpers, world-frame transform, YAML output, and PNG plotting
-       for parking lot layout generation.
+@brief World-frame transform, YAML serialisation, and PNG plotting for parking
+       lot layouts.
 
-All layout modules (rectangle.py, trapezoid.py, irregular_a.py) import from here.
-Nothing in this module is layout-specific.
+This module is the *engine* side of layout generation: it turns a layout dict
+(returned by LotBuilder.build()) into a CARLA-frame YAML file plus a bird's-eye
+PNG. It contains no layout-specific code and no DSL primitives.
+
+All bay-related concerns (constants, geometry primitives, validators, the DSL
+itself) live in builder.py. Floor plan modules import only from builder.py;
+generate_layouts.py imports the three engine functions from here.
 """
 
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import yaml
 
-from uncertainty_rl.utils.geometry import point_in_polygon
 
 # ---------------------------------------------------------------------------
-# Bay dimension constants (German EAR 05)
-# ---------------------------------------------------------------------------
-
-BAY_DIMS: Dict[str, Dict[str, float]] = {
-    "perpendicular": {"width": 2.5, "depth": 5.0, "aisle": 6.0},
-    "angled": {"width": 2.5, "depth": 5.4, "aisle": 3.6},
-    "parallel": {"width": 2.5, "depth": 8.0, "aisle": 4.0},
-}
-
-BAYS_PER_TYPE = 5  # Exactly 5 bays per type per floor plan
-
-# Shared spacing constants used by all layout modules.
-# _WALL_GAP: minimum clearance between a bay's back face and the perimeter wall/cones.
-# PED_STRIP: width of a pedestrian zone strip alongside an aisle face (m).
-# _PED_MARGIN: inset applied to both ends of a pedestrian zone so it does not
-#              overlap the perimeter cone boundary.
-_WALL_GAP: float = 0.5
-PED_STRIP: float = 3.0
-_PED_MARGIN: float = 0.5
-
-
-# ---------------------------------------------------------------------------
-# Low-level geometry helpers
+# Low-level rotation/translation primitives used by to_world_frame
 # ---------------------------------------------------------------------------
 
 
 def _rotate(x: float, y: float, heading_rad: float) -> Tuple[float, float]:
     """
     @brief Rotate point (x, y) by heading_rad about the origin.
-    @param x: Local x coordinate.
-    @param y: Local y coordinate.
-    @param heading_rad: Rotation angle in radians (CCW positive).
-    @return Rotated (x, y) tuple.
     """
     cos_h = math.cos(heading_rad)
     sin_h = math.sin(heading_rad)
@@ -64,12 +42,6 @@ def _translate(
 ) -> Tuple[float, float]:
     """
     @brief Rotate then translate a local point to world frame.
-    @param x: Local x coordinate.
-    @param y: Local y coordinate.
-    @param origin_x: World-frame x of the lot origin.
-    @param origin_y: World-frame y of the lot origin.
-    @param heading_rad: Lot heading in radians.
-    @return World-frame (x, y) tuple.
     """
     rx, ry = _rotate(x, y, heading_rad)
     return (rx + origin_x, ry + origin_y)
@@ -78,211 +50,8 @@ def _translate(
 def _world_yaw(local_yaw_deg: float, heading_deg: float) -> float:
     """
     @brief Convert a local yaw angle to world-frame yaw.
-    @param local_yaw_deg: Yaw in the lot's local frame (degrees).
-    @param heading_deg: Lot heading offset (degrees).
-    @return World-frame yaw in degrees.
     """
     return (local_yaw_deg + heading_deg) % 360.0
-
-
-# ---------------------------------------------------------------------------
-# Bay layout generators (local frame)
-# ---------------------------------------------------------------------------
-
-
-def _bay_corners(
-    cx: float,
-    cy: float,
-    yaw_deg: float,
-    width: float,
-    depth: float,
-) -> List[Tuple[float, float]]:
-    """
-    @brief Return the four corner points of a bay rectangle in local frame.
-
-    The bay rectangle has depth along the vehicle's heading axis and width
-    perpendicular to it. Corners are ordered CCW starting from (-d/2, -w/2).
-
-    @param cx: Bay centre x.
-    @param cy: Bay centre y.
-    @param yaw_deg: Bay heading in degrees (vehicle nose direction).
-    @param width: Bay width (perpendicular to heading), metres.
-    @param depth: Bay depth (along heading), metres.
-    @return List of four (x, y) corner tuples.
-    """
-    yaw_rad = math.radians(yaw_deg)
-    cos_y = math.cos(yaw_rad)
-    sin_y = math.sin(yaw_rad)
-    hw = width / 2.0
-    hd = depth / 2.0
-    local = [(-hd, -hw), (hd, -hw), (hd, hw), (-hd, hw)]
-    return [
-        (cx + cos_y * lx - sin_y * ly, cy + sin_y * lx + cos_y * ly) for lx, ly in local
-    ]
-
-
-def validate_bays_in_polygon(
-    bays: List[Dict[str, Any]],
-    corners: List[Dict[str, float]],
-    shape_name: str,
-    margin: float = 0.05,
-) -> None:
-    """
-    @brief Raise ValueError if any bay corner lies outside the lot polygon.
-
-    Checks all four corners of every bay rectangle. A small margin is used
-    to allow bays that are flush against a wall (floating-point tolerance).
-
-    @param bays: List of bay dicts with local_x, local_y, local_yaw_deg, width, depth.
-    @param corners: Lot perimeter as list of {x, y} dicts (local frame).
-    @param shape_name: Floor plan name for error messages.
-    @param margin: Outward expansion of polygon for boundary-touching bays.
-    @raises ValueError: If any bay corner is outside the expanded polygon.
-    """
-    poly = [(c["x"], c["y"]) for c in corners]
-    cx_avg = sum(p[0] for p in poly) / len(poly)
-    cy_avg = sum(p[1] for p in poly) / len(poly)
-    expanded = [
-        (
-            cx_avg + (1.0 + margin) * (px - cx_avg),
-            cy_avg + (1.0 + margin) * (py - cy_avg),
-        )
-        for px, py in poly
-    ]
-
-    for bay in bays:
-        bay_corners_pts = _bay_corners(
-            bay["local_x"],
-            bay["local_y"],
-            bay["local_yaw_deg"],
-            bay["width"],
-            bay["depth"],
-        )
-        for corner in bay_corners_pts:
-            if not point_in_polygon(corner[0], corner[1], expanded):
-                raise ValueError(
-                    f"[{shape_name}] Bay '{bay.get('bay_type', '?')}' at "
-                    f"({bay['local_x']:.2f}, {bay['local_y']:.2f}) has a corner "
-                    f"at ({corner[0]:.2f}, {corner[1]:.2f}) outside the lot boundary."
-                )
-
-
-def warn_narrow_corridors(
-    bays: List[Dict[str, Any]],
-    shape_name: str,
-    min_width: float = 6.0,
-) -> None:
-    """
-    @brief Warn if the minimum gap between any two facing bay clusters is narrower
-           than min_width (EAR 05 minimum corridor width = 6.0 m).
-
-    @param bays: All bays in the layout (local frame), each with local_x, local_y,
-                 local_yaw_deg, width, depth.
-    @param shape_name: Floor plan name for warning messages.
-    @param min_width: Minimum acceptable corridor width in metres (default 6.0 m).
-    """
-    for i in range(len(bays)):
-        for j in range(i + 1, len(bays)):
-            a = bays[i]
-            b = bays[j]
-            same_type = a.get("bay_type") == b.get("bay_type")
-            yaw_diff = abs(a["local_yaw_deg"] - b["local_yaw_deg"]) % 360.0
-            same_yaw = yaw_diff < 1.0 or abs(yaw_diff - 360.0) < 1.0
-            if same_type and same_yaw:
-                continue
-            a_half_x = a["depth"] / 2.0
-            a_half_y = a["width"] / 2.0
-            b_half_x = b["depth"] / 2.0
-            b_half_y = b["width"] / 2.0
-            gap_x = abs(a["local_x"] - b["local_x"]) - a_half_x - b_half_x
-            gap_y = abs(a["local_y"] - b["local_y"]) - a_half_y - b_half_y
-            gap = max(gap_x, gap_y, 0.0) if gap_x > 0 or gap_y > 0 else 0.0
-            if gap < min_width:
-                print(
-                    f"  WARNING [{shape_name}]: corridor between "
-                    f"'{a.get('bay_type', '?')}'"
-                    f" ({a['local_x']:.1f}, {a['local_y']:.1f}) "
-                    f"and '{b.get('bay_type', '?')}'"
-                    f" ({b['local_x']:.1f}, {b['local_y']:.1f}) "
-                    f"is {gap:.2f} m (min {min_width:.1f} m)."
-                )
-
-
-# ---------------------------------------------------------------------------
-# Reusable bay row builders
-# ---------------------------------------------------------------------------
-
-
-def angled_bays_along_wall(
-    n: int,
-    wall_x0: float,
-    wall_y0: float,
-    wall_dx: float,
-    wall_dy: float,
-    wall_len: float,
-    offset_from_wall: float,
-    start_along_wall: float,
-    facing_yaw_deg: float,
-) -> List[Dict[str, Any]]:
-    """
-    @brief Generate n angled (45-deg) bay centres along an arbitrary wall.
-    @param n: Number of bays.
-    @param wall_x0: Wall start point x.
-    @param wall_y0: Wall start point y.
-    @param wall_dx: Wall unit direction x (normalised).
-    @param wall_dy: Wall unit direction y (normalised).
-    @param wall_len: Total wall length (kept for documentation).
-    @param offset_from_wall: Distance from wall to bay centre (inward).
-    @param start_along_wall: Distance along wall to the first bay centre.
-    @param facing_yaw_deg: Yaw of a parked vehicle (degrees, local frame).
-    @return List of bay dicts.
-    """
-    dims = BAY_DIMS["angled"]
-    spacing = dims["width"] / math.sin(math.radians(45.0))
-    # Inward normal: rotate wall direction 90 deg CCW
-    nx = -wall_dy
-    ny = wall_dx
-    bays = []
-    for i in range(n):
-        along = start_along_wall + i * spacing
-        bx = wall_x0 + wall_dx * along + nx * offset_from_wall
-        by = wall_y0 + wall_dy * along + ny * offset_from_wall
-        bays.append(
-            {
-                "bay_type": "angled",
-                "local_x": bx,
-                "local_y": by,
-                "local_yaw_deg": facing_yaw_deg,
-                "width": dims["width"],
-                "depth": dims["depth"],
-            }
-        )
-    return bays
-
-
-# ---------------------------------------------------------------------------
-# Bay offset helpers
-# ---------------------------------------------------------------------------
-
-
-def ang_offset_from_wall(bay_depth: float, bay_width: float) -> float:
-    """
-    @brief Inward offset from a flat wall to angled bay centre (45 deg parking).
-    @param bay_depth: Bay depth (metres).
-    @param bay_width: Bay width (metres).
-    @return Perpendicular offset from wall to bay centre.
-    """
-    return (bay_depth / 2.0 + bay_width / 2.0) * math.sin(math.radians(45.0))
-
-
-def ang_x_margin(bay_depth: float, bay_width: float) -> float:
-    """
-    @brief Minimum along-wall start offset so leftmost bay corner sits at wall edge.
-    @param bay_depth: Bay depth (metres).
-    @param bay_width: Bay width (metres).
-    @return Start offset along the wall direction.
-    """
-    return (bay_depth / 2.0 + bay_width / 2.0) * math.cos(math.radians(45.0)) + 0.5
 
 
 # ---------------------------------------------------------------------------
