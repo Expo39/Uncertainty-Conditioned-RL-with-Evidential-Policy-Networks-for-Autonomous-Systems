@@ -8,16 +8,16 @@ consumed by CARLAParkingEnv. Optionally produces bird's-eye PNG plots.
 
 Three floor plan shapes are supported:
 
-  rectangle   -- Standard axis-aligned rectangle (60x45 m). Training layout.
-  trapezoid   -- Wider at entrance, narrower at rear (front=48, rear=30, depth=44 m).
+  rectangle   - Standard axis-aligned rectangle (60x45 m). Training layout.
+  trapezoid   - Wider at entrance, narrower at rear (front=48, rear=30, depth=44 m).
                  Training layout.
-  irregular_a -- Nine-sided polygon with diagonal top wall and bottom notch
+  irregular_a - Nine-sided polygon with diagonal top wall and bottom notch
                  (OOD, held out from training).
 
-Each shape is defined in its own module under scripts/layouts/:
-  scripts/layouts/rectangle.py
-  scripts/layouts/trapezoid.py
-  scripts/layouts/irregular_a.py
+Each shape is defined in its own module under scripts/layouts/floor_plans/:
+  scripts/layouts/floor_plans/rectangle.py
+  scripts/layouts/floor_plans/trapezoid.py
+  scripts/layouts/floor_plans/irregular_a.py
 
 Usage::
 
@@ -45,7 +45,7 @@ from typing import Optional
 # __file__ is generate_layouts.py -> .parent.parent.parent = project root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.layouts import irregular_a, rectangle, trapezoid  # noqa: E402
+from scripts.layouts.floor_plans import irregular_a, rectangle, trapezoid  # noqa: E402
 from scripts.layouts.common import (  # noqa: E402
     plot_layout,
     to_world_frame,

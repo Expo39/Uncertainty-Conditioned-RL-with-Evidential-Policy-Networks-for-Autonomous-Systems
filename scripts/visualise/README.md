@@ -11,7 +11,7 @@ The visualiser tails the JSONL file in real-time, groups lines into episodes, an
 ## Running
 
 ```bash
-# Training is already running in another terminal -- just open the viewer:
+# Training is already running in another terminal - just open the viewer:
 make visualise
 
 # Load a checkpoint, start demo drive in Docker, open the viewer (all-in-one):

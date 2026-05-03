@@ -299,25 +299,9 @@ def generate() -> Dict[str, Any]:
     spawn = {"x": -2.0, "y": width / 2.0, "yaw_deg": 0.0}
     spawn2 = {"x": depth / 2.0, "y": 3.0, "yaw_deg": 90.0}
 
-    # ------------------------------------------------------------------
     # Patrol path: 6-waypoint CCW loop tracing the driving aisles.
-    #
-    # Corridor positions derived as midpoints between facing bay surfaces:
-    #   patrol_x_left      : midpoint between left wall (x=0) and left edge of
-    #                        centre cluster.
-    #   patrol_y_lower     : midpoint between bottom-wall bay nose faces and
-    #                        centre row A (perp) nose face.
-    #   patrol_x_par_aisle : midpoint between inner faces of Group B and Group C
-    #                        parallel columns.
-    #   patrol_y_top_aisle : midpoint between top parallel bay nose faces and
-    #                        top faces of right parallel columns.
-    #   patrol_diag_start_x: midpoint between right end of top parallel group
-    #                        and outer face of inner parallel column (Group C).
-    #   patrol_y_upper     : midpoint between top parallel nose faces and top
-    #                        face of centre angled row B.
-    #   patrol_diag_end_x  : x after a 45-deg down-left diagonal from
-    #                        patrol_diag_start_x that drops to patrol_y_upper.
-    # ------------------------------------------------------------------
+    # Corridor positions are midpoints between facing bay surfaces.
+    # See documentation/detailed_notes/layout/patrol_paths.md for derivation.
     centre_cluster_x_min = ang_cx_start_c - _ang_spacing / 2.0
     centre_cluster_x_max = ang_cx_start_c + (_CENTRE_ANG_BAYS - 0.5) * _ang_spacing
     perp_cluster_x_min = perp_cx_start - dims_perp["width"] / 2.0
@@ -367,7 +351,7 @@ def generate() -> Dict[str, Any]:
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face.
+    # Pedestrian zones - one strip per distinct aisle face.
     # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
 

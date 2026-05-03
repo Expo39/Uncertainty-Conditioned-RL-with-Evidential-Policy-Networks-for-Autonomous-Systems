@@ -285,7 +285,6 @@ def ang_x_margin(bay_depth: float, bay_width: float) -> float:
     return (bay_depth / 2.0 + bay_width / 2.0) * math.cos(math.radians(45.0)) + 0.5
 
 
-
 # ---------------------------------------------------------------------------
 # World-frame transformation
 # ---------------------------------------------------------------------------
@@ -544,7 +543,7 @@ def plot_layout(
     )
     ax.add_patch(lot_patch)
 
-    # Draw full perimeter -- no gaps (spawns are inside the lot, not on the wall).
+    # Draw full perimeter - no gaps (spawns are inside the lot, not on the wall).
     n = len(corner_pts)
     for i in range(n):
         p0 = corner_pts[i]

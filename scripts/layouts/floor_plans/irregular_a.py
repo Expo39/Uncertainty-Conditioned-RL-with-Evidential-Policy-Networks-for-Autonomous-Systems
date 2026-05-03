@@ -360,21 +360,9 @@ def generate() -> Dict[str, Any]:
     spawn2 = {"x": _s2_x_nudged, "y": _s2_y_nudged, "yaw_deg": round(_s2_yaw, 1)}
     spawn3 = {"x": 70.0, "y": 3.0, "yaw_deg": 90.0}
 
-    # ------------------------------------------------------------------
-    # Patrol path: CCW orbit around the central obstacle (5 waypoints).
-    #
-    # Corridor x/y values are computed as midpoints between the nearest facing
-    # bay nose/back surfaces on each side of each corridor segment:
-    #   _left_x  : midpoint between left-wall angled bay right edges and
-    #              obstacle row E left nose faces.
-    #   _right_x : midpoint between obstacle row F right nose faces and
-    #              notch perp bay left edges.
-    #   _lower_y : midpoint between obstacle row C bottom nose faces and
-    #              bottom parallel bay top faces.
-    #   _upper_y : midpoint between obstacle row D top nose faces and the
-    #              approximate lowest y of the diagonal top-wall bay footprints.
-    # WP2b chamfers the top-left corner to avoid clipping the top-left perp cluster.
-    # ------------------------------------------------------------------
+    # Patrol path: 5-waypoint CCW orbit around the central obstacle.
+    # Corridor positions are midpoints between facing bay surfaces.
+    # See documentation/detailed_notes/layout/patrol_paths.md for derivation.
     _left_ang_right_x = _left_offset + dims_ang["depth"] / 2.0 * math.cos(
         math.radians(45.0)
     )
@@ -402,7 +390,7 @@ def generate() -> Dict[str, Any]:
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face.
+    # Pedestrian zones - one strip per distinct aisle face.
     # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
 

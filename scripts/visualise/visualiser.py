@@ -16,7 +16,7 @@ Layers drawn (back to front):
   7. Ego trajectory trail (faded cyan)
   8. Ego vehicle (cyan rectangle + heading arrow)
   9. HUD overlay (episode info)
- 10. Debug HUD (errors, reward, covariance) -- only when present in frame
+ 10. Debug HUD (errors, reward, covariance) - only when present in frame
 
 Usage:
     python scripts/visualise/visualiser.py
@@ -289,8 +289,8 @@ class LiveVisualiser:
     The static scene (lot, bays, parked vehicles) is rebuilt once per episode.
 
     Controls:
-        F        -- toggle fullscreen
-        ESC / Q  -- exit
+        F        - toggle fullscreen
+        ESC / Q  - exit
     """
 
     def __init__(self, history_file: Optional[Path] = None) -> None:
@@ -317,7 +317,7 @@ class LiveVisualiser:
         self._origin = np.zeros(2)
         self._scale = 1.0
 
-        # Accumulated ego trail -- grows every frame, cleared on episode reset.
+        # Accumulated ego trail - grows every frame, cleared on episode reset.
         self._vis_trail: List[Tuple[float, float]] = []
         self._vis_trail_episode_id: Optional[int] = None
 
@@ -325,6 +325,9 @@ class LiveVisualiser:
         self._exit_requested: bool = False
         self._fullscreen: bool = False
         self._ever_received_frame: bool = False
+        self._trail_surf: pygame.Surface = pygame.Surface(
+            (_MAP_W, _WINDOW_H), pygame.SRCALPHA
+        )
 
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
         self._signal_file.touch()
@@ -376,7 +379,7 @@ class LiveVisualiser:
                 self._draw_waiting()
                 time.sleep(_POLL_SLEEP)
             else:
-                # Data stream temporarily dry -- hold last frame, don't flicker
+                # Data stream temporarily dry - hold last frame, don't flicker
                 time.sleep(_POLL_SLEEP)
 
             self._clock.tick(_FPS_CAP)
@@ -509,9 +512,9 @@ class LiveVisualiser:
             pts = np.array(self._vis_trail[-_TRAIL_MAX_POINTS:])
             spts = _world_to_screen(pts, origin, scale)
             if len(spts) >= 2:
-                trail_surf = pygame.Surface((_MAP_W, _WINDOW_H), pygame.SRCALPHA)
-                pygame.draw.lines(trail_surf, _C_TRAIL, False, spts, 2)
-                self._screen.blit(trail_surf, (0, 0))
+                self._trail_surf.fill((0, 0, 0, 0))
+                pygame.draw.lines(self._trail_surf, _C_TRAIL, False, spts, 2)
+                self._screen.blit(self._trail_surf, (0, 0))
 
         # Patrol NPC vehicles
         for actor in state.get("actors", []):

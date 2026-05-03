@@ -163,7 +163,7 @@ def main() -> None:
                 step_result = env.step(action)
                 obs = cast(np.ndarray, step_result[0])
                 done_arr = cast(np.ndarray, step_result[2])
-                # DummyVecEnv.step() returns (obs, rewards, dones, infos) -- 4 elements.
+                # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
                 infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
