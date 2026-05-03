@@ -1,12 +1,26 @@
 # scripts/inspect/
 
 CARLA debug overlay inspector for visually verifying parking lot geometry and sensor
-placement before training. Requires windowed CARLA (X11 display) and the
+placement before training. Requires a windowed CARLA session (X11 display) and the
 `carla-server-demo` container (started automatically by all Make targets).
 
 ## Entry Point
 
 All inspector modes are driven by a single script: **`lot_inspector.py`**.
+
+## File Structure
+
+| File | Purpose |
+|------|---------|
+| `lot_inspector.py` | CLI entry point: argument parsing, env construction, mode dispatch |
+| `inspectors/base.py` | `_Inspector` base class: CARLA connection, tick loop, spectator helpers |
+| `inspectors/layout.py` | `LayoutInspector`: lot geometry overlays |
+| `inspectors/sensor.py` | `SensorInspector`: sensor mount dots + FOV arcs on layout |
+| `inspectors/live.py` | `LiveInspector`: real spawned LiDAR with live scan dots |
+| `inspectors/dryrun.py` | `DryRunInspector` + `KeyboardController`: full training pipeline |
+| `inspectors/__init__.py` | Subpackage exports |
+| `_drawing.py` | Free functions for CARLA debug geometry (dots, arcs, labels) |
+| `dryrun.sh` | Shell driver for `make docker-inspect-dryrun` |
 
 ## Modes
 
@@ -56,6 +70,18 @@ make docker-inspect-live                               # Default: LiDAR dots
 make docker-inspect-live INSPECT_LAYOUT=trapezoid      # Different floor plan
 ```
 
+### Dryrun mode (`--mode dryrun`)
+
+Runs the full training pipeline (env reset + step loop) with a constant forward
+action or keyboard control and no model. Spectator follows the ego vehicle.
+EKF covariance, GT pose, and EKF vs GT errors are printed to the console every
+50 steps.
+
+```bash
+make docker-inspect-dryrun MANUAL=true                 # Keyboard control
+make docker-inspect-dryrun                             # Constant forward action
+```
+
 ## Arguments
 
 | Argument | Choices | Default | Modes |
@@ -64,11 +90,14 @@ make docker-inspect-live INSPECT_LAYOUT=trapezoid      # Different floor plan
 | `--layout` | `rectangle`, `trapezoid`, `irregular_a` | `rectangle` | all |
 | `--view` | `birds_eye`, `side`, `front` | `birds_eye` | sensors only |
 | `--zoom` | `close`, `wide` | `close` | sensors, birds_eye only |
-| `--duration` | int | `300` | all |
+| `--duration` | int (seconds) | `86400` (24 h) | all |
+| `--episodes` | int | unlimited | dryrun only |
+| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free` | `third_person` | dryrun only |
+| `--termination-pause` | float (seconds) | `3.0` | dryrun only |
+| `--manual` | flag | off | dryrun only |
 
 ## Requirements
 
 All inspector modes run inside dedicated Docker containers. They need:
 - A running `carla-server-demo` container (started automatically by Make targets)
 - An X11 display (`$DISPLAY` detected automatically by Make targets)
-- The project root mounted at `/workspace` (handled by docker-compose)

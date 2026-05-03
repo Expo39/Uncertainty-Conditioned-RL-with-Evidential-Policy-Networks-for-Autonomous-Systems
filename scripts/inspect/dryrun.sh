@@ -4,14 +4,6 @@
 #
 # Starts carla-server-demo and ros2-bridge-inspect detached, waits for them
 # to be healthy, then runs the training container.
-#
-# Normal mode:  training container starts detached, logs are followed.
-# Manual mode (INSPECT_MANUAL=true): training container starts in the
-#   foreground with -it so the TTY keyboard controller inside the container
-#   receives arrow key presses from this terminal directly.
-#
-# All environment variables are passed in by the Makefile docker-inspect-dryrun
-# target.  Do not call this script directly.
 
 set -euo pipefail
 
