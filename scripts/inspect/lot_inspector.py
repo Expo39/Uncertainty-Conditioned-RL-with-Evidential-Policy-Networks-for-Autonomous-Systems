@@ -1,49 +1,6 @@
 """
 @file lot_inspector.py
 @brief Entry point for the unified CARLA parking lot and sensor inspector.
-
-Parses command-line arguments, builds a :class:`CARLAParkingEnv`, and dispatches
-to the appropriate inspector class from :mod:`scripts.inspect._inspectors`.
-
-Class hierarchy (defined in ``_inspectors.py``):
-  _Inspector          -- CARLA connection, world tick loop, spectator placement
-    LayoutInspector   -- lot bay outlines, spawn/patrol/pedestrian overlays
-      SensorInspector -- sensor mount dots + LiDAR FOV arcs
-    LiveInspector     -- real spawned 2D LiDAR: scan points as debug dots
-    DryRunInspector   -- full training pipeline, random actions, no model
-
-
-Drawing helpers (free functions) are in :mod:`scripts.inspect._drawing`.
-
-Usage (via Make targets):
-  make docker-inspect INSPECT_LAYOUT=rectangle          # Layout only
-  make docker-inspect-sensors                           # Sensors on layout
-  make docker-inspect-sensors INSPECT_LAYOUT=trapezoid
-  make docker-inspect-live                              # Live LiDAR feed
-  make docker-inspect-dryrun INSPECT_LAYOUT=rectangle   # Full pipeline, random actions
-
-Or directly:
-  python -m scripts.inspect.lot_inspector --mode layout --layout trapezoid
-  python -m scripts.inspect.lot_inspector --mode sensors --layout rectangle
-  python -m scripts.inspect.lot_inspector --mode live
-  python -m scripts.inspect.lot_inspector --mode dryrun  --layout rectangle
-
-Arguments:
-  --mode               layout | sensors | live | dryrun (default: sensors)
-  --layout             rectangle | trapezoid | irregular_a
-                       (default: rectangle)
-  --view               birds_eye | side | front
-                       (default: birds_eye, sensors mode)
-  --host               CARLA server hostname (default: carla-server-demo)
-  --port               CARLA server port (default: 2100)
-  --duration           Seconds to run (default: 300)
-  --episodes           Max episodes for dryrun (default: unlimited)
-  --inspect-view       View for dryrun: third_person|side|back|front|free
-  --termination-pause  Seconds to hold after episode (default: 3.0)
-
-@note Runs in synchronous CARLA mode.  Requires the full Docker stack.
-@note CARLA 0.9.16 draw_line ignores colour -- overlays use draw_point at small
-      spacing to simulate coloured lines.
 """
 
 import argparse
@@ -54,17 +11,17 @@ from typing import Any, Dict, Optional
 import yaml
 
 try:
-    import carla  # noqa: F401 -- imported for the sys.exit guard below
+    import carla  # noqa: F401 - imported for the sys.exit guard below
 except ImportError:
     print("ERROR: carla Python package not found.  Run inside the training container.")
     sys.exit(1)
 
-from scripts.inspect._inspectors import (
+from scripts.inspect.inspectors import (
+    _Inspector,
     DryRunInspector,
     LayoutInspector,
     LiveInspector,
     SensorInspector,
-    _Inspector,
 )
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -75,9 +32,9 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-# ===========================================================================
+# ---------------------------------------------------------------------------
 # Entry point
-# ===========================================================================
+# ---------------------------------------------------------------------------
 
 
 def _build_env(
@@ -296,9 +253,7 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
-        # Use parking_scenarios directly from config -- identical to training.
-        # No floor_plans override; layout sampling (random per episode across all
-        # configured layouts) and spawn point sampling must match training exactly.
+        # Use parking_scenarios directly from config - identical to training.
         scenarios = dict(train_cfg.get("parking_scenarios", {}))
         sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
 
