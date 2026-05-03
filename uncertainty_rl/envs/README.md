@@ -156,3 +156,16 @@ Each floor plan has 15 bays - 5 of each type:
 | `load_floor_plan` | Select and cache a floor plan YAML for one episode |
 | `wait_for_ekf` | Block until LiDAR and EKF data are both available |
 | `calibrate_ekf_frame_offset` | Compute odom-to-world 2D rigid body transform via EKF convergence loop; returns (tx, ty, cos_r, sin_r, r) |
+
+---
+
+## Module: `real/`
+
+Real-world deployment stubs. Not used during simulation training.
+
+| File | Purpose |
+|------|---------|
+| `deployment_utils.py` | `RealWorldDeployment`: surveyed datum loading + actuator calibration |
+| `inference_loop.py` | `RealWorldInferenceLoop`: policy inference loop stub for physical vehicle |
+
+`RealWorldInferenceLoop.run()` mirrors the sim eval loop but calls physical sensor/actuation APIs. `SafetyWrapper.apply()` is active on every step. `RealWorldDeployment.calibrate_action()` maps normalised policy outputs to physical actuator commands via `ActuationCalibration`.

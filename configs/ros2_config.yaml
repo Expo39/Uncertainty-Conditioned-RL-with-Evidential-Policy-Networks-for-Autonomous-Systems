@@ -245,6 +245,40 @@ twist_in_odom_frame: false
 # All nodes that need consistent TF lookups must use the same time source as the bridge.
 use_sim_time: true
 
+# ---------------------------------------------------------------------------
+# navsat_transform_node parameters (real deployment only).
+# Converts sensor_msgs/NavSatFix -> nav_msgs/Odometry in the local metric frame.
+# The datum (lat/lon anchor) is read from configs/deployment/real/real_world_datum.yaml.
+# This section controls navsat_transform behaviour; the datum itself lives in
+# real_world_datum.yaml so it can be updated on-site without touching this file.
+# ---------------------------------------------------------------------------
+navsat_transform:
+  frequency: 20.0                      # Hz -- match EKF frequency
+  delay: 3.0                           # seconds to wait for IMU before starting
+  magnetic_declination_radians: 0.0    # site-specific -- look up at ngdc.noaa.gov
+  yaw_offset: 0.0                      # radians -- non-zero if IMU x-axis != vehicle forward
+  broadcast_utm_transform: false       # true = publish UTM->odom TF (rviz diagnostics)
+  publish_filtered_gps: false          # true = republish EKF position as NavSatFix
+  use_odometry_yaw: false              # false = derive heading from IMU on startup
+  wait_for_datum: false                # false = use datum parameter, not /datum topic
+
+# ---------------------------------------------------------------------------
+# Real-vehicle topic names (used by real_vehicle.launch.py only).
+# Set these to match the topic names published by the physical hardware drivers.
+# These are NOT used in simulation -- carla_bridge.launch.py uses carla_topics.
+# ---------------------------------------------------------------------------
+real_vehicle:
+  # Physical IMU driver output (sensor_msgs/Imu).
+  # Must have angular_velocity_covariance populated by the driver.
+  # Common drivers: VectorNav ROS 2, Microstrain ROS 2, imu_tools.
+  imu_topic: "/imu/data"
+
+  # Physical GNSS driver output (sensor_msgs/NavSatFix, raw lat/lon).
+  # navsat_transform_node subscribes to this and converts to metric Odometry
+  # on /odometry/gps for the EKF. GnssNoiseRelayNode is NOT used in deployment.
+  # Common drivers: u-blox ROS 2 (ublox_gps), nmea_navsat_driver.
+  gnss_fix_topic: "/gnss/fix"
+
 # QoS settings for ROS 2 subscribers/publishers
 qos:
   reliability: "reliable"

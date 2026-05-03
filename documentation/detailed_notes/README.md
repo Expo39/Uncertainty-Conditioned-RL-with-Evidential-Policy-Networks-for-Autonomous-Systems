@@ -34,6 +34,7 @@ at the top level of this directory.
 | `observation_space.md` | `envs/_parking_core.py`, `envs/CLAUDE.md` | 12-dim obs layout, LiDAR sector boundaries, covariance features |
 | `ros2_architecture.md` | `envs/covariance_subscriber.py`, `ros2/` | DDS-bypass via shared JSON, atomicity, sequence-number guard |
 | `layout/patrol_paths.md` | `envs/sim/_npc_controller.py` | Proportional heading controller, waypoint loop, avoidance cone geometry |
+| `real_world_deployment.md` | `envs/real/deployment_utils.py`, `envs/real/inference_loop.py` | Sensor data flow, EKF frame calibration, surveyed datum, actuation calibration, GNSS/IMU driver notes |
 
 ## See also
 
