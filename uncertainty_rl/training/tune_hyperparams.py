@@ -2,28 +2,24 @@
 @file tune_hyperparams.py
 @brief Optuna hyperparameter tuning for PPO + evidential policy networks.
 
-Uses TPESampler (multivariate) and MedianPruner to systematically search PPO +
-evidential hyperparameters across multiple trials. Each trial runs a short
-training session (100k steps default) and evaluates env/mean_progress_reward.
-Best trial params are written back to configs/train_config.yaml for seamless
-integration with the normal training workflow.
+Uses TPESampler (multivariate) and MedianPruner to search PPO + evidential
+hyperparameters. Each trial runs a short training session and evaluates
+env/mean_progress_reward. Best params are written back to train_config.yaml.
 
-Search space design references:
-  [1] Andrychowicz et al. 2021, "What Matters In On-Policy RL?" (ICLR 2021)
-  [2] Eimer et al. 2023, "Hyperparameters in RL and How To Tune Them" (ICML 2023)
-  [3] Watanabe 2023, "Tree-Structured Parzen Estimator" (arXiv:2304.11127)
-  [4] Raffin 2022, "Automatic Hyperparameter Tuning In Practice" (ICRA tutorial)
+@see documentation/detailed_notes/hyperparameter_search.md for search space
+     design rationale and literature references.
 """
 
 import argparse
 import copy
-import json
 import logging
 import os
+import shutil
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
-import numpy as np
+import yaml
 
 # Optuna is required for tuning
 try:
@@ -43,7 +39,6 @@ except ImportError:
     )
 
 from uncertainty_rl.training.train_ppo import (
-    TrainResult,
     load_config,
     load_env_config,
     merge_configs,
@@ -53,23 +48,15 @@ from uncertainty_rl.training.train_ppo import (
 logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
 
-# ===========================================================================
+# ------------------------------------------------------------------
 # sample_hyperparams: Tuning search space (8 active parameters)
-# ===========================================================================
+# ------------------------------------------------------------------
 
 
 def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> Dict[str, Any]:
     """
     @brief Sample hyperparameters from the search space.
-
-    Bounds come from tuning_config.yaml, not hardcoded. Returns a flat dict
-    of hyperparameters to be merged into the training config.
-
-    8 active parameters [1][2]: learning_rate, n_steps, batch_size, n_epochs,
-    gamma, ent_coef, lambda_reg, lambda_reg_warmup_steps. Fixed parameters
-    (clip_range, max_grad_norm, target_kl, net_arch) retain their defaults
-    from train_config.yaml.
-
+    
     @param trial: Optuna trial object.
     @param tuning_config: Tuning configuration with search space bounds.
     @return Dictionary of sampled hyperparameters.
@@ -102,7 +89,7 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
         space.get("n_epochs", [3, 5, 10]),
     )
 
-    # Gamma: sample 1 - (1 - gamma) on log scale for precision near 1.0 [4]
+    # Gamma: sample 1 - (1 - gamma) on log scale for precision near 1.0
     one_minus_gamma = trial.suggest_float(
         "one_minus_gamma",
         1 - float(space.get("gamma", [0.98, 0.999])[1]),
@@ -118,7 +105,7 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
         log=True,
     )
 
-    # Evidential parameters -- always enabled (lambda_reg > 0).
+    # Evidential parameters - always enabled (lambda_reg > 0).
     # Disabling evidential regularisation defeats the architecture's purpose.
     lambda_reg = trial.suggest_float(
         "lambda_reg",
@@ -148,9 +135,9 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     }
 
 
-# ===========================================================================
+# ------------------------------------------------------------------
 # TrialEvalCallback: Read metrics from training for trial evaluation
-# ===========================================================================
+# ------------------------------------------------------------------
 
 
 class TrialEvalCallback(BaseCallback):
@@ -199,9 +186,9 @@ class TrialEvalCallback(BaseCallback):
             raise optuna.TrialPruned()
 
 
-# ===========================================================================
+# ------------------------------------------------------------------
 # apply_best_params: Write best trial params back to train_config.yaml
-# ===========================================================================
+# ------------------------------------------------------------------
 
 
 def apply_best_params(
@@ -223,21 +210,18 @@ def apply_best_params(
     backup_dir.mkdir(parents=True, exist_ok=True)
 
     # Create timestamped backup in configs/backups/
-    from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = backup_dir / f"train_config_{timestamp}.yaml.bak"
 
     # Copy original config to backup
     if config_path.exists():
-        import shutil
         shutil.copy2(config_path, backup_path)
         logger.info("Created backup: %s", backup_path)
 
     # Load original config
     try:
-        import yaml as pyyaml
         with open(config_path) as f:
-            original_config = pyyaml.safe_load(f)
+            original_config = yaml.safe_load(f)
     except Exception as e:
         logger.error("Failed to load original config: %s", e)
         raise
@@ -245,19 +229,16 @@ def apply_best_params(
     # Update only keys that were in the search space
     for key, value in best_params.items():
         if isinstance(value, dict):
-            # Handle nested keys like evidential.lambda_reg
             if key not in original_config:
                 original_config[key] = {}
             original_config[key].update(value)
         else:
-            # Handle flat keys
             original_config[key] = value
 
     # Write back to train_config.yaml
     try:
-        import yaml as pyyaml
         with open(config_path, 'w') as f:
-            pyyaml.dump(original_config, f, default_flow_style=False, sort_keys=False)
+            yaml.dump(original_config, f, default_flow_style=False, sort_keys=False)
         logger.info("Updated train_config.yaml with best params")
 
         # Log the changes
@@ -274,9 +255,9 @@ def apply_best_params(
         raise
 
 
-# ===========================================================================
+# ------------------------------------------------------------------
 # objective: Optuna objective function
-# ===========================================================================
+# ------------------------------------------------------------------
 
 
 def objective(
@@ -350,9 +331,9 @@ def objective(
         raise optuna.TrialPruned()
 
 
-# ===========================================================================
+# ------------------------------------------------------------------
 # run_study: Execute the Optuna study
-# ===========================================================================
+# ------------------------------------------------------------------
 
 
 def run_study(
@@ -367,14 +348,6 @@ def run_study(
     Uses TPESampler (multivariate) + MedianPruner. Results are stored in
     SQLite for persistence and resume capability. Best params are written
     back to train_config.yaml after the study completes.
-
-    Sampler: multivariate TPE captures parameter interactions (e.g.
-    learning_rate vs batch_size) [3]. n_startup_trials=10 gives pure random
-    exploration before TPE builds its density model.
-
-    Pruner: MedianPruner over HyperbandPruner -- Hyperband creates multiple
-    brackets requiring ~10 startup trials each, exhausting most of our budget
-    on random search [4].
 
     @param tuning_config: Tuning configuration with study settings.
     @param base_config: Base training config (merged train + env configs).
@@ -458,7 +431,6 @@ def run_study(
     apply_best_params(best_params, train_config_path)
 
     # Also save standalone copy to logs/tuning/results/best_params.yaml
-    import yaml
     best_params_path = results_dir / "best_params.yaml"
     with open(best_params_path, 'w') as f:
         yaml.dump(best_params, f, default_flow_style=False)
@@ -466,9 +438,9 @@ def run_study(
     logger.info("Tuning results saved to %s", results_dir)
 
 
-# ===========================================================================
+# ------------------------------------------------------------------
 # main: CLI entry point
-# ===========================================================================
+# ------------------------------------------------------------------
 
 
 def main() -> None:
