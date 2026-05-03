@@ -1,34 +1,14 @@
 """
 @file gnss_noise_relay.py
-@brief ROS 2 node that adds dynamic noise to CARLA GNSS and converts to local
-       Odometry via flat-earth projection, publishing COG heading for EKF yaw correction.
+@brief ROS 2 node that injects per-episode GNSS noise, projects to local XY,
+       and publishes Odometry + COG heading for the robot_localisation EKF.
 
-This node subscribes to the raw NavSatFix from the CARLA GNSS sensor, adds
-Gaussian noise to lat/lon/alt, converts the noisy lat/lon to local XY via a
-flat-earth projection, publishes the result as nav_msgs/Odometry on
-/odometry/gps for direct consumption by the robot_localisation EKF, and
-derives a Course Over Ground (COG) heading from successive noisy position
-fixes for publication as PoseWithCovarianceStamped on /gnss/heading.
+Subscribes to CARLA NavSatFix, adds tier-appropriate Gaussian noise, converts
+to metric Odometry via flat-earth projection (/odometry/gps), and derives a
+Course Over Ground heading from successive noisy fixes (/gnss/heading).
 
-COG heading is derived entirely from noisy GNSS positions -- no ground truth
-or CARLA API calls. Speed is estimated as displacement / elapsed time between
-successive fixes, matching how a real u-blox receiver computes COG internally.
-
-Heading is only updated when estimated speed exceeds cog_min_speed_ms
-(default 0.3 m/s). Below this threshold the last valid heading is re-published
-so the EKF always receives a yaw measurement.
-
-IMU covariance stamping is handled separately by ImuNoiseRelayNode
-(imu_noise_relay.py). The two nodes are launched together by carla_bridge.launch.py.
-
-The noise multiplier is signalled per-episode via a shared JSON file
-(gnss_noise_config.json) written by the training container at each reset().
-
-Mid-episode fix-state transitions are modelled via a discrete-time Markov
-chain. Transition probabilities are loaded from gnss_noise_profiles.yaml
-alongside the tier noise parameters.
-
-@author Antonio Galdes
+@see documentation/detailed_notes/ros2_architecture.md for the COG heading
+     variance formula and Markov tier model.
 """
 
 import json
@@ -44,7 +24,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import NavSatFix
 
-# Ordered tier names -- index position defines row/column in transition matrix.
+# Ordered tier names - index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 
 # Noise parameters for each tier (fallback if config file is absent).
@@ -74,19 +54,6 @@ class GnssNoiseRelayNode(Node):
     """
     @class GnssNoiseRelayNode
     @brief Adds per-episode noise to CARLA GNSS, publishes Odometry + COG heading.
-
-    Subscribes to a single front GNSS NavSatFix. On each callback:
-      1. Injects tier-appropriate independent Gaussian noise to lat/lon.
-      2. Flat-earth projects to local XY (metres from datum).
-      3. Publishes /odometry/gps (Odometry, EKF odom0 -- x, y correction).
-      4. Computes COG heading from displacement since the previous fix.
-      5. Publishes /gnss/heading (PoseWithCovarianceStamped, EKF pose0 -- yaw correction).
-
-    COG speed = displacement / dt, computed entirely from successive noisy GNSS
-    positions and NavSatFix message timestamps. No CARLA API or ground truth used.
-    Heading variance scales with sigma_pos^2 / speed^2 (error propagation of
-    atan2 from two noisy fixes), so it degrades naturally at low speed and under
-    high GNSS noise tiers.
 
     @see documentation/design/gnss_markov_transitions.md
     """
@@ -184,12 +151,6 @@ class GnssNoiseRelayNode(Node):
         self._prev_stamp_sec: Optional[float] = None
 
         # COG heading state.
-        # _cog_initialised guards publication: no heading is sent to the EKF
-        # until the first valid fix pair above cog_min_speed_ms is obtained.
-        # This prevents the EKF from fusing a wrong default heading at episode
-        # start before the vehicle has moved enough for a reliable COG estimate.
-        # Once initialised, _last_heading_rad is held at standstill (correct,
-        # since a stationary vehicle has not rotated).
         self._cog_initialised: bool = False
         self._last_heading_rad: float = 0.0
         self._last_heading_var: float = (math.pi ** 2) / 3.0
@@ -200,8 +161,6 @@ class GnssNoiseRelayNode(Node):
             depth=10,
         )
         # robot_localization subscribes to odom0/pose0 with BEST_EFFORT.
-        # A RELIABLE publisher paired with BEST_EFFORT subscriber delivers no
-        # messages in ROS 2 -- use BEST_EFFORT for the output publishers.
         qos_be = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
@@ -296,16 +255,11 @@ class GnssNoiseRelayNode(Node):
                 )
 
             # Seed COG heading from the known spawn yaw (layout geometry).
-            # This eliminates the cold-start problem: the EKF receives a correct
-            # heading from tick 1 before any vehicle motion. The spawn yaw is
-            # not ground truth -- it is the layout geometry, available equally
-            # in simulation and real deployment (surveyed lot entry heading).
             spawn_yaw = data.get("spawn_yaw")
             if spawn_yaw is not None:
                 self._last_heading_rad = float(spawn_yaw)
                 # Use a moderately tight variance: the spawn heading is known
                 # from the layout but the vehicle may not be perfectly aligned.
-                # 5 deg stddev = (5 * pi/180)^2 ~ 7.6e-3 rad^2.
                 self._last_heading_var = (math.radians(5.0)) ** 2
                 self._cog_initialised = True
                 self.get_logger().info(
@@ -363,13 +317,6 @@ class GnssNoiseRelayNode(Node):
         """
         @brief Compute COG heading variance from GNSS position noise and speed.
 
-        Error propagation of atan2(dy, dx) from two independent noisy fixes:
-            var(heading) ~= 2 * sigma_pos^2 / dist^2
-                         = 2 * sigma_pos^2 / (speed * dt)^2
-        Since dt = 1/20 Hz is fixed, this simplifies to 2*sigma^2/dist^2, and
-        the dominant factor in practice is speed: slow vehicles have high
-        heading variance, fast vehicles have low heading variance.
-
         @param speed_ms: GNSS-derived speed (displacement / dt) in m/s.
         @return Heading variance in rad^2.
         """
@@ -388,10 +335,6 @@ class GnssNoiseRelayNode(Node):
     def _gnss_callback(self, msg: NavSatFix) -> None:
         """
         @brief Process a single GNSS fix: inject noise, project to XY, publish odom + COG.
-
-        Speed is estimated as displacement / dt between successive noisy GNSS
-        positions. Both the displacement and timestamp come from the NavSatFix
-        message -- no CARLA API or ground truth is used.
 
         @param msg: Raw NavSatFix from the CARLA GNSS sensor.
         """
@@ -481,7 +424,7 @@ class GnssNoiseRelayNode(Node):
 
         # -- COG heading (EKF pose0: yaw correction) ---------------------------
         # Displacement and dt derived entirely from successive noisy GNSS
-        # positions and NavSatFix message timestamps -- no CARLA ground truth.
+        # positions and NavSatFix message timestamps.
         if self._prev_x is not None and self._prev_stamp_sec is not None:
             dt = stamp_sec - self._prev_stamp_sec
             if dt > 0.0:
@@ -518,8 +461,7 @@ class GnssNoiseRelayNode(Node):
         self._prev_stamp_sec = stamp_sec
 
         # Only publish heading once the first valid COG reading has been obtained.
-        # Before that the EKF runs on IMU vyaw only -- correct behaviour since
-        # a wrong default heading would corrupt the EKF yaw state immediately.
+        # Before that the EKF runs on IMU vyaw only.
         if not self._cog_initialised:
             return
 
