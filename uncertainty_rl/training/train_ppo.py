@@ -29,7 +29,6 @@ except ImportError:
     torch = None  # type: ignore[assignment,misc]
 
 try:
-    # Reserved: re-enable when multi-instance CARLA eval is supported.
     from stable_baselines3.common.callbacks import EvalCallback  # noqa: F401
     from stable_baselines3.common.callbacks import (
         BaseCallback,
@@ -115,19 +114,8 @@ def make_env(
     """
 
     def _init() -> gym.Env:
-        # SafetyWrapper is deliberately NOT applied here. The policy must learn
-        # freely during training without any safety interception -- applying the
-        # wrapper during training would cause the policy to learn to rely on it
-        # (reward hacking). The wrapper is applied exclusively at evaluation and
-        # deployment time (see evaluate.py and envs/real/inference_loop.py).
 
         # Each worker connects to its own CARLA server on a separate port and host.
-        # Port stride is 1000 so worker ports (2000, 3000, ...) never collide
-        # with CARLA's 3-port block (world+streaming+RPC on base, base+1, base+2).
-        # Host: container names uncertainty-rl-carla-0, uncertainty-rl-carla-1, ...
-        # Container names (not service names) are used because each worker is a
-        # separate compose invocation sharing the same bridge network -- Docker DNS
-        # resolves container names across compose projects on a shared network.
         worker_port = config.get("carla_port", 2000) + rank * 1000
         worker_host = f"uncertainty-rl-carla-{rank}"
 
@@ -199,10 +187,6 @@ def merge_configs(
     """
     @brief Merge training and environment configs into a single dict.
 
-    env_config keys take precedence for environment settings. train_config
-    keys take precedence for training hyperparameters. In practice they have
-    no overlapping keys so this is a simple union.
-
     @param train_config: Training hyperparameters from train_config.yaml.
     @param env_config: Environment settings from env_config.yaml.
     @return Merged configuration dictionary.
@@ -215,18 +199,6 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
     """
     @brief Load and merge the environment config with shared deployment configs.
 
-    Three-layer merge (lowest to highest precedence):
-      1. sensor_config.yaml  -- physical sensor specs and mount positions
-      2. agent_config.yaml   -- shared agent/policy parameters (speed cap, safety
-                                thresholds, obs flags, ROS 2 settings, deployment flags)
-      3. env_config.yaml     -- CARLA-specific overrides (noise, timing, scenarios)
-
-    Both sensor_config.yaml and agent_config.yaml live in configs/deployment/.
-    env_config.yaml lives in configs/deployment/sim/ and its keys take precedence
-    over the shared configs on conflict.
-
-    Sensor mounts from sensor_config.sensors.*.mount are injected into
-    carla_sensors.*.mount so the CARLA spawner receives them.
 
     @param env_config_path: Path to the CARLA environment config YAML.
     @return Fully merged environment configuration dictionary.
@@ -263,15 +235,6 @@ class EnvDiagnosticsCallback(BaseCallback):
     """
     @class EnvDiagnosticsCallback
     @brief SB3 callback that logs per-episode environment diagnostics to TensorBoard.
-
-    Reads from the `info` dict returned by `CARLAParkingEnv.step()` and records
-    rolling means of reward components (position error, orientation error, speed,
-    progress reward) plus episode outcome rates (success, collision, timeout).
-    These appear under the `env/` namespace in TensorBoard alongside SB3's
-    built-in `rollout/` and `train/` metrics.
-
-    Logged at every rollout collection step (i.e. every `n_steps` environment
-    steps), matching the cadence of SB3's own metric dumps.
     """
 
     def __init__(self) -> None:
@@ -298,7 +261,7 @@ class EnvDiagnosticsCallback(BaseCallback):
             )
             self._ep_speeds.append(float(info.get("speed", 0.0)))
             self._ep_progress_rewards.append(float(info.get("progress_reward", 0.0)))
-            # Episode-terminal flags -- count when episode ended.
+            # Episode-terminal flags - count when episode ended.
             is_terminal = (
                 info.get("success", False)
                 or info.get("collision", False)
@@ -406,14 +369,14 @@ def train(
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # Create training environment -- one worker per CARLA instance.
+    # Create training environment - one worker per CARLA instance.
     # parallel_workers > 1 requires docker-compose.parallel.yml (see make docker-train-parallel).
     n_workers: int = config.get("parallel_workers", 1)
     logger.info(f"Creating training environment ({n_workers} worker(s))...")
     train_vec_env = DummyVecEnv([make_env(config, rank=i) for i in range(n_workers)])
 
     # Normalise observations but not rewards - reward components will be
-    # manually scaled via potential-based shaping (see reward TODO in config)
+    # manually scaled via potential-based shaping
     env = VecNormalize(
         train_vec_env,
         norm_obs=True,
