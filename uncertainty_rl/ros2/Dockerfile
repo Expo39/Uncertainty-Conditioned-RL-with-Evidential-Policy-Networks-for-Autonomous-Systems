@@ -7,8 +7,6 @@
 # - CARLA ROS bridge
 # - robot_localisation package for EKF covariance output
 # - Python dependencies for covariance extraction
-#
-# @author Antonio Galdes
 
 ARG ROS_DISTRO=jazzy
 FROM ros:${ROS_DISTRO}-ros-base-noble
@@ -49,14 +47,6 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
 # Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
-# Three patches applied to the cloned ros-bridge source:
-#   1. CARLA_VERSION: bridge hardcodes 0.9.13 but is wire-compatible with 0.9.16.
-#   2. generate_opendrive_world: add OpendriveGenerationParameters to disable nav
-#      mesh (crashes on headless GPU) and match our FlatPlane world setup.
-#   3. on_tick_id guard: AttributeError when shutdown() is called before on_tick_id
-#      is assigned during rapid restart. getattr fallback makes it a no-op.
-#   4. patch_bridge.py: catches RuntimeError on destroy() of already-gone actors
-#      (sensor.py + actor_factory.py) to prevent hang in world.tick() sync mode.
 COPY uncertainty_rl/ros2/patch_bridge.py /tmp/patch_bridge.py
 RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
@@ -82,17 +72,12 @@ RUN rosdep update && \
     ackermann_msgs" || true
 
 # Build only the CARLA bridge packages needed at runtime.
-# carla_manual_control is included because carla_ros_bridge depends on it at
-# build time (looks for carla_manual_control/package.sh during colcon build).
-# It is never launched at runtime. rviz2/rqt packages are excluded (GUI only).
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
     --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
 
-# Install the uncertainty_rl Python package (base deps only -- no torch/SB3).
-# Covariance extraction nodes import uncertainty_rl.utils.covariance_utils.
-# Placed outside /workspace/src so colcon does not find it as a duplicate package.
+# Install the uncertainty_rl Python package (base deps only - no torch/SB3).
 COPY pyproject.toml /opt/uncertainty_rl_pkg/pyproject.toml
 COPY uncertainty_rl/__init__.py /opt/uncertainty_rl_pkg/uncertainty_rl/__init__.py
 COPY uncertainty_rl/utils/ /opt/uncertainty_rl_pkg/uncertainty_rl/utils/

@@ -4,11 +4,7 @@
 
 Both nodes are independent (separate subscriptions and publishers) but are
 spun together in a single process via MultiThreadedExecutor to avoid the
-overhead of a second container process. The split into two files keeps each
-node's responsibility clear; this file is the sole entry point registered
-in setup.py.
-
-@author Antonio Galdes
+overhead of a second container process.
 """
 
 from typing import Optional
