@@ -1,22 +1,10 @@
 """
 @file deployment_utils.py
-@brief Real-world deployment utilities for the autonomous parking system.
+@brief Real-world deployment utilities: surveyed datum loading and actuator calibration.
 
-Owns two real-vehicle-specific concerns:
-  - Loading the surveyed lot datum (UTM easting/northing -> lot layout frame)
-    and exposing it as reference_pose() for EKF frame calibration.
-  - Loading and applying per-actuator gain/deadband/bias calibration.
-
-EKF frame calibration (odom-to-world transform computation) is performed by
-calibrate_ekf_frame_offset() in envs/_parking_core.py, which is hardware-
-agnostic. Both CARLAParkingEnv (sim) and RealWorldInferenceLoop (real-world)
-call it with their respective get_pose callables; only the reference position
-source differs (layout YAML spawn vs. surveyed datum).
-
-@see documentation/detailed_notes/real_world_deployment.md
-@see uncertainty_rl.envs._parking_core.calibrate_ekf_frame_offset
-
-@author Antonio Galdes
+Owns the static mission configuration for a real-world deployment: the surveyed
+lot datum (EKF frame reference), the target bay resolved from the layout YAML,
+and the per-actuator calibration map. No ROS 2 or runtime sensor state.
 """
 
 import logging
@@ -35,24 +23,11 @@ logger = logging.getLogger(__name__)
 class RealWorldDeployment:
     """
     @class RealWorldDeployment
-    @brief Encapsulates all real-vehicle deployment logic.
+    @brief Surveyed lot datum + per-actuator calibration for real-vehicle deployment.
 
-    In simulation, CARLAParkingEnv uses CARLA ground-truth transforms for EKF
-    frame calibration and identity actuation. On the real vehicle both of those
-    assumptions break:
-
-      1. There is no CARLA -- the EKF frame offset must be derived from a
-         surveyed datum point measured at the test site.
-      2. The physical actuators (steering rack, throttle, brake) do not respond
-         linearly to normalised [-1, 1] commands -- they have deadbands, gain
-         differences, and biases that must be calibrated.
-
-    This class owns both concerns and exposes a clean interface so
-    carla_parking.py does not need to contain any real-world-specific logic.
-
-    @note All values in datum and calibration files are UNMEASURED placeholders
-          until filled in at the deployment site. See the YAML files for the
-          measurement procedure.
+    Owns the EKF frame reference (lot_x/y/heading from real_world_datum.yaml) and
+    maps normalised policy actions to physical actuator commands via
+    ActuationCalibration.
     """
 
     def __init__(
@@ -63,7 +38,7 @@ class RealWorldDeployment:
         """
         @brief Construct from pre-loaded datum dict and actuation calibration.
         @param datum: Contents of the 'datum' key from real_world_datum.yaml.
-        @param actuation: ActuationCalibration instance (identity if uncalibrated).
+        @param actuation: ActuationCalibration instance.
         """
         self._datum = datum
         self._actuation = actuation
@@ -82,9 +57,7 @@ class RealWorldDeployment:
         @brief Load datum and actuation calibration from YAML files.
 
         Returns a RealWorldDeployment with identity actuation if either file
-        is absent or unpopulated. Logs a warning for missing datum (required
-        for correct EKF calibration) but does not raise -- the caller will see
-        identity transform values and can decide how to handle them.
+        is absent or unpopulated.
 
         @param datum_path: Path to configs/real_world_datum.yaml.
         @param calibration_path: Path to configs/actuation_calibration.yaml.
@@ -134,15 +107,6 @@ class RealWorldDeployment:
 
         Reads mission.yaml to get target_bay_id and layout_file, loads the
         layout, resolves the target bay, then constructs the deployment object.
-
-        Typical usage at deployment startup:
-
-            deployment, target_bay = RealWorldDeployment.from_mission(
-                mission_path="configs/deployment/real/mission.yaml",
-                datum_path="configs/deployment/real/real_world_datum.yaml",
-                calibration_path="configs/deployment/real/actuation_calibration.yaml",
-            )
-            # target_bay is ready to pass to the obs pipeline (dx/dy/dyaw).
 
         @param mission_path: Path to mission.yaml.
         @param datum_path: Path to real_world_datum.yaml (optional).
@@ -202,17 +166,9 @@ class RealWorldDeployment:
 
     def reference_pose(self) -> Tuple[float, float, float]:
         """
-        @brief Return the vehicle's reference pose in the lot layout frame.
-
-        This is the position of the datum marker (a surveyed physical point in
-        the parking lot) expressed in the lot layout coordinate frame -- the
-        same frame used in configs/layouts/*.yaml and the bird's-eye PNGs.
-
-        Used as the world_x/y/yaw reference when calling
-        calibrate_ekf_frame_offset() from _parking_core.
-
-        @return Tuple (x_m, y_m, yaw_rad) in lot layout frame.
-        @warning Returns (0, 0, 0) if datum was not loaded. Check logs.
+        @brief Return the surveyed datum pose in the lot layout frame.
+        @return Tuple (x_m, y_m, yaw_rad). Returns (0, 0, 0) if datum not loaded.
+        @warning Check logs for load failure before trusting this value.
         """
         x = float(self._datum.get("lot_x", 0.0))
         y = float(self._datum.get("lot_y", 0.0))
@@ -237,11 +193,6 @@ class RealWorldDeployment:
     ) -> Dict[str, Any]:
         """
         @brief Look up a bay by ID in the loaded layout and return its dict.
-
-        In real-world deployment the target bay is assigned by a dispatch
-        system or operator -- it is never randomly sampled. Call this once
-        per mission with the bay ID received from dispatch, then pass the
-        returned dict to the policy observation pipeline.
 
         @param bay_id: Bay identifier string matching the 'id' field in the
                        layout YAML (e.g. 'B01', 'A03').
@@ -284,10 +235,6 @@ class RealWorldDeployment:
     ) -> Tuple[float, float]:
         """
         @brief Map policy action outputs to physical actuator commands.
-
-        Applies the per-actuator gain/deadband/bias loaded from
-        configs/actuation_calibration.yaml. Returns the inputs unchanged
-        if the calibration file was absent or uncalibrated (identity mapping).
 
         @param steering: Policy steering output in [-1, 1].
         @param longitudinal: Policy longitudinal output in [-1, 1].

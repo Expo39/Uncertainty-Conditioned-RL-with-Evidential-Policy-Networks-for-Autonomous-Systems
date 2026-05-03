@@ -32,11 +32,19 @@
 #           placeholder zeros and fill in on-site.
 
 datum:
-  # UTM coordinates of the reference point (RTK-fixed measurement).
+  # WGS84 coordinates of the reference point (RTK-fixed measurement).
+  # Used directly by navsat_transform_node as the local metric frame origin.
+  # Record with 'ros2 topic echo /gnss/fix' when the receiver reports RTK fixed.
+  # @warning UNMEASURED -- fill in at deployment site.
+  datum_lat: 0.0      # degrees latitude  (e.g. 51.501364)
+  datum_lon: 0.0      # degrees longitude (e.g. -0.141890)
+
+  # UTM coordinates of the same reference point (for cross-checking only).
+  # navsat_transform_node uses datum_lat/datum_lon above, not UTM directly.
   # @warning UNMEASURED -- fill in at deployment site.
   utm_easting: 0.0    # metres east in UTM zone (e.g. 456789.12)
   utm_northing: 0.0   # metres north in UTM zone (e.g. 5678901.23)
-  utm_zone: ""        # e.g. "30U" -- must match navsat_transform UTM zone
+  utm_zone: ""        # e.g. "30U"
 
   # Vehicle heading when parked at datum point.
   # Convention: degrees, ENU frame (0 = East, 90 = North, -90 = South).
