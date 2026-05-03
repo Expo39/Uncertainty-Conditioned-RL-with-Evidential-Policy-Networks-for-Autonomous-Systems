@@ -237,17 +237,9 @@ def generate() -> Dict[str, Any]:
         "yaw_deg": round(_spawn2_yaw, 1),
     }
 
-    # ------------------------------------------------------------------
     # Patrol path: 4-waypoint loop through the lower and upper aisles.
-    #
-    # Corridor y values:
-    #   aisle1_cy: midpoint below row A nose face (centre perp row, faces -Y).
-    #   aisle3_cy: midpoint above row B nose face (centre perp row, faces +Y).
-    # The x extents are offset by 4 m inside the lot boundary so the patrol
-    # vehicle stays clear of the entrance gate (left) and right-wall bays.
-    #   x_enter: between left lot boundary and left edge of perp cluster.
-    #   x_exit:  between right edge of perp cluster and right-wall parallel bays.
-    # ------------------------------------------------------------------
+    # Corridor positions are midpoints between facing bay surfaces.
+    # See documentation/detailed_notes/layout/patrol_paths.md for derivation.
     perp_cluster_x_min = perp_cx_start - dims_perp["width"] / 2.0
     perp_cluster_x_max = perp_cx_start + (PERP_BAYS_PER_ROW - 0.5) * dims_perp["width"]
     par_right_inner_x = par_cx_right - dims_par["width"] / 2.0
@@ -294,7 +286,7 @@ def generate() -> Dict[str, Any]:
     ]
 
     # ------------------------------------------------------------------
-    # Pedestrian zones -- one strip per distinct aisle face.
+    # Pedestrian zones - one strip per distinct aisle face.
     # PED_STRIP and _PED_MARGIN are imported from common.py.
     # ------------------------------------------------------------------
     ped_zones = [
