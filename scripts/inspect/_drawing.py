@@ -1,20 +1,6 @@
 """
 @file _drawing.py
 @brief Internal CARLA debug-geometry drawing helpers for the lot inspector.
-
-Contains all free functions that place coloured dots on the CARLA debug overlay:
-  - _draw_dotted_segment  -- dotted line between two world-frame points
-  - _draw_layout_overlays -- bay outlines, spawn points, patrol path, pedestrian zones
-  - _draw_sensor_dot      -- labelled dot at a sensor mount position
-  - _draw_fov_arc         -- bold arc boundary for a sensor FOV wedge or ring
-  - _draw_sensor_overlays -- composite sensor overlay (all mounts + FOV arcs)
-
-All colour constants are derived here from ``scripts.colours`` and exported so
-that ``_inspectors.py`` can use them directly without re-importing.
-
-@note This module is internal -- import via ``scripts.inspect._drawing``.
-@note CARLA 0.9.16 ``draw_line`` ignores colour; all lines are simulated with
-      closely-spaced ``draw_point`` calls via ``_draw_dotted_segment``.
 """
 
 import math
@@ -69,9 +55,9 @@ _COL_PATROL = hex_to_carla_color(HEX_PATROL_PATH)
 _COL_LOT = hex_to_carla_color(HEX_LOT)
 
 
-# ===========================================================================
+# ---------------------------------------------------------------------------
 # Layout overlay drawing functions
-# ===========================================================================
+# ---------------------------------------------------------------------------
 
 
 def _draw_dotted_segment(
@@ -264,9 +250,9 @@ def _draw_layout_overlays(
             )
 
 
-# ===========================================================================
+# ---------------------------------------------------------------------------
 # Sensor overlay drawing functions
-# ===========================================================================
+# ---------------------------------------------------------------------------
 
 
 def _draw_sensor_dot(
@@ -325,9 +311,6 @@ def _draw_fov_arc(
     """
     @brief Draw a single bold arc boundary for a sensor FOV wedge or ring.
 
-    Places dots at ``_ARC_SPACING`` intervals along the arc at ``radius``.
-    Radial boundary lines run from the origin to each arc endpoint.
-
     @param debug: carla.DebugHelper.
     @param origin_x: Arc centre X (world frame).
     @param origin_y: Arc centre Y (world frame).
@@ -382,15 +365,6 @@ def _draw_sensor_overlays(
 ) -> None:
     """
     @brief Draw sensor mount dots and FOV arcs for the current vehicle pose.
-
-    Reads mount positions from ``train_cfg`` (``carla_sensors`` section) and draws:
-      - IMU: yellow dot at centre-of-mass height
-      - GNSS: magenta dot at roof antenna mount
-      - 2D LiDAR: cyan dot at front bumper + 270 deg FOV arc + faint 90 deg blind sector
-
-    All positions are read from ``carla_sensors.<sensor>.mount`` in ``train_cfg``
-    and transformed from vehicle body frame to world frame using the current
-    vehicle transform.
 
     @param env: Active CARLAParkingEnv (vehicle must be spawned).
     @param train_cfg: Loaded train_config.yaml dict.
