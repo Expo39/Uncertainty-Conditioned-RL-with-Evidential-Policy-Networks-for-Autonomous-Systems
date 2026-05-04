@@ -1,0 +1,399 @@
+% ==========================================================================
+% Reference Mapping: Where Each Citation Appears in the Codebase
+%
+% This file tracks which references were used during implementation and
+% WHERE they influenced design decisions. Use this as a lookup when
+% writing the dissertation methodology and experimental setup chapters.
+%
+% Format: \section{Topic} -> bullet list of decisions with \cite{} refs.
+% Compile with: pdflatex references.tex && bibtex references && pdflatex references.tex && pdflatex references.tex
+% ==========================================================================
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{natbib}
+\usepackage{hyperref}
+\usepackage{enumitem}
+
+\title{Implementation Reference Map\\
+\large Uncertainty-Conditioned RL with Evidential Policy Networks}
+\author{Antonio Galdes}
+\date{Last updated: \today}
+
+\begin{document}
+\maketitle
+
+\section{Evidential Deep Learning Architecture}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{NIG parameterisation} (gamma, nu, alpha, beta) with softplus constraints:
+        \texttt{evidential\_policy.py}, \texttt{sb3\_integration.py}.
+        Based on \cite{amini2020deep}.
+
+  \item \textbf{Evidential regularisation} $L_R = |\mathbf{a} - \gamma| \cdot (2\nu + \alpha)$
+        with $\lambda_\text{reg} = 0.01$:
+        \texttt{sb3\_integration.py:EvidentialPPO.train()},
+        \texttt{configs/train\_config.yaml}.
+        Coefficient matches EPPO $\xi = 0.01$ \cite{eppo2024},
+        validated range $[0.001, 0.1]$ by \cite{trustgeo2023} and \cite{soleimany2021evidential}.
+
+  \item \textbf{Evidential actor (not critic)}: Design decision in \texttt{CLAUDE.md}.
+        Note: EPPO \cite{eppo2024} applies evidential DL to the \emph{critic},
+        not the actor. Our evidential actor is a less-studied configuration
+        that produces Student-t policy distributions.
+
+  \item \textbf{NIG hyperprior initialisation} (TODO in \texttt{train\_config.yaml}):
+        nu bias $\approx 0.5$, alpha bias $\approx 0.5$, beta bias $\approx 0.0$.
+        Produces ``honestly uncertain'' starting points.
+        EPPO \cite{eppo2024} uses Gamma(2,1) for nu/alpha, Gamma(1,1) for beta.
+
+  \item \textbf{Lambda annealing} from 0 to 0.01 over 50K steps (TODO):
+        Lets NLL establish good predictions before regularisation begins.
+        Standard practice in evidential DL literature.
+\end{itemize}
+
+\section{PPO Hyperparameters}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Learning rate 3e-4 with linear decay}:
+        \texttt{train\_ppo.py:linear\_schedule()},
+        \texttt{configs/train\_config.yaml}.
+        3e-4 validated by \cite{andrychowicz2021what} (250K+ agents).
+        Linear decay proven optimal by \cite{defazio2023road}.
+
+  \item \textbf{batch\_size=256, n\_epochs=5} (40 off-policy steps, down from 320):
+        \texttt{configs/train\_config.yaml}.
+        \cite{carl2025} showed $\sim$15 off-policy steps outperformed 959 on CARLA.
+        Corrected upward to 40 for single-env setup (no parallel data collection).
+
+  \item \textbf{ent\_coef=0.0} (zero entropy for continuous control):
+        \texttt{configs/train\_config.yaml}.
+        \cite{andrychowicz2021what}: ``no evidence that the entropy term improves
+        performance on continuous control environments.''
+
+  \item \textbf{target\_kl=0.02} (early epoch stopping):
+        \texttt{train\_ppo.py}, \texttt{configs/train\_config.yaml}.
+        Standard PPO mechanism \cite{schulman2017proximal}. Set slightly higher
+        than typical 0.015 due to noisy reward landscape from weather randomisation.
+
+  \item \textbf{gamma=0.99} (kept, not reduced to 0.98):
+        Scenario-specific: with current reward structure, success bonus at step
+        $\sim$300 needs $\gamma^{300} \approx 0.05$ to propagate.
+        At $\gamma = 0.98$, $\gamma^{300} \approx 0.002$ (invisible).
+        SB3 highway-env parking uses $\gamma = 0.95$ \cite{highwayenv} but with
+        dense reward per step.
+
+  \item \textbf{n\_steps=2048} (kept for single CARLA env):
+        $\sim$4 episodes per update provides trajectory diversity across weather
+        conditions. \cite{carl2025} used lower values but with 4--8 parallel envs.
+
+  \item \textbf{Observation normalisation} (VecNormalize, norm\_obs=True):
+        \texttt{train\_ppo.py}.
+        \cite{andrychowicz2021what}: ``one of the most impactful implementation details.''
+
+  \item \textbf{norm\_reward=False}:
+        \texttt{train\_ppo.py}.
+        Auto-normalisation divides by $\text{std}(\text{discounted returns})$,
+        unstable when reward distribution shifts (early: penalties only, later:
+        success bonuses). With potential-based shaping, manual scaling preferred.
+\end{itemize}
+
+\section{Network Architecture}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{net\_arch=[256,256]} for both actor and critic:
+        \texttt{configs/train\_config.yaml}.
+        Evidential head outputs $4 \times 3 = 12$ NIG parameters from 18-dim state.
+        \cite{andrychowicz2021what} recommend separate sizing; kept equal because
+        the 18-dim state includes 9 covariance features encoding complex non-linear
+        uncertainty structure, plus 3 relative target pose features.
+
+  \item \textbf{ReLU activation}:
+        Both EPPO \cite{eppo2024} and \cite{amini2020deep} use ReLU.
+
+  \item \textbf{LayerNorm} (TODO):
+        EPPO \cite{eppo2024} uses LayerNorm after each hidden layer.
+        Preserves network plasticity under non-stationary training
+        \cite{dohare2024loss, lyle2022understanding}.
+\end{itemize}
+
+\section{Reward Function}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Potential-based distance shaping} (TODO, Task 9):
+        Switch from $R = -d$ to $R = d_{t-1} - d_t$.
+        Grounded in \cite{ng1999policy} (policy invariance under
+        potential-based transformations).
+
+  \item \textbf{Milestone bonuses} at distance thresholds (TODO):
+        \cite{rarlap2024} found milestone-augmented rewards outperformed
+        both sparse and pure dense rewards for parking with PPO.
+
+  \item \textbf{highway-env parking benchmark} as reference design:
+        \cite{highwayenv} uses weighted p-norm with $p = 0.5$,
+        weights $[1.0, 0.3, 0.0, 0.0, 0.02, 0.02]$.
+\end{itemize}
+
+\section{Environment Design / Curriculum and Bay Sampling}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Stratified bay type sampling} (1/3 each: perpendicular, angled, parallel):
+        \texttt{carla\_parking.py:CARLAParkingEnv.reset()},
+        \texttt{configs/train\_config.yaml:bay\_type\_sampling}.
+        Justified on three grounds:
+        \begin{itemize}
+          \item \cite{bengio2009curriculum}: balanced difficulty distribution leads to
+                faster convergence than training on the natural (skewed) distribution.
+                The parking lot has far more perpendicular bays than parallel bays
+                in the wild; without stratification the agent would rarely see the
+                hardest manoeuvre.
+          \item \cite{florensa2017reverse}: rare difficult scenarios (parallel pull-in bays)
+                are never practised enough without deliberate curriculum design. The
+                stratified sampler is the minimal curriculum intervention that guarantees
+                each bay type is seen equally often.
+          \item \cite{leurent2018highway} highway-env ParkingEnv uses 28 same-type slots
+                as the direct precedent for a goal-conditioned parking environment.
+                This environment extends the design to 15 bays across 3 types with
+                stratified sampling.
+          \item \cite{cobbe2019quantifying}: general instance diversity principle for RL
+                generalisation. Cited only for the general principle -- the specific
+                count thresholds (4000--16000 CoinRun levels) do not transfer to
+                vector-state parking, where the image-based pixel-memorisation failure
+                mode does not apply.
+        \end{itemize}
+\end{itemize}
+
+\section{Environment Design and Domain Randomisation}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Randomised floor plan presets (2 training, 1 OOD holdout)}:
+        \texttt{configs/train\_config.yaml:parking\_scenarios.floor\_plans}.
+        Two floor plan geometries (\texttt{rectangle}, \texttt{trapezoid}) are
+        sampled uniformly during training. One geometry (\texttt{irregular\_a},
+        five-sided polygon) is held back entirely and used exclusively for OOD
+        evaluation.
+        Justified by domain randomisation \cite{tobin2017domain}: exposing the
+        policy to geometric variety during training encourages generalisation.
+        The held-out geometry drives epistemic uncertainty higher on novel
+        layouts, demonstrating the evidential policy's calibration.
+        Why 3 floor plans rather than more: the agent's relative-obs formulation
+        \texttt{(dx, dy, dyaw)} makes absolute bay position in world coordinates
+        invisible -- overfitting to specific bay positions is structurally
+        impossible. The real diversity axes are manoeuvre type (3 bay types) and
+        lot perimeter shape. Two training floor plans provide sufficient geometric
+        variety. See also \cite{cobbe2019quantifying} for the general diversity
+        principle (note: their 4000--16000 CoinRun level counts do not transfer
+        to vector-state parking -- cited for the general principle only).
+
+  \item \textbf{Randomised bay occupancy per episode} ($\sim$70\% probability
+        per eligible slot): Prevents the policy from memorising a fixed obstacle
+        layout. The target slot and parallel-bay neighbours are always kept empty.
+        Also justified by domain randomisation \cite{tobin2017domain}.
+
+  \item \textbf{Randomised GNSS noise tier, NPC patrol count, pedestrian count per episode}:
+        Varies the localisation uncertainty distribution across episodes.
+        Per-episode RTK fix-state tier sampled from
+        \texttt{configs/gnss\_noise\_profiles.yaml}. 0--3 patrol vehicles
+        (scripted proportional controller, no Traffic Manager), 0--4
+        pedestrians (\texttt{WalkerControl}, zone-constrained random-walk,
+        no NavMesh required). No weather variation (FlatPlane does not
+        render weather effects). \cite{tobin2017domain}.
+
+  \item \textbf{Pedestrian zone-boundary correction (steer toward zone centre)}:
+        \texttt{carla\_parking.py:\_update\_pedestrians()}.
+        Pedestrians are assigned to aisle zones defined in the layout YAML.
+        When a walker reaches within 0.5\,m of the zone boundary, it is assigned
+        a new heading directed toward the zone centre rather than using velocity
+        reflection.
+        Pure reflection causes oscillation: the walker overshoots by one physics
+        step, exits the zone, the heading is negated, and on the next step the
+        walker is still outside and is negated again, producing a standing
+        vibration on the boundary wall.
+        The ``steer toward interior'' approach is the same mechanism used by the
+        CARLA Scenario Runner \cite{carla_scenario_runner}, which assigns a new
+        interior waypoint when an actor approaches a trigger-region boundary.
+        Pedestrians remain in the aisles between parked car bodies, which is
+        the correct location for LiDAR occlusion effects.
+
+  \item \textbf{Three bay types (perpendicular, angled 45 deg, parallel forward entry)}:
+        \texttt{configs/layouts/*.yaml:bays[*].bay\_type}.
+        All three bay types appear in real car parks, including within the same
+        facility \cite{ced_parking_design}. Training across all three bay types
+        improves generalisation \cite{seg_parking2024}. Bay type is not in the
+        observation; the agent infers the required manoeuvre from the relative
+        target pose \texttt{(dx, dy, dyaw)} and reward signal.
+
+  \item \textbf{Bay dimensions from German EAR 05 / EU harmonised practice (FGSV 2005)}:
+        Perpendicular 2.5 m $\times$ 5.0 m, aisle 6.0 m;
+        angled 2.5 m $\times$ 5.4 m, aisle 3.6 m;
+        parallel 2.5 m $\times$ 8.0 m (forward pull-in without reversing), aisle 4.0 m.
+        EAR 05 represents current comfortable minimum standards, slightly larger
+        than absolute minimums, appropriate for a learning agent.
+        Source: FGSV Empfehlungen fur Anlagen des ruhenden Verkehrs (EAR 05), 2005.
+
+  \item \textbf{Reserved slots for parallel forward entry}:
+        Slots immediately in front and behind the target parallel bay are marked
+        \texttt{always\_empty} in the layout YAML
+        (\texttt{configs/layouts/*.yaml:bays[*].always\_empty: true}).
+        Engineering decision: no reference required. Perpendicular and angled
+        bays require no reserved neighbours as the ego drives straight in without
+        sweeping adjacent slots.
+\end{itemize}
+
+\section{Experimental Design and Evaluation}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{10 seeds minimum} for final ablation:
+        \texttt{configs/train\_config.yaml:random\_seeds}.
+        \cite{henderson2018deep} showed 5 seeds produce misleading results.
+        \cite{colas2018many} showed 5 seeds yields insufficient statistical power.
+        \cite{agarwal2021deep} established IQM + bootstrap CIs as gold standard.
+
+  \item \textbf{rliable evaluation protocol}:
+        Report IQM with 95\% stratified bootstrap CIs, probability of improvement,
+        performance profiles. \cite{agarwal2021deep}.
+
+  \item \textbf{Sequential seeds [0..9]}:
+        Avoids appearance of cherry-picking. Standard practice per
+        \cite{agarwal2021deep}.
+
+  \item \textbf{1M total timesteps}:
+        EPPO \cite{eppo2024} uses 500K. \cite{lazzaroni2024parking} used 60M
+        with curriculum learning. 1M provides 2$\times$ safety margin for
+        compact state + shaped rewards.
+\end{itemize}
+
+\section{System Framing and Sensor Architecture}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Decoupled perception/control architecture}:
+        Target parking pose $(x, y, \theta)$ is provided by an upstream visual
+        perception module (e.g.\ camera-based bay detector). This system focuses
+        on the control layer only: navigating safely to the given pose under
+        localisation uncertainty. This matches commercial autonomous parking
+        pipelines \cite{bosch_automated_parking, valeo_park4u} where perception
+        and control are decoupled. Onboard bay detection is out of scope and
+        noted as future work in the dissertation.
+
+  \item \textbf{RTK-GNSS for localisation (outdoor lots only)}:
+        RTK-GNSS provides cm-level accuracy under nominal conditions (RTK fixed),
+        with well-understood degradation modes (float $\sim$30\,cm, standalone
+        $\sim$2--5\,m) that produce the covariance variation the policy needs.
+        A base station + rover costs $\sim$600\,GBP and is trivially deployable
+        at an outdoor lot. Parking bays are 2.5\,m wide with $\sim$0.35\,m margin
+        per side; sub-0.3\,m lateral accuracy is required \cite{reid2019localization}.
+        RTK fixed satisfies this; standalone does not.
+        Justified by \cite{takasu2009rtklib} (cm-level with low-cost receivers),
+        \cite{groves2013gnss} (multipath/NLOS degradation in structured environments).
+        Scope limitation: outdoor parking lots only (stated in dissertation).
+
+  \item \textbf{Why RTK-GNSS replaced Cartographer scan-matching}:
+        The earlier approach used 2D LiDAR scan-matching via Cartographer
+        \cite{cartographer2016}. This was abandoned because: (1) when the lot
+        is full, parked cars occlude perimeter cones and localisation degrades
+        catastrophically; (2) the Cartographer stack added massive complexity
+        (pbstream mapping workflow, Lua configs, TfToOdomNode, IMU frame relay,
+        cross-distro DDS hacks). The thesis contribution is uncertainty-conditioned
+        RL, not the localisation method.
+
+  \item \textbf{Wheel odometry excluded from EKF sensor suite}:
+        The CARLA ROS bridge publishes \texttt{/carla/ego\_vehicle/odometry}
+        from ground-truth physics state (not integrated wheel encoder ticks).
+        It carries zero noise and zero covariance, so feeding it into the EKF
+        suppresses covariance variation regardless of lot conditions.
+        Prediction step uses IMU only between GNSS fixes.
+        Justified by \cite{moore2014generalized}: the \texttt{robot\_localization}
+        package supports IMU-only prediction; wheel odometry is optional.
+        Parking manoeuvres are short ($\sim$10--30\,s) and low-speed
+        ($<$2\,m/s). IMU-only drift over this duration is bounded and
+        corrected at each GNSS fix.
+
+  \item \textbf{Sensor architecture (single suite)}:
+        \begin{itemize}
+          \item RTK-GNSS (base + rover): position fixes for EKF localisation
+                ($\sim$600\,GBP). \cite{takasu2009rtklib, reid2019localization}.
+          \item IMU: orientation, yaw rate for EKF prediction step ($\sim$50\,GBP).
+          \item 2D LiDAR: obstacle clearance only (obs indices 15--19), not used
+                for localisation ($\sim$500--1500\,GBP).
+                See \cite{tang2015lidar, niu2017online, chen2020lidar} for
+                IMU+LiDAR sufficiency in parking scenarios.
+        \end{itemize}
+
+  \item \textbf{RTK fix states as natural uncertainty source}:
+        No prior work conditions RL vehicle control on GNSS fix-state covariance.
+        The RTK fix-state tiers (fixed $\sim$2\,cm, float $\sim$30\,cm,
+        standalone $\sim$2--5\,m) create natural discrete uncertainty regimes
+        that the policy must learn to handle. These tiers are modelled in
+        \texttt{configs/gnss\_noise\_profiles.yaml} and sampled per-episode
+        during training. \cite{reid2019localization, groves2013gnss}.
+
+  \item \textbf{Functional safety justification}:
+        ISO 26262 \cite{iso26262} requires systems to detect and respond to
+        faults, not just operate correctly under nominal conditions. The
+        uncertainty-aware policy satisfies this: it detects localisation
+        degradation (via EKF covariance) and responds safely (via evidential
+        epistemic uncertainty triggering handoff).
+
+  \item \textbf{ODD boundary detection via epistemic uncertainty}:
+        SAE J3016 \cite{sae_j3016} defines ODD: conditions under which an
+        automated system is designed to function. Epistemic uncertainty from
+        the evidential actor serves as an ODD boundary detector -- high
+        epistemic indicates operation outside the trained envelope.
+\end{itemize}
+
+\section{Infrastructure}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{CARLA simulator}: \cite{dosovitskiy2017carla}.
+        Headless, vector observations only (no camera rendering).
+
+  \item \textbf{Stable-Baselines3}: \cite{raffin2021stable}.
+        PPO implementation, VecNormalize, callbacks, custom policy subclassing.
+
+  \item \textbf{robot\_localisation EKF}: \cite{robotlocalization, moore2014generalized}.
+        Fuses RTK-GNSS position fixes (via \texttt{navsat\_transform\_node})
+        with IMU orientation/yaw rate. Provides covariance output as
+        uncertainty signal in the observation space.
+
+  \item \textbf{Cartographer (historical)}: \cite{cartographer2016}.
+        HISTORICAL: was used for LiDAR scan-matching in an earlier project
+        iteration. Replaced by RTK-GNSS+IMU because cone occlusion by parked
+        cars caused catastrophic scan-match failure in full lots.
+\end{itemize}
+
+\section{Novelty Positioning}
+
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Evidential actor (vs EPPO)}: EPPO \cite{akgul2025eppo} applies
+        EDL to the critic V(s) only; actor remains standard Gaussian. We place
+        the NIG evidential head on the actor network itself, yielding per-action
+        epistemic and aleatoric uncertainty in a single forward pass.
+
+  \item \textbf{EDL on Q-network (discrete)}: CEQR-DQN \cite{stutts2024ceqr}
+        applies EDL to the Q-network for MinAtar (discrete actions). Different
+        problem class from continuous-action parking control.
+
+  \item \textbf{EDL on perception (not policy)}: DRO-EDL-MPC \cite{ham2025dro}
+        applies EDL to perception (object detection) to inform MPC constraints.
+        Not RL. We place EDL at the policy level within model-free RL.
+
+  \item \textbf{Ensemble uncertainty conditioning}: UNICON \cite{yu2022unicon}
+        uses ensemble Q-disagreement to condition policy selection. Not evidential
+        (ensemble-based). MuJoCo benchmarks, not driving/parking.
+
+  \item \textbf{Pedestrian prediction covariance in state}: Cai et al.\
+        \cite{cai2024crowd} feed pedestrian trajectory prediction covariance
+        into DRL state. Different uncertainty source (other agents, not ego
+        localisation) and domain (crowd navigation, not parking).
+
+  \item \textbf{Parking uncertainty gap confirmed}: A 2025 MDPI Sensors survey
+        \cite{parking_survey2025} identifies uncertainty estimation as critical
+        for parking safety but notes it exists only at perception level, not
+        integrated into control/decision-making policy.
+\end{itemize}
+
+\bibliographystyle{plainnat}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,93 @@
+TMUX QUICK GUIDE - Uncertainty-Conditioned RL Project
+======================================================
+NOTE: Install via apt (not snap) to avoid flag differences:
+  sudo apt install tmux
+
+
+WHAT IS TMUX?
+-------------
+tmux is a terminal multiplexer. It lets you run commands in a session that
+persists even after you close your SSH connection. Think of it as a terminal
+that keeps running on the server in the background.
+
+WHEN TO USE IT
+--------------
+Always use tmux before running long commands over SSH:
+  - make docker-train-loc        (14+ hours)
+  - make docker-train-loc-short  (10 min verification run)
+  - make docker-map              (mapping drive)
+  - make docker-up               (if you want to monitor long startup)
+
+If you run these without tmux and your SSH session drops, training dies.
+
+
+BASIC WORKFLOW
+--------------
+
+1. Start a named session:
+   tmux new -s training
+
+2. Run your command inside it:
+   make docker-train-loc
+
+3. Detach (leave it running in background):
+   Ctrl+B, then D
+
+4. Close SSH safely -- training keeps running on the server.
+
+5. Reattach later (from a new SSH session):
+   tmux attach -t training
+
+6. Kill a session when done:
+   tmux kill-session -t training
+
+
+USEFUL COMMANDS
+---------------
+
+List all running sessions:
+  tmux ls
+
+Reattach to a session:
+  tmux attach -t <name>
+
+Scroll up in tmux (to read logs):
+  Ctrl+B, then [
+  Use arrow keys or Page Up/Down to scroll.
+  Press Q to exit scroll mode.
+
+Split terminal horizontally (two panes):
+  Ctrl+B, then "
+
+Split terminal vertically (two panes):
+  Ctrl+B, then %
+
+Switch between panes:
+  Ctrl+B, then arrow key
+
+
+TYPICAL SESSION FOR THIS PROJECT
+---------------------------------
+
+SSH into machine:
+  ssh antonio@<machine-ip>
+
+Start tmux:
+  tmux new -s training
+
+Navigate to project:
+  cd ~/Dissertation/Uncertainty-Conditioned-RL-with-Evidential-Policy-Networks-for-Autonomous-Systems
+
+Start training:
+  make docker-train-loc
+
+Detach and close SSH:
+  Ctrl+B, D
+  exit
+
+Next day -- reattach to check progress:
+  ssh antonio@<machine-ip>
+  tmux attach -t training
+
+Check TensorBoard at any time (no tmux needed):
+  Open browser -> http://localhost:6006
