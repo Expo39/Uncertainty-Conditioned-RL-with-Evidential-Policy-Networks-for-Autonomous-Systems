@@ -89,7 +89,7 @@ class SafetyWrapper(gym.Wrapper):
         aleatoric: float,
         aleatoric_scaling: float,
         handoff_threshold: float,
-    ) -> Tuple[np.ndarray, bool]:
+    ) -> Tuple[np.ndarray, bool, float]:
         """
         @brief Apply safety interception logic to a raw policy action.
 
@@ -101,22 +101,22 @@ class SafetyWrapper(gym.Wrapper):
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @param aleatoric_scaling: Scaling factor for longitudinal cap.
         @param handoff_threshold: Epistemic level above which full stop is triggered.
-        @return Tuple (modulated_action, handoff_triggered).
+        @return Tuple (modulated_action, handoff_triggered, aleatoric_scale).
         """
-        modulated = action.copy()
+        # Epistemic: full stop if above threshold (out-of-distribution state).
+        handoff = epistemic >= handoff_threshold
+        if handoff:
+            return np.zeros_like(action), True, 0.0
 
         # Aleatoric: cap longitudinal only - steering is unrestricted.
         # High aleatoric = unpredictable outcomes (e.g. pedestrian cutting across).
         # Reducing speed lowers collision risk without compromising directional control.
         aleatoric_scale = 1.0 / (1.0 + aleatoric_scaling * aleatoric)
-        modulated[1] = float(np.clip(modulated[1], -1.0, aleatoric_scale))
+        modulated = action.copy()
+        lon = float(modulated[1])
+        modulated[1] = lon if lon <= aleatoric_scale else aleatoric_scale
 
-        # Epistemic: full stop if above threshold (out-of-distribution state).
-        handoff = epistemic >= handoff_threshold
-        if handoff:
-            modulated = np.zeros_like(action)
-
-        return modulated, handoff
+        return modulated, False, aleatoric_scale
 
     def step(
         self,
@@ -128,21 +128,15 @@ class SafetyWrapper(gym.Wrapper):
         @return Standard Gymnasium (obs, reward, terminated, truncated, info).
         """
         self._step_count += 1
-        info_extra: Dict[str, Any] = {}
 
-        modulated_action, handoff = SafetyWrapper.apply(
+        modulated_action, handoff, aleatoric_scale = SafetyWrapper.apply(
             action,
             epistemic=self._current_epistemic,
             aleatoric=self._current_aleatoric,
             aleatoric_scaling=self._aleatoric_scaling,
             handoff_threshold=self._handoff_threshold,
         )
-        aleatoric_scale = 1.0 / (
-            1.0 + self._aleatoric_scaling * self._current_aleatoric
-        )
         self._aleatoric_scale_sum += aleatoric_scale
-        info_extra["aleatoric_scale"] = aleatoric_scale
-        info_extra["safety_handoff"] = handoff
 
         if handoff:
             self._handoff_count += 1
@@ -154,12 +148,12 @@ class SafetyWrapper(gym.Wrapper):
 
         obs, reward, terminated, truncated, info = self.env.step(modulated_action)
 
-        # Merge safety info into step info.
-        info.update(info_extra)
+        info["aleatoric_scale"] = aleatoric_scale
+        info["safety_handoff"] = handoff
         info["epistemic"] = self._current_epistemic
         info["aleatoric"] = self._current_aleatoric
 
-        if info_extra.get("safety_handoff", False):
+        if handoff:
             truncated = True
 
         return obs, reward, terminated, truncated, info
