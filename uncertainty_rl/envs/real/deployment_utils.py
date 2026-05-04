@@ -42,6 +42,9 @@ class RealWorldDeployment:
         """
         self._datum = datum
         self._actuation = actuation
+        self._lot_x: float = float(datum.get("lot_x", 0.0))
+        self._lot_y: float = float(datum.get("lot_y", 0.0))
+        self._lot_yaw_rad: float = math.radians(float(datum.get("heading_deg", 0.0)))
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -170,10 +173,7 @@ class RealWorldDeployment:
         @return Tuple (x_m, y_m, yaw_rad). Returns (0, 0, 0) if datum not loaded.
         @warning Check logs for load failure before trusting this value.
         """
-        x = float(self._datum.get("lot_x", 0.0))
-        y = float(self._datum.get("lot_y", 0.0))
-        yaw = math.radians(float(self._datum.get("heading_deg", 0.0)))
-        return x, y, yaw
+        return self._lot_x, self._lot_y, self._lot_yaw_rad
 
     def datum_loaded(self) -> bool:
         """
