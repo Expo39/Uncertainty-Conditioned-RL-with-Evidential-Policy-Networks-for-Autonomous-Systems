@@ -8,8 +8,6 @@ commands.
 
 from typing import Any, Dict, Optional, Tuple
 
-import numpy as np
-
 
 class ActuatorMap:
     """
@@ -41,12 +39,12 @@ class ActuatorMap:
         @return Physical actuator command, clamped to [min_output, max_output].
         """
         shifted = value - self.deadband_offset
-        if abs(shifted) < self.deadband:
-            # Inside deadband - output is zero (or bias if non-zero).
-            mapped = self.bias
-        else:
-            mapped = self.gain * shifted + self.bias
-        return float(np.clip(mapped, self.min_output, self.max_output))
+        mapped = self.bias if abs(shifted) < self.deadband else self.gain * shifted + self.bias
+        if mapped < self.min_output:
+            return self.min_output
+        if mapped > self.max_output:
+            return self.max_output
+        return mapped
 
 
 class ActuationCalibration:

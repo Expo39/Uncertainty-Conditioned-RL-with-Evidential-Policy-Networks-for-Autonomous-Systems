@@ -157,7 +157,7 @@ class GnssNoiseRelayNode(Node):
         self._heading_cov_template[21] = 1.0e6
         self._heading_cov_template[28] = 1.0e6
         # yaw slot (35) is updated per-callback from self._last_heading_var.
-        # odom cov slot 35 (yaw) always 1e6 - set once here.
+        # odom cov slot 35 (yaw) always 1e6.
         self._odom_cov_template[35] = 1.0e6
 
         # Cached RTK-fixed baseline variance (used as floor in odom and COG).
