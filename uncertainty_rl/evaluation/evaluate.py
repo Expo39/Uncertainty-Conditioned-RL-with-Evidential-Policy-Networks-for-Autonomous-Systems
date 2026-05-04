@@ -8,11 +8,10 @@ EKF uncertainty levels.
 """
 
 import argparse
-import copy
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -69,36 +68,27 @@ class EvaluationMetrics:
         @brief Convert metrics to dictionary.
         @return Dictionary of metrics.
         """
+        def _mean_std(lst: List[float]) -> Tuple[float, float]:
+            if not lst:
+                return 0.0, 0.0
+            arr = np.asarray(lst)
+            return float(arr.mean()), float(arr.std())
+
+        pos_mean, pos_std = _mean_std(self.position_errors)
+        ori_mean, ori_std = _mean_std(self.orientation_errors)
+        epi_mean, _ = _mean_std(self.epistemic_uncertainties)
+        ale_mean, _ = _mean_std(self.aleatoric_uncertainties)
+
         return {
             "success_rate": self.success_rate,
             "average_reward": self.average_reward,
             "average_steps": self.average_steps,
-            "mean_position_error": (
-                float(np.mean(self.position_errors)) if self.position_errors else 0.0
-            ),
-            "std_position_error": (
-                float(np.std(self.position_errors)) if self.position_errors else 0.0
-            ),
-            "mean_orientation_error": (
-                float(np.mean(self.orientation_errors))
-                if self.orientation_errors
-                else 0.0
-            ),
-            "std_orientation_error": (
-                float(np.std(self.orientation_errors))
-                if self.orientation_errors
-                else 0.0
-            ),
-            "mean_epistemic_uncertainty": (
-                float(np.mean(self.epistemic_uncertainties))
-                if self.epistemic_uncertainties
-                else 0.0
-            ),
-            "mean_aleatoric_uncertainty": (
-                float(np.mean(self.aleatoric_uncertainties))
-                if self.aleatoric_uncertainties
-                else 0.0
-            ),
+            "mean_position_error": pos_mean,
+            "std_position_error": pos_std,
+            "mean_orientation_error": ori_mean,
+            "std_orientation_error": ori_std,
+            "mean_epistemic_uncertainty": epi_mean,
+            "mean_aleatoric_uncertainty": ale_mean,
         }
 
 
@@ -112,15 +102,12 @@ def _scale_sensor_noise(
     @param imu_multiplier: Multiplier for all IMU noise stddev values.
     @return New sensor config dict with scaled noise values.
     """
-    scaled = copy.deepcopy(base_sensors)
-
-    imu = scaled.get("imu", {})
-    for key in imu:
-        if "stddev" in key:
-            imu[key] = imu[key] * imu_multiplier
-    scaled["imu"] = imu
-
-    return scaled
+    base_imu: Dict[str, Any] = base_sensors.get("imu", {})
+    scaled_imu = {
+        k: (v * imu_multiplier if "stddev" in k else v)
+        for k, v in base_imu.items()
+    }
+    return {**base_sensors, "imu": scaled_imu}
 
 
 def make_eval_env(
@@ -146,63 +133,54 @@ def make_eval_env(
     # Build parking_scenarios_config: NPC counts and lot layout from condition
     # overrides + training defaults. eval_config.yaml uses num_patrol_vehicles
     # (not num_vehicles) to match CARLAParkingEnv's parking_scenarios_config keys.
-    base_scenarios: Dict[str, Any] = {}
-    if env_config is not None:
-        base_scenarios = dict(env_config.get("parking_scenarios", {}))
-    # Perimeter cone flag: per-condition > eval_config global > env_config default.
-    spawn_cones_eval_global: bool = bool(config.get("spawn_perimeter_cones", False))
-    spawn_cones: bool = bool(
-        condition.get(
-            "spawn_perimeter_cones",
-            base_scenarios.get("spawn_perimeter_cones", spawn_cones_eval_global),
-        )
+    base_scenarios: Dict[str, Any] = (
+        dict(env_config.get("parking_scenarios", {})) if env_config is not None else {}
     )
+    floor_plans: Dict[str, Any] = base_scenarios.get("floor_plans", {})
+
+    # Perimeter cone flag: per-condition > eval_config global > env_config default.
+    _cones_fallback = base_scenarios.get(
+        "spawn_perimeter_cones", config.get("spawn_perimeter_cones", False)
+    )
+    spawn_cones: bool = condition.get("spawn_perimeter_cones", _cones_fallback)
+
+    # In evaluation, occupancy is fixed per condition (min == max).
+    # eval_config.yaml uses bay_occupancy_rate (a single value); training uses
+    # bay_occupancy_min/max for the per-episode uniform resample range.
+    bay_occupancy: float = condition.get(
+        "bay_occupancy_rate", base_scenarios.get("bay_occupancy_max", 0.6)
+    )
+
     parking_config: Dict[str, Any] = {
         "spawn_perimeter_cones": spawn_cones,
         "num_patrol_vehicles_max": condition.get("num_patrol_vehicles", 0),
         "pedestrian_spawn_probability": condition.get(
             "pedestrian_spawn_probability", 1.0
         ),
-        # In evaluation, occupancy is fixed per condition (min == max).
-        # eval_config.yaml uses bay_occupancy_rate (a single value); training uses
-        # bay_occupancy_min/max for the per-episode uniform resample range.
-        "bay_occupancy_min": condition.get(
-            "bay_occupancy_rate",
-            base_scenarios.get("bay_occupancy_max", 0.6),
-        ),
-        "bay_occupancy_max": condition.get(
-            "bay_occupancy_rate",
-            base_scenarios.get("bay_occupancy_max", 0.6),
-        ),
-        "floor_plans": base_scenarios.get("floor_plans", {}),
+        "bay_occupancy_min": bay_occupancy,
+        "bay_occupancy_max": bay_occupancy,
+        "floor_plans": floor_plans,
     }
     # Allow per-condition floor plan override (e.g. OOD evaluation)
     if "floor_plan" in condition:
         floor_plan_name: str = condition["floor_plan"]
-        floor_plans = base_scenarios.get("floor_plans", {})
         if floor_plan_name in floor_plans:
             parking_config["floor_plans"] = {
                 floor_plan_name: floor_plans[floor_plan_name]
             }
 
-    # Observation flags from env config (baseline-specific obs dims respected)
-    include_covariance: bool = True
-    include_obstacle_obs: bool = True
-    if env_config is not None:
-        include_covariance = bool(env_config.get("include_covariance", True))
-        include_obstacle_obs = bool(env_config.get("include_obstacle_obs", True))
-
-    # debug: per-step DebugLogger diagnostics - off by default, same as training.
-    debug: bool = bool(config.get("debug", False))
+    # Observation flags and env-specific settings resolved once from env_config
+    _ec = env_config if env_config is not None else {}
+    include_covariance: bool = _ec.get("include_covariance", True)
+    include_obstacle_obs: bool = _ec.get("include_obstacle_obs", True)
+    use_extra_spawns: bool = _ec.get("use_extra_spawns", False)
+    gnss_profiles_path: Optional[str] = _ec.get("gnss_noise_profiles", None)
 
     # GNSS noise multiplier override: locks tier for this eval condition.
-    gnss_override: Optional[float] = condition.get(
-        "gnss_noise_multiplier", None
-    )
+    gnss_override: Optional[float] = condition.get("gnss_noise_multiplier", None)
 
-    use_extra_spawns: bool = bool(
-        env_config.get("use_extra_spawns", False) if env_config is not None else False
-    )
+    # debug: per-step DebugLogger diagnostics - off by default, same as training.
+    debug: bool = config.get("debug", False)
 
     # SafetyWrapper parameters from agent_config.yaml
     aleatoric_scaling: float = float(config.get("safety_aleatoric_scaling", 0.5))
@@ -220,15 +198,10 @@ def make_eval_env(
             include_covariance=include_covariance,
             include_obstacle_obs=include_obstacle_obs,
             use_extra_spawns=use_extra_spawns,
-            gnss_noise_profiles_path=(
-                env_config.get("gnss_noise_profiles", None)
-                if env_config is not None
-                else None
-            ),
+            gnss_noise_profiles_path=gnss_profiles_path,
             gnss_noise_multiplier_override=gnss_override,
             debug=debug,
         )
-        
         return SafetyWrapper(
             base_env,
             aleatoric_scaling=aleatoric_scaling,
@@ -262,74 +235,65 @@ def evaluate_agent(
     """
     metrics = EvaluationMetrics()
 
-    episode_rewards: List[float] = []
-    episode_steps: List[int] = []
-    successes = 0
+    episode_rewards = np.empty(n_episodes, dtype=np.float64)
+    episode_steps = np.empty(n_episodes, dtype=np.int32)
+    success_flags = np.zeros(n_episodes, dtype=bool)
 
-    # Detect evidential policy to enable uncertainty collection
+    # Detect evidential policy once; hoist method references out of the loop.
     is_evidential = isinstance(model, EvidentialPPO) and hasattr(
         model.policy, "get_action_with_uncertainty"
     )
 
+    # Bind a single step function to eliminate the per-step branch.
+    _StepReturn = Tuple[np.ndarray, float, np.ndarray, List[Dict[str, Any]]]
+    step_fn: Callable[[np.ndarray], _StepReturn]
+    if is_evidential:
+        _get_action_with_uncertainty = (
+            model.policy.get_action_with_uncertainty  # type: ignore[union-attr]
+        )
+        _set_uncertainty = env.env_method
+
+        def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
+            obs_tensor = th.as_tensor(obs)
+            action_tensor, uncertainty_dict = _get_action_with_uncertainty(
+                obs_tensor, deterministic=deterministic
+            )
+            action = action_tensor.cpu().numpy()
+            epistemic = float(uncertainty_dict["epistemic"].mean().item())
+            aleatoric = float(uncertainty_dict["aleatoric"].mean().item())
+            metrics.epistemic_uncertainties.append(epistemic)
+            metrics.aleatoric_uncertainties.append(aleatoric)
+            _set_uncertainty("set_uncertainty", epistemic, aleatoric)
+            next_obs, reward, done, infos = env.step(action)
+            return next_obs, float(reward[0]), done, infos
+    else:
+        def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
+            action, _states = model.predict(obs, deterministic=deterministic)
+            next_obs, reward, done, infos = env.step(action)
+            return next_obs, float(reward[0]), done, infos
+
     for episode in range(n_episodes):
-        obs = cast(np.ndarray, env.reset())
-        done_arr = np.array([False])
+        obs: np.ndarray = env.reset()
         episode_reward = 0.0
         steps = 0
-        episode_success = False
+        done = np.array([False])
 
-        while not done_arr[0]:
-            if is_evidential:
-                # Evidential interface: collect uncertainty per step
-                obs_tensor = th.as_tensor(obs)
-                get_action = (
-                    model.policy.get_action_with_uncertainty  # type: ignore[union-attr]
-                )
-                action_tensor, uncertainty_dict = get_action(
-                    obs_tensor, deterministic=deterministic
-                )
-                action = action_tensor.cpu().numpy()
-                epistemic = float(uncertainty_dict["epistemic"].mean().item())
-                aleatoric = float(uncertainty_dict["aleatoric"].mean().item())
-                metrics.epistemic_uncertainties.append(epistemic)
-                metrics.aleatoric_uncertainties.append(aleatoric)
-
-                # Feed uncertainty into SafetyWrapper before stepping.
-                env.env_method("set_uncertainty", epistemic, aleatoric)
-            else:
-                action, _states = model.predict(obs, deterministic=deterministic)
-
-            step_result = env.step(action)
-            obs = cast(np.ndarray, step_result[0])
-            reward = cast(np.ndarray, step_result[1])
-            done_arr = cast(np.ndarray, step_result[2])
-            # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
-            infos = cast(List[Dict[str, Any]], step_result[3])
-
-            episode_reward += float(reward[0])
+        while not done[0]:
+            obs, step_reward, done, infos = step_fn(obs)
+            episode_reward += step_reward
             steps += 1
+            if done[0]:
+                # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
+                success_flags[episode] = infos[0].get("success", False)
+                if render:
+                    env.render()
 
-            # Record success from the environment's info dict
-            if done_arr[0] and infos[0].get("success", False):
-                episode_success = True
+        episode_rewards[episode] = episode_reward
+        episode_steps[episode] = steps
 
-            if render:
-                env.render()
-
-            if done_arr[0]:
-                break
-
-        if episode_success:
-            successes += 1
-
-        # Store metrics
-        episode_rewards.append(episode_reward)
-        episode_steps.append(steps)
-
-    # Compute aggregate metrics
-    metrics.success_rate = (successes / n_episodes) * 100.0
-    metrics.average_reward = float(np.mean(episode_rewards))
-    metrics.average_steps = float(np.mean(episode_steps))
+    metrics.success_rate = float(success_flags.sum()) / n_episodes * 100.0
+    metrics.average_reward = float(episode_rewards.mean())
+    metrics.average_steps = float(episode_steps.mean())
 
     return metrics
 
@@ -353,14 +317,14 @@ def evaluate_across_conditions(
     @param output_dir: Directory to save results.
     @return DataFrame with evaluation results.
     """
+    from uncertainty_rl.training.train_ppo import load_env_config
+
     # Load configurations
     with open(eval_config_path, "r") as f:
         eval_config: Dict[str, Any] = yaml.safe_load(f)
 
     # load_env_config merges sensor_config.yaml (shared keys) with env_config.yaml
     # (CARLA-specific keys) so env_config is the single unified config for the env.
-    from uncertainty_rl.training.train_ppo import load_env_config
-
     env_config: Dict[str, Any] = load_env_config(env_config_path)
 
     with open(train_config_path, "r") as f:
@@ -385,6 +349,14 @@ def evaluate_across_conditions(
     vec_normalize_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
 
     results = []
+    vec_normalize_exists = os.path.exists(vec_normalize_path)
+    if not vec_normalize_exists:
+        logger.warning(
+            "No VecNormalize stats found at %s. "
+            "Running without observation normalisation.",
+            vec_normalize_path,
+        )
+    deterministic: bool = eval_config.get("deterministic", True)
 
     for condition in conditions:
         name = condition.get("name", "unknown")
@@ -396,40 +368,36 @@ def evaluate_across_conditions(
         eval_env: Union[DummyVecEnv, VecNormalize] = base_env
 
         # Apply normalisation if available
-        if os.path.exists(vec_normalize_path):
+        if vec_normalize_exists:
             eval_env = VecNormalize.load(vec_normalize_path, base_env)
             eval_env.training = False
             eval_env.norm_reward = False
-        else:
-            logger.warning(
-                "No VecNormalize stats found at %s. "
-                "Running without observation normalisation.",
-                vec_normalize_path,
-            )
 
         # Evaluate
         metrics = evaluate_agent(
             model=model,
             env=eval_env,
             n_episodes=n_episodes,
-            deterministic=eval_config.get("deterministic", True),
+            deterministic=deterministic,
         )
 
-        # Store results
-        result = metrics.to_dict()
-        result["condition"] = name
-        result["description"] = description
-        result["gnss_noise_multiplier"] = condition.get(
-            "gnss_noise_multiplier", 1.0
+        # Store results: merge metrics dict with condition metadata in one pass
+        optional_fields = (
+            {"floor_plan": condition["floor_plan"]} if "floor_plan" in condition else {}
         )
-        result["imu_noise_multiplier"] = condition.get("imu_noise_multiplier", 1.0)
-        result["num_patrol_vehicles"] = condition.get("num_patrol_vehicles", 0)
-        result["pedestrian_spawn_probability"] = condition.get(
-            "pedestrian_spawn_probability", 1.0
-        )
-        result["bay_occupancy_rate"] = condition.get("bay_occupancy_rate", 0.6)
-        if "floor_plan" in condition:
-            result["floor_plan"] = condition["floor_plan"]
+        result = {
+            **metrics.to_dict(),
+            "condition": name,
+            "description": description,
+            "gnss_noise_multiplier": condition.get("gnss_noise_multiplier", 1.0),
+            "imu_noise_multiplier": condition.get("imu_noise_multiplier", 1.0),
+            "num_patrol_vehicles": condition.get("num_patrol_vehicles", 0),
+            "pedestrian_spawn_probability": condition.get(
+                "pedestrian_spawn_probability", 1.0
+            ),
+            "bay_occupancy_rate": condition.get("bay_occupancy_rate", 0.6),
+            **optional_fields,
+        }
         results.append(result)
 
         logger.info(
@@ -466,53 +434,40 @@ def plot_evaluation_results(
     sns.set_style("whitegrid")
 
     conditions = df["condition"].tolist()
-    x_positions = range(len(conditions))
+    x_arr = np.arange(len(conditions))
+    x_list = x_arr.tolist()
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
 
-    # Plot 1: Success rate vs condition
-    axes[0, 0].bar(x_positions, df["success_rate"], color="steelblue", alpha=0.8)
-    axes[0, 0].set_xticks(list(x_positions))
-    axes[0, 0].set_xticklabels(conditions, rotation=45, ha="right")
-    axes[0, 0].set_ylabel("Success Rate (%)", fontsize=12)
-    axes[0, 0].set_title("Success Rate vs Condition", fontsize=14)
-    axes[0, 0].grid(True, alpha=0.3, axis="y")
+    # Plots 1-3: single-series bar charts, data-driven
+    bar_specs = [
+        (axes[0, 0], "success_rate",   "steelblue",
+         "Success Rate (%)",  "Success Rate vs Condition"),
+        (axes[0, 1], "average_reward", "forestgreen",
+         "Average Reward",    "Average Reward vs Condition"),
+        (axes[1, 0], "average_steps",  "firebrick",
+         "Average Steps",     "Average Steps to Termination vs Condition"),
+    ]
+    for ax, col, colour, ylabel, title in bar_specs:
+        ax.bar(x_list, df[col], color=colour, alpha=0.8)
+        ax.set_xticks(x_list)
+        ax.set_xticklabels(conditions, rotation=45, ha="right")
+        ax.set_ylabel(ylabel, fontsize=12)
+        ax.set_title(title, fontsize=14)
+        ax.grid(True, alpha=0.3, axis="y")
 
-    # Plot 2: Average reward vs condition
-    axes[0, 1].bar(x_positions, df["average_reward"], color="forestgreen", alpha=0.8)
-    axes[0, 1].set_xticks(list(x_positions))
-    axes[0, 1].set_xticklabels(conditions, rotation=45, ha="right")
-    axes[0, 1].set_ylabel("Average Reward", fontsize=12)
-    axes[0, 1].set_title("Average Reward vs Condition", fontsize=14)
-    axes[0, 1].grid(True, alpha=0.3, axis="y")
-
-    # Plot 3: Average steps to termination vs condition
-    axes[1, 0].bar(x_positions, df["average_steps"], color="firebrick", alpha=0.8)
-    axes[1, 0].set_xticks(list(x_positions))
-    axes[1, 0].set_xticklabels(conditions, rotation=45, ha="right")
-    axes[1, 0].set_ylabel("Average Steps", fontsize=12)
-    axes[1, 0].set_title("Average Steps to Termination vs Condition", fontsize=14)
-    axes[1, 0].grid(True, alpha=0.3, axis="y")
-
-    # Plot 4: Policy uncertainty estimates
+    # Plot 4: Policy uncertainty estimates (grouped bars)
     if "mean_epistemic_uncertainty" in df.columns:
         bar_width = 0.35
-        x_arr = np.arange(len(conditions))
         axes[1, 1].bar(
-            x_arr - bar_width / 2,
-            df["mean_epistemic_uncertainty"],
-            bar_width,
-            label="Epistemic",
-            alpha=0.8,
+            x_arr - bar_width / 2, df["mean_epistemic_uncertainty"],
+            bar_width, label="Epistemic", alpha=0.8,
         )
         axes[1, 1].bar(
-            x_arr + bar_width / 2,
-            df["mean_aleatoric_uncertainty"],
-            bar_width,
-            label="Aleatoric",
-            alpha=0.8,
+            x_arr + bar_width / 2, df["mean_aleatoric_uncertainty"],
+            bar_width, label="Aleatoric", alpha=0.8,
         )
-        axes[1, 1].set_xticks(list(x_arr))
+        axes[1, 1].set_xticks(x_list)
         axes[1, 1].set_xticklabels(conditions, rotation=45, ha="right")
         axes[1, 1].set_ylabel("Uncertainty", fontsize=12)
         axes[1, 1].set_title("Policy Uncertainty Estimates", fontsize=14)
