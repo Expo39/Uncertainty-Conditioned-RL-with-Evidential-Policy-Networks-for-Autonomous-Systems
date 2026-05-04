@@ -244,7 +244,7 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # ROS 2 bridge for dryrun inspect -- connects to carla-server-demo (port 2100)
+  # ROS 2 bridge for dryrun inspect - connects to carla-server-demo (port 2100)
   # instead of the headless carla-server. Provides EKF covariance to the dryrun
   # training container via the shared outputs/ekf_state.json file.
   ros2-bridge-inspect:
@@ -293,7 +293,7 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Dryrun inspector -- full training pipeline with random actions in windowed CARLA.
+  # Dryrun inspector - full training pipeline with random actions in windowed CARLA.
   # Connects to carla-server-demo (port 2100) and ros2-bridge-inspect for EKF.
   training-inspect-dryrun:
     build:

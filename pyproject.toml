@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Training deps -- installed only inside the Docker training container via
+# Training deps - installed only inside the Docker training container via
 # pip install -e ".[training]".  NOT installed in the local .venv.
 # torch/sb3/gymnasium pull in CUDA and must never run through make install.
 training = [
