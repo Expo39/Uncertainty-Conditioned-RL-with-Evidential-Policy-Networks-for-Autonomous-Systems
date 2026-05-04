@@ -17,7 +17,9 @@ ENV ROS_DISTRO=${ROS_DISTRO}
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Install system dependencies
+# Install system dependencies and ROS 2 packages in a single layer.
+# - robot-localization: EKF node + navsat_transform_node (fuses GNSS+IMU, outputs /odometry/filtered)
+# - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-colcon-common-extensions \
@@ -25,12 +27,6 @@ RUN apt-get update && apt-get install -y \
     git \
     wget \
     curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install ROS 2 packages:
-# - robot-localization: EKF node + navsat_transform_node (fuses GNSS+IMU, outputs /odometry/filtered)
-# - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
-RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \

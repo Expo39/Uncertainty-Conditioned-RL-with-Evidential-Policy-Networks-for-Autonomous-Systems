@@ -26,6 +26,8 @@ from sensor_msgs.msg import NavSatFix
 
 # Ordered tier names - index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
+# reverse lookup: tier name -> index in _TIER_ORDER / transition matrix.
+_TIER_INDEX: Dict[str, int] = {name: i for i, name in enumerate(_TIER_ORDER)}
 
 # Noise parameters for each tier (fallback if config file is absent).
 # Values match configs/deployment/sim/gnss_noise_profiles.yaml.
@@ -59,7 +61,6 @@ class GnssNoiseRelayNode(Node):
     """
 
     _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/gnss_noise_config.json"
-    _CONFIG_CHECK_INTERVAL: int = 1
 
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
         """
@@ -135,6 +136,7 @@ class GnssNoiseRelayNode(Node):
         self._metric_stddev_m: float = self._base_metric_stddev
 
         self._config_seq: int = -1
+        self._config_mtime_ns: int = 0
         self._callback_count: int = 0
 
         self._auto_datum: bool = (
@@ -143,6 +145,23 @@ class GnssNoiseRelayNode(Node):
         self._datum_latched: bool = not self._auto_datum
 
         self._rng = np.random.default_rng()
+
+        # Pre-allocated 36-element zeroed lists reused at each callback.
+        self._odom_cov_template: List[float] = [0.0] * 36
+        self._heading_cov_template: List[float] = [0.0] * 36
+        # Fixed non-zero slots for heading covariance (all position/vel dims
+        # have infinite variance; only yaw slot carries signal).
+        self._heading_cov_template[0] = 1.0e6
+        self._heading_cov_template[7] = 1.0e6
+        self._heading_cov_template[14] = 1.0e6
+        self._heading_cov_template[21] = 1.0e6
+        self._heading_cov_template[28] = 1.0e6
+        # yaw slot (35) is updated per-callback from self._last_heading_var.
+        # odom cov slot 35 (yaw) always 1e6 - set once here.
+        self._odom_cov_template[35] = 1.0e6
+
+        # Cached RTK-fixed baseline variance (used as floor in odom and COG).
+        self._rtk_fixed_var: float = 0.02 ** 2
 
         # Previous noisy fix in local XY (metres) and its timestamp (seconds).
         # Used to compute COG heading via displacement / dt.
@@ -202,8 +221,8 @@ class GnssNoiseRelayNode(Node):
         self._extra_alt_stddev_m = extra_alt
         self._metric_stddev_m = params["metric_stddev_m"]
 
-        if tier_name in _TIER_ORDER:
-            self._active_tier_idx = _TIER_ORDER.index(tier_name)
+        if tier_name in _TIER_INDEX:
+            self._active_tier_idx = _TIER_INDEX[tier_name]
 
     def _check_config_file(self) -> None:
         """
@@ -213,9 +232,14 @@ class GnssNoiseRelayNode(Node):
         the initial tier for the episode.
         """
         try:
-            if not os.path.exists(self._config_path):
-                return
+            mtime_ns = os.stat(self._config_path).st_mtime_ns
+        except OSError:
+            return
+        if mtime_ns == self._config_mtime_ns:
+            return
+        self._config_mtime_ns = mtime_ns
 
+        try:
             with open(self._config_path, "r") as f:
                 data = json.load(f)
 
@@ -320,12 +344,11 @@ class GnssNoiseRelayNode(Node):
         @param speed_ms: GNSS-derived speed (displacement / dt) in m/s.
         @return Heading variance in rad^2.
         """
-        _RTK_FIXED_SIGMA_M = 0.02
-        sigma = self._metric_stddev_m if self._gnss_noise_enabled else _RTK_FIXED_SIGMA_M
+        sigma = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
         # Floor speed at cog_min_speed_ms to avoid division by near-zero.
-        effective_speed = max(speed_ms, self._cog_min_speed_ms)
-        raw_var = 2.0 * (sigma ** 2) / (effective_speed ** 2)
-        min_var = 2.0 * (_RTK_FIXED_SIGMA_M ** 2) / (effective_speed ** 2)
+        eff_speed_sq = max(speed_ms, self._cog_min_speed_ms) ** 2
+        raw_var = 2.0 * (sigma ** 2) / eff_speed_sq
+        min_var = 2.0 * self._rtk_fixed_var / eff_speed_sq
         return max(raw_var, min_var)
 
     # ------------------------------------------------------------------
@@ -339,9 +362,7 @@ class GnssNoiseRelayNode(Node):
         @param msg: Raw NavSatFix from the CARLA GNSS sensor.
         """
         self._callback_count += 1
-
-        if self._callback_count % self._CONFIG_CHECK_INTERVAL == 0:
-            self._check_config_file()
+        self._check_config_file()
 
         if self._markov_enabled:
             self._step_markov()
@@ -372,19 +393,16 @@ class GnssNoiseRelayNode(Node):
 
         if self._gnss_noise_enabled:
             sigma = self._metric_stddev_m
-            noise_lon = (
-                float(self._rng.normal(0.0, sigma)) / self._metres_per_deg_lon
-                if sigma > 0.0 else 0.0
+            # Single PRNG draw for all three noise terms then scale.
+            n_xy, n_xy2, n_alt = self._rng.standard_normal(3)
+            out.longitude = msg.longitude + (
+                n_xy * sigma / self._metres_per_deg_lon if sigma > 0.0 else 0.0
             )
-            noise_lat = (
-                float(self._rng.normal(0.0, sigma)) / self._metres_per_deg_lat
-                if sigma > 0.0 else 0.0
+            out.latitude = msg.latitude + (
+                n_xy2 * sigma / self._metres_per_deg_lat if sigma > 0.0 else 0.0
             )
-            out.longitude = msg.longitude + noise_lon
-            out.latitude = msg.latitude + noise_lat
             out.altitude = msg.altitude + (
-                float(self._rng.normal(0.0, self._extra_alt_stddev_m))
-                if self._extra_alt_stddev_m > 0.0 else 0.0
+                n_alt * self._extra_alt_stddev_m if self._extra_alt_stddev_m > 0.0 else 0.0
             )
         else:
             out.longitude = msg.longitude
@@ -413,12 +431,10 @@ class GnssNoiseRelayNode(Node):
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
 
-        _rtk_fixed_var = 0.02 ** 2
-        xy_var = metric_var if self._gnss_noise_enabled else _rtk_fixed_var
-        pose_cov = [0.0] * 36
+        xy_var = metric_var if self._gnss_noise_enabled else self._rtk_fixed_var
+        pose_cov = list(self._odom_cov_template)
         pose_cov[0] = xy_var
         pose_cov[7] = xy_var
-        pose_cov[35] = 1.0e6  # yaw not provided by this message
         odom_msg.pose.covariance = pose_cov
         self._odom_pub.publish(odom_msg)
 
@@ -430,8 +446,7 @@ class GnssNoiseRelayNode(Node):
             if dt > 0.0:
                 dx = local_x - self._prev_x
                 dy = local_y - self._prev_y
-                dist = math.sqrt(dx * dx + dy * dy)
-                speed_ms = dist / dt  # GNSS-derived speed, no GT
+                speed_ms = math.hypot(dx, dy) / dt  # GNSS-derived speed, no GT
 
                 if speed_ms >= self._cog_min_speed_ms:
                     # CARLA +Y is south, so increasing latitude maps to decreasing
@@ -469,16 +484,9 @@ class GnssNoiseRelayNode(Node):
         heading_msg = PoseWithCovarianceStamped()
         heading_msg.header = out.header
         heading_msg.header.frame_id = "odom"
-        heading_msg.pose.pose.orientation.x = 0.0
-        heading_msg.pose.pose.orientation.y = 0.0
         heading_msg.pose.pose.orientation.z = math.sin(half_h)
         heading_msg.pose.pose.orientation.w = math.cos(half_h)
-        h_cov = [0.0] * 36
-        h_cov[0] = 1.0e6
-        h_cov[7] = 1.0e6
-        h_cov[14] = 1.0e6
-        h_cov[21] = 1.0e6
-        h_cov[28] = 1.0e6
+        h_cov = list(self._heading_cov_template)
         h_cov[35] = self._last_heading_var
         heading_msg.pose.covariance = h_cov
         self._heading_pub.publish(heading_msg)
