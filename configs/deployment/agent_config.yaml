@@ -4,25 +4,11 @@
 # simulation and on the real vehicle. It is the single source of truth for
 # agent behaviour, observation flags, ROS 2 pipeline settings, safety policy
 # parameters, and deployment flags.
-#
-# What lives here:
-#   - Policy safety parameters (speed cap, SafetyWrapper thresholds)
-#   - Observation space flags (must match the trained policy)
-#   - ROS 2 / EKF pipeline settings (same node config in sim and real)
-#   - Real-world deployment flags
-#
-# What does NOT live here:
-#   - Sensor physical specs and mount positions -> sensor_config.yaml
-#   - CARLA-specific simulation parameters -> deployment/sim/env_config.yaml
-#   - Real-vehicle datum / actuation calibration -> deployment/real/
 
 # ---------------------------------------------------------------------------
-# Policy safety parameters (apply in both sim eval and real deployment)
-# Training runs WITHOUT the SafetyWrapper -- the policy learns freely.
-# The wrapper is applied exclusively at evaluation and deployment time.
+# Policy safety parameters
 # ---------------------------------------------------------------------------
-max_ego_speed_ms: 5.0  # Speed limit (m/s). Throttle cut above this in sim;
-                       # safety governor on real vehicle. 5 m/s = ~18 km/h.
+max_ego_speed_ms: 5.0  # Speed limit (m/s).
 
 # SafetyWrapper parameters.
 # aleatoric_scaling: higher = more aggressive longitudinal cap under outcome noise.
@@ -31,20 +17,19 @@ safety_aleatoric_scaling: 0.5
 safety_handoff_threshold: 5.0
 
 # ---------------------------------------------------------------------------
-# Observation space flags (must match the trained policy -- identical in sim and real)
+# Observation space flags (must match the trained policy)
 # ---------------------------------------------------------------------------
-include_covariance: true      # Include EKF covariance features (obs indices 3-11)
-include_obstacle_obs: true    # Include 5 hemispheric LiDAR clearance dims (obs indices 15-19)
+include_covariance: true  # Include EKF covariance features
+include_obstacle_obs: true  # Include 5 hemispheric LiDAR clearance dims
 
 # ---------------------------------------------------------------------------
-# ROS 2 / EKF pipeline settings (same node config in sim and real)
+# ROS 2 / EKF pipeline settings
 # ---------------------------------------------------------------------------
 ros2:
-  covariance_topic: "/odometry/filtered"
-  covariance_timeout: 120.0
-  ekf_convergence_timeout: 15.0
-  publish_initial_pose: true   # Publishes /set_pose at each episode reset so the EKF
-                               # starts from the known vehicle spawn pose.
+  covariance_topic: "/odometry/filtered"  # Topic where EKF publishes covariance. 
+  covariance_timeout: 120.0  # Seconds to wait for covariance messages.
+  ekf_convergence_timeout: 15.0  # Seconds to wait for EKF convergence.
+  publish_initial_pose: true  # Publishes /set_pose at each episode reset.
   initial_pose_topic: "/set_pose"
 
 # ---------------------------------------------------------------------------

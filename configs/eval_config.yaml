@@ -1,78 +1,61 @@
 # Evaluation Configuration
-# Configuration for evaluating trained agents across physical conditions
-# that produce varying EKF uncertainty levels.
-#
-# Primary uncertainty axis: GNSS noise tier (RTK fix state).
-#   gnss_noise_multiplier scales the base RTK-fixed noise (0.02 m stddev):
-#     1.0  = RTK fixed  (~2 cm)   -- nominal parking
-#     15.0 = RTK float  (~30 cm)  -- marginal, policy should be cautious
-#     100.0 = Standalone (~2 m)   -- policy should abort
-#     250.0 = Degraded   (~5 m)   -- policy must abort / safety handoff
-# Secondary axes: IMU noise multiplier, bay occupancy, dynamic actor density.
+# Condition sweep across GNSS noise tiers and traffic densities.
+# gnss_noise_multiplier scales the base RTK-fixed noise (0.02 m stddev).
+# See detailed_notes/ekf_pipeline.md for tier-to-multiplier mapping.
 
-# Model settings
-model_path: "checkpoints/final_model"  # Path to trained model
+model_path: "checkpoints/final_model"
 
-# Environment settings
-carla_host: "uncertainty-rl-carla-0"  # Container name for worker 0 (resolved via shared bridge network). Use "localhost" for local dev.
+carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name.
 carla_port: 2000
-town: "FlatPlane"  # Special value: loads configs/layouts/flat_plane.xodr via generate_opendrive_world()
+town: "FlatPlane"
 max_steps: 500
-map_load_sleep: 5.0  # Seconds to wait after loading flat_plane.xodr before continuing.
+map_load_sleep: 5.0
 
-# ROS 2 covariance subscription (same topic as training)
 ros2:
   covariance_topic: "/odometry/filtered"
   covariance_timeout: 10.0
 
-# Evaluation settings
-n_episodes: 100  # Episodes per condition
-deterministic: true  # Use deterministic actions
-render: false  # Render episodes (requires display)
-debug: false   # Enable per-step DebugLogger diagnostics (same flag as train_config)
+n_episodes: 100  # Episodes per condition.
+deterministic: true  # Use deterministic (mean) actions.
+debug: false
 
-# Evaluation conditions sweep
-# Each condition specifies GNSS noise tier, IMU noise multiplier, and traffic density.
-# gnss_noise_multiplier overrides per-episode tier sampling from gnss_noise_profiles.yaml
-# when present. When absent, the env samples a tier randomly (training behaviour).
-# Ordered from easiest (low uncertainty) to hardest (extreme uncertainty).
 eval_conditions:
-  # --- Nominal conditions (car should park successfully) ---
+  # Nominal conditions (policy should park successfully)
   - name: "nominal_empty"
-    description: "RTK fixed, empty lot -- best-case conditions"
-    gnss_noise_multiplier: 1.0    # RTK fixed (~2 cm)
+    description: "RTK fixed, empty lot"
+    gnss_noise_multiplier: 1.0  # RTK fixed (~2 cm)
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 0
     pedestrian_spawn_probability: 0.0
     bay_occupancy_rate: 0.6
 
   - name: "nominal_busy"
-    description: "RTK fixed, full traffic + all pedestrian zones -- training distribution"
-    gnss_noise_multiplier: 1.0    # RTK fixed (~2 cm)
+    description: "RTK fixed, full traffic - training distribution"
+    gnss_noise_multiplier: 1.0  # RTK fixed (~2 cm)
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.8
 
-  # --- GNSS degradation sweep (graduated uncertainty response) ---
+  # GNSS degradation sweep
   - name: "rtk_float"
-    description: "RTK float (~30 cm), moderate traffic -- marginal localisation"
-    gnss_noise_multiplier: 15.0   # RTK float (~30 cm)
+    description: "RTK float (~30 cm), moderate traffic"
+    gnss_noise_multiplier: 15.0  # RTK float (~30 cm)
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 0.8
     bay_occupancy_rate: 0.6
 
   - name: "rtk_float_busy"
-    description: "RTK float (~30 cm), full traffic -- compound degradation"
-    gnss_noise_multiplier: 15.0   # RTK float (~30 cm)
+    description: "RTK float (~30 cm), full traffic"
+    gnss_noise_multiplier: 15.0  # RTK float (~30 cm)
     imu_noise_multiplier: 1.5
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.8
 
   - name: "rtk_standalone"
-    description: "Standalone GNSS (~2 m), moderate traffic -- policy should abort"
+    description: "Standalone GNSS (~2 m), moderate traffic - policy should abort"
     gnss_noise_multiplier: 100.0  # Standalone (~2 m)
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
@@ -80,57 +63,44 @@ eval_conditions:
     bay_occupancy_rate: 0.6
 
   - name: "rtk_lost"
-    description: "Degraded GNSS (~5 m), busy lot -- safety handoff expected"
+    description: "Degraded GNSS (~5 m), busy lot - safety handoff expected"
     gnss_noise_multiplier: 250.0  # Degraded (~5 m)
     imu_noise_multiplier: 2.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.8
 
-  # --- OOD floor plan evaluation (calibration experiment) ---
-  # Whether a layout is OOD is determined by its ood: true/false flag in
-  # env_config.yaml floor_plans -- not hardcoded here. Currently trapezoid
-  # and irregular_a are both ood: true (held out from training). rectangle is
-  # ood: false (training geometry). Tests whether epistemic uncertainty rises
-  # on novel geometry -- a calibration check on the NIG prior.
+  # OOD floor plan evaluation - epistemic uncertainty calibration check
   - name: "ood_layout"
-    description: "OOD floor plan (irregular_a), RTK fixed -- epistemic calibration check"
-    gnss_noise_multiplier: 1.0    # RTK fixed -- good localisation
+    description: "OOD floor plan (irregular_a), RTK fixed"
+    gnss_noise_multiplier: 1.0
     imu_noise_multiplier: 1.0
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.6
-    floor_plan: "irregular_a"  # Held out from training
+    floor_plan: "irregular_a"
 
   - name: "ood_layout_degraded"
-    description: "OOD floor plan (irregular_a), RTK float -- double challenge"
-    gnss_noise_multiplier: 15.0   # RTK float (~30 cm)
+    description: "OOD floor plan (irregular_a), RTK float"
+    gnss_noise_multiplier: 15.0
     imu_noise_multiplier: 1.5
     num_patrol_vehicles: 1
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.6
-    floor_plan: "irregular_a"  # Held out from training
+    floor_plan: "irregular_a"
 
-  # --- Worst-case / safety handoff demonstration ---
-  # Familiar training geometry under conditions far beyond the training distribution.
-  # Expected: degraded GNSS + extreme IMU noise -> EKF covariance spikes,
-  # evidential epistemic uncertainty crosses the safety handoff threshold --
-  # demonstrating the core safety capability.
+  # Safety handoff demonstration - beyond training distribution
   - name: "worst_case"
-    description: "Safety handoff demo: degraded GNSS + max IMU noise + all pedestrians"
+    description: "Degraded GNSS + max IMU noise - safety handoff demo"
     gnss_noise_multiplier: 250.0  # Degraded (~5 m)
-    imu_noise_multiplier: 6.0     # Well beyond training range (training: 0.5x-3.0x)
-    num_patrol_vehicles: 0        # No patrol -- focus on GNSS/IMU degradation
-    pedestrian_spawn_probability: 1.0  # All zones occupied -- maximum occlusion
-    bay_occupancy_rate: 0.0       # Zero parked cars
-    floor_plan: "rectangle"       # Familiar training geometry (not OOD)
+    imu_noise_multiplier: 6.0  # Beyond training range (0.5x-3.0x)
+    num_patrol_vehicles: 0
+    pedestrian_spawn_probability: 1.0
+    bay_occupancy_rate: 0.0
+    floor_plan: "rectangle"
 
-# Output settings
 output_dir: "evaluation_results"
-save_plots: true
-save_csv: true
 
-# Success criteria
 success_criteria:
   position_threshold: 0.5  # metres
   orientation_threshold: 10.0  # degrees

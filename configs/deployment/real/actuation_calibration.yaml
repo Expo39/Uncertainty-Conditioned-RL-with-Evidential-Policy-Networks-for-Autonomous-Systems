@@ -2,42 +2,25 @@
 #
 # Maps the policy's normalised action output [steering, longitudinal] to
 # physical actuator commands on the real vehicle.
-#
-# In simulation this file is ignored (identity mapping is used).
-# Set real_world_deployment: true in env_config.yaml to activate.
-#
-# Calibration procedure (to be completed at deployment):
-#   1. Drive the real vehicle in manual mode with teleoperation.
-#   2. Apply known policy outputs (e.g. steering=0.1, 0.2, ..., 1.0) and
-#      measure the resulting wheel angle and vehicle yaw rate.
-#   3. Apply known longitudinal outputs and measure acceleration/deceleration.
-#   4. Fit gain/deadband/bias to the measured response.
-#   5. Record the calibration run in documentation/design/actuation_calibration.md.
-#
-# Mapping model (per actuator):
-#   output = gain * clip(input - deadband_offset, deadband, 1.0) + bias
-#
-# All values below are identity (no transformation) until measured.
-# @warning Do NOT deploy on the real vehicle without filling in measured values.
 
 calibration:
   steering:
     # Maps policy steering [-1, 1] to wheel angle command [-1, 1].
-    # @warning UNCALIBRATED -- identity mapping until measured.
-    gain: 1.0             # TODO: measure from steering response
-    deadband: 0.0         # TODO: measure minimum input for non-zero steer
+    # @warning UNCALIBRATED - identity mapping until measured.
+    gain: 1.0  # TODO: measure from steering response
+    deadband: 0.0  # TODO: measure minimum input for non-zero steer
     deadband_offset: 0.0  # TODO: adjust if steering is asymmetric
-    bias: 0.0             # TODO: adjust for any steering neutral offset
+    bias: 0.0  # TODO: adjust for any steering neutral offset
     min_output: -1.0
     max_output: 1.0
 
   longitudinal:
     # Maps policy longitudinal [-1, 1] to throttle/brake command [-1, 1].
     # Negative = brake, positive = throttle (same sign convention as env).
-    # @warning UNCALIBRATED -- identity mapping until measured.
-    gain: 1.0             # TODO: measure from throttle/brake response
-    deadband: 0.0         # TODO: measure minimum input for vehicle motion
+    # @warning UNCALIBRATED - identity mapping until measured.
+    gain: 1.0  # TODO: measure from throttle/brake response
+    deadband: 0.0  # TODO: measure minimum input for vehicle motion
     deadband_offset: 0.0  # TODO: adjust for any input bias
-    bias: 0.0             # TODO: adjust for creep at zero throttle
-    min_output: -1.0      # Full brake
-    max_output: 1.0       # Full throttle
+    bias: 0.0  # TODO: adjust for creep at zero throttle
+    min_output: -1.0  # Full brake
+    max_output: 1.0  # Full throttle

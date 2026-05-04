@@ -1,91 +1,30 @@
-# ROS 2 configuration for the RTK-GNSS + IMU localisation pipeline.
-#
-# Pipeline summary:
-#
-#   /carla/ego_vehicle/gnss  (NavSatFix, raw CARLA GNSS with base RTK noise)
-#       -> GnssNoiseRelayNode  (adds per-episode noise, flat-earth -> local XY,
-#                               derives COG heading from successive noisy fixes)
-#       -> /odometry/gps    (Odometry with metric covariance from RTK tier)
-#       -> /gnss/heading    (PoseWithCovarianceStamped, COG yaw for EKF pose0)
-#
-#   /carla/ego_vehicle/imu  (sensor_msgs/Imu)
-#       -> ImuNoiseRelayNode  (stamps angular_velocity_covariance + linear_acceleration_covariance)
-#       -> /carla/ego_vehicle/imu/stamped
-#       -> EKF imu0: vyaw PREDICTION step between GNSS fixes
-#
-#   robot_localisation EKF fuses all three:
-#       odom0 = /odometry/gps   (x, y from GNSS via flat-earth projection)
-#       pose0 = /gnss/heading   (yaw from COG heading)
-#       imu0  = /carla/ego_vehicle/imu/stamped  (vyaw)
-#       output = /odometry/filtered  (pose + 6x6 covariance)
-#
-#   CovarianceExtractorNode reads /odometry/filtered and writes ekf_state.json.
-#   Training container reads ekf_state.json for obs[0-14] (velocity + covariance).
-#
-# EKF output covariance reflects RTK fix-state quality:
-#   RTK fixed (~2 cm)    -> low covariance  -> confident parking
-#   RTK float (~30 cm)   -> medium covariance -> cautious approach
-#   Standalone (~2-5 m)  -> high covariance -> abort/handoff
-# Per-episode RTK fix states are sampled from configs/deployment/sim/gnss_noise_profiles.yaml.
-# The GnssNoiseRelayNode reads the tier from gnss_noise_config.json (shared volume).
+# ROS 2 Configuration for the RTK-GNSS + IMU localisation pipeline.
+# EKF fuses GNSS odometry (odom0), COG heading (pose0), and IMU yaw rate (imu0).
+# See detailed_notes/ekf_pipeline.md for pipeline architecture and tuning rationale.
 
-# CARLA ROS bridge topic names (published automatically by the bridge)
 carla_topics:
-  imu: "/carla/ego_vehicle/imu"             # sensor_msgs/Imu (raw, zero covariance from bridge)
-  imu_stamped: "/carla/ego_vehicle/imu/stamped"  # sensor_msgs/Imu (covariance-stamped by ImuNoiseRelayNode)
-  gnss: "/carla/ego_vehicle/gnss"           # sensor_msgs/NavSatFix
-  lidar: "/carla/ego_vehicle/lidar"         # sensor_msgs/PointCloud2 (2D, obstacle detection only)
+  imu: "/carla/ego_vehicle/imu"
+  imu_stamped: "/carla/ego_vehicle/imu/stamped"  # Covariance-stamped by ImuNoiseRelayNode.
+  gnss: "/carla/ego_vehicle/gnss"
+  lidar: "/carla/ego_vehicle/lidar"
 
-# robot_localisation EKF node parameters.
-# Loaded directly by carla_bridge.launch.py as node parameters.
 ekf:
-  frequency: 20.0        # EKF update rate (Hz) -- matches CARLA timestep
-  two_d_mode: true       # Constrain to 2D: suppress z, roll, pitch states
-  world_frame: "odom"    # EKF output frame. navsat_transform creates a stable
-                         # UTM-aligned odom frame. _calibrate_ekf_frame_offset()
-                         # computes the rigid transform from odom to CARLA world
-                         # coordinates at episode reset.
-  odom_frame: "odom"     # Must match world_frame for single-odom-source mode.
-  base_link_frame: "ego_vehicle"  # Central body frame for all sensors.
-  publish_tf: true
-
-  # IMU sensor: prediction step.
-  # Enabled: vyaw (index 11) only.
-  # Orientation (index 5) disabled: CARLA IMU always publishes identity quaternion
-  # (orientation field is zero regardless of vehicle heading). Enabling it pins
-  # the EKF yaw to zero with infinite confidence (zero covariance field in the
-  # Imu message), suppressing all heading estimation from vyaw integration.
-  # ax/ay (indices 12,13) disabled: linear velocity (vx/vy) has no correction
-  # source (no wheel odometry), so accel integration produces unreliable estimates
-  # that degrade at high GNSS uncertainty tiers. vx/vy excluded from observation.
-  # Use the covariance-stamped IMU topic published by ImuNoiseRelayNode.
+  frequency: 20.0  # EKF update rate (Hz) - matches CARLA timestep.
+  two_d_mode: true  # Suppress z, roll, pitch states.
+  world_frame: "odom"
+  odom_frame: "odom"
+  base_link_frame: "ego_vehicle"
+  # IMU: vyaw prediction step only. Orientation and linear accel disabled.
   imu0: "/carla/ego_vehicle/imu/stamped"
-  # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
-  # Orientation (index 5) disabled: CARLA IMU publishes identity quaternion at all times.
-  # vyaw (index 11): yaw rate for prediction step.
+  # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   imu0_config: [false, false, false, false, false, false,
                 false, false, false, false, false, true,
                 false, false, false]
-
-  # ImuNoiseRelayNode stamps VN-100 datasheet variances onto every relayed
-  # sensor_msgs/Imu message (angular_velocity_covariance and
-  # linear_acceleration_covariance). robot_localization reads covariance from
-  # the message in preference to process_noise_covariance, so the EKF is
-  # correctly weighted without any override here.
-  # On the real vehicle the IMU driver stamps its own hardware covariance;
-  # ImuNoiseRelayNode passes the message through unmodified when
-  # enable_imu_noise: false, so the real driver covariance is used directly.
   imu0_differential: false
   imu0_relative: false
-  # Rejection thresholds intentionally omitted: robot_localization defaults to
-  # numeric_limits<double>::max() when unset, disabling Mahalanobis gating.
-  # Setting 0.0 rejects every measurement (distance >= 0^2 is always true).
-  # Initial state estimate covariance (15x15, row-major).
-  # Must be non-zero -- a zero initial covariance is singular and causes the
-  # EKF Cholesky decomposition to produce NaN on the first prediction step.
-  # Active states: x(0), y(1), yaw(5), vx(6), vy(7), vyaw(11).
-  # Inactive states (z, roll, pitch, vz, vroll, vpitch, ax, ay, az) use 1e-9
-  # (near-zero, non-singular placeholder; two_d_mode suppresses them entirely).
+
+  # Initial state covariance (15x15). Active states: x, y, yaw, vx, vy, vyaw = 0.25.
+  # Non-zero required to avoid singular Cholesky on first prediction step.
   initial_estimate_covariance: [
     0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
@@ -104,23 +43,8 @@ ekf:
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9
   ]
 
-  # Process noise covariance (15x15, row-major, diagonal meaningful entries).
-  # Governs how fast the EKF covariance grows between sensor updates.
-  # Set yaw (index 5,5) and vyaw (index 11,11) to match gyro noise level,
-  # so the EKF covariance inflates realistically between 20 Hz GNSS fixes
-  # rather than staying artificially flat (as it does with zero IMU covariance).
-  #
-  # Format: 15 diagonal values; robot_localization accepts the full 225-element
-  # row-major list or just a YAML list of 15 diagonal elements via the
-  # process_noise_covariance parameter (diagonal shorthand not documented
-  # but supported). Use the full 225-element form for clarity.
-  #
-  # Active states: yaw (5), vyaw (11).
-  #   sigma_yaw: Q_yaw must be larger than R_heading (3.56e-4 rad^2 at rtk_fixed)
-  #     so the Kalman gain K = P/(P+R) is high enough for heading corrections to
-  #     dominate IMU vyaw integration. Q_yaw = 5e-3 -> K ~ 0.93 at rtk_fixed.
-  #   sigma_vyaw  = 2.73e-4 rad/s -> variance = 7.46e-8 (rad/s)^2
-  # x/y process noise: max speed ~5 m/s, timestep 1/20 Hz -> 0.01 m^2.
+  # Process noise covariance (15x15). Controls covariance inflation between updates.
+  # Active: x/y=1e-2, yaw=5e-3, vyaw=1e-7.
   process_noise_covariance: [
     1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
@@ -139,152 +63,66 @@ ekf:
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6
   ]
 
-  # COG heading: absolute yaw correction step.
-  # Published by GnssNoiseRelayNode from successive noisy GNSS positions.
-  # Heading = atan2(dy, dx) from two flat-earth-projected fixes; variance derived
-  # from sigma_pos^2 / speed^2 (error propagation of atan2 from noisy positions).
-  # Only updated when GNSS-derived speed >= cog_min_speed_ms (default 0.3 m/s).
-  # Uses PoseWithCovarianceStamped; only yaw is active (position cov = 1e6).
+  # COG heading from GnssNoiseRelayNode (PoseWithCovarianceStamped, yaw only).
   pose0: "/gnss/heading"
-  # 6-element list: [x, y, z, roll, pitch, yaw]
+  # [x, y, z, roll, pitch, yaw]
   pose0_config: [false, false, false, false, false, true]
   pose0_differential: false
   pose0_relative: false
-  # Rejection threshold intentionally omitted: defaults to max(), disabling gating.
 
-  # GNSS-derived odometry: correction step.
-  # Published by GnssNoiseRelayNode with flat-earth projection (lat/lon -> XY).
-  # Covariance diagonal matches the current RTK tier metric variance.
-  # Enabled: x (0), y (1) only.
-  # yaw (5): NOT enabled -- absolute heading comes from pose0 (GNSS COG heading).
-  # vx/vy (6,7): NOT enabled -- GnssNoiseRelayNode publishes position-only
-  #   Odometry; its twist fields are zero.
+  # GNSS flat-earth odometry from GnssNoiseRelayNode (x, y correction step).
   odom0: "/odometry/gps"
-  # 15-element list: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
+  # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   odom0_config: [true, true, false, false, false, false,
                  false, false, false, false, false, false,
                  false, false, false]
 
-# ---------------------------------------------------------------------------
-# GnssNoiseRelayNode parameters.
-# CARLA GNSS outputs zero-noise lat/lon (noise zeroed in _sensor_manager.py).
-# This node owns all GNSS noise injection and flat-earth projection.
-# ---------------------------------------------------------------------------
 gnss_noise_relay:
   input_topic: "/carla/ego_vehicle/gnss"
-  output_topic: "/gnss/noisy"        # NavSatFix with noise (diagnostics only)
-  odom_output_topic: "/odometry/gps" # Odometry with flat-earth XY (EKF odom0)
-
-  # Noise enable flags. Set all false for real deployment or ideal-sensor testing.
-  enable_gnss_noise: false           # false = pure flat-earth projector, no added noise
-  enable_markov_transitions: false   # false = constant tier per episode
-
-  # Base 1-sigma position error for RTK-fixed conditions (metres).
-  # Tier multipliers scale this: rtk_fixed=1x, rtk_float=15x, standalone=100x, degraded=250x.
-  # Ignored when enable_gnss_noise: false.
-  base_metric_stddev_m: 0.02
-
-  # COG heading output topic (PoseWithCovarianceStamped, EKF pose0).
+  output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
+  odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
+  enable_gnss_noise: false  # false = pure flat-earth projector, no added noise.
+  enable_markov_transitions: false  # false = constant tier per episode.
+  base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
-  # Minimum GNSS-derived speed (m/s) to update the COG heading estimate.
-  # Below this threshold the last valid heading is re-published unchanged.
-  # At parking approach speeds (~1-6 m/s) COG is reliable; at near-standstill
-  # the IMU vyaw integration handles heading continuity.
-  cog_min_speed_ms: 0.3
+  cog_min_speed_ms: 0.3  # Min speed (m/s) to update COG heading. IMU handles near-standstill.
 
-# ---------------------------------------------------------------------------
-# ImuNoiseRelayNode parameters.
-# CARLA IMU outputs zero-noise readings (noise zeroed in _sensor_manager.py).
-# This node owns all IMU covariance stamping and ZUPT logic.
-# ---------------------------------------------------------------------------
 imu_noise_relay:
   imu_input_topic: "/carla/ego_vehicle/imu"
   imu_output_topic: "/carla/ego_vehicle/imu/stamped"
+  enable_imu_noise: false  # false = pass through (real driver stamps its own covariance).
+  imu_gyro_variance: 1.0e-7  # VN-100 gyro variance (rad/s)^2.
+  zupt_threshold_rad_s: 0.015  # Clamp vyaw to zero below this to suppress standstill bias.
+  imu_accel_variance: 3.76e-5  # VN-100 accel variance (m/s^2)^2.
+  accel_zupt_threshold_ms2: 0.2  # Clamp ax/ay to zero at standstill when ZUPT active.
 
-  # Noise enable flag. Set false for real deployment (real IMU driver stamps its
-  # own covariance, which robot_localization uses in preference to process noise)
-  # or for ideal-sensor dryrun testing.
-  enable_imu_noise: false
+# CovarianceExtractorNode: subscribes to EKF output and writes ekf_state.json.
+odom_topic: "/odometry/filtered"
+covariance_topic: "/ekf_uncertainty/covariance"  # Unused in training (file-based transport).
+publish_rate: 10.0  # File write rate (Hz).
 
-  # Gyro noise: VN-100 datasheet noise density 0.0035 deg/s/sqrt(Hz).
-  #   Per-sample variance at 20 Hz: (6.11e-5 * sqrt(20))^2 = 7.46e-8 (rad/s)^2
-  #   Using 1e-7 as a conservative margin above the datasheet value.
-  imu_gyro_variance: 1.0e-7
+twist_in_odom_frame: false  # EKF publishes twist in body frame (nav_msgs/Odometry convention).
 
-  # Gyro ZUPT: clamp angular_velocity.z to zero when below this threshold.
-  # Suppresses residual simulation bias at standstill without affecting turns.
-  # CARLA standstill bias ~0.012 rad/s; threshold set just above to avoid
-  # clamping slow parking turns (observed as low as 0.010 rad/s).
-  zupt_threshold_rad_s: 0.015
+use_sim_time: true  # Must match CARLA bridge (publishes /clock from sim elapsed_seconds).
 
-  # Accel noise: VN-100 datasheet noise density 0.14 mg/sqrt(Hz).
-  #   Per-sample variance at 20 Hz: (1.37e-3 * sqrt(20))^2 = 3.76e-5 (m/s^2)^2
-  imu_accel_variance: 3.76e-5
-
-  # Accel ZUPT: clamp ax/ay to zero when gyro ZUPT is also active and both
-  # accel axes are below this threshold. Pins vx/vy near zero at standstill.
-  accel_zupt_threshold_ms2: 0.2
-
-# CovarianceExtractorNode configuration.
-# Subscribes to /odometry/filtered, extracts 3x3 [x, y, yaw] covariance submatrix,
-# and writes pose + covariance to ekf_state.json for the training container.
-odom_topic: "/odometry/filtered"            # EKF output topic
-covariance_topic: "/ekf_uncertainty/covariance"  # CovarianceEstimate publisher (unused in training -- file-based)
-publish_rate: 10.0                           # Hz (file write rate)
-
-# Velocity frame convention.
-# robot_localisation publishes twist in the child frame (body frame) per the
-# nav_msgs/Odometry convention, regardless of world_frame setting. No rotation
-# needed. Set true only for non-standard EKF configs that genuinely output
-# twist in the odom frame (none known).
-twist_in_odom_frame: false
-
-# Time source for ROS 2 nodes.
-# The CARLA bridge runs with use_sim_time=true and publishes /clock from
-# CARLA's elapsed_seconds (starts near 0, not Unix epoch).
-# All nodes that need consistent TF lookups must use the same time source as the bridge.
-use_sim_time: true
-
-# ---------------------------------------------------------------------------
 # navsat_transform_node parameters (real deployment only).
-# Converts sensor_msgs/NavSatFix -> nav_msgs/Odometry in the local metric frame.
-# The datum (lat/lon anchor) is read from configs/deployment/real/real_world_datum.yaml.
-# This section controls navsat_transform behaviour; the datum itself lives in
-# real_world_datum.yaml so it can be updated on-site without touching this file.
-# ---------------------------------------------------------------------------
 navsat_transform:
-  frequency: 20.0                      # Hz -- match EKF frequency
-  delay: 3.0                           # seconds to wait for IMU before starting
-  magnetic_declination_radians: 0.0    # site-specific -- look up at ngdc.noaa.gov
-  yaw_offset: 0.0                      # radians -- non-zero if IMU x-axis != vehicle forward
-  broadcast_utm_transform: false       # true = publish UTM->odom TF (rviz diagnostics)
-  publish_filtered_gps: false          # true = republish EKF position as NavSatFix
-  use_odometry_yaw: false              # false = derive heading from IMU on startup
-  wait_for_datum: false                # false = use datum parameter, not /datum topic
+  frequency: 20.0
+  delay: 3.0
+  magnetic_declination_radians: 0.0  # Look up at ngdc.noaa.gov for deployment site.
+  yaw_offset: 0.0
+  broadcast_utm_transform: false
+  publish_filtered_gps: false
+  use_odometry_yaw: false
+  wait_for_datum: false
 
-# ---------------------------------------------------------------------------
-# Real-vehicle topic names (used by real_vehicle.launch.py only).
-# Set these to match the topic names published by the physical hardware drivers.
-# These are NOT used in simulation -- carla_bridge.launch.py uses carla_topics.
-# ---------------------------------------------------------------------------
+# Real-vehicle topic names (used by real_vehicle.launch.py only, not in simulation).
 real_vehicle:
-  # Physical IMU driver output (sensor_msgs/Imu).
-  # Must have angular_velocity_covariance populated by the driver.
-  # Common drivers: VectorNav ROS 2, Microstrain ROS 2, imu_tools.
   imu_topic: "/imu/data"
-
-  # Physical GNSS driver output (sensor_msgs/NavSatFix, raw lat/lon).
-  # navsat_transform_node subscribes to this and converts to metric Odometry
-  # on /odometry/gps for the EKF. GnssNoiseRelayNode is NOT used in deployment.
-  # Common drivers: u-blox ROS 2 (ublox_gps), nmea_navsat_driver.
   gnss_fix_topic: "/gnss/fix"
 
-# QoS settings for ROS 2 subscribers/publishers
 qos:
   reliability: "reliable"
   history: "keep_last"
   depth: 10
 
-# Logging
-log_level: "info"   # debug, info, warn, error
-log_rate: 1.0       # Log uncertainty statistics every N seconds

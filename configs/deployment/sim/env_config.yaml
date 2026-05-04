@@ -1,157 +1,66 @@
 # CARLA Simulation Configuration
-# Contains ONLY settings specific to the CARLA simulator: connection details,
-# simulation timing, sensor noise parameters, and parking lot scenario geometry.
-#
-# Keys shared between simulation and real-vehicle deployment are split across
-# two single-source-of-truth files in configs/deployment/:
-#   sensor_config.yaml -- physical sensor specs and mount positions
-#   agent_config.yaml  -- agent/policy parameters, obs flags, ROS 2 settings,
-#                         safety wrapper thresholds, deployment flags
-# Consumers merge all three files before constructing the environment.
+# CARLA-specific settings only. Shared agent/sensor settings live in
+# deployment/agent_config.yaml and deployment/sensor_config.yaml.
 
-# Debug mode -- set true to emit per-step diagnostics and show a second HUD line
-# in the visualiser. Off by default to avoid I/O overhead during training runs.
-debug: false
+debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
-# Inspection / dry-run settings (used by scripts/inspect/lot_inspector.py only,
-# not consumed during training).
 inspect:
-  # Action applied every step in dryrun mode.
-  # [steer, longitudinal] -- positive longitudinal = throttle, negative = brake.
-  # 0.5 throttle is sufficient to overcome static friction on the FlatPlane world.
-  dryrun_action: [0.0, 0.5]
+  dryrun_action: [0.0, 0.5]  # [steer, longitudinal] applied each step in dryrun mode.
 
-# ---------------------------------------------------------------------------
-# CARLA connection and simulation settings
-# ---------------------------------------------------------------------------
-carla_host: "uncertainty-rl-carla-0"  # Container name for worker 0 (resolved via shared bridge network). Use "localhost" for local dev.
+carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
-town: "FlatPlane"  # Loads configs/layouts/flat_plane.xodr via generate_opendrive_world(); clean flat ground with no buildings or traffic infrastructure
-max_steps: 1500  # Episode length in agent decisions.
-                 # Lot diagonal ~79m (65x45m). At 3m/s cruise ~26s traversal +
-                 # ~15-20s slow approach and parking manoeuvre = ~45s typical.
-                 # 1000 steps * 0.05s = 50s sim time.
-action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz, matching the EKF and
-                  # ROS 2 control frequency. action_repeat=1 removes any sim/real
-                  # rate mismatch.
-use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs. RTK-GNSS
-                        # odom frame is UTM-aligned regardless of spawn location.
-carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz. Fixed for EKF + ROS 2 bridge consistency.
-mapping_timestep: 0.05  # Same as carla_timestep. Kept for consistency with LiDAR rotation_frequency=20
-                        # which needs 0.05s for a full scan.
-map_load_sleep: 1.0  # Seconds to wait after loading flat_plane.xodr before continuing. Increase on slow servers.
-no_rendering_mode: true  # Disable Unreal rendering pipeline (cameras return empty, physics + state work still active). Essential for state-based agents with no camera input. Speedup: 3-4x.
+town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
+max_steps: 1500  # Episode length (steps). 1500 * 0.05s = 75s sim time.
+action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz. See detailed_notes/ekf_pipeline.md.
+use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs.
+carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
+map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
+no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active). ~3-4x speedup.
 
-# GNSS noise profiles for per-episode RTK fix-state sampling (sim only).
-# Training env loads this file at __init__ and samples a tier each reset().
 gnss_noise_profiles: configs/deployment/sim/gnss_noise_profiles.yaml
 
-# Geographic datum for the flat-earth projection in GnssNoiseRelayNode.
-# When both are 0.0 (default), GnssNoiseRelayNode auto-latches the datum from
-# the first raw GNSS reading so the EKF odom frame is centred near CARLA world
-# (0,0) in metres. This is safe for FlatPlane worlds loaded via
-# generate_opendrive_world() where CARLA uses an internal GPS reference
-# (not lat=0, lon=0). Set explicit non-zero values only if you need to override
-# the auto-detected origin (e.g. a known real-world datum).
-gnss_datum_lat: 0.0  # degrees north (0.0 = auto-detect from first GNSS reading)
-gnss_datum_lon: 0.0  # degrees east  (0.0 = auto-detect from first GNSS reading)
+gnss_datum_lat: 0.0  # degrees north. 0.0 = auto-latch from first GNSS reading.
+gnss_datum_lon: 0.0  # degrees east.  0.0 = auto-latch from first GNSS reading.
 
-# ---------------------------------------------------------------------------
-# CARLA sensor noise configuration
-# Sensors: single RTK-GNSS + IMU (localisation) + 2D LiDAR (obstacle detection).
-# RTK-GNSS provides position fixes; COG heading is derived by GnssNoiseRelayNode
-# from successive noisy fixes. Degradation is modelled via per-episode noise tiers
-# (see gnss_noise_profiles.yaml).
-# 2D LiDAR feeds obstacle clearance observations (obs indices 10-14) only --
-# it does NOT participate in localisation.
-#
-# Sensor mount positions live in configs/deployment/sensor_config.yaml.
-# Noise parameters (CARLA-specific) live here only.
-# Agent parameters (speed cap, safety thresholds) live in configs/deployment/agent_config.yaml.
-# ---------------------------------------------------------------------------
 carla_sensors:
-  imu:
-    # No noise fields -- all IMU noise is injected by ImuNoiseRelayNode
-    # and configured from ros2_config.yaml (imu_gyro_variance, imu_accel_variance,
-    # enable_imu_noise). CARLA-side noise is zeroed in _sensor_manager.py.
-    sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
+  imu: 
+    sensor_tick: 0.05  # Publish rate (seconds). IMU noise injected by ImuNoiseRelayNode.
 
-  lidar:        # 2D LiDAR (SICK TiM571) -- obstacle detection only, NOT localisation.
-    # Feeds _get_obstacle_features() for obs indices 15-19 (hemispheric clearance).
-    # Real spec: 1 channel, 270 deg FOV, 25 m range, 15 Hz, 0.33 deg angular
-    # resolution (~810 pts/scan at 270 deg).
-    #
-    # The policy only consumes 5 hemisphere min-distance features from this scan
-    # (left_dist, left_bearing, right_dist, right_bearing, forward_dist).
-    # Min-distance features are insensitive to point density, so the sim-to-real
-    # gap from point count does not affect the policy input.
-    #
-    # CARLA sim-to-real notes (values below match real hardware):
-    #   - points_per_second: set to match real TiM571 (~12,150 pts/sec).
-    #     CARLA's zero-width rays produce sparser returns than the physical
-    #     beam divergence of 1.26 deg, but min-distance features are robust
-    #     to this sparsity.
-    #   - rotation_frequency: 15 Hz (real TiM571 native rate). carla_timestep
-    #     is 0.05s (20 Hz); at 15 Hz one full scan takes 0.067s = 1.33 sim
-    #     ticks. CARLA accumulates points across ticks and flushes on the
-    #     scan boundary, so scans arrive every ~1-2 ticks. The env reads the
-    #     latest available scan each step, so occasional empty ticks are
-    #     harmless -- the previous scan is reused via get_latest_lidar_scan().
-    #   - sensor_tick: 0.067s (1/15 Hz) to match real publish rate.
-    #   - FOV: CARLA sensor.lidar.ray_cast scans 360 deg; the rear 180 deg
-    #     is discarded in _get_obstacle_features() (x <= 0 mask), matching
-    #     the real sensor's forward-facing hemisphere.
-    channels: 1                 # True 2D LiDAR: single horizontal scan plane
-    range: 25.0                 # TiM571 max range (metres)
-    points_per_second: 12150    # Real TiM571 rate (~810 pts/scan at 15 Hz).
-                                # Min-distance features are density-invariant.
-    rotation_frequency: 15.0    # Real TiM571 native rate (Hz).
-    upper_fov: 0.0              # Flat horizontal plane (2D LiDAR)
-    lower_fov: 0.0              # Flat horizontal plane (2D LiDAR)
-    sensor_tick: 0.067          # 1/15 Hz = 0.067s -- matches real publish rate.
+  lidar:  # 2D LiDAR (SICK TiM571). Obstacle detection only - not used for localisation.
+    # Values match real TiM571 hardware. See detailed_notes/observation_space.md.
+    channels: 1  # Single horizontal scan plane.
+    range: 25.0  # Max range (metres).
+    points_per_second: 12150  # ~810 pts/scan at 15 Hz. Min-distance features are density-invariant.
+    rotation_frequency: 15.0  # Native scan rate (Hz). CARLA flushes on scan boundary.
+    upper_fov: 0.0  # Flat 2D plane.
+    lower_fov: 0.0  # Flat 2D plane.
+    sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
 
-  gnss:         # Front (primary) RTK-GNSS receiver (u-blox ZED-F9P or similar)
-    # No noise fields -- all GNSS noise is injected by GnssNoiseRelayNode
-    # and configured from ros2_config.yaml (base_metric_stddev_m, gnss_noise_profiles.yaml
-    # tiers, enable_markov_transitions). CARLA-side noise is zeroed in _sensor_manager.py.
-    sensor_tick: 0.05           # Publish rate (seconds), matches carla_timestep
+  gnss:  # RTK-GNSS receiver. Noise injected by GnssNoiseRelayNode, not here.
+    sensor_tick: 0.05  # Publish rate (seconds).
 
-
-# ---------------------------------------------------------------------------
-# Parking lot scenario configuration
-# Floor plan geometry is pre-computed offline (make generate-layouts) and
-# stored in configs/layouts/. The env reads from these YAML files directly.
-# ---------------------------------------------------------------------------
 parking_scenarios:
-  perimeter_marker_blueprint: "static.prop.constructioncone"
-                                       # CARLA blueprint for perimeter/obstacle markers. Options:
-                                       #   static.prop.constructioncone  - traffic cone (~0.7m, good LiDAR return)
-                                       #   static.prop.trafficcone01     - smaller cone variant
-                                       #   static.prop.streetbarrier     - jersey barrier (~1.0m, excellent return)
-                                       #   static.prop.ironplank         - metal plank/rail
-                                       # Run world.get_blueprint_library().filter('static.prop.*') in
-                                       # CARLA to enumerate all available props for your map.
-  perimeter_cone_spacing: 2.0          # Metres between perimeter markers
-  bay_occupancy_min: 0.3               # Lower bound for per-episode bay occupancy (uniform resample)
-  bay_occupancy_max: 0.8               # Upper bound for per-episode bay occupancy (uniform resample)
-  num_patrol_vehicles_max: 1           # Exact NPC patrol vehicles spawned every episode (fixed, not randomised)
-  patrol_obstacle_stop_distance: 5.0  # Metres ahead - patrol brakes if any vehicle is in forward cone within this range
-  patrol_pedestrian_stop_distance: 4.0  # Metres ahead - patrol brakes if any pedestrian within range
-  patrol_max_speed_ms: 3.0            # Patrol vehicle speed in m/s (applied directly via kinematic, no physics acceleration)
-  patrol_heading_gain: 0.8            # Proportional gain for patrol NPC heading controller
-  patrol_stuck_speed_threshold: 0.3   # m/s below which NPC is considered stuck (while throttle applied)
-  patrol_stuck_steps_max: 30          # Steps below threshold before teleporting NPC to next waypoint
-  pedestrian_speed_ms: 1.4            # Pedestrian walk speed in m/s (applied directly via WalkerControl)
-  pedestrian_spawn_probability: 0.8    # Per-zone independent spawn probability each episode (0.0-1.0)
-  pedestrian_heading_resample_steps: 30  # Steps between pedestrian direction changes
-  pedestrian_max_lifetime_steps: 200  # Steps before a pedestrian despawns and respawns in its zone
+  # CARLA blueprint for perimeter markers.
+  perimeter_marker_blueprint: "static.prop.constructioncone"  # CARLA cone blueprint used as perimeter
+  perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
+  bay_occupancy_min: 0.3  # Lower bound for per-episode bay occupancy.
+  bay_occupancy_max: 0.8  # Upper bound for per-episode bay occupancy.
+  num_patrol_vehicles_max: 1  # NPC patrol vehicles per episode.
+  patrol_obstacle_stop_distance: 5.0  # Metres - patrol brakes for vehicles in forward cone.
+  patrol_pedestrian_stop_distance: 4.0  # Metres - patrol brakes for pedestrians in range.
+  patrol_max_speed_ms: 3.0  # Patrol speed (m/s), applied via kinematic control.
+  patrol_heading_gain: 0.8  # Proportional gain for patrol heading controller.
+  pedestrian_speed_ms: 1.4  # Walk speed (m/s), applied via WalkerControl.
+  pedestrian_spawn_probability: 0.8  # Per-zone spawn probability each episode (0.0-1.0).
+  pedestrian_heading_resample_steps: 30  # Steps between direction changes.
+  pedestrian_max_lifetime_steps: 200  # Steps before despawn and respawn in zone.
   floor_plans:
     rectangle:
       layout_file: configs/layouts/rectangle.yaml
-      ood: false   # Used during training
+      ood: false  # Training layout.
     trapezoid:
       layout_file: configs/layouts/trapezoid.yaml
-      ood: false   # Used during training (rectangle + trapezoid are training layouts)
+      ood: false  # Training layout.
     irregular_a:
       layout_file: configs/layouts/irregular_a.yaml
-      ood: true    # Never sampled during training; held out for OOD evaluation
+      ood: true  # Held out for OOD evaluation only.

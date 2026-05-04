@@ -1,16 +1,16 @@
 # configs/deployment/sim/
 
 CARLA-specific config and assets. All files in this directory relate directly to the
-CARLA simulator -- connection settings, sensor definitions, and pre-built assets.
+CARLA simulator - connection settings, sensor definitions, and pre-built assets.
 
 ## Files
 
 ### `env_config.yaml`
 
 All CARLA environment and sensor settings. Loaded by `train_ppo.py`, `evaluate.py`,
-`mapping_drive.py`, `lot_inspector.py`, `demo_drive.py`, and `carla_bridge.launch.py`.
+`lot_inspector.py`, `demo_drive.py`, and `carla_bridge.launch.py`.
 Pass as `--env-config configs/deployment/sim/env_config.yaml`. Do not mix training
-hyperparameters in here -- those belong in `configs/train_config.yaml`.
+hyperparameters in here - those belong in `configs/train_config.yaml`.
 
 ### `OpenDriveMap.bin`
 

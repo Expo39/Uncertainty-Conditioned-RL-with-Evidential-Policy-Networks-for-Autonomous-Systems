@@ -4,55 +4,31 @@
 # are identical in CARLA and on the real vehicle. It is the single source of
 # truth for anything describing the physical sensor suite.
 #
-# What lives here:
-#   - Sensor physical specs (range, FOV, frequency)
-#   - Sensor mount positions in vehicle body frame
-#
-# What does NOT live here:
-#   - Agent/policy parameters -> agent_config.yaml
-#   - CARLA-specific noise parameters and blueprints -> deployment/sim/env_config.yaml
-#   - Real-vehicle datum / actuation calibration -> deployment/real/
-#
-# Mount positions are in vehicle body frame:
-#   x = longitudinal from rear axle midpoint (positive = forward)
-#   y = lateral (positive = left)
-#   z = vertical from ground plane (positive = up)
-#
 # @warning All mount values are UNMEASURED placeholders for the real vehicle.
-#          Update before deployment. IMU (rear passenger seat floor) has a
-#          large lever arm from the GNSS antenna (roof) -- accurate to ~2 cm
-#          or the EKF introduces ~5 cm * sin(heading_change) positional bias.
 
 sensors:
   imu:
     # MEMS IMU (e.g. VectorNav VN-100 or equivalent).
     # Planned location: rear passenger seat floor.
-    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
-    #          In CARLA the IMU is placed at the vehicle centre of mass (x=0, y=0, z=0.3).
     mount:
-      x: 0.0    # TODO: measure from rear axle midpoint (metres, positive = forward)
-      y: 0.0    # TODO: measure lateral offset (metres, positive = left)
-      z: 0.3    # CARLA: centre-of-mass height. TODO: verify on real vehicle.
+      x: 0.0  
+      y: 0.0  
+      z: 0.3 
 
   gnss:
     # Single RTK-GNSS antenna. Localisation source for /odometry/gps.
-    # COG heading is derived from successive noisy fixes in GnssNoiseRelayNode.
-    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
     mount:
-      x: 0.0    # Slightly forward of vehicle centre -- places antenna on roof
-      y: 0.0    # Longitudinal axis -- no lateral offset
-      z: 1.6    # CARLA: antenna height above vehicle origin. TODO: verify on real vehicle.
+      x: 0.0 
+      y: 0.0 
+      z: 1.6 
 
   lidar:
     # 2D LiDAR: SICK TiM571. Obstacle detection only (NOT localisation).
-    # Physical spec: 1 channel, 270 deg FOV, 25 m range, 15 Hz, 0.33 deg resolution.
-    # Planned location: front bumper area.
-    range: 25.0           # Max range (metres)
-    channels: 1           # Single horizontal scan plane
-    fov_deg: 270.0        # Physical FOV (rear 90 deg blocked by car body)
-    frequency_hz: 15.0    # Native scan rate (Hz)
-    # @warning Mount values UNMEASURED for the real vehicle -- update before deployment.
+    range: 25.0  # Max range (metres)
+    channels: 1  # Single horizontal scan plane
+    fov_deg: 270.0  # Physical FOV (rear 90 deg blocked by car body)
+    frequency_hz: 15.0  # Native scan rate (Hz)
     mount:
-      x: 2.4    # CARLA: front bumper centre. TODO: verify on real vehicle.
-      y: 0.0    # TODO: measure lateral offset (metres)
-      z: 0.5    # CARLA: above bumper lip. TODO: verify on real vehicle.
+      x: 2.4  
+      y: 0.0  
+      z: 0.5 

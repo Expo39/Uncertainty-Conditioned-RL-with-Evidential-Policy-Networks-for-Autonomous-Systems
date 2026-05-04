@@ -1,152 +1,56 @@
-# Training Configuration for Uncertainty-Conditioned RL
-# PPO hyperparameters, network architecture, evidential settings, and training
-# schedule. Environment and sensor settings live in carla/env_config.yaml.
+# Training Configuration
+# PPO hyperparameters, network architecture, evidential settings, and training schedule.
+# Environment settings live in deployment/sim/env_config.yaml.
+# See detailed_notes/ekf_pipeline.md, reward_function.md, evidential_nig_initialisation.md.
 
-# ---------------------------------------------------------------------------
 # PPO hyperparameters
-# Calibrated for single-CARLA-env parking (sequential data collection,
-# 20-dim state, 3-dim action, 1000-step episodes, sparse bay + traffic randomisation).
-# ---------------------------------------------------------------------------
-
-# Learning rate: 3e-4, linear decay to 0 applied in train_ppo.py.
-learning_rate: 0.0003
-
-# n_steps: 2048 steps = ~4 complete episodes per PPO update with a single CARLA env.
-n_steps: 2048
-
-# batch_size x n_epochs: Controls off-policy gradient steps per rollout.
-# Old: 64 x 10 = 320 steps (excessive, causes policy drift).
-# New: 256 x 5 = 40 steps (within CaRL-validated range for CARLA).
+learning_rate: 0.0003  # Linear decay to 0 applied in train_ppo.py.
+n_steps: 2048  # Steps per PPO update (~4 episodes with a single CARLA env).
 batch_size: 256
 n_epochs: 5
+gamma: 0.99  # High gamma needed: success bonus at ~step 300 must propagate back.
+gae_lambda: 0.95
+clip_range: 0.2
+clip_range_vf: null  # No VF clipping (SB3 default).
+ent_coef: 0.005  # Non-zero to maintain policy entropy in continuous action space.
+vf_coef: 0.5
+max_grad_norm: 0.5
+target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
 
-# gamma: Keep 0.99 for current reward structure. The +100 success bonus at
-# step ~300 needs gamma^300 ~ 0.05 to propagate. At 0.98, gamma^300 ~ 0.002
-# (invisible). If switching to potential-based reward shaping, 0.98 is viable.
-gamma: 0.99
-
-gae_lambda: 0.95    # Standard default
-clip_range: 0.2     # Standard default
-clip_range_vf: null  # No VF clipping (SB3 default, avoids loss overshooting)
-
-# ent_coef: Zero for continuous control. Exploration is handled by the
-# Gaussian policy's learned standard deviation.
-ent_coef: 0.005
-
-vf_coef: 0.5        # Standard default
-max_grad_norm: 0.5   # Standard default
-
-# target_kl: Early-stop epochs when KL divergence exceeds threshold.
-# Set slightly higher than the typical 0.015 because sparse bay and traffic
-# randomisation creates noisy reward landscapes. Acts as a safety valve against
-# policy collapse during aggressive gradient steps.
-target_kl: 0.02
-
-# ---------------------------------------------------------------------------
 # Network architecture
-# ---------------------------------------------------------------------------
-# [256,256] for both actor and critic. The evidential actor head outputs
-# 4 x 2 = 8 NIG parameters. [256,256] gives enough capacity for the
-# 20-dim state with its covariance, target pose, and obstacle features.
-net_arch: [256, 256]
-activation: "relu"  # Validated for evidential architectures. Options: relu, tanh, elu, leaky_relu
+net_arch: [256, 256]  # Actor and critic hidden layers.
+activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
+# LayerNorm inserted after each hidden layer via _build_mlp_extractor() in sb3_integration.py.
 
-# LayerNorm is inserted after each hidden Linear in EvidentialActorCriticPolicy
-# via _build_mlp_extractor() override. Preserves plasticity under non-stationary
-# training (bay occupancy + traffic randomisation). Implemented in sb3_integration.py.
-
-# ---------------------------------------------------------------------------
-# Observation normalisation
-# ---------------------------------------------------------------------------
-# VecNormalize with norm_obs=True is essential for the mixed-scale 20-dim
-# state (metres, radians, covariance values 1e-6 to 100+, obstacle distance).
-#
-# Covariance features (indices 6-14) are log1p-transformed in _get_state()
-# before VecNormalize sees them. Compresses heavy tails from high-uncertainty
-# conditions (rain, sensor noise). Implemented in carla_parking.py.
-#
-# norm_reward=False: potential-based reward components are already on similar
-# scales; auto-normalisation can obscure the success signal.
-
-# ---------------------------------------------------------------------------
-# Evidential network settings
-# ---------------------------------------------------------------------------
+# Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
 evidential:
-  # Regularisation coefficient for evidential loss (target value after warmup).
-  # Uses a prior-anchoring log-penalty (not the Amini et al. supervised term).
-  # Reduced from 0.01 to 0.001 for better stability with NIG clamping.
-  lambda_reg: 0.001
+  lambda_reg: 0.001  # Evidential regularisation coefficient (target after warmup).
+  lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
+  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty.
 
-  # Number of environment steps over which lambda_reg is linearly annealed from 0
-  # to lambda_reg. Lets the NLL loss establish good predictions before regularisation.
-  lambda_reg_warmup_steps: 50000
 
-  # NIG hyperprior initialisation is implemented in EvidentialLayer.__init__():
-  #   nu bias ~ 0.9   -> softplus(0.9)+1e-6 ~ 0.97
-  #   alpha bias ~ 0.9 -> softplus(0.9)+1.0 ~ 1.97
-  #   beta bias ~ 0.0  -> softplus(0)+1e-6 ~ 0.69
-  #   output weights scaled by 0.01 (start near bias-determined values)
-  # Biases re-applied after ortho_init in EvidentialActorCriticPolicy._build().
+policy_type: "evidential"  # evidential: EvidentialPPO + NIG actor. standard: PPO + MlpPolicy.
 
-  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty
+# Reward function: uncertainty-scaled potential-based shaping. See detailed_notes/reward_function.md.
+uncertainty_std_max: 2.0  # EKF std (metres) at which progress reward reaches zero.
 
-# Uncertainty weights (reserved -- not yet consumed by training code).
-uncertainty:
-  epistemic_weight: 1.0
-  aleatoric_weight: 1.0
+# Observation normalisation: VecNormalize with norm_obs=True. Covariance features
+# are log1p-transformed before VecNormalize.
 
-# ---------------------------------------------------------------------------
-# Policy type
-# ---------------------------------------------------------------------------
-# evidential: EvidentialPPO + EvidentialActorCriticPolicy (NIG actor, standard critic)
-# standard:   PPO + MlpPolicy (standard Gaussian policy, no evidential loss)
-policy_type: "evidential"
-
-# ---------------------------------------------------------------------------
-# Reward function
-# ---------------------------------------------------------------------------
-# Reward function: uncertainty-scaled potential-based shaping (Ng et al. 1999).
-#   R = progress * (1 - uncertainty_scale) - 0.01/step
-#   where progress = (prev_distance - curr_distance) / OUT_OF_BOUNDS_THRESHOLD
-#   and uncertainty_scale = clip(max(std_x, std_y) / uncertainty_std_max, 0, 1)
-#   + collision: -10.0 + termination
-#   + success:   +10.0 + termination
-#   + out-of-bounds: -5.0 + termination
-# Implemented in CARLAParkingEnv._compute_reward().
-#
-# uncertainty_std_max: std at which progress reward reaches zero (metres).
-# At rtk_fixed (~0.016 m) scale ~ 0. At standalone (~2 m) scale ~ 1.
-# Set to match the standalone tier metric_stddev_m so progress saturates
-# to zero exactly when parking is infeasible.
-uncertainty_std_max: 2.0
-
-# ---------------------------------------------------------------------------
 # Logging and checkpointing
-# ---------------------------------------------------------------------------
-checkpoint_freq: 50000  # Save checkpoint every N steps
-log_interval: 10        # Log every N episodes
-verbose: 1              # SB3 verbosity: 0=silent, 1=training info, 2=debug
-enable_visualiser: true  # Write vis_state.json for the 2D bird's-eye visualiser (make visualise)
+checkpoint_freq: 50000  # Save checkpoint every N steps.
+log_interval: 10  # Log every N episodes.
+verbose: 1  # SB3 verbosity: 0=silent, 1=info, 2=debug.
+enable_visualiser: true  # Write vis_state.json for the 2D bird's-eye visualiser.
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
-# ---------------------------------------------------------------------------
 # Training schedule
-# ---------------------------------------------------------------------------
 total_timesteps: 1000000
 seed: 42
-random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for final ablation
-eval_freq: 10000   # Evaluate every N training steps (reserved, eval_env currently disabled)
-n_eval_episodes: 10  # Episodes per evaluation run (reserved, eval_env currently disabled)
+random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
+eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
+n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).
 
-# Parallel execution settings
-# Number of simultaneous CARLA instances. Each worker connects to a separate
-# CARLA server on base_port + rank*1000 (2000, 3000, ...) and reads from its own
-# EKF state file (ekf_state.json, ekf_state_1.json, ...).
-# Workers are brought up by docker-compose.env_workers.yml (one invocation per rank).
-# Set to 1 for single-instance training (default).
-# Set to 2 and run make docker-train-parallel for 2-worker parallel training.
-# Hard ceiling: 2 workers on RTX 4070 Ti Super -- RAM bottleneck (~4 GB/instance,
-# 7 GB free at idle; swap already full so 3 instances would OOM).
-# Expected throughput: 1 worker ~20-25 it/s, 2 workers ~40-50 it/s.
+# Parallel workers. Each worker connects to a separate CARLA server on base_port + rank*1000.
 parallel_workers: 1

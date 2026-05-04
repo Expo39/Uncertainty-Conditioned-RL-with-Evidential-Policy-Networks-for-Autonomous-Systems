@@ -1,29 +1,17 @@
 # RTK-GNSS noise profiles for per-episode fix-state sampling.
-#
-# Each tier models a different RTK fix state with corresponding CARLA GNSS
-# sensor noise (in degrees lat/lon) and an EKF covariance stamp (in metres).
-# At each episode reset(), the training env samples a tier from the weighted
-# distribution below and spawns the GNSS sensor with the corresponding noise.
-#
-# CARLA GNSS noise is specified in degrees; 1 deg latitude ~ 111,320 m.
-# Longitude scaling depends on latitude, but CARLA's FlatPlane is near the
-# equator so 1 deg longitude ~ 111,320 m as well.
-#
-# The GnssNoiseRelay node in the ros2-bridge stamps NavSatFix.position_covariance
-# with the corresponding metric variance so the EKF receives correctly scaled
+# Consumed by GnssNoiseRelayNode. Tier is sampled each reset(); noise injected
+# into NavSatFix.position_covariance so the EKF receives correctly scaled
 # measurement noise.
 #
-# Training weights favour conditions where parking IS achievable (70%
-# rtk_fixed + rtk_float) so the agent learns to park, while including enough
-# degraded episodes (30%) to learn when NOT to attempt parking.
-# When GNSS degrades mid-episode the EKF odom drifts; when it recovers the
-# EKF self-corrects via fresh GNSS fixes and dx/dy become accurate again.
+# CARLA GNSS noise is in degrees lat/lon.
+# Training weights: 70% high-accuracy (rtk_fixed + rtk_float) so the agent
+# learns to park, 30% degraded so it learns when NOT to attempt parking.
 
 tiers:
   rtk_fixed:
     # RTK fixed-integer solution: cm-level accuracy.
     # Parking is easy; policy learns nominal manoeuvring.
-    lat_stddev_deg: 0.0000002   # ~0.02 m stddev
+    lat_stddev_deg: 0.0000002  # ~0.02 m stddev
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
     metric_stddev_m: 0.02
@@ -33,7 +21,7 @@ tiers:
   rtk_float:
     # RTK float solution: decimetre-level accuracy.
     # Parking is tight; uncertainty penalty starts biting.
-    lat_stddev_deg: 0.0000027   # ~0.30 m stddev
+    lat_stddev_deg: 0.0000027  # ~0.30 m stddev
     lon_stddev_deg: 0.0000027
     alt_stddev_m: 0.5
     metric_stddev_m: 0.30
@@ -43,7 +31,7 @@ tiers:
   standalone:
     # Standalone GNSS (RTK lost): metre-level accuracy.
     # Progress reward nearly zero; policy learns to wait.
-    lat_stddev_deg: 0.000018    # ~2.0 m stddev
+    lat_stddev_deg: 0.000018  # ~2.0 m stddev
     lon_stddev_deg: 0.000018
     alt_stddev_m: 5.0
     metric_stddev_m: 2.0
@@ -53,7 +41,7 @@ tiers:
   degraded:
     # Severely degraded GNSS (multipath, heavy obstruction).
     # Progress reward saturates to zero; policy learns hard abort.
-    lat_stddev_deg: 0.000045    # ~5.0 m stddev
+    lat_stddev_deg: 0.000045  # ~5.0 m stddev
     lon_stddev_deg: 0.000045
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
