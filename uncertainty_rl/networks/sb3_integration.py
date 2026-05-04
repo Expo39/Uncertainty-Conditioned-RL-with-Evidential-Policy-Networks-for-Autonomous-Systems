@@ -547,7 +547,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @return Tuple of (action, uncertainty_dict) where uncertainty_dict
                 contains epistemic, aleatoric, total, gamma, nu, alpha, beta.
         """
-        self.set_training_mode(False)
+        if self.training:
+            self.set_training_mode(False)
         with th.no_grad():
             if self.use_uncertainty_conditioning:
                 gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
@@ -669,13 +670,15 @@ class EvidentialPPO(PPO):
             clip_range_vf_fn = cast(Schedule, self.clip_range_vf)
             clip_range_vf = clip_range_vf_fn(self._current_progress_remaining)
 
-        # Accumulate as detached tensors to minimise GPU->CPU syncs.
-        # Only approx_kl_div is synced per-batch (required for early-stopping control flow).
+        # Accumulate as detached tensors.
+        # approx_kl_div is synced per-batch only when target_kl early-stopping is active.
         entropy_losses: List[th.Tensor] = []
         pg_losses: List[th.Tensor] = []
         value_losses: List[th.Tensor] = []
         evidential_reg_losses: List[th.Tensor] = []
-        clip_fractions: List[th.Tensor] = []
+        # clip_fraction as a running float sum.
+        clip_fraction_sum: float = 0.0
+        clip_fraction_count: int = 0
         epistemic_uncertainties: List[th.Tensor] = []
         aleatoric_uncertainties: List[th.Tensor] = []
 
@@ -730,9 +733,11 @@ class EvidentialPPO(PPO):
                 policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
                 pg_losses.append(policy_loss.detach())
-                clip_fractions.append(
-                    th.mean((th.abs(ratio - 1) > clip_range).float()).detach()
+                # Sync clip fraction to CPU immediately as a float.
+                clip_fraction_sum += float(
+                    th.mean((th.abs(ratio - 1) > clip_range).float())
                 )
+                clip_fraction_count += 1
 
                 # Value loss
                 if clip_range_vf is None:
@@ -758,13 +763,16 @@ class EvidentialPPO(PPO):
                 )
                 evidential_reg_losses.append(evidential_reg.detach())
 
-                # KL divergence for early stopping - synced per batch for control flow.
+                # KL divergence for early stopping - only sync to CPU when target_kl is
+                # set.
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
-                    approx_kl_div = float(
-                        th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu()
-                    )
-                    approx_kl_divs.append(approx_kl_div)
+                    kl_tensor = th.mean((th.exp(log_ratio) - 1) - log_ratio)
+                    if self.target_kl is not None:
+                        approx_kl_div = float(kl_tensor)
+                        approx_kl_divs.append(approx_kl_div)
+                    else:
+                        approx_kl_div = 0.0
 
                 if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
                     continue_training = False
@@ -801,8 +809,12 @@ class EvidentialPPO(PPO):
         self.logger.record("train/entropy_loss", _mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", _mean(pg_losses))
         self.logger.record("train/value_loss", _mean(value_losses))
-        self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.logger.record("train/clip_fraction", _mean(clip_fractions))
+        kl_mean = float(np.mean(approx_kl_divs)) if approx_kl_divs else 0.0
+        self.logger.record("train/approx_kl", kl_mean)
+        clip_frac = (
+            clip_fraction_sum / clip_fraction_count if clip_fraction_count > 0 else 0.0
+        )
+        self.logger.record("train/clip_fraction", clip_frac)
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
         self.logger.record(
@@ -816,6 +828,10 @@ class EvidentialPPO(PPO):
 
         # Evidential-specific logs
         self.logger.record("train/evidential_reg_loss", _mean(evidential_reg_losses))
-        self.logger.record("train/epistemic_uncertainty", _mean(epistemic_uncertainties))
-        self.logger.record("train/aleatoric_uncertainty", _mean(aleatoric_uncertainties))
+        self.logger.record(
+            "train/epistemic_uncertainty", _mean(epistemic_uncertainties)
+        )
+        self.logger.record(
+            "train/aleatoric_uncertainty", _mean(aleatoric_uncertainties)
+        )
         self.logger.record("train/lambda_reg", current_lambda_reg)
