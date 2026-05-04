@@ -1,11 +1,7 @@
 # Real-world deployment datum configuration.
 #
-# Used by CARLAParkingEnv._calibrate_ekf_frame_offset() when
+# Used by calibrate_ekf_frame_offset() when
 # real_world_deployment: true in env_config.yaml.
-#
-# In simulation, the EKF frame offset is computed using CARLA ground-truth
-# vehicle pose (vehicle.get_transform()). On the real vehicle there is no
-# ground-truth source, so the offset is computed from a surveyed datum point.
 #
 # Procedure (once per deployment site):
 #   1. Choose a clearly marked reference point in the parking lot
@@ -15,45 +11,32 @@
 #      or 'ros2 topic echo /gnss/fix' when RTK fixed).
 #   4. Measure the vehicle heading at this point (compass or IMU yaw after
 #      the EKF has converged) and record as heading_deg (0 = East in UTM,
-#      90 = North -- i.e. standard ENU convention).
+#      90 = North - i.e. standard ENU convention).
 #   5. Fill in datum.utm_easting, datum.utm_northing, datum.heading_deg below.
 #   6. Also fill in datum.lot_origin_x, datum.lot_origin_y: the position of
 #      this same reference point in the lot layout coordinate frame (from the
-#      layout YAML -- same frame as the PNG bird's-eye view).
-#
-# The env uses these values to compute the rigid transform:
-#   odom -> lot_layout_frame
-# so that bay positions from the layout YAML can be expressed in EKF odom
-# coordinates for the relative target obs (dx/dy/dyaw, indices 12-14).
+#      layout YAML - same frame as the PNG bird's-eye view).
 #
 # UTM zone: fill in the zone for your deployment site.
-# @warning: datum coordinates are site-specific. Do not commit real coordinates
-#           to the repository -- add this file to .gitignore if needed, or use
-#           placeholder zeros and fill in on-site.
 
 datum:
   # WGS84 coordinates of the reference point (RTK-fixed measurement).
   # Used directly by navsat_transform_node as the local metric frame origin.
-  # Record with 'ros2 topic echo /gnss/fix' when the receiver reports RTK fixed.
-  # @warning UNMEASURED -- fill in at deployment site.
   datum_lat: 0.0      # degrees latitude  (e.g. 51.501364)
   datum_lon: 0.0      # degrees longitude (e.g. -0.141890)
 
   # UTM coordinates of the same reference point (for cross-checking only).
   # navsat_transform_node uses datum_lat/datum_lon above, not UTM directly.
-  # @warning UNMEASURED -- fill in at deployment site.
   utm_easting: 0.0    # metres east in UTM zone (e.g. 456789.12)
   utm_northing: 0.0   # metres north in UTM zone (e.g. 5678901.23)
   utm_zone: ""        # e.g. "30U"
 
   # Vehicle heading when parked at datum point.
   # Convention: degrees, ENU frame (0 = East, 90 = North, -90 = South).
-  # @warning UNMEASURED -- fill in at deployment site.
   heading_deg: 0.0
 
   # Position of the datum reference point in the lot layout coordinate frame.
   # This is the same (x, y) frame used in configs/layouts/*.yaml and the
   # bird's-eye PNG. Measured from the lot origin as defined in the layout YAML.
-  # @warning UNMEASURED -- fill in by matching the physical marker to the PNG.
   lot_x: 0.0    # metres in lot layout frame
   lot_y: 0.0    # metres in lot layout frame

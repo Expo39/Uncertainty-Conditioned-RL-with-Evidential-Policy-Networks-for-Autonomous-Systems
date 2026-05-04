@@ -8,10 +8,7 @@
 #      the bay ID you want (printed on each bay in the image).
 #   2. Set target_bay_id below to that ID.
 #   3. Set layout_file to the matching layout YAML path.
-#   4. Restart the deployment process -- no code changes required.
-#
-# @warning Do NOT set target_bay_id to a bay marked always_empty: true in the
-#          layout YAML. RealWorldDeployment.set_target_bay() will raise if you do.
+#   4. Restart the deployment process.
 
 # Bay to park in. Edit before each mission.
 target_bay_id: "B01"

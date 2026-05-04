@@ -1,17 +1,9 @@
 # Baseline: Full Method (Main Contribution)
-# 21-dim obs: EKF pose (6) + covariance (9) + relative target (3) + obstacle features (3).
+# 12-dim obs: EKF yaw rate (1) + covariance stds (3) + relative target pose (3) + obstacle clearance (5).
 # The agent sees localisation uncertainty AND the policy quantifies its own
-# epistemic and aleatoric uncertainty. This is the main contribution.
-#
-# Ablation dimensions:
-#   include_covariance: true   (covariance dims present)
-#   include_obstacle_obs: true (obstacle dims present -- not the experimental variable)
-#   policy_type: evidential    (EvidentialActorCriticPolicy + EvidentialPPO)
-#
-# All other parameters inherited from configs/train_config.yaml.
+# epistemic and aleatoric uncertainty.
 
 baseline_name: "full_method"
-baseline_description: "21-dim obs (pose + covariance + target + obstacles), evidential actor (main contribution)"
 
 include_covariance: true
 include_obstacle_obs: true
