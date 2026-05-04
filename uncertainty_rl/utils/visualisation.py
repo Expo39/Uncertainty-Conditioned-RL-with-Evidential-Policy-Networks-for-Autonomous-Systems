@@ -24,17 +24,6 @@ class VisStateWriter:
     """
     @class VisStateWriter
     @brief Writes vis_state.json every step for the detachable 2D visualiser.
-
-    Atomic write via tmp file + os.replace - the visualiser process never reads
-    partial data. Training writes to outputs/vis_state.json; the visualiser polls
-    that file every 100 ms and redraws on change.
-
-    Usage in training:
-        writer = VisStateWriter(Path("outputs/vis_state.json"))
-        writer.write(ego_transform, actor_transforms, target_bay, episode_info)
-
-    Visualiser reads outputs/vis_state.json.
-    Close the visualiser window at any time - training is unaffected.
     """
 
     # ------------------------------------------------------------------

@@ -3,13 +3,6 @@
 # @brief Core training stack for uncertainty-conditioned RL research.
 #
 # Defines the training container, demo container, and TensorBoard.
-# CARLA servers and ros2-bridge instances are managed separately via
-# docker-compose.env_workers.yml. Start N env workers first, then start
-# this stack - always through Make targets, never docker compose directly.
-#
-# Visual inspection and demo services live in docker-compose.inspect.yml.
-#
-# @author Antonio Galdes
 
 name: ucrl
 
@@ -52,7 +45,6 @@ services:
 
   # Demo / evaluation container - same image as training but runs demo_drive.py.
   # Started on demand by make eval-visualise-2d; never started by make docker-up.
-  # Separated from the training container so a live training run is never interrupted.
   demo:
     build:
       context: .

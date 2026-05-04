@@ -19,14 +19,14 @@ def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
 
     Handles two YAML formats produced by scripts/generate_layouts.py:
 
-    Format A - explicit extents::
+    Format A - explicit extents:
 
         x_min: <float>
         x_max: <float>
         y_min: <float>
         y_max: <float>
 
-    Format B - centre + half-extents::
+    Format B - centre + half-extents:
 
         centre_x: <float>
         centre_y: <float>
@@ -127,9 +127,6 @@ def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> 
     @param y: Query point y coordinate.
     @param corners: Ordered polygon vertices as (x, y) pairs (closed automatically).
     @return True if the point is inside the polygon.
-
-    @note 1e-12 division guard prevents zero-division when the query point lies
-          exactly on a horizontal edge (yj == yi).
     """
     n = len(corners)
     inside = False
@@ -166,13 +163,6 @@ def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float
 def wrap_angle_symmetric(angle: float) -> float:
     """
     @brief Wrap an angle to (-pi, pi] with 180-degree parking symmetry.
-
-    Both nose-in and nose-out are valid parking orientations. This function
-    returns whichever of ``angle`` or ``angle + pi`` has the smaller absolute
-    value, wrapped to (-pi, pi].
-
-    Used wherever a heading error should be invariant to the vehicle entering
-    a bay forwards or in reverse (e.g. reward computation, target pose).
 
     @param angle: Raw heading error in radians.
     @return Heading error in (-pi, pi] with 180-deg symmetry applied.

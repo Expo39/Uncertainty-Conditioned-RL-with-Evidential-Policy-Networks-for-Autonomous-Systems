@@ -1,6 +1,6 @@
 # 2D localisation covariance estimate from the robot_localisation EKF.
 #
-# Replaces std_msgs/Float64MultiArray per Henki ROS 2 best practices:
+# Replaces std_msgs/Float64MultiArray:
 # custom messages with semantic meaning instead of primitive arrays.
 #
 # Published by CovarianceExtractorNode, consumed by the training container's
