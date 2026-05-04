@@ -91,10 +91,20 @@ class RealWorldInferenceLoop:
         self._obs_buffer = np.zeros(obs_dim, dtype=np.float32)
         self._obstacle_features_buffer = np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
 
+        # Pre-allocated world pose buffer [wx, wy, wyaw, vyaw]
+        self._world_pose_buffer = np.zeros(4, dtype=np.float32)
+        # True once the buffer contains valid data (set after first successful EKF read).
+        self._world_pose_valid: bool = False
+
         # EKF odom-to-world offset; computed once in prepare().
         self._ekf_odom_offset: Tuple[float, float, float, float, float] = (
             0.0, 0.0, 1.0, 0.0, 0.0
         )
+
+        # Cached static target bay values
+        self._target_x: float = 0.0
+        self._target_y: float = 0.0
+        self._target_yaw: float = 0.0
 
         # File-based EKF covariance subscriber (same as sim).
         self._cov_subscriber = _CovarianceSubscriber(ros2_config=ros2_cfg)
@@ -102,6 +112,8 @@ class RealWorldInferenceLoop:
         # ROS 2 publisher for vehicle commands; initialised lazily in run().
         self._twist_publisher: Optional[Any] = None
         self._ros2_node: Optional[Any] = None
+        self._twist_msg: Optional[Any] = None
+        self._twist_stop_msg: Optional[Any] = None
         self._actuation_topic: str = str(
             ros2_cfg.get("actuation_topic", "/cmd_vel")
         )
@@ -202,6 +214,11 @@ class RealWorldInferenceLoop:
             timeout=self._ekf_convergence_timeout,
         )
 
+        # Cache static target values
+        self._target_x = float(self._target_bay["x"])
+        self._target_y = float(self._target_bay["y"])
+        self._target_yaw = float(self._target_bay["yaw"])
+
     # ------------------------------------------------------------------
     # Sensor reads (partially implemented)
     # ------------------------------------------------------------------
@@ -218,6 +235,30 @@ class RealWorldInferenceLoop:
         """
         return None
 
+    def _odom_to_world(
+        self, raw_ekf_pose: np.ndarray
+    ) -> Tuple[float, float, float, float]:
+        """
+        @brief Apply the stored odom-to-world transform to a raw EKF pose.
+        @param raw_ekf_pose: Array [odom_x, odom_y, odom_yaw, vyaw].
+        @return Tuple (world_x, world_y, world_yaw, vyaw).
+        """
+        # ROS REP-103 y is negated relative to lot layout y (same as sim).
+        ox = float(raw_ekf_pose[0])
+        oy = -float(raw_ekf_pose[1])
+        oyaw = float(raw_ekf_pose[2])
+        tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
+        wx = cos_r * ox - sin_r * oy + tx
+        wy = sin_r * ox + cos_r * oy + ty
+        wyaw = oyaw + r
+        vyaw = float(raw_ekf_pose[3])
+        self._world_pose_buffer[0] = wx
+        self._world_pose_buffer[1] = wy
+        self._world_pose_buffer[2] = wyaw
+        self._world_pose_buffer[3] = vyaw
+        self._world_pose_valid = True
+        return wx, wy, wyaw, vyaw
+
     def _get_observation(self) -> np.ndarray:
         """
         @brief Assemble the observation vector from live EKF state and LiDAR.
@@ -232,19 +273,10 @@ class RealWorldInferenceLoop:
 
         world_pose: Optional[np.ndarray] = None
         if raw_ekf_pose is not None:
-            # ROS REP-103 y is negated relative to lot layout y (same as sim).
-            ekf_odom_x = float(raw_ekf_pose[0])
-            ekf_odom_y = -float(raw_ekf_pose[1])
-            ekf_odom_yaw = float(raw_ekf_pose[2])
-            tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
-            wx = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
-            wy = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
-            wyaw = ekf_odom_yaw + r
-            world_pose = np.array(
-                [wx, wy, wyaw, float(raw_ekf_pose[3])],
-                dtype=np.float32,
-            )
+            wx, wy, wyaw, vyaw = self._odom_to_world(raw_ekf_pose)
+            world_pose = np.array([wx, wy, wyaw, vyaw], dtype=np.float32)
         else:
+            self._world_pose_valid = False
             logger.debug("EKF pose unavailable - obs will use zero pose.")
 
         obstacle_features = extract_obstacle_features(
@@ -281,56 +313,41 @@ class RealWorldInferenceLoop:
                 "Call run() rather than invoking _apply_action() directly."
             )
 
-        try:
-            from geometry_msgs.msg import Twist  # type: ignore[import]
-        except ImportError as exc:
-            raise ImportError(
-                "geometry_msgs not available. "
-                "Ensure the ROS 2 environment is sourced inside the ros2-bridge container."
-            ) from exc
-
-        msg = Twist()
-        msg.linear.x = float(np.clip(longitudinal, -1.0, 1.0))
-        msg.angular.z = float(np.clip(steering, -1.0, 1.0))
-        self._twist_publisher.publish(msg)
+        # Scalar clamping is faster than np.clip for individual floats.
+        self._twist_msg.linear.x = longitudinal if -1.0 <= longitudinal <= 1.0 else (
+            -1.0 if longitudinal < -1.0 else 1.0
+        )
+        self._twist_msg.angular.z = steering if -1.0 <= steering <= 1.0 else (
+            -1.0 if steering < -1.0 else 1.0
+        )
+        self._twist_publisher.publish(self._twist_msg)
 
     def _is_done(self) -> Tuple[bool, bool]:
         """
-        @brief Check episode termination conditions from live EKF state.
+        @brief Check episode termination conditions from the world pose cached by
+               _get_observation() this step.
         @return Tuple (terminated, truncated).
-
         """
         # Operator override always truncates immediately.
         if self._operator_stop.is_set():
-            logger.warning("Operator stop requested- truncating mission.")
+            logger.warning("Operator stop requested - truncating mission.")
             return False, True
 
-        raw_ekf_pose, _ = self._cov_subscriber.get_latest_state()
-        if raw_ekf_pose is None:
-            logger.debug("_is_done(): EKF pose unavailable- continuing.")
+        # Reuse the world pose already computed by _get_observation() this step.
+        if not self._world_pose_valid:
+            logger.debug("_is_done(): EKF pose unavailable - continuing.")
             return False, False
 
-        # Apply the same odom-to-world transform used in _get_observation().
-        ekf_odom_x = float(raw_ekf_pose[0])
-        ekf_odom_y = -float(raw_ekf_pose[1])
-        ekf_odom_yaw = float(raw_ekf_pose[2])
-        tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
-        world_x = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
-        world_y = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
-        world_yaw = ekf_odom_yaw + r
+        world_x = float(self._world_pose_buffer[0])
+        world_y = float(self._world_pose_buffer[1])
+        world_yaw = float(self._world_pose_buffer[2])
+        yaw_rate = float(self._world_pose_buffer[3])
 
-        # vyaw (index 3) is used as a proxy for speed magnitude.
-        yaw_rate = float(raw_ekf_pose[3])
-
-        target_x = float(self._target_bay["x"])
-        target_y = float(self._target_bay["y"])
-        target_yaw = float(self._target_bay["yaw"])
-
-        pos_error = math.hypot(world_x - target_x, world_y - target_y)
+        pos_error = math.hypot(world_x - self._target_x, world_y - self._target_y)
         yaw_error = abs(
             math.atan2(
-                math.sin(world_yaw - target_yaw),
-                math.cos(world_yaw - target_yaw),
+                math.sin(world_yaw - self._target_yaw),
+                math.cos(world_yaw - self._target_yaw),
             )
         )
 
@@ -373,7 +390,10 @@ class RealWorldInferenceLoop:
 
     def _init_ros2(self) -> None:
         """
-        @brief Initialise rclpy node and Twist publisher for actuation.
+        @brief Initialise rclpy node, Twist publisher, and pre-allocate Twist messages.
+
+        Pre-allocates self._twist_msg (reused every _apply_action call) and
+        self._twist_stop_msg (zero-velocity, published on shutdown).
 
         @raises ImportError if rclpy or geometry_msgs are not installed.
         @raises RuntimeError if rclpy.init() has already been called externally
@@ -395,6 +415,9 @@ class RealWorldInferenceLoop:
         self._twist_publisher = self._ros2_node.create_publisher(
             Twist, self._actuation_topic, 10
         )
+        # Pre-allocate messages to avoid per-step allocation.
+        self._twist_msg = Twist()
+        self._twist_stop_msg = Twist()
         logger.info(
             "ROS 2 Twist publisher ready on topic '%s'.", self._actuation_topic
         )
@@ -409,10 +432,7 @@ class RealWorldInferenceLoop:
         """
         if self._twist_publisher is not None:
             try:
-                from geometry_msgs.msg import Twist  # type: ignore[import]
-
-                stop_msg = Twist()
-                self._twist_publisher.publish(stop_msg)
+                self._twist_publisher.publish(self._twist_stop_msg)
                 logger.info("Zero-velocity stop command published.")
             except Exception:
                 logger.warning("Failed to publish stop command during shutdown.", exc_info=True)
@@ -425,6 +445,8 @@ class RealWorldInferenceLoop:
 
         self._twist_publisher = None
         self._ros2_node = None
+        self._twist_msg = None
+        self._twist_stop_msg = None
 
     # ------------------------------------------------------------------
     # Safety
@@ -491,36 +513,38 @@ class RealWorldInferenceLoop:
             terminated = False
             truncated = False
 
-            while steps < self._max_steps:
-                obs = self._get_observation()
-                obs_tensor = th.as_tensor(obs[np.newaxis], dtype=th.float32)
+            with th.no_grad():
+                while steps < self._max_steps:
+                    obs = self._get_observation()
+                    # Zero-copy view: obs_buffer is already float32.
+                    obs_tensor = th.from_numpy(obs).unsqueeze_(0)
 
-                action_tensor, uncertainty_dict = (
-                    self._policy.get_action_with_uncertainty(
-                        obs_tensor, deterministic=True
+                    action_tensor, uncertainty_dict = (
+                        self._policy.get_action_with_uncertainty(
+                            obs_tensor, deterministic=True
+                        )
                     )
-                )
-                action = action_tensor.cpu().numpy()[0]
-                epistemic = float(uncertainty_dict["epistemic"].mean().item())
-                aleatoric = float(uncertainty_dict["aleatoric"].mean().item())
+                    action = action_tensor.detach().numpy()[0]
+                    epistemic = uncertainty_dict["epistemic"].mean().item()
+                    aleatoric = uncertainty_dict["aleatoric"].mean().item()
 
-                modulated_action, handoff = self._apply_safety_wrapper(
-                    action, epistemic, aleatoric
-                )
-                if handoff:
-                    handoff_count += 1
+                    modulated_action, handoff = self._apply_safety_wrapper(
+                        action, epistemic, aleatoric
+                    )
+                    if handoff:
+                        handoff_count += 1
 
-                steering, longitudinal = self._deployment.calibrate_action(
-                    float(modulated_action[0]),
-                    float(modulated_action[1]),
-                )
-                self._apply_action(steering, longitudinal)
+                    steering, longitudinal = self._deployment.calibrate_action(
+                        float(modulated_action[0]),
+                        float(modulated_action[1]),
+                    )
+                    self._apply_action(steering, longitudinal)
 
-                steps += 1
-                terminated, truncated = self._is_done()
+                    steps += 1
+                    terminated, truncated = self._is_done()
 
-                if terminated or truncated:
-                    break
+                    if terminated or truncated:
+                        break
 
             if steps >= self._max_steps and not (terminated or truncated):
                 logger.warning(
