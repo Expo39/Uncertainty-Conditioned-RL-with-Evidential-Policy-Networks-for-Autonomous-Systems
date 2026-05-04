@@ -100,17 +100,19 @@ class _Inspector:
         """
         if self._env.world is None:
             return
+        vx = vt.location.x
+        vy = vt.location.y
+        vz = vt.location.z
         yaw_rad = math.radians(vt.rotation.yaw)
+        cos_y = math.cos(yaw_rad)
+        sin_y = math.sin(yaw_rad)
         offset = 11.0
-        side_x = vt.location.x - offset * math.sin(yaw_rad)
-        side_y = vt.location.y + offset * math.cos(yaw_rad)
-        look_yaw = math.degrees(
-            math.atan2(vt.location.y - side_y, vt.location.x - side_x)
-        )
-        spectator = self._env.world.get_spectator()
-        spectator.set_transform(
+        side_x = vx - offset * sin_y
+        side_y = vy + offset * cos_y
+        look_yaw = math.degrees(math.atan2(vy - side_y, vx - side_x))
+        self._env.world.get_spectator().set_transform(
             carla.Transform(
-                carla.Location(x=side_x, y=side_y, z=vt.location.z + 2.0),
+                carla.Location(x=side_x, y=side_y, z=vz + 2.0),
                 carla.Rotation(pitch=-8.0, yaw=look_yaw, roll=0.0),
             )
         )
@@ -122,17 +124,19 @@ class _Inspector:
         """
         if self._env.world is None:
             return
+        vx = vt.location.x
+        vy = vt.location.y
+        vz = vt.location.z
         yaw_rad = math.radians(vt.rotation.yaw)
+        cos_y = math.cos(yaw_rad)
+        sin_y = math.sin(yaw_rad)
         offset = 5.0
-        front_x = vt.location.x + offset * math.cos(yaw_rad)
-        front_y = vt.location.y + offset * math.sin(yaw_rad)
-        look_yaw = math.degrees(
-            math.atan2(vt.location.y - front_y, vt.location.x - front_x)
-        )
-        spectator = self._env.world.get_spectator()
-        spectator.set_transform(
+        front_x = vx + offset * cos_y
+        front_y = vy + offset * sin_y
+        look_yaw = math.degrees(math.atan2(vy - front_y, vx - front_x))
+        self._env.world.get_spectator().set_transform(
             carla.Transform(
-                carla.Location(x=front_x, y=front_y, z=vt.location.z + 2.5),
+                carla.Location(x=front_x, y=front_y, z=vz + 2.5),
                 carla.Rotation(pitch=-20.0, yaw=look_yaw, roll=0.0),
             )
         )
@@ -148,19 +152,27 @@ class _Inspector:
             return
 
         tick_hz = self._TICK_HZ
+        tick_period = 1.0 / tick_hz
         total_ticks = self._duration * tick_hz
         redraw_ticks = self._REDRAW_INTERVAL * tick_hz
         log_ticks = 30 * tick_hz
 
+        # Bind hot-path callables to locals.
+        world_tick = self._env.world.tick
+        update_patrol = self._env._update_patrol_npcs
+        update_peds = self._env._update_pedestrians
+        draw_overlays = self._draw_overlays
+        overlay_life = self._OVERLAY_LIFE
+
         print(f"Scene live for {self._duration}s.  Press Ctrl+C to exit early.")
         try:
             for i in range(total_ticks):
-                self._env.world.tick()
-                self._env._update_patrol_npcs()
-                self._env._update_pedestrians()
+                world_tick()
+                update_patrol()
+                update_peds()
                 if i % redraw_ticks == 0:
-                    self._draw_overlays(life_time=self._OVERLAY_LIFE)
-                time.sleep(1.0 / tick_hz)
+                    draw_overlays(life_time=overlay_life)
+                time.sleep(tick_period)
                 if (i + 1) % log_ticks == 0:
                     elapsed = (i + 1) // tick_hz
                     print(f"  {elapsed}/{self._duration} s elapsed ...")

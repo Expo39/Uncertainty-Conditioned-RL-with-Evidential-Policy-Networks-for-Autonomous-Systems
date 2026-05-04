@@ -53,6 +53,18 @@ _COL_TARGET = hex_to_carla_color(HEX_TARGET_BAY)
 _COL_PED = hex_to_carla_color(HEX_PEDESTRIAN_ZONE)
 _COL_PATROL = hex_to_carla_color(HEX_PATROL_PATH)
 _COL_LOT = hex_to_carla_color(HEX_LOT)
+_COL_SPAWN = carla.Color(r=255, g=255, b=0)
+_COL_EXTRA_SPAWN = carla.Color(r=255, g=140, b=0)
+_COL_WHITE = carla.Color(r=255, g=255, b=255)
+_COL_GREY = carla.Color(r=120, g=120, b=120)
+
+# Bay-type colours
+_BAY_TYPE_COLOURS: Dict[str, Any] = {k: hex_to_carla_color(v) for k, v in BAY_HEX.items()}
+
+# GNSS sensor keys -> display labels (extend if a second antenna is added).
+_GNSS_LABELS: Dict[str, str] = {
+    "gnss": "GNSS",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -85,12 +97,15 @@ def _draw_dotted_segment(
     """
     dx = bx - ax
     dy = by - ay
-    length = math.sqrt(dx * dx + dy * dy)
+    length = math.hypot(dx, dy)
     n_pts = max(2, int(math.ceil(length / _DOT_SPACING)))
+    inv_n = 1.0 / (n_pts - 1)
+    draw_point = debug.draw_point
+    Location = carla.Location
     for s in range(n_pts):
-        t = s / (n_pts - 1)
-        debug.draw_point(
-            carla.Location(x=ax + t * dx, y=ay + t * dy, z=z),
+        t = s * inv_n
+        draw_point(
+            Location(x=ax + t * dx, y=ay + t * dy, z=z),
             size=dot_size,
             color=colour,
             life_time=life_time,
@@ -112,9 +127,10 @@ def _draw_layout_overlays(
     @param life_time: Primitive lifetime in seconds.
     """
     debug = world.debug
+    draw_point = debug.draw_point
+    draw_string = debug.draw_string
+    Location = carla.Location
     z = float(layout.get("origin", {}).get("z", 0.3)) + 0.15
-
-    type_colours = {k: hex_to_carla_color(v) for k, v in BAY_HEX.items()}
 
     # --- Bay outlines ---
     for bay_idx, bay in enumerate(layout.get("bays", [])):
@@ -123,15 +139,19 @@ def _draw_layout_overlays(
         colour = (
             _COL_TARGET
             if is_target
-            else type_colours.get(bay_type, carla.Color(r=120, g=120, b=120))
+            else _BAY_TYPE_COLOURS.get(bay_type, _COL_GREY)
         )
         bx = float(bay["x"])
         by = float(bay["y"])
         width = float(bay.get("width", 2.5))
         depth = float(bay.get("depth", 5.0))
-        yaw_rad = math.radians(
-            float(bay.get("yaw_deg", math.degrees(float(bay.get("yaw", 0.0)))))
-        )
+
+        # Prefer yaw_deg; fall back to yaw (already in radians).
+        if "yaw_deg" in bay:
+            yaw_rad = math.radians(float(bay["yaw_deg"]))
+        else:
+            yaw_rad = float(bay.get("yaw", 0.0))
+
         cos_y = math.cos(yaw_rad)
         sin_y = math.sin(yaw_rad)
         hd = depth / 2.0
@@ -151,16 +171,14 @@ def _draw_layout_overlays(
             )
 
         label = "TARGET" if is_target else str(bay_idx)
-        debug.draw_string(
-            carla.Location(x=bx, y=by, z=z + 1.5),
+        draw_string(
+            Location(x=bx, y=by, z=z + 1.5),
             label,
             color=colour,
             life_time=life_time,
         )
 
     # --- Lot perimeter boundary ---
-    # Always drawn as a dotted line so lot geometry is visible in the inspector
-    # regardless of whether spawn_perimeter_cones is true or false.
     lot_corners_raw = layout.get("corners", [])
     if lot_corners_raw:
         lot_corners: List[Tuple[float, float]] = [
@@ -178,35 +196,33 @@ def _draw_layout_overlays(
     spawn = layout.get("spawn_transform", {})
     sx = float(spawn.get("x", 0.0))
     sy = float(spawn.get("y", 0.0))
-    _col_spawn = carla.Color(r=255, g=255, b=0)
-    debug.draw_point(
-        carla.Location(x=sx, y=sy, z=z + 0.3),
+    draw_point(
+        Location(x=sx, y=sy, z=z + 0.3),
         size=0.2,
-        color=_col_spawn,
+        color=_COL_SPAWN,
         life_time=life_time,
     )
-    debug.draw_string(
-        carla.Location(x=sx, y=sy, z=z + 1.0),
+    draw_string(
+        Location(x=sx, y=sy, z=z + 1.0),
         "SPAWN",
-        color=_col_spawn,
+        color=_COL_SPAWN,
         life_time=life_time,
     )
 
     # --- Extra spawn points ---
-    _col_extra = carla.Color(r=255, g=140, b=0)
     for i, extra in enumerate(layout.get("extra_spawn_transforms", [])):
         ex = float(extra.get("x", 0.0))
         ey = float(extra.get("y", 0.0))
-        debug.draw_point(
-            carla.Location(x=ex, y=ey, z=z + 0.3),
+        draw_point(
+            Location(x=ex, y=ey, z=z + 0.3),
             size=0.15,
-            color=_col_extra,
+            color=_COL_EXTRA_SPAWN,
             life_time=life_time,
         )
-        debug.draw_string(
-            carla.Location(x=ex, y=ey, z=z + 1.0),
+        draw_string(
+            Location(x=ex, y=ey, z=z + 1.0),
             f"SPAWN{i + 2}",
-            color=_col_extra,
+            color=_COL_EXTRA_SPAWN,
             life_time=life_time,
         )
 
@@ -223,10 +239,10 @@ def _draw_layout_overlays(
             ax, ay = zc[j]
             bxc, byc = zc[(j + 1) % 4]
             _draw_dotted_segment(debug, ax, ay, bxc, byc, z, _COL_PED, 0.05, life_time)
-        zone_cx = (x_min + x_max) / 2.0
-        zone_cy = (y_min + y_max) / 2.0
-        debug.draw_string(
-            carla.Location(x=zone_cx, y=zone_cy, z=z + 1.5),
+        zone_cx = (x_min + x_max) * 0.5
+        zone_cy = (y_min + y_max) * 0.5
+        draw_string(
+            Location(x=zone_cx, y=zone_cy, z=z + 1.5),
             f"PED {zone_idx}",
             color=_COL_PED,
             life_time=life_time,
@@ -236,15 +252,16 @@ def _draw_layout_overlays(
     waypoints: List[Tuple[float, float]] = [
         (float(wp["x"]), float(wp["y"])) for wp in layout.get("patrol_waypoints", [])
     ]
+    n_wp = len(waypoints)
     for i, (wx, wy) in enumerate(waypoints):
-        debug.draw_point(
-            carla.Location(x=wx, y=wy, z=z + 0.2),
+        draw_point(
+            Location(x=wx, y=wy, z=z + 0.2),
             size=0.12,
             color=_COL_PATROL,
             life_time=life_time,
         )
-        if len(waypoints) > 1:
-            nx, ny = waypoints[(i + 1) % len(waypoints)]
+        if n_wp > 1:
+            nx, ny = waypoints[(i + 1) % n_wp]
             _draw_dotted_segment(
                 debug, wx, wy, nx, ny, z + 0.2, _COL_PATROL, 0.04, life_time
             )
@@ -275,20 +292,24 @@ def _draw_sensor_dot(
                       Useful in side-profile view to show mount height clearly.
     @param ground_z: Ground Z for the drop line base (default 0.3).
     """
-    debug.draw_point(loc, size=0.35, color=colour, life_time=life_time)
+    draw_point = debug.draw_point
+    Location = carla.Location
+    draw_point(loc, size=0.35, color=colour, life_time=life_time)
     if drop_line and loc.z > ground_z + 0.1:
-        _col_white = carla.Color(r=255, g=255, b=255)
-        n_pts = max(2, int(math.ceil((loc.z - ground_z) / 0.12)))
+        height = loc.z - ground_z
+        n_pts = max(2, int(math.ceil(height / 0.12)))
+        inv_n = 1.0 / n_pts
+        lx, ly = loc.x, loc.y
         for i in range(n_pts + 1):
-            t = i / n_pts
-            debug.draw_point(
-                carla.Location(x=loc.x, y=loc.y, z=ground_z + t * (loc.z - ground_z)),
+            t = i * inv_n
+            draw_point(
+                Location(x=lx, y=ly, z=ground_z + t * height),
                 size=0.12,
-                color=_col_white,
+                color=_COL_WHITE,
                 life_time=life_time,
             )
     debug.draw_string(
-        carla.Location(x=loc.x, y=loc.y, z=loc.z + 0.7),
+        Location(x=loc.x, y=loc.y, z=loc.z + 0.7),
         label,
         color=colour,
         life_time=life_time,
@@ -326,19 +347,30 @@ def _draw_fov_arc(
     arc_span = angle_max_rad - angle_min_rad
     arc_len = abs(arc_span) * radius
     n_pts = max(4, int(math.ceil(arc_len / _ARC_SPACING)))
-    for i in range(n_pts + 1):
-        t = i / n_pts
-        angle = angle_min_rad + t * arc_span
-        debug.draw_point(
-            carla.Location(
-                x=origin_x + radius * math.cos(angle),
-                y=origin_y + radius * math.sin(angle),
+
+    # Rotation-recurrence: advance (c, s) by step_angle each iteration.
+    step = arc_span / n_pts
+    dc = math.cos(step)
+    ds = math.sin(step)
+    c = math.cos(angle_min_rad)
+    s = math.sin(angle_min_rad)
+
+    draw_point = debug.draw_point
+    Location = carla.Location
+
+    for _ in range(n_pts + 1):
+        draw_point(
+            Location(
+                x=origin_x + radius * c,
+                y=origin_y + radius * s,
                 z=origin_z,
             ),
             size=dot_size,
             color=colour,
             life_time=life_time,
         )
+        # Advance by step_angle via 2x2 rotation multiply.
+        c, s = c * dc - s * ds, s * dc + c * ds
 
     if draw_radials:
         for angle in (angle_min_rad, angle_max_rad):
@@ -383,12 +415,16 @@ def _draw_sensor_overlays(
     vz = vt.location.z
     ground_z = vz + 0.05
     yaw_rad = math.radians(vt.rotation.yaw)
+    cos_yaw = math.cos(yaw_rad)
+    sin_yaw = math.sin(yaw_rad)
 
     def _to_world(lx: float, ly: float, lz: float) -> Any:
         """@brief Transform vehicle body-frame offset to world-frame carla.Location."""
-        wx = vx + lx * math.cos(yaw_rad) - ly * math.sin(yaw_rad)
-        wy = vy + lx * math.sin(yaw_rad) + ly * math.cos(yaw_rad)
-        return carla.Location(x=wx, y=wy, z=vz + lz)
+        return carla.Location(
+            x=vx + lx * cos_yaw - ly * sin_yaw,
+            y=vy + lx * sin_yaw + ly * cos_yaw,
+            z=vz + lz,
+        )
 
     # ---- IMU ---------------------------------------------------------------
     imu_m = sensors_cfg.get("imu", {}).get("mount", {})
@@ -426,11 +462,13 @@ def _draw_sensor_overlays(
     if not side_view:
         lidar_range = float(sensors_cfg.get("lidar", {}).get("range", 30.0))
         fov_half = math.radians(135.0)
+        arc_z = lidar_loc.z + 0.05
+        lx_w, ly_w = lidar_loc.x, lidar_loc.y
         _draw_fov_arc(
             debug,
-            lidar_loc.x,
-            lidar_loc.y,
-            lidar_loc.z + 0.05,
+            lx_w,
+            ly_w,
+            arc_z,
             radius=lidar_range,
             angle_min_rad=yaw_rad - fov_half,
             angle_max_rad=yaw_rad + fov_half,
@@ -441,9 +479,9 @@ def _draw_sensor_overlays(
         )
         _draw_fov_arc(
             debug,
-            lidar_loc.x,
-            lidar_loc.y,
-            lidar_loc.z + 0.05,
+            lx_w,
+            ly_w,
+            arc_z,
             radius=lidar_range,
             angle_min_rad=yaw_rad + fov_half,
             angle_max_rad=yaw_rad + math.radians(360.0) - fov_half,
@@ -453,15 +491,9 @@ def _draw_sensor_overlays(
             draw_radials=False,
         )
 
-    # ---- GNSS antennas (data-driven: gnss = front, gnss_rear = rear) --------
-    # Iterate over any gnss* entries present in config so future additions
-    # (e.g. a third antenna) do not require another code change.
-    _gnss_labels = {
-        "gnss": "GNSS F",
-        "gnss_rear": "GNSS R",
-    }
+    # ---- GNSS antenna ---------------------------------------
     _gnss_locs: List[Any] = []
-    for sensor_key in ("gnss", "gnss_rear"):
+    for sensor_key, label in _GNSS_LABELS.items():
         if sensor_key not in sensors_cfg:
             continue
         m = sensors_cfg[sensor_key].get("mount", {})
@@ -474,7 +506,7 @@ def _draw_sensor_overlays(
         _draw_sensor_dot(
             debug,
             loc,
-            _gnss_labels.get(sensor_key, sensor_key.upper()),
+            label,
             _COL_GNSS,
             life_time,
             drop_line=side_view,
@@ -493,4 +525,3 @@ def _draw_sensor_overlays(
             0.06,
             life_time,
         )
-
