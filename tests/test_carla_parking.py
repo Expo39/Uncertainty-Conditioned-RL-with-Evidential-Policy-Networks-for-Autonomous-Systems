@@ -3,12 +3,7 @@
 @brief Unit tests for the CARLA parking environment and geometry helpers.
 
 All tests are CPU-only (no CARLA server, no ROS 2, no GPU). The environment
-falls back gracefully when CARLA and rclpy are unavailable. Tests exercise:
-  - Pure geometry helpers (cone interpolation, relative target pose)
-  - Observation space shape (21-dim with covariance + obstacles, 9-dim without)
-  - Bay sampling logic (stratified sampling by bay type)
-  - VisStateWriter (atomic write, valid JSON, tmp file cleaned up)
-  - Gymnasium API contract (reset/step return shapes, dtypes)
+falls back gracefully when CARLA and rclpy are unavailable.
 """
 
 import json
@@ -23,6 +18,7 @@ import pytest
 
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
+    COVARIANCE_FEATURES_DIM,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     TOTAL_OBS_DIM,
@@ -31,7 +27,17 @@ from uncertainty_rl.utils.constants import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    point_in_polygon,
+    wrap_angle_symmetric,
+    yaw_from_quaternion,
     zone_bbox,
+)
+from uncertainty_rl.envs._parking_core import (
+    build_observation,
+    compute_obs_dim,
+    extract_obstacle_features,
+    load_floor_plan,
+    wait_for_ekf,
 )
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
@@ -192,46 +198,43 @@ class TestObservationSpaceShape:
     @brief Verify obs space dim based on include_covariance flag.
     """
 
-    def test_17_dim_with_covariance(self) -> None:
+    def test_12_dim_with_covariance(self) -> None:
         """
-        @brief include_covariance=True -> 17-dim observation space (default).
+        @brief include_covariance=True -> 12-dim observation space (default).
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 17
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 12
         env.close()
 
-    def test_11_dim_without_covariance(self) -> None:
+    def test_9_dim_without_covariance(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=True (default) -> 11-dim.
-
-        Without covariance but with obstacle obs:
-        pose(6) + target(3) + obstacle(2) = 11.
+        @brief include_covariance=False, include_obstacle_obs=True (default) -> 9-dim.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 11
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 9
         assert env.observation_space.shape == (expected,)
         env.close()
 
-    def test_9_dim_without_covariance_or_obstacles(self) -> None:
+    def test_4_dim_without_covariance_or_obstacles(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=False -> 9-dim.
+        @brief include_covariance=False, include_obstacle_obs=False -> 4-dim.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(
             max_steps=5, include_covariance=False, include_obstacle_obs=False
         )
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 6 + 3 = 9
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 1 + 3 = 4
         assert env.observation_space.shape == (expected,)
         env.close()
 
     def test_action_space_shape(self) -> None:
         """
-        @brief Action space must be 3-dim: [steering, throttle, brake].
+        @brief Action space must be 2-dim: [steering, longitudinal].
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -252,7 +255,7 @@ class TestObservationSpaceShape:
 
 
 # ---------------------------------------------------------------------------
-# Gymnasium API contract (requires live CARLA server -- integration only)
+# Gymnasium API contract (requires live CARLA server - integration only)
 # ---------------------------------------------------------------------------
 
 
@@ -701,7 +704,7 @@ def _make_env_for_reward() -> Any:
 
     env = CARLAParkingEnv(max_steps=100)
 
-    # Mock sensor manager -- no collision by default
+    # Mock sensor manager - no collision by default
     mock_sm = MagicMock()
     mock_sm.consume_collision.return_value = (False, False)
     env._sensor_manager = mock_sm
@@ -993,7 +996,7 @@ class TestStepInfoDict:
     @class TestStepInfoDict
     @brief Tests that step() info dict contains all expected keys with correct types.
 
-    Uses vehicle=None (no CARLA connection) -- step() still builds the full info
+    Uses vehicle=None (no CARLA connection) - step() still builds the full info
     dict and returns sensible zero-values when the vehicle is absent.
     """
 
@@ -1054,3 +1057,489 @@ class TestStepInfoDict:
         _, _, _, _, info = env.step(env.action_space.sample())
 
         assert info["speed"] >= 0.0
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: point_in_polygon
+# ---------------------------------------------------------------------------
+
+
+class TestPointInPolygon:
+    """
+    @class TestPointInPolygon
+    @brief Tests for the ray-casting point-in-polygon check.
+    """
+
+    def test_centre_of_unit_square_is_inside(self) -> None:
+        """
+        @brief Centre of a unit square must be inside.
+        """
+        corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        assert point_in_polygon(0.5, 0.5, corners) is True
+
+    def test_point_outside_square_is_not_inside(self) -> None:
+        """
+        @brief Point clearly outside the square must return False.
+        """
+        corners = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+        assert point_in_polygon(2.0, 2.0, corners) is False
+
+    def test_point_inside_triangle(self) -> None:
+        """
+        @brief Point inside a triangle must return True.
+        """
+        corners = [(0.0, 0.0), (4.0, 0.0), (2.0, 4.0)]
+        assert point_in_polygon(2.0, 1.0, corners) is True
+
+    def test_point_outside_triangle(self) -> None:
+        """
+        @brief Point outside a triangle must return False.
+        """
+        corners = [(0.0, 0.0), (4.0, 0.0), (2.0, 4.0)]
+        assert point_in_polygon(3.5, 3.5, corners) is False
+
+    def test_negative_coordinates(self) -> None:
+        """
+        @brief Polygon with negative coordinates must work correctly.
+        """
+        corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]
+        assert point_in_polygon(0.0, 0.0, corners) is True
+        assert point_in_polygon(3.0, 0.0, corners) is False
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: yaw_from_quaternion
+# ---------------------------------------------------------------------------
+
+
+class TestYawFromQuaternion:
+    """
+    @class TestYawFromQuaternion
+    @brief Tests for quaternion -> yaw extraction.
+    """
+
+    def test_identity_quaternion_gives_zero_yaw(self) -> None:
+        """
+        @brief Identity quaternion (0, 0, 0, 1) must give yaw = 0.
+        """
+        assert yaw_from_quaternion(0.0, 0.0, 0.0, 1.0) == pytest.approx(0.0)
+
+    def test_90_deg_yaw(self) -> None:
+        """
+        @brief Quaternion for 90-deg rotation about z gives yaw = pi/2.
+        """
+        # q = (0, 0, sin(pi/4), cos(pi/4))
+        s = math.sin(math.pi / 4)
+        c = math.cos(math.pi / 4)
+        assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(math.pi / 2, abs=1e-6)
+
+    def test_minus_90_deg_yaw(self) -> None:
+        """
+        @brief Quaternion for -90-deg rotation gives yaw = -pi/2.
+        """
+        s = math.sin(-math.pi / 4)
+        c = math.cos(-math.pi / 4)
+        assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(-math.pi / 2, abs=1e-6)
+
+    def test_output_in_minus_pi_to_pi(self) -> None:
+        """
+        @brief yaw_from_quaternion must always return a value in [-pi, pi].
+        """
+        for angle in np.linspace(-math.pi, math.pi, 20):
+            s = math.sin(angle / 2)
+            c = math.cos(angle / 2)
+            yaw = yaw_from_quaternion(0.0, 0.0, s, c)
+            assert -math.pi <= yaw <= math.pi
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: wrap_angle_symmetric
+# ---------------------------------------------------------------------------
+
+
+class TestWrapAngleSymmetric:
+    """
+    @class TestWrapAngleSymmetric
+    @brief Tests for the 180-deg symmetric angle wrap.
+    """
+
+    def test_zero_returns_zero(self) -> None:
+        """
+        @brief wrap_angle_symmetric(0) must be 0.
+        """
+        assert wrap_angle_symmetric(0.0) == pytest.approx(0.0)
+
+    def test_pi_maps_to_zero(self) -> None:
+        """
+        @brief pi and -pi are equivalent to 0 under parking symmetry.
+        """
+        # Both pi and -pi should map to 0 (symmetric heading error)
+        assert abs(wrap_angle_symmetric(math.pi)) < math.pi / 2
+
+    def test_small_positive_returns_itself(self) -> None:
+        """
+        @brief Small positive angle < pi/2 must return itself (no flip needed).
+        """
+        angle = 0.3
+        result = wrap_angle_symmetric(angle)
+        assert result == pytest.approx(angle, abs=1e-6)
+
+    def test_result_magnitude_le_pi_over_2(self) -> None:
+        """
+        @brief Result magnitude must always be <= pi/2 (smaller of two orientations).
+        """
+        for angle in np.linspace(-math.pi, math.pi, 50):
+            result = wrap_angle_symmetric(angle)
+            assert abs(result) <= math.pi / 2 + 1e-9
+
+    def test_large_angle_flipped(self) -> None:
+        """
+        @brief An angle of 2pi/3 should flip to -pi/3 (smaller absolute value).
+        """
+        angle = 2 * math.pi / 3
+        result = wrap_angle_symmetric(angle)
+        assert abs(result) == pytest.approx(math.pi / 3, abs=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# _parking_core: extract_obstacle_features
+# ---------------------------------------------------------------------------
+
+
+class TestExtractObstacleFeatures:
+    """
+    @class TestExtractObstacleFeatures
+    @brief Tests for hemispheric LiDAR clearance feature extraction.
+    """
+
+    def _empty_out(self) -> np.ndarray:
+        return np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
+
+    def test_none_scan_returns_zeros(self) -> None:
+        """
+        @brief None scan must leave the output buffer all-zero.
+        """
+        out = self._empty_out()
+        result = extract_obstacle_features(None, out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_empty_scan_returns_zeros(self) -> None:
+        """
+        @brief Empty scan array must leave the output buffer all-zero.
+        """
+        out = self._empty_out()
+        result = extract_obstacle_features(np.empty((0, 2), dtype=np.float32), out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_forward_point_populates_forward_dist(self) -> None:
+        """
+        @brief A point directly ahead must populate forward_dist (index 4).
+        """
+        scan = np.array([[3.0, 0.0]], dtype=np.float32)  # x=3, y=0 -> bearing=0
+        out = self._empty_out()
+        result = extract_obstacle_features(scan, out)
+        assert result[4] == pytest.approx(3.0, abs=1e-3)
+
+    def test_left_point_populates_left_dist(self) -> None:
+        """
+        @brief A point to the left (bearing > 15 deg) must populate left_dist (index 0).
+        """
+        scan = np.array([[2.0, 2.0]], dtype=np.float32)  # bearing ~45 deg
+        out = self._empty_out()
+        result = extract_obstacle_features(scan, out)
+        expected_dist = math.sqrt(2.0 ** 2 + 2.0 ** 2)
+        assert result[0] == pytest.approx(expected_dist, rel=1e-3)
+
+    def test_right_point_populates_right_dist(self) -> None:
+        """
+        @brief A point to the right (bearing < -15 deg) must populate right_dist (index 2).
+        """
+        scan = np.array([[2.0, -2.0]], dtype=np.float32)  # bearing ~-45 deg
+        out = self._empty_out()
+        result = extract_obstacle_features(scan, out)
+        expected_dist = math.sqrt(2.0 ** 2 + 2.0 ** 2)
+        assert result[2] == pytest.approx(expected_dist, rel=1e-3)
+
+    def test_self_return_filtered_out(self) -> None:
+        """
+        @brief Points closer than 1 m must be discarded as self-returns.
+        """
+        scan = np.array([[0.3, 0.0]], dtype=np.float32)
+        out = self._empty_out()
+        result = extract_obstacle_features(scan, out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_rear_hemisphere_filtered_out(self) -> None:
+        """
+        @brief Points with x <= 0 (rear hemisphere) must be discarded.
+        """
+        scan = np.array([[-3.0, 0.0]], dtype=np.float32)
+        out = self._empty_out()
+        result = extract_obstacle_features(scan, out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_nearest_point_selected_per_sector(self) -> None:
+        """
+        @brief When multiple points are in the same sector, the nearest is chosen.
+        """
+        scan = np.array([
+            [5.0, 0.0],  # forward, dist=5
+            [2.0, 0.0],  # forward, dist=2 (nearer)
+        ], dtype=np.float32)
+        out = self._empty_out()
+        result = extract_obstacle_features(scan, out)
+        assert result[4] == pytest.approx(2.0, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# _parking_core: build_observation
+# ---------------------------------------------------------------------------
+
+
+class TestBuildObservation:
+    """
+    @class TestBuildObservation
+    @brief Tests for observation vector construction.
+    """
+
+    def _make_target(self, x: float = 5.0, y: float = 0.0, yaw: float = 0.0) -> dict:
+        return {"x": x, "y": y, "yaw": yaw}
+
+    def _ekf_pose(
+        self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, vyaw: float = 0.1
+    ) -> np.ndarray:
+        return np.array([x, y, yaw, vyaw], dtype=np.float32)
+
+    def test_full_obs_has_correct_dim(self) -> None:
+        """
+        @brief Full obs (cov + obstacles) must equal TOTAL_OBS_DIM.
+        """
+        dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=True)
+        buf = np.zeros(dim, dtype=np.float32)
+        obs = build_observation(
+            ekf_pose=self._ekf_pose(),
+            uncertainty=np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32),
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=True,
+            include_obstacle_obs=True,
+            obs_buffer=buf,
+        )
+        assert obs.shape == (TOTAL_OBS_DIM,)
+
+    def test_no_covariance_obs_has_correct_dim(self) -> None:
+        """
+        @brief Without covariance, obs dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM.
+        """
+        dim = compute_obs_dim(include_covariance=False, include_obstacle_obs=True)
+        buf = np.zeros(dim, dtype=np.float32)
+        obs = build_observation(
+            ekf_pose=self._ekf_pose(),
+            uncertainty=None,
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=False,
+            include_obstacle_obs=True,
+            obs_buffer=buf,
+        )
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM
+        assert obs.shape == (expected,)
+
+    def test_none_ekf_pose_gives_all_zeros(self) -> None:
+        """
+        @brief None ekf_pose must produce an observation of all zeros.
+        """
+        dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=True)
+        buf = np.zeros(dim, dtype=np.float32)
+        obs = build_observation(
+            ekf_pose=None,
+            uncertainty=None,
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=True,
+            include_obstacle_obs=True,
+            obs_buffer=buf,
+        )
+        np.testing.assert_array_equal(obs, np.zeros(dim))
+
+    def test_uncertainty_written_to_covariance_indices(self) -> None:
+        """
+        @brief Uncertainty values must appear at indices 1-3 when include_covariance=True.
+        """
+        dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=False)
+        buf = np.zeros(dim, dtype=np.float32)
+        unc = np.array([0.1, 0.2, 0.3], dtype=np.float32)
+        obs = build_observation(
+            ekf_pose=self._ekf_pose(),
+            uncertainty=unc,
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=True,
+            include_obstacle_obs=False,
+            obs_buffer=buf,
+        )
+        np.testing.assert_allclose(obs[1:1 + COVARIANCE_FEATURES_DIM], unc)
+
+    def test_returns_copy_not_buffer(self) -> None:
+        """
+        @brief build_observation must return a copy; mutating result must not
+               affect subsequent calls.
+        """
+        dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=True)
+        buf = np.zeros(dim, dtype=np.float32)
+        obs = build_observation(
+            ekf_pose=self._ekf_pose(),
+            uncertainty=np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32),
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=True,
+            include_obstacle_obs=True,
+            obs_buffer=buf,
+        )
+        obs[:] = 999.0
+        assert buf[0] != 999.0
+
+
+# ---------------------------------------------------------------------------
+# _parking_core: load_floor_plan
+# ---------------------------------------------------------------------------
+
+
+class TestLoadFloorPlan:
+    """
+    @class TestLoadFloorPlan
+    @brief Tests for floor plan selection and caching logic.
+    """
+
+    def _write_layout(self, path: Path) -> None:
+        import yaml
+        layout = {"bays": [{"id": "bay_01", "x": 0.0, "y": 0.0, "yaw": 0.0}]}
+        with open(path, "w") as f:
+            yaml.dump(layout, f)
+
+    def test_loads_eligible_plan(self) -> None:
+        """
+        @brief load_floor_plan must return a valid (name, layout) tuple.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            layout_file = Path(d) / "rectangle.yaml"
+            self._write_layout(layout_file)
+            config = {"rectangle": {"layout_file": str(layout_file), "ood": False}}
+            cache: dict = {}
+            name, layout = load_floor_plan(config, eval_mode=False, layout_cache=cache)
+            assert name == "rectangle"
+            assert "bays" in layout
+
+    def test_raises_when_no_eligible_plans(self) -> None:
+        """
+        @brief RuntimeError when all plans are OOD and eval_mode=False.
+        """
+        config = {"ood_only": {"layout_file": "x.yaml", "ood": True}}
+        with pytest.raises(RuntimeError):
+            load_floor_plan(config, eval_mode=False, layout_cache={})
+
+    def test_ood_plan_eligible_in_eval_mode(self) -> None:
+        """
+        @brief OOD plans must be eligible when eval_mode=True.
+        """
+        with tempfile.TemporaryDirectory() as d:
+            layout_file = Path(d) / "irregular.yaml"
+            self._write_layout(layout_file)
+            config = {"irregular_a": {"layout_file": str(layout_file), "ood": True}}
+            cache: dict = {}
+            name, layout = load_floor_plan(config, eval_mode=True, layout_cache=cache)
+            assert name == "irregular_a"
+
+    def test_layout_cached_after_first_load(self) -> None:
+        """
+        @brief Second call with the same path must use the cache (no re-read).
+        """
+        with tempfile.TemporaryDirectory() as d:
+            layout_file = Path(d) / "rect.yaml"
+            self._write_layout(layout_file)
+            config = {"rectangle": {"layout_file": str(layout_file), "ood": False}}
+            cache: dict = {}
+            load_floor_plan(config, eval_mode=False, layout_cache=cache)
+            assert len(cache) == 1
+            load_floor_plan(config, eval_mode=False, layout_cache=cache)
+            assert len(cache) == 1  # still only one entry
+
+    def test_raises_file_not_found(self) -> None:
+        """
+        @brief FileNotFoundError when the layout YAML does not exist.
+        """
+        config = {"missing": {"layout_file": "/no/such/file.yaml", "ood": False}}
+        with pytest.raises(FileNotFoundError):
+            load_floor_plan(config, eval_mode=False, layout_cache={})
+
+
+# ---------------------------------------------------------------------------
+# _parking_core: wait_for_ekf
+# ---------------------------------------------------------------------------
+
+
+class TestWaitForEkf:
+    """
+    @class TestWaitForEkf
+    @brief Tests for the EKF readiness polling helper.
+    """
+
+    def test_returns_immediately_when_both_ready(self) -> None:
+        """
+        @brief wait_for_ekf must return without error when both inputs are ready.
+        """
+        wait_for_ekf(
+            has_lidar=lambda: True,
+            has_ekf=lambda: True,
+            timeout=1.0,
+            tick_interval=0.001,
+        )
+
+    def test_raises_on_timeout_when_lidar_missing(self) -> None:
+        """
+        @brief RuntimeError when LiDAR never becomes ready within timeout.
+        """
+        with pytest.raises(RuntimeError, match="LiDAR"):
+            wait_for_ekf(
+                has_lidar=lambda: False,
+                has_ekf=lambda: True,
+                timeout=0.05,
+                tick_interval=0.01,
+            )
+
+    def test_raises_on_timeout_when_ekf_missing(self) -> None:
+        """
+        @brief RuntimeError when EKF never becomes ready within timeout.
+        """
+        with pytest.raises(RuntimeError, match="EKF"):
+            wait_for_ekf(
+                has_lidar=lambda: True,
+                has_ekf=lambda: False,
+                timeout=0.05,
+                tick_interval=0.01,
+            )
+
+    def test_tick_fn_called_while_waiting(self) -> None:
+        """
+        @brief tick_fn must be invoked on each poll iteration while waiting.
+        """
+        tick_calls = []
+
+        def tick() -> None:
+            tick_calls.append(1)
+
+        # Becomes ready after 2 ticks
+        counter = [0]
+
+        def has_ekf() -> bool:
+            counter[0] += 1
+            return counter[0] >= 3
+
+        wait_for_ekf(
+            has_lidar=lambda: True,
+            has_ekf=has_ekf,
+            timeout=1.0,
+            tick_fn=tick,
+            tick_interval=0.001,
+        )
+        assert len(tick_calls) >= 2
