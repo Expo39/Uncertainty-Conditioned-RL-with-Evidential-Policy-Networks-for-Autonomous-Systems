@@ -19,22 +19,6 @@ class DebugLogger:
     """
     @class DebugLogger
     @brief Per-step debug diagnostics for CARLAParkingEnv.
-
-    When debug=True, emits structured lines at DEBUG level every step covering
-    reward breakdown, EKF covariance stats, obstacle proximity, action, and pose
-    error. Also produces a compact dict via step_debug_dict() that is embedded in
-    vis_history.jsonl frames so the visualiser can display a second HUD line.
-
-    When debug=False every method is a no-op so there is zero overhead during
-    normal training runs.
-
-    Usage in the environment::
-
-        self._debug_logger = DebugLogger(debug=config.get("debug", False))
-        # inside step():
-        self._debug_logger.log_step(reward, obs, uncertainty, action, pos_error)
-        # inside _write_vis_state():
-        state["debug"] = self._debug_logger.step_debug_dict()
     """
 
     # ------------------------------------------------------------------

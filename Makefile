@@ -1,4 +1,3 @@
-# Makefile - Uncertainty-Conditioned RL
 # Development commands for training, evaluation, testing, and linting.
 
 .PHONY: help install test test-unit test-integration
@@ -22,7 +21,6 @@ SCRIPTS_DIR := scripts
 DOCKER_COMPOSE         := docker compose
 DOCKER_COMPOSE_INSPECT := docker compose -f docker-compose.yml -f docker-compose.inspect.yml
 DOCKER_COMPOSE_WORKERS := docker compose -f docker-compose.env_workers.yml
-
 LAYOUT       ?= rectangle
 
 # Scripts that bring up/down N env workers (N read from train_config.yaml by default).
@@ -64,7 +62,7 @@ install: ## Create .venv and install package + dev dependencies
 # Docker: Lifecycle
 # ----------------------------------------------------------------------
 SERVICE ?=
-docker-build: ## Build all Docker images (core + env-workers + inspect stacks). Usage: make docker-build
+docker-build: ## Build all Docker images (core + env-workers + inspect stacks).
 	$(DOCKER_COMPOSE) build $(SERVICE)
 	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml $(SERVICE)
 	$(DOCKER_COMPOSE_INSPECT) build $(SERVICE)
@@ -78,7 +76,7 @@ docker-build-no-cache-core: ## Build core + env-worker images without cache (car
 docker-build-no-cache-inspect: ## Build inspect-stack images without cache (ros2-bridge-inspect, training-inspect-*)
 	$(DOCKER_COMPOSE_INSPECT) build --no-cache
 
-docker-build-ros2: ## Rebuild only the ros2-bridge images without cache (fast: use after editing carla_bridge.launch.py or ros2 node code)
+docker-build-ros2: ## Rebuild only the ros2-bridge images without cache
 	$(DOCKER_COMPOSE_WORKERS) build --no-cache ros2-bridge
 	$(DOCKER_COMPOSE_INSPECT) build --no-cache ros2-bridge-inspect
 
@@ -157,31 +155,31 @@ docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: m
 # Docker: Testing & Linting
 # ----------------------------------------------------------------------
 
-docker-test: ## Run full test suite inside container (auto-starts core stack if needed)
+docker-test: ## Run full test suite inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short
 
-docker-test-unit: ## Run unit tests inside container (auto-starts core stack if needed)
+docker-test-unit: ## Run unit tests inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "not integration"
 
-docker-test-integration: ## Run integration tests inside container (auto-starts core stack if needed)
+docker-test-integration: ## Run integration tests inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
 
-docker-verify: ## Run all checks inside container (auto-starts core stack if needed)
+docker-verify: ## Run all checks inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training bash -c "pytest $(TESTS_DIR) -v --tb=short -m 'not integration' && flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503 && isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && mypy $(SRC_DIR) --ignore-missing-imports && python -c 'import uncertainty_rl; print(\"All checks passed.\")'"
 
-docker-lint: ## Run linters inside container (auto-starts core stack if needed)
+docker-lint: ## Run linters inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training make lint
 
-docker-format: ## Format code inside container (auto-starts core stack if needed)
+docker-format: ## Format code inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training make format
 
-docker-typecheck: ## Run mypy inside container (auto-starts core stack if needed)
+docker-typecheck: ## Run mypy inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training make typecheck
 
@@ -196,7 +194,7 @@ WORKER ?= 0
 docker-shell-ros2: ## Interactive shell in ROS 2 bridge for a worker. Usage: make docker-shell-ros2 [WORKER=0]
 	docker exec -it uncertainty-rl-ros2-$(WORKER) /bin/bash
 
-docker-shell-ros2-inspect: ## Interactive shell in ROS 2 inspect container (use while docker-inspect-dryrun is running)
+docker-shell-ros2-inspect: ## Interactive shell in ROS 2 inspect container 
 	$(DOCKER_COMPOSE_INSPECT) exec ros2-bridge-inspect /bin/bash
 
 docker-logs: ## Follow logs from training stack containers (training, tensorboard)
@@ -304,10 +302,10 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. Usage: make docker-i
 # ======================================================================
 
 # ----------------------------------------------------------------------
-# Layout Generation (no CARLA needed)
+# Layout Generation
 # ----------------------------------------------------------------------
 
-generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA needed). Usage: make generate-layouts [LAYOUT=trapezoid]
+generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make generate-layouts [LAYOUT=trapezoid]
 	$(call ensure-venv)
 	mkdir -p configs/layouts outputs/layouts
 	$(PYTHON) scripts/layouts/generate_layouts.py \
@@ -384,7 +382,7 @@ sanity: ## Quick import check
 	$(call ensure-venv)
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
 
-verify: lint typecheck sanity ## Run all local checks (lint + typecheck + sanity). Does not require torch/gymnasium/sb3.
+verify: lint typecheck sanity ## Run all local checks (lint + typecheck + sanity).
 
 # ----------------------------------------------------------------------
 # Cleanup
