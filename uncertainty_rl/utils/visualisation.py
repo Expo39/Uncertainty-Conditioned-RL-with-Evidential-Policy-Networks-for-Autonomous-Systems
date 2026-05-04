@@ -36,6 +36,10 @@ class VisStateWriter:
         @param output_path: Destination path for vis_state.json.
         """
         self._output_path = output_path
+        self._tmp_path = output_path.with_suffix(".tmp")
+        self._output_path_str = str(output_path)
+        self._tmp_path_str = str(self._tmp_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
     def write(
         self,
@@ -72,10 +76,8 @@ class VisStateWriter:
 
         try:
             json_str = json.dumps(state)
-            self._output_path.parent.mkdir(parents=True, exist_ok=True)
-            tmp_path = self._output_path.with_suffix(".tmp")
-            tmp_path.write_text(json_str)
-            os.replace(str(tmp_path), str(self._output_path))
+            self._tmp_path.write_text(json_str)
+            os.replace(self._tmp_path_str, self._output_path_str)
         except Exception as exc:
             logger.debug(f"VisStateWriter: could not write state: {exc}")
 
