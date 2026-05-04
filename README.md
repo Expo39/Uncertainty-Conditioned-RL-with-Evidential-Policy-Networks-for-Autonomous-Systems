@@ -145,13 +145,13 @@ Run `make help` for the full list.
 ```
 uncertainty_rl/                      # Main Python package
 |-- networks/evidential_policy.py    # Evidential layers, NIG distributions
-|-- envs/carla_parking.py            # CARLA Gymnasium environment (20D state, 3D action)
+|-- envs/sim/carla_parking.py        # CARLA Gymnasium environment (12D state, 2D action)
 |-- training/
 |   |-- train_ppo.py                 # PPO training with SB3
 |   +-- Dockerfile                   # Training container (NGC PyTorch + SB3)
 |-- evaluation/evaluate.py           # Noise sweep, metrics, plots
 |-- ros2/
-|   |-- covariance_extractor.py      # Bridge to robot_localization EKF
+|   |-- uncertainty_rl_ros2/covariance_extractor.py  # Bridge to robot_localization EKF
 |   +-- Dockerfile                   # ROS 2 bridge container (Jazzy + robot_localisation)
 +-- utils/
     |-- logging.py                   # MetricsLogger, UncertaintyTracker
@@ -165,7 +165,7 @@ tests/                               # pytest suite mirroring uncertainty_rl/ st
 Lot geometry (bay positions, perimeter corners, spawn transforms) is pre-computed offline
 and stored in `configs/layouts/`. To regenerate or modify layouts:
 
-### Step 1 -- Generate from shape dimensions (no CARLA needed)
+### Step 1 - Generate from shape dimensions (no CARLA needed)
 
 ```bash
 make generate-layouts
@@ -174,7 +174,7 @@ make generate-layouts
 Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and `outputs/layouts/*.png`.
 Inspect the PNGs to confirm bay placement and aisle clearances.
 
-### Step 2 -- Verify layout in windowed CARLA
+### Step 2 - Verify layout in windowed CARLA
 
 ```bash
 make docker-inspect INSPECT_LAYOUT=trapezoid
@@ -193,7 +193,7 @@ discovery step needed.
 Training always runs headless. Attach the visualiser at any time from the host:
 
 ```bash
-make visualise           # live window -- close to detach, training unaffected
+make visualise           # live window - close to detach, training unaffected
 make visualise-record    # live window + saves MP4 on close
 #   outputs/recordings/YYYY-MM-DD_HH-MM-SS.mp4
 ```
@@ -223,7 +223,7 @@ All hyperparameters live in `configs/` YAML files - never hardcoded in source.
 
 | File | Key Parameters |
 |------|---------------|
-| `carla/env_config.yaml` | `carla_host`, `carla_port`, `town`, `max_steps`, `carla_sensors.*`, `parking_scenarios.*`, `gnss_noise_profiles`, `include_covariance`, `include_obstacle_obs` |
+| `deployment/sim/env_config.yaml` | `carla_host`, `carla_port`, `town`, `max_steps`, `carla_sensors.*`, `parking_scenarios.*`, `gnss_noise_profiles`, `include_covariance`, `include_obstacle_obs` |
 | `train_config.yaml` | `learning_rate` (0.0003), `batch_size` (256), `n_steps` (2048), `net_arch` ([256, 256]), `evidential.lambda_reg` (0.01), `policy_type` |
 | `eval_config.yaml` | `eval_conditions` (10 conditions), `n_episodes` (100), `success_criteria` thresholds |
 | `ros2_config.yaml` | `carla_topics.*`, `ekf.*`, `odom_topic`, `covariance_topic` |
