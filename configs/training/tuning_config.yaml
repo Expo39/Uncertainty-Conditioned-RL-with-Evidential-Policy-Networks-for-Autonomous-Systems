@@ -1,123 +1,30 @@
 # Hyperparameter Tuning Configuration
 # Optuna study settings and search space bounds for PPO + evidential policy networks.
-# Consumed by uncertainty_rl.training.tune_hyperparams.run_study().
-#
-# Search space design references:
-#   [1] Andrychowicz et al. 2021, "What Matters In On-Policy RL?" (ICLR 2021)
-#       - clip_range 0.2 robust default, max_grad_norm minimal impact, gamma top-2
-#   [2] Eimer et al. 2023, "Hyperparameters in RL and How To Tune Them" (ICML 2023)
-#       - 64 TPE trials sufficient for 11-param PPO on Brax continuous control
-#   [3] Watanabe 2023, "Tree-Structured Parzen Estimator: Understanding Its
-#       Algorithm Components" (arXiv:2304.11127)
-#       - multivariate=True captures parameter interactions; n_startup_trials=10
-#   [4] Raffin 2022, "Automatic Hyperparameter Tuning In Practice (Part 2)"
-#       (arXiv.github.io blog + ICRA tutorial)
-#       - gamma sampled via 1-(1-gamma) log trick; n_startup_trials=5 minimum
-#   [5] RL-Zoo3 hyperparams_opt.py (DLR-RM/rl-baselines3-zoo, sample_ppo_params)
-#       - Reference search space for PPO continuous control
-
-# ---------------------------------------------------------------------------
-# Optuna Study Settings
-# ---------------------------------------------------------------------------
+# See documentation/detailed_notes/hyperparameter_search.md for search space rationale.
 
 study_name: "uncertainty_rl_tuning"
-
-# SQLite storage for trial persistence and resume capability
-storage_path: "logs/tuning/optuna_study.db"
-
-# 35 trials for 8-parameter space [2]: Eimer et al. found 64 trials sufficient
-# for 11 params. Reducing to 8 params (Section 4 below) makes 35 trials a
-# well-covered budget with TPE + multivariate kernel.
-n_trials: 35
-
-# 100k steps: enough for ~49 PPO updates (n_steps=2048) to rank configs [4].
-# Full convergence is not needed -- pruner kills bad trials at ~25-30%.
-timesteps_per_trial: 100000
-
-# Random seed for reproducibility
+storage_path: "logs/tuning/optuna_study.db"  # SQLite for trial persistence and resume.
+n_trials: 35  # Budget for 8-parameter space. See detailed_notes/hyperparameter_search.md.
+timesteps_per_trial: 100000  # ~49 PPO updates; enough to rank configs without full convergence.
 seed: 42
 
-# ---------------------------------------------------------------------------
-# Sampler Settings
-# ---------------------------------------------------------------------------
-# TPESampler with multivariate=True [3]: captures parameter interactions
-# (e.g. learning_rate vs batch_size). n_startup_trials=10 gives pure random
-# exploration before TPE builds its density model.
 sampler:
-  multivariate: true
-  n_startup_trials: 10
+  multivariate: true  # Captures parameter interactions (e.g. learning_rate vs batch_size).
+  n_startup_trials: 10  # Random exploration before TPE builds its density model.
 
-# ---------------------------------------------------------------------------
-# Pruner Settings
-# ---------------------------------------------------------------------------
-# MedianPruner over HyperbandPruner: Hyperband creates multiple brackets
-# requiring ~10 startup trials per bracket, which exhausts most of our
-# 35-trial budget on random search. MedianPruner keeps all trials in a
-# single pool so TPE sees all observations [4].
 pruner:
-  n_startup_trials: 8     # First 8 trials run to completion (reliable baseline)
-  n_warmup_steps: 5       # ~10k steps before pruning (5 rollouts x 2048 steps)
-  n_min_trials: 5         # Require 5 completed trials before pruning any
+  n_startup_trials: 8  # First 8 trials run to completion.
+  n_warmup_steps: 5  # ~10k steps before pruning begins.
+  n_min_trials: 5  # Require 5 completed trials before pruning any.
 
-# ---------------------------------------------------------------------------
-# Objective Metric
-# ---------------------------------------------------------------------------
-
-# Primary metric: env/mean_progress_reward
-# Non-zero even when agent rarely succeeds, giving TPESampler useful signal
-# from trial 1. env/success_rate is logged separately as secondary metric.
-eval_metric: "env/mean_progress_reward"
-
-# ---------------------------------------------------------------------------
-# Search Space Bounds (8 active parameters)
-# ---------------------------------------------------------------------------
-# Parameters TUNED: those identified as high-importance by [1] and [2].
-# Parameters FIXED: clip_range (0.2), max_grad_norm (0.5), target_kl (0.02),
-#   net_arch ([256,256]) -- low importance per [1], not worth a search dimension.
-#   These remain at their defaults in train_config.yaml.
+eval_metric: "env/mean_progress_reward"  # Non-zero even when agent rarely succeeds.
 
 search_space:
-
-  # Learning rate: consistently top-2 most important [1][2][4].
-  # Default: 3e-4. Narrowed upper bound from 2e-3 to 1e-3 (SB3 default 3e-4
-  # is near the middle on log scale).
-  learning_rate: [1e-5, 1e-3]
-
-  # n_steps: number of environment steps before policy update
-  # Options: 1024, 2048 (default), 4096
-  n_steps: [1024, 2048, 4096]
-
-  # batch_size: gradient step batch size. Constraint: batch_size <= n_steps.
-  # Removed 512 (only valid when n_steps >= 512; wastes one interaction) [5].
-  batch_size: [64, 128, 256]
-
-  # n_epochs: gradient steps per rollout [1]
-  # Options: 3, 5 (default), 10
-  n_epochs: [3, 5, 10]
-
-  # Discount factor: top-2 most important [1]. Sampled via 1-(1-gamma) on log
-  # scale for precision near 1.0 [4]. Narrowed lower bound from 0.97 to 0.98
-  # -- episodes are 500 steps, gamma < 0.98 causes credit assignment failure.
-  gamma: [0.98, 0.999]
-
-  # Entropy coefficient: encourages exploration in Gaussian policy [1][2].
-  # Default: 0.005. Search: [1e-6, 0.01].
-  ent_coef: [1e-6, 0.01]
-
-  # Evidential regularisation coefficient -- novel to this architecture, must
-  # be tuned. Always enabled (lambda_reg > 0); disabling it entirely defeats
-  # the evidential contribution.
-  # Default: 0.001. Search: [1e-5, 0.01] (log scale).
-  lambda_reg: [1e-5, 0.01]
-
-  # Warmup steps for evidential lambda_reg annealing. Interacts with lambda_reg.
-  # Default: 50000. Search: [10000, 100000] (log scale).
-  lambda_reg_warmup_steps: [10000, 100000]
-
-  # -----------------------------------------------------------------------
-  # FIXED parameters (removed from search space)
-  # -----------------------------------------------------------------------
-  # clip_range: 0.2        [1]: "0.2-0.3 perform reasonably well in all environments"
-  # max_grad_norm: 0.5     [1]: "gradient clipping offers minor benefits"
-  # target_kl: 0.02        Safety valve, not a performance parameter
-  # net_arch: [256, 256]   Sufficient capacity for 20-dim input with evidential head
+  learning_rate: [1e-5, 1e-3]  # Log scale.
+  n_steps: [1024, 2048, 4096]  # Categorical.
+  batch_size: [64, 128, 256]  # Categorical; constrained <= n_steps in code.
+  n_epochs: [3, 5, 10]  # Categorical.
+  gamma: [0.98, 0.999]  # Sampled via 1-(1-gamma) log scale.
+  ent_coef: [1e-6, 0.01]  # Log scale.
+  lambda_reg: [1e-5, 0.01]  # Log scale.
+  lambda_reg_warmup_steps: [10000, 100000]  # Log scale.

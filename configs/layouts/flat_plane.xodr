@@ -1,22 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   @file flat_plane.xodr
-  @brief Minimal OpenDRIVE map: a single flat ground plane covering all three
-         parking lot floor plans with no roads, buildings, or traffic infrastructure.
-         Used by CARLAParkingEnv via generate_opendrive_world().
-
-  World-frame footprint of all lots combined:
-    x: -220 to +250  (rectangle at x=-200..-165, trapezoid at x=0..44, irregular_a at x=~200+)
-    y: -100 to +50
-
-  Road geometry: road centre line runs east at y=+25 for 480 m starting at x=-230.
-  The single right lane (id=-1) has width 130 m, which extends from y=+25 down to
-  y=-105, covering all lot y-coordinates.
-
-  Reduced from 900x400 m to 480x130 m to keep the CARLA nav mesh tile count low
-  (was 144 tiles -> OOM segfault during saving; now ~18 tiles -> stable).
-
-  Loaded via client.generate_opendrive_world() not client.load_world().
+  @brief Minimal OpenDRIVE map: a single flat ground plane with no roads, 
+         buildings, or traffic infrastructure.
 -->
 <OpenDRIVE>
   <header revMajor="1" revMinor="4" name="FlatPlane" version="1.0"

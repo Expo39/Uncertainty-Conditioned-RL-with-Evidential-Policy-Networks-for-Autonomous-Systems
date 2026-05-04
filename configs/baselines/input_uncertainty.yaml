@@ -1,16 +1,8 @@
 # Baseline: Input Uncertainty Only
-# 21-dim obs: EKF pose (6) + covariance (9) + relative target (3) + obstacle features (3).
+# 12-dim obs: EKF yaw rate (1) + covariance stds (3) + relative target pose (3) + obstacle clearance (5).
 # The agent sees localisation uncertainty but uses a standard Gaussian policy.
-#
-# Ablation dimensions:
-#   include_covariance: true   (covariance dims present)
-#   include_obstacle_obs: true (obstacle dims present -- not the experimental variable)
-#   policy_type: standard      (SB3 MlpPolicy + PPO)
-#
-# All other parameters inherited from configs/train_config.yaml.
 
 baseline_name: "input_uncertainty"
-baseline_description: "21-dim obs (pose + covariance + target + obstacles), standard actor"
 
 include_covariance: true
 include_obstacle_obs: true
