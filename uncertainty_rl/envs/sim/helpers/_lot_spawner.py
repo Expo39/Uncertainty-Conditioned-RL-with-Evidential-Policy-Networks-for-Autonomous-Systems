@@ -7,10 +7,14 @@ cones, and parked vehicles. CARLAParkingEnv holds a LotSpawner instance and
 delegates static spawning and cleanup to it.
 """
 
+import itertools
 import logging
 import math
 import random
+import re
 from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
 
 try:
     import carla
@@ -51,7 +55,6 @@ _LARGE_VEHICLE_TYPES: Tuple[str, ...] = (
 )
 
 # Emergency / special-purpose vehicles excluded from both parked and patrol pools.
-# Police cars and taxis are visually implausible in a civilian parking lot scenario.
 _EXCLUDED_VEHICLE_TYPES: Tuple[str, ...] = (
     "police",
     "taxi",
@@ -76,6 +79,15 @@ _SMALL_VEHICLE_TYPES: Tuple[str, ...] = (
     "zx125",
     "bike",
     "bicycle",
+)
+
+# Single compiled regex - one pass and one .search() call per blueprint
+_EXCLUDED_BP_RE: re.Pattern = re.compile(
+    "|".join(
+        re.escape(s)
+        for s in _LARGE_VEHICLE_TYPES + _SMALL_VEHICLE_TYPES + _EXCLUDED_VEHICLE_TYPES
+    ),
+    re.IGNORECASE,
 )
 
 
@@ -135,15 +147,15 @@ class LotSpawner:
         self.spawned_static_vehicles: List[Any] = []
 
         # Cones are layout-specific and fixed for the lifetime of a floor plan.
-        # Caching avoids destroying and re-spawning ~60-80 actors every episode reset.
         self._cached_cones_layout: str = ""
 
         # Cached blueprint lists - populated once on first connect, never re-fetched.
         self._car_blueprints: List[Any] = []
         self._cone_bp: Optional[Any] = None
-        # Dedicated motorcycle blueprints for fixed bays (Kawasaki Ninja, Yamaha YZF).
         self._ninja_bp: Optional[Any] = None
         self._yzf_bp: Optional[Any] = None
+        # Prebuilt occupant map - populated in refresh_blueprints().
+        self._occupant_bp: Dict[str, Optional[Any]] = {}
 
     # ------------------------------------------------------------------
     # Per-reset setup
@@ -154,18 +166,13 @@ class LotSpawner:
         @brief Fetch and filter blueprint lists from the CARLA world.
 
         Populates self._car_blueprints with four-wheeled vehicles excluding
-        large, small/novelty, and special-purpose types. Also caches dedicated
-        motorcycle blueprints for fixed bays. Blueprints are static for the
-        lifetime of the CARLA server, so the fetch is skipped on subsequent
-        calls if already populated.
+        large, small/novelty, and special-purpose types.
+        Blueprints are static for the lifetime of the CARLA server, so the
+        fetch is skipped on subsequent calls if already populated.
 
         @param world: Live carla.World handle.
         """
-        if world is None:
-            return
-
-        # Blueprints do not change between episodes - only fetch once.
-        if self._car_blueprints:
+        if world is None or self._car_blueprints:
             return
 
         bp_lib = world.get_blueprint_library()
@@ -174,14 +181,16 @@ class LotSpawner:
             bp
             for bp in vehicle_bps
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
-            and not any(excl in bp.id.lower() for excl in _LARGE_VEHICLE_TYPES)
-            and not any(excl in bp.id.lower() for excl in _SMALL_VEHICLE_TYPES)
-            and not any(excl in bp.id.lower() for excl in _EXCLUDED_VEHICLE_TYPES)
+            and not _EXCLUDED_BP_RE.search(bp.id)
         ]
 
         self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
         self._yzf_bp = bp_lib.find("vehicle.yamaha.yzf")
         self._cone_bp = bp_lib.find(self._marker_blueprint)
+        self._occupant_bp = {
+            self._MOTORCYCLE_OCCUPANTS[0]: self._ninja_bp,
+            self._MOTORCYCLE_OCCUPANTS[1]: self._yzf_bp,
+        }
 
     # ------------------------------------------------------------------
     # Spawning
@@ -198,18 +207,11 @@ class LotSpawner:
         """
         @brief Spawn all static actors for one episode.
 
-        Perimeter and obstacle cones are cached across episodes for the same
-        floor plan - they are layout-fixed and do not need to be destroyed and
-        re-spawned every reset. Only parked vehicles are re-randomised each
-        episode.
-
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict.
         @param target_bay: Dict with at least 'bay_id' key for the target bay.
         @param floor_contact_z: Ego vehicle CoM z after settling under gravity.
-               Used as the drop height reference for cones and vehicles.
         @param layout_name: Floor plan name for cone cache invalidation.
-               Pass the same value as self._current_floor_plan_name in the env.
         """
         if world is None:
             return
@@ -218,7 +220,6 @@ class LotSpawner:
             self._bay_occupancy_min, self._bay_occupancy_max
         )
 
-        # Cones (layout-fixed, cached across episodes)
         cones_already_spawned = (
             layout_name
             and layout_name == self._cached_cones_layout
@@ -232,35 +233,17 @@ class LotSpawner:
                 layout_name,
             )
         else:
-            # Destroy any stale cones from a previous layout then re-spawn.
             for cone in self.spawned_cones:
                 if cone is not None and cone.is_alive:
                     cone.destroy()
             self.spawned_cones.clear()
 
-            cone_pending: List[Tuple[Any, float, float, float]] = []
-            cone_pending.extend(
-                self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
-            )
-            cone_pending.extend(
-                self._spawn_obstacle_cones(world, current_layout, floor_contact_z)
-            )
-
+            cone_pending = list(itertools.chain(
+                self._spawn_perimeter_cones(world, current_layout, floor_contact_z),
+                self._spawn_obstacle_cones(world, current_layout, floor_contact_z),
+            ))
             self._settle_pending(world, cone_pending)
-
-            for actor, ax, ay, actor_yaw in cone_pending:
-                if not actor.is_alive:
-                    continue
-                actor.set_simulate_physics(False)
-                settled_z = actor.get_transform().location.z
-                actor.set_transform(
-                    carla.Transform(
-                        carla.Location(x=ax, y=ay, z=settled_z),
-                        carla.Rotation(yaw=actor_yaw),
-                    )
-                )
-                self.spawned_cones.append(actor)
-
+            self._freeze_pending(cone_pending, self.spawned_cones)
             self._cached_cones_layout = layout_name
             logger.debug(
                 "Spawned and cached %d cone actors for layout '%s'.",
@@ -268,26 +251,11 @@ class LotSpawner:
                 layout_name,
             )
 
-        # Parked vehicles (re-randomised every episode)
         vehicle_pending = self._spawn_static_vehicles(
             world, current_layout, target_bay, floor_contact_z
         )
-
-        # On FlatPlane the drop height is <0.1 m; vehicles settle in 2-4 ticks.
         self._settle_pending(world, vehicle_pending)
-
-        for actor, ax, ay, actor_yaw in vehicle_pending:
-            if not actor.is_alive:
-                continue
-            actor.set_simulate_physics(False)
-            settled_z = actor.get_transform().location.z
-            actor.set_transform(
-                carla.Transform(
-                    carla.Location(x=ax, y=ay, z=settled_z),
-                    carla.Rotation(yaw=actor_yaw),
-                )
-            )
-            self.spawned_static_vehicles.append(actor)
+        self._freeze_pending(vehicle_pending, self.spawned_static_vehicles)
 
     # ------------------------------------------------------------------
     # Cleanup
@@ -311,17 +279,46 @@ class LotSpawner:
 
         Call from CARLAParkingEnv.close() to fully clean up on shutdown.
         """
-        for actor_list in [self.spawned_cones, self.spawned_static_vehicles]:
-            for actor in actor_list:
-                if actor is not None and actor.is_alive:
-                    actor.destroy()
-            actor_list.clear()
-
+        for actor in self.spawned_cones:
+            if actor is not None and actor.is_alive:
+                actor.destroy()
+        self.spawned_cones.clear()
+        for actor in self.spawned_static_vehicles:
+            if actor is not None and actor.is_alive:
+                actor.destroy()
+        self.spawned_static_vehicles.clear()
         self._cached_cones_layout = ""
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _freeze_pending(
+        self,
+        pending: List[Tuple[Any, float, float, float]],
+        target_list: List[Any],
+    ) -> None:
+        """
+        @brief Freeze settled actors and append them to target_list.
+
+        Shared post-settle step for both cones and vehicles. Disables physics,
+        reads the settled z, then pin-transforms the actor in place.
+
+        @param pending: List of (actor, x, y, yaw) from a spawn helper.
+        @param target_list: Destination list (spawned_cones or spawned_static_vehicles).
+        """
+        for actor, ax, ay, actor_yaw in pending:
+            if not actor.is_alive:
+                continue
+            actor.set_simulate_physics(False)
+            settled_z = actor.get_transform().location.z
+            actor.set_transform(
+                carla.Transform(
+                    carla.Location(x=ax, y=ay, z=settled_z),
+                    carla.Rotation(yaw=actor_yaw),
+                )
+            )
+            target_list.append(actor)
 
     def _settle_pending(
         self,
@@ -330,21 +327,17 @@ class LotSpawner:
     ) -> None:
         """
         @brief Tick the world until all pending actors have settled under gravity.
-
-        Actors in ``pending`` must have physics enabled. Ticks up to
-        ``_SETTLE_TICKS`` times (1 s at 20 Hz), stopping early once every
-        alive actor's vertical velocity drops below ``_SETTLE_VZ_THRESHOLD``.
-
+        
         @param world: Live carla.World handle.
         @param pending: List of (actor, x, y, yaw) tuples awaiting settlement.
         """
+        actors = [a for a, _, _, _ in pending]
         for _ in range(self._SETTLE_TICKS):
             world.tick()
-            if all(
-                abs(a.get_velocity().z) < self._SETTLE_VZ_THRESHOLD
-                for a, _, _, _ in pending
-                if a.is_alive
-            ):
+            for a in actors:
+                if a.is_alive and abs(a.get_velocity().z) >= self._SETTLE_VZ_THRESHOLD:
+                    break
+            else:
                 break
 
     def _spawn_perimeter_cones(
@@ -352,10 +345,6 @@ class LotSpawner:
     ) -> List[Tuple[Any, float, float, float]]:
         """
         @brief Spawn static markers along the lot perimeter polygon with physics ON.
-
-        Returns pending (actor, x, y, yaw) tuples for the shared settle loop in
-        spawn_all(). Physics is left ON so gravity drops each cone to the true
-        ground surface; the caller freezes them after settling.
 
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict with 'corners' key.
@@ -372,8 +361,6 @@ class LotSpawner:
         ]
         cone_positions = _interpolate_cone_positions(corners, self._cone_spacing)
 
-        # Spawn slightly above the ego CoM z so the cone clears the surface
-        # before physics drops it flush to the ground.
         z = floor_contact_z + self._CONE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
@@ -398,9 +385,6 @@ class LotSpawner:
         """
         @brief Spawn static markers around interior obstacle rectangles with physics ON.
 
-        Returns pending (actor, x, y, yaw) tuples for the shared settle loop in
-        spawn_all().
-
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict with 'obstacles' key.
         @param floor_contact_z: Ego CoM z - used as the spawn height reference.
@@ -411,6 +395,7 @@ class LotSpawner:
             return []
 
         z = floor_contact_z + self._CONE_Z_OFFSET
+        spacing = self._cone_spacing
         pending: List[Tuple[Any, float, float, float]] = []
 
         for obs in obstacles:
@@ -419,32 +404,38 @@ class LotSpawner:
             hw = float(obs["half_width"])
             hh = float(obs["half_height"])
 
-            # Top/bottom edges: step along X; left/right edges: step along Y.
-            # Corners are covered by the horizontal pass so the vertical pass
-            # starts one spacing in from each corner to avoid overlaps.
-            cone_positions: List[Tuple[float, float, float]] = []
-            for ey in (cy - hh, cy + hh):
-                t = -hw
-                while t <= hw + 1e-6:
-                    cone_positions.append((cx + t, ey, 0.0))
-                    t += self._cone_spacing
-            for ex in (cx - hw, cx + hw):
-                t = -hh + self._cone_spacing
-                while t < hh - 1e-6:
-                    cone_positions.append((ex, cy + t, 90.0))
-                    t += self._cone_spacing
+            # Top/bottom edges step along X; left/right edges step along Y.
+            # Corners are covered by the horizontal pass; vertical pass starts
+            # one spacing in from each corner to avoid overlaps.
+            h_steps = np.arange(-hw, hw + 1e-6, spacing)
+            v_steps = np.arange(-hh + spacing, hh - 1e-6, spacing)
+            n_h = len(h_steps)
+            n_v = len(v_steps)
 
-            for px, py, yaw_deg in cone_positions:
+            xs = np.concatenate([
+                cx + h_steps, cx + h_steps,
+                np.full(n_v, cx - hw), np.full(n_v, cx + hw),
+            ])
+            ys = np.concatenate([
+                np.full(n_h, cy - hh), np.full(n_h, cy + hh),
+                cy + v_steps, cy + v_steps,
+            ])
+            yaws = np.concatenate([
+                np.zeros(2 * n_h),
+                np.full(2 * n_v, 90.0),
+            ])
+
+            for px, py, yaw_deg in zip(xs, ys, yaws):
                 cone = world.try_spawn_actor(
                     self._cone_bp,
                     carla.Transform(
-                        carla.Location(x=px, y=py, z=z),
-                        carla.Rotation(yaw=yaw_deg),
+                        carla.Location(x=float(px), y=float(py), z=z),
+                        carla.Rotation(yaw=float(yaw_deg)),
                     ),
                 )
                 if cone is not None:
                     cone.set_simulate_physics(True)
-                    pending.append((cone, px, py, yaw_deg))
+                    pending.append((cone, float(px), float(py), float(yaw_deg)))
 
         logger.debug(
             "Spawned obstacle cones for %d interior obstacle(s) (settling).",
@@ -462,12 +453,6 @@ class LotSpawner:
         """
         @brief Spawn static parked vehicles with physics ON and return pending list.
 
-        The settle loop and freeze step are handled by spawn_all() so all static
-        actors (cones + vehicles) settle in one shared tick loop.
-
-        Target bay and its immediate neighbours are always left empty to give
-        the agent clearance to manoeuvre in.
-
         @param world: Live carla.World handle.
         @param current_layout: Parsed floor plan YAML dict with 'bays' key.
         @param target_bay: Dict with 'bay_id' key for the selected target bay.
@@ -483,61 +468,44 @@ class LotSpawner:
         bays = current_layout.get("bays", [])
         target_id = target_bay.get("bay_id", "")
         excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
-
         z_spawn = floor_contact_z + self._VEHICLE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
         for bay in bays:
-            # Layout YAMLs may use 'bay_id' or the shorter 'id' key.
-            if bay.get("bay_id", bay.get("id", "")) in excluded_ids:
-                continue
-            if bay.get("always_empty", False):
-                continue
-            if random.random() > self._bay_occupancy_rate:
-                continue
-
-            bp = random.choice(self._car_blueprints)
-            if bp.has_attribute("color"):
-                color = random.choice(bp.get_attribute("color").recommended_values)
-                bp.set_attribute("color", color)
-
+            bay_type = bay.get("bay_type", "")
             bay_x = float(bay["x"])
             bay_y = float(bay["y"])
-            # YAML stores heading as 'yaw_deg' (degrees) or 'yaw' (radians).
-            yaw = _bay_yaw_deg(bay)
-            if random.random() < 0.5:
-                yaw = (yaw + 180.0) % 360.0
 
-            transform = carla.Transform(
-                carla.Location(x=bay_x, y=bay_y, z=z_spawn),
-                carla.Rotation(yaw=yaw),
-            )
-            actor = world.try_spawn_actor(bp, transform)
-            if actor is not None:
-                actor.set_simulate_physics(True)
-                pending.append((actor, bay_x, bay_y, yaw))
+            if bay_type == "motorcycle":
+                # Fixed occupant - skip exclusion / occupancy / colour randomisation.
+                bp = self._occupant_bp.get(bay.get("occupant", ""))
+                if bp is None:
+                    continue
+                yaw = _bay_yaw_deg(bay)
+            else:
+                if bay.get("bay_id", bay.get("id", "")) in excluded_ids:
+                    continue
+                if bay.get("always_empty", False):
+                    continue
+                if random.random() > self._bay_occupancy_rate:
+                    continue
+                bp = random.choice(self._car_blueprints)
+                if bp.has_attribute("color"):
+                    bp.set_attribute(
+                        "color",
+                        random.choice(bp.get_attribute("color").recommended_values),
+                    )
+                yaw = _bay_yaw_deg(bay)
+                if random.random() < 0.5:
+                    yaw = (yaw + 180.0) % 360.0
 
-        # Motorcycle bays have a fixed occupant (Kawasaki Ninja or Yamaha YZF)
-        # identified by the 'occupant' field in the layout YAML.
-        _occupant_bp: Dict[str, Optional[Any]] = {
-            self._MOTORCYCLE_OCCUPANTS[0]: self._ninja_bp,
-            self._MOTORCYCLE_OCCUPANTS[1]: self._yzf_bp,
-        }
-        for bay in bays:
-            if bay.get("bay_type") != "motorcycle":
-                continue
-            occupant = bay.get("occupant", "")
-            bp = _occupant_bp.get(occupant)
-            if bp is None:
-                continue
-            bay_x = float(bay["x"])
-            bay_y = float(bay["y"])
-            yaw = _bay_yaw_deg(bay)
-            transform = carla.Transform(
-                carla.Location(x=bay_x, y=bay_y, z=z_spawn),
-                carla.Rotation(yaw=yaw),
+            actor = world.try_spawn_actor(
+                bp,
+                carla.Transform(
+                    carla.Location(x=bay_x, y=bay_y, z=z_spawn),
+                    carla.Rotation(yaw=yaw),
+                ),
             )
-            actor = world.try_spawn_actor(bp, transform)
             if actor is not None:
                 actor.set_simulate_physics(True)
                 pending.append((actor, bay_x, bay_y, yaw))
@@ -549,9 +517,6 @@ class LotSpawner:
     def _adjacent_bay_ids(target_id: str) -> List[str]:
         """
         @brief Return IDs of the bays immediately left/right of target_id.
-
-        Bay IDs follow '<type>_<index>' (e.g. 'parallel_3'). Adjacent bays
-        are kept empty so the agent has clearance to manoeuvre into the target.
 
         @param target_id: Bay ID of the selected target.
         @return List of adjacent IDs (empty list for end bays or bad IDs).
