@@ -69,14 +69,6 @@ htmlcov/
 # TODO files
 TODO.md
 
-# Documentation (local dissertation notes, meeting agendas, references)
-documentation/
-meeting_agendas/
-references/
-ENVIRONMENT_DESIGN.md
-extras/
-Proposals/
-Progress_Report/
 
 # Project config archive (local portability)
 project_configs.tar.gz
