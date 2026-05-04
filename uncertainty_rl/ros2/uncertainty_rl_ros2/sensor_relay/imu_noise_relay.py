@@ -9,7 +9,7 @@ uncertainty growth between GNSS fixes.
 """
 
 import math
-from typing import Optional
+from typing import List, Optional
 
 import rclpy
 from rclpy.node import Node
@@ -92,6 +92,21 @@ class ImuNoiseRelayNode(Node):
         )
         self._pub = self.create_publisher(Imu, imu_output_topic, qos_be)
 
+        # Pre-built constant covariance lists.
+        self._orientation_cov: List[float] = [-1.0] + [0.0] * 8
+        v_gyro = self._imu_gyro_variance
+        self._angular_velocity_cov: List[float] = [
+            v_gyro, 0.0,    0.0,
+            0.0,    v_gyro, 0.0,
+            0.0,    0.0,    v_gyro,
+        ]
+        v_accel = self._imu_accel_variance
+        self._linear_acceleration_cov: List[float] = [
+            v_accel, 0.0,     0.0,
+            0.0,     v_accel, 0.0,
+            0.0,     0.0,     v_accel,
+        ]
+
         self.get_logger().info(
             f"ImuNoiseRelay: {imu_input_topic} -> {imu_output_topic} | "
             f"noise={'ON' if enable_imu_noise else 'DISABLED'} "
@@ -123,43 +138,28 @@ class ImuNoiseRelayNode(Node):
         out.orientation = msg.orientation
 
         # Gyro ZUPT: clamp angular_velocity.z to zero when below threshold.
-        out.angular_velocity.x = msg.angular_velocity.x
-        out.angular_velocity.y = msg.angular_velocity.y
         raw_vyaw = msg.angular_velocity.z
         gyro_zupt_active = abs(raw_vyaw) < self._zupt_threshold
-        out.angular_velocity.z = 0.0 if gyro_zupt_active else raw_vyaw
+        out.angular_velocity.x = msg.angular_velocity.x
+        out.angular_velocity.y = msg.angular_velocity.y
+        out.angular_velocity.z = raw_vyaw * (not gyro_zupt_active)
 
         # Accel ZUPT: when gyro ZUPT is active and both ax/ay are small,
         # clamp to zero so the EKF correction step pins vx/vy near zero.
         ax = msg.linear_acceleration.x
         ay = msg.linear_acceleration.y
-        if gyro_zupt_active and (
+        accel_zupt = gyro_zupt_active and (
             abs(ax) < self._accel_zupt_threshold
             and abs(ay) < self._accel_zupt_threshold
-        ):
-            ax = 0.0
-            ay = 0.0
-        out.linear_acceleration.x = ax
-        out.linear_acceleration.y = ay
+        )
+        out.linear_acceleration.x = 0.0 if accel_zupt else ax
+        out.linear_acceleration.y = 0.0 if accel_zupt else ay
         out.linear_acceleration.z = msg.linear_acceleration.z
 
-        out.orientation_covariance = [-1.0] + [0.0] * 8
-
-        # Diagonal angular_velocity_covariance: VN-100 gyro spec.
-        v_gyro = self._imu_gyro_variance
-        out.angular_velocity_covariance = [
-            v_gyro, 0.0,    0.0,
-            0.0,    v_gyro, 0.0,
-            0.0,    0.0,    v_gyro,
-        ]
-
-        # Diagonal linear_acceleration_covariance: VN-100 accel spec.
-        v_accel = self._imu_accel_variance
-        out.linear_acceleration_covariance = [
-            v_accel, 0.0,     0.0,
-            0.0,     v_accel, 0.0,
-            0.0,     0.0,     v_accel,
-        ]
+        # Assign pre-built constant covariance lists (rebuilt once at init).
+        out.orientation_covariance = self._orientation_cov
+        out.angular_velocity_covariance = self._angular_velocity_cov
+        out.linear_acceleration_covariance = self._linear_acceleration_cov
 
         self._pub.publish(out)
 
