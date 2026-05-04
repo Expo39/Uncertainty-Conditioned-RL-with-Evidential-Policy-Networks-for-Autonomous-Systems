@@ -1,37 +1,6 @@
 """
 @file irregular_a.py
 @brief Irregular nine-sided parking lot floor plan (OOD, ~80x50 m).
-
-Perimeter inspired by a shed-style building footprint:
-  - Left wall:  tall vertical side (x=0, y=0..50).
-  - Top wall:   diagonal slope from top-right P6(80,37) down-left to P7(20,50),
-                then flat from P7(20,50) to P8(0,50).
-  - Right wall: shorter vertical side (x=80, y=0..37).
-  - Bottom:     flat with a rectangular service notch cut in (x=53..65, y=0..8),
-                splitting the bottom wall into two segments.
-
-This combination of a sloped top wall, non-rectangular footprint, and bottom notch
-creates a spatial layout the agent never sees during training (rectangle and trapezoid
-are both convex and symmetric). Bay groups are placed in orientations absent from
-the training layouts:
-
-  - Obstacle cluster: back-to-back perpendicular rows on all four faces of the central
-    rectangular obstacle (x=23.25..39.25, y=17..21): 6 bays/row on top/bottom faces,
-    2 bays/row on left/right faces.
-  - Top-flat cluster: back-to-back perpendicular rows against the flat top wall
-    (P8..P7, x=0..20): 7 bays/row, facing each other across a 6 m aisle.
-  - Top-diagonal angled row: 11 bays along the diagonal top wall (P6->P7) at 45 deg.
-  - Left-wall angled group: 4 bays against the left wall (x=0), 45 deg.
-  - Notch cluster: 4 perpendicular bays against the notch top wall (y=8).
-  - Bottom parallel group: 5 bays along the bottom wall (x=0..53, y=0).
-  - Right-wall parallel group: 3 bays against the right wall (x=80).
-
-Three spawn transforms (3 m inside the perimeter along each heading):
-  - Primary   (S1): left wall entry (x=3, y=25), facing +X into lot.
-  - Secondary (S2): diagonal top wall at x=70, 3 m inward perpendicular to slope.
-  - Tertiary  (S3): bottom wall right section (x=70, y=3), facing +Y.
-
-Used as an OOD evaluation layout (OOD=True).
 """
 
 import math
@@ -39,327 +8,149 @@ from typing import Any, Dict
 
 from scripts.layouts.builder import LotBuilder, PatrolPath, PedestrianZone
 
-# World-frame origin chosen so the primary spawn lands at CARLA (0,0).
 ORIGIN_X = -3.0
 ORIGIN_Y = 25.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = True
 
+# Perimeter corners (CCW polygon order).
+P0 = (0.0, 0.0)    # bottom-left
+P1 = (53.0, 0.0)   # notch bottom-left
+P2 = (53.0, 8.0)   # notch top-left
+P3 = (65.0, 8.0)   # notch top-right
+P4 = (65.0, 0.0)   # notch bottom-right
+P5 = (80.0, 0.0)   # bottom-right
+P6 = (80.0, 37.0)  # diagonal start (top-right)
+P7 = (20.0, 50.0)  # diagonal/flat junction
+P8 = (0.0, 50.0)   # top-left
+
+# Wall indices in CCW order.
+WALL_BOTTOM_LEFT = 0    # P0 -> P1 (left of notch)
+WALL_NOTCH_LEFT = 1     # P1 -> P2
+WALL_NOTCH_TOP = 2      # P2 -> P3
+WALL_NOTCH_RIGHT = 3    # P3 -> P4
+WALL_BOTTOM_RIGHT = 4   # P4 -> P5
+WALL_RIGHT = 5          # P5 -> P6
+WALL_TOP_DIAGONAL = 6   # P6 -> P7
+WALL_TOP_FLAT = 7       # P7 -> P8
+WALL_LEFT = 8           # P8 -> P0
+
+# Central obstacle (rectangular cone wall in lot interior).
+OBSTACLE = (23.25, 39.25, 17.0, 21.0)   # (x_min, x_max, y_min, y_max)
+TOP_FLAT_AISLE = 6.0     # Aisle between top-flat back-to-back perp rows.
+LEFT_ANG_BOTTOM_Y = 3.0  # Local y of the bottom-most left-wall angled bay.
+
 
 def generate() -> Dict[str, Any]:
     """
     @brief Build the irregular_a layout using the LotBuilder DSL.
-    @return Layout dict (corners, bays, spawn, extra_spawns, patrol_waypoints,
-            pedestrian_zones, obstacles).
     """
-    # Perimeter polygon (9 vertices, CCW).
-    p0 = (0.0, 0.0)
-    p1 = (53.0, 0.0)
-    p2 = (53.0, 8.0)
-    p3 = (65.0, 8.0)
-    p4 = (65.0, 0.0)
-    p5 = (80.0, 0.0)
-    p6 = (80.0, 37.0)
-    p7 = (20.0, 50.0)
-    p8 = (0.0, 50.0)
-
-    lot = LotBuilder(name="irregular_a", corners=[p0, p1, p2, p3, p4, p5, p6, p7, p8])
+    lot = LotBuilder(
+        name="irregular_a",
+        corners=[P0, P1, P2, P3, P4, P5, P6, P7, P8],
+    )
     dims_perp = lot.dims["perpendicular"]
     dims_ang = lot.dims["angled"]
-    dims_par = lot.dims["parallel"]
 
-    # ------------------------------------------------------------------
-    # Obstacle perpendicular bays: back-to-back rows on all four faces of the
-    # central obstacle rectangle (x=23.25..39.25, y=17..21).
-    # ------------------------------------------------------------------
-    OBSTACLE_X_MIN = 23.25
-    OBSTACLE_X_MAX = 39.25
-    OBSTACLE_Y_MIN = 17.0
-    OBSTACLE_Y_MAX = 21.0
-    PERP_OBS_TB = 6
-    PERP_OBS_LR = 2
+    # ---------- Bays around central obstacle ---------------------------
+    obs_south = lot.row_along_obstacle_face("perpendicular", n=6, obstacle=OBSTACLE, face="south")
+    obs_north = lot.row_along_obstacle_face("perpendicular", n=6, obstacle=OBSTACLE, face="north")
+    obs_west = lot.row_along_obstacle_face("perpendicular", n=2, obstacle=OBSTACLE, face="west")
+    obs_east = lot.row_along_obstacle_face("perpendicular", n=2, obstacle=OBSTACLE, face="east")
 
-    obs_row_c_cy = OBSTACLE_Y_MIN - lot.wall_gap - dims_perp["depth"] / 2.0
-    obs_row_d_cy = OBSTACLE_Y_MAX + lot.wall_gap + dims_perp["depth"] / 2.0
-    obs_tb_cx_start = (
-        (OBSTACLE_X_MIN + OBSTACLE_X_MAX) / 2.0
-        - (PERP_OBS_TB - 1) / 2.0 * dims_perp["width"]
-    )
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_OBS_TB,
-        anchor=(obs_tb_cx_start, obs_row_c_cy),
-        direction="east",
-        yaw_deg=90.0,
-    )
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_OBS_TB,
-        anchor=(obs_tb_cx_start, obs_row_d_cy),
-        direction="east",
-        yaw_deg=270.0,
+    # ---------- Left wall angled bays ----------------------------------
+    # The bottom-most bay should land at y=LEFT_ANG_BOTTOM_Y. Walking the
+    # left wall from P8 down to P0 (CCW order), placement starts at the
+    # natural corner clearance from P8. We pack from the END (closer to P0)
+    # so the first bay placed is the bottom one at LEFT_ANG_BOTTOM_Y.
+    lot.row_along_perimeter(
+        bay_type="angled", n=4, wall=WALL_LEFT, bay_angle_deg=45.0,
+        start_along=LEFT_ANG_BOTTOM_Y - lot.wall_y(WALL_BOTTOM_LEFT)
+        + _angled_default_clearance(lot) - lot.wall_gap,
+        pack_from="end",
     )
 
-    obs_row_e_cx = OBSTACLE_X_MIN - lot.wall_gap - dims_perp["depth"] / 2.0
-    obs_row_f_cx = OBSTACLE_X_MAX + lot.wall_gap + dims_perp["depth"] / 2.0
-    obs_lr_cy_start = (
-        (OBSTACLE_Y_MIN + OBSTACLE_Y_MAX) / 2.0
-        - (PERP_OBS_LR - 1) / 2.0 * dims_perp["width"]
-    )
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_OBS_LR,
-        anchor=(obs_row_e_cx, obs_lr_cy_start),
-        direction="north",
-        yaw_deg=0.0,
-    )
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_OBS_LR,
-        anchor=(obs_row_f_cx, obs_lr_cy_start),
-        direction="north",
-        yaw_deg=180.0,
+    # ---------- Diagonal top wall: 11 angled bays hugging P7 end -------
+    diag_wall_len = math.hypot(P7[0] - P6[0], P7[1] - P6[1])
+    ang_spacing = dims_ang["width"] / math.sin(math.radians(45.0))
+    end_clearance = _angled_default_clearance(lot)
+    diag_ang = lot.row_along_perimeter(
+        bay_type="angled", n=11, wall=WALL_TOP_DIAGONAL, bay_angle_deg=45.0,
+        start_along=diag_wall_len - end_clearance - 11 * ang_spacing,
     )
 
-    # ------------------------------------------------------------------
-    # Left-wall angled group: 4 bays against the left wall (x=0), 45 deg.
-    # Wall traversed downward (P8->P0) so the inward normal points +X.
-    # _left_wall_y0 chosen so the bottom bay lands close to y=3.
-    # ------------------------------------------------------------------
-    ANG_BAYS_LEFT = 4
-    _left_spacing = dims_ang["width"] / math.sin(math.radians(45.0))
-    _ang_diag_half = (dims_ang["depth"] + dims_ang["width"]) / 2.0
-    _left_end_margin = _ang_diag_half * math.cos(math.radians(45.0)) + 0.5 + lot.wall_gap
-    _left_wall_y0 = (
-        3.0 + (ANG_BAYS_LEFT - 1) * _left_spacing + 2.0 * _left_end_margin
+    # ---------- Top-flat back-to-back perp rows ------------------------
+    # Row 1 sits flush against the top-flat wall with backs to it; row 2
+    # mirrors row 1 across a 6 m aisle.
+    top_flat_back = lot.row_along_perimeter(
+        bay_type="perpendicular", n=7, wall=WALL_TOP_FLAT, centred=True,
     )
-    lot.row_along_wall(
-        bay_type="angled",
-        n=ANG_BAYS_LEFT,
-        wall_p0=(0.0, _left_wall_y0),
-        wall_p1=(0.0, 0.0),
-        bay_angle_deg=45.0,
-        side="ccw",
-        start_along=_left_end_margin,
-        pack_from="start",
+    top_flat_facing = lot.facing_row(top_flat_back, gap=TOP_FLAT_AISLE)
+
+    # ---------- Notch top wall: 4 perpendicular bays -------------------
+    notch_perp = lot.row_along_perimeter(
+        bay_type="perpendicular", n=4, wall=WALL_NOTCH_TOP, centred=True,
     )
 
-    # ------------------------------------------------------------------
-    # Top-diagonal angled row: 11 bays along P6(80,37)->P7(20,50).
-    # Group hugs the P7 (top-left) end; the spare gap falls at the P6 end.
-    # ------------------------------------------------------------------
-    ANG_BAYS_DIAGONAL = 11
-    top_wall_len = math.hypot(p7[0] - p6[0], p7[1] - p6[1])
-    _ang_spacing = dims_ang["width"] / math.sin(math.radians(45.0))
-    _ang_end_margin = _ang_diag_half * math.cos(math.radians(45.0)) + 0.5 + lot.wall_gap
-    ang_start_diag = top_wall_len - _ang_end_margin - ANG_BAYS_DIAGONAL * _ang_spacing
-    lot.row_along_wall(
-        bay_type="angled",
-        n=ANG_BAYS_DIAGONAL,
-        wall_p0=p6,
-        wall_p1=p7,
-        bay_angle_deg=45.0,
-        side="ccw",
-        start_along=ang_start_diag,
-        pack_from="start",
+    # ---------- Bottom + right parallel groups -------------------------
+    bottom_par = lot.row_along_perimeter(
+        bay_type="parallel", n=5, wall=WALL_BOTTOM_LEFT,
+        bay_angle_deg=90.0, centred=True,
+    )
+    right_par = lot.row_along_perimeter(
+        bay_type="parallel", n=3, wall=WALL_RIGHT,
+        bay_angle_deg=90.0, centred=True,
     )
 
-    # ------------------------------------------------------------------
-    # Right-wall parallel group: 3 bays against the right wall (x=80, y=0..37).
-    # Axis-aligned. yaw=90 (nose +Y), depth (8 m) along Y.
-    # ------------------------------------------------------------------
-    PAR_BAYS_RIGHT = 3
-    par_right_cx = 80.0 - lot.wall_gap - dims_par["width"] / 2.0
-    par_right_cy_start = 37.0 / 2.0 - (PAR_BAYS_RIGHT - 1) / 2.0 * dims_par["depth"]
-    lot.row(
-        bay_type="parallel",
-        n=PAR_BAYS_RIGHT,
-        anchor=(par_right_cx, par_right_cy_start),
-        direction="north",
-        yaw_deg=90.0,
-        spacing=dims_par["depth"],
-    )
-
-    # ------------------------------------------------------------------
-    # Bottom parallel group: 5 bays along x=0..53, y=0. yaw=0, depth along X.
-    # 5 bays span 40 m; centred in the 53 m wall -> left edge at x=6.5.
-    # ------------------------------------------------------------------
-    PAR_BAYS_BOTTOM = 5
-    par_cy = dims_par["width"] / 2.0 + lot.wall_gap
-    par_x_start = (
-        (53.0 - PAR_BAYS_BOTTOM * dims_par["depth"]) / 2.0 + dims_par["depth"] / 2.0
-    )
-    lot.row(
-        bay_type="parallel",
-        n=PAR_BAYS_BOTTOM,
-        anchor=(par_x_start, par_cy),
-        direction="east",
-        yaw_deg=0.0,
-        spacing=dims_par["depth"],
-    )
-
-    # ------------------------------------------------------------------
-    # Top-flat cluster: back-to-back perpendicular rows against the flat top
-    # wall (P8..P7, x=0..20). 7 bays/row, facing each other across a 6 m aisle.
-    # ------------------------------------------------------------------
-    PERP_TOP_FLAT = 7
-    top_flat_perp_cy = 50.0 - lot.wall_gap - dims_perp["depth"] / 2.0
-    top_flat_perp_cx_start = (
-        (0.0 + 20.0) / 2.0 - (PERP_TOP_FLAT - 1) / 2.0 * dims_perp["width"]
-    )
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_TOP_FLAT,
-        anchor=(top_flat_perp_cx_start, top_flat_perp_cy),
-        direction="east",
-        yaw_deg=270.0,
-    )
-    top_flat_perp2_cy = top_flat_perp_cy - (6.0 + dims_perp["depth"])
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_TOP_FLAT,
-        anchor=(top_flat_perp_cx_start, top_flat_perp2_cy),
-        direction="east",
-        yaw_deg=90.0,
-    )
-
-    # ------------------------------------------------------------------
-    # Notch cluster: 4 perpendicular bays against the notch top wall (y=8).
-    # 4 * 2.5 m = 10 m, centred in the 12 m notch top span (x=53..65).
-    # ------------------------------------------------------------------
-    PERP_NOTCH = 4
-    notch_perp_cy = 8.0 + lot.wall_gap + dims_perp["depth"] / 2.0
-    notch_perp_cx_start = (
-        (53.0 + 65.0) / 2.0 - (PERP_NOTCH - 1) / 2.0 * dims_perp["width"]
-    )
-    lot.row(
-        bay_type="perpendicular",
-        n=PERP_NOTCH,
-        anchor=(notch_perp_cx_start, notch_perp_cy),
-        direction="east",
-        yaw_deg=90.0,
-    )
-
-    # ------------------------------------------------------------------
-    # Spawns (3 m inside the perimeter along each heading).
-    # ------------------------------------------------------------------
-    _s2_y_proj = 37.0 + (50.0 - 37.0) / (20.0 - 80.0) * (70.0 - 80.0)
-    _top_wlen = math.hypot(60.0, 13.0)
-    _s2_yaw = math.degrees(math.atan2(-60.0 / _top_wlen, -13.0 / _top_wlen)) % 360.0
-    _s2_x_nudged = round(70.0 + math.cos(math.radians(_s2_yaw)) * 3.0, 1)
-    _s2_y_nudged = round(_s2_y_proj + math.sin(math.radians(_s2_yaw)) * 3.0, 1)
-
+    # ---------- Spawns -------------------------------------------------
     lot.spawn(x=3.0, y=25.0, yaw_deg=0.0, primary=True)
-    lot.spawn(x=_s2_x_nudged, y=_s2_y_nudged, yaw_deg=round(_s2_yaw, 1))
+    _diagonal_top_spawn(lot)
     lot.spawn(x=70.0, y=3.0, yaw_deg=90.0)
 
-    # ------------------------------------------------------------------
-    # Patrol path: 5-waypoint CCW orbit around the central obstacle.
-    # ------------------------------------------------------------------
-    _left_offset = (
-        _ang_diag_half * math.sin(math.radians(45.0)) + lot.wall_gap
-    )
-    _left_ang_right_x = _left_offset + dims_ang["depth"] / 2.0 * math.cos(
-        math.radians(45.0)
-    )
-    _obs_row_e_left_x = obs_row_e_cx - dims_perp["depth"] / 2.0
-    _obs_row_f_nose_x = obs_row_f_cx + dims_perp["depth"] / 2.0
-    _notch_left_x = notch_perp_cx_start - dims_perp["width"] / 2.0
-    _par_bottom_top_y = par_cy + dims_par["width"] / 2.0
-    _obs_row_c_nose_y = obs_row_c_cy - dims_perp["depth"] / 2.0
-    _obs_row_d_nose_y = obs_row_d_cy + dims_perp["depth"] / 2.0
-    _ang_offset_diag = (
-        _ang_diag_half * math.sin(math.radians(45.0)) + lot.wall_gap
-    )
-    _diag_front_y = 37.0 - _ang_offset_diag - dims_ang["depth"] / 2.0
-
-    _lower_y = (_obs_row_c_nose_y + _par_bottom_top_y) / 2.0
-    _upper_y = (_diag_front_y + _obs_row_d_nose_y) / 2.0
-    _right_x = (_obs_row_f_nose_x + _notch_left_x) / 2.0
-    _left_x = (_left_ang_right_x + _obs_row_e_left_x) / 2.0
-
+    # ---------- Patrol path (5-waypoint CCW orbit around obstacle) -----
     patrol = PatrolPath()
-    patrol.add(_left_x, _lower_y)
-    patrol.add(_left_x, 28.0)
+    y_lower = patrol.aisle_y(below=bottom_par, above=obs_south)
+    y_upper = patrol.aisle_y(below=obs_north, above=diag_ang)
+    x_left = patrol.aisle_x(left=0.0, right=obs_west)
+    x_right = patrol.aisle_x(left=obs_east, right=notch_perp)
+    patrol.add(x_left, y_lower)
+    patrol.add(x_left, 28.0)
     patrol.add(26.0, 34.0)
-    patrol.add(_right_x, _upper_y)
-    patrol.add(_right_x, _lower_y)
+    patrol.add(x_right, y_upper)
+    patrol.add(x_right, y_lower)
     lot.set_patrol(patrol)
 
-    # ------------------------------------------------------------------
-    # Pedestrian zones - one strip per distinct aisle face.
-    # ------------------------------------------------------------------
-    margin = 0.5
-    strip = 3.0
+    # ---------- Pedestrian zones ---------------------------------------
+    lot.add_zone(PedestrianZone.along_row(obs_south, side="south"))
+    lot.add_zone(PedestrianZone.along_row(obs_north, side="north"))
+    lot.add_zone(PedestrianZone.between_rows(top_flat_back, top_flat_facing))
+    lot.add_zone(PedestrianZone.along_row(notch_perp, side="north"))
+    lot.add_zone(PedestrianZone.along_row(right_par, side="west"))
 
-    obs_tb_cx_end = obs_tb_cx_start + (PERP_OBS_TB - 1) * dims_perp["width"]
-    obs_row_c_nose_y = obs_row_c_cy - dims_perp["depth"] / 2.0
-    obs_row_d_nose_y = obs_row_d_cy + dims_perp["depth"] / 2.0
-    top_flat_perp_cx_end = (
-        top_flat_perp_cx_start + (PERP_TOP_FLAT - 1) * dims_perp["width"]
-    )
-    top_row1_nose_y = top_flat_perp_cy - dims_perp["depth"] / 2.0
-    top_row2_nose_y = top_flat_perp2_cy + dims_perp["depth"] / 2.0
-    notch_perp_cx_end = notch_perp_cx_start + (PERP_NOTCH - 1) * dims_perp["width"]
-    notch_nose_y = notch_perp_cy + dims_perp["depth"] / 2.0
-    par_right_nose_x = par_right_cx - dims_par["width"] / 2.0
-    par_right_y_end = par_right_cy_start + (PAR_BAYS_RIGHT - 1) * dims_par["depth"]
-
-    # Zone 1: aisle below obstacle row C nose faces (faces +Y, nose at y=11.5).
-    lot.add_zone(
-        PedestrianZone(
-            x_min=obs_tb_cx_start - dims_perp["width"] / 2.0 + margin,
-            x_max=obs_tb_cx_end + dims_perp["width"] / 2.0 - margin,
-            y_min=obs_row_c_nose_y - strip,
-            y_max=obs_row_c_nose_y - margin,
-        )
-    )
-    # Zone 2: aisle above obstacle row D nose faces (faces -Y, nose at y=26.5).
-    lot.add_zone(
-        PedestrianZone(
-            x_min=obs_tb_cx_start - dims_perp["width"] / 2.0 + margin,
-            x_max=obs_tb_cx_end + dims_perp["width"] / 2.0 - margin,
-            y_min=obs_row_d_nose_y + margin,
-            y_max=obs_row_d_nose_y + strip,
-        )
-    )
-    # Zone 3: aisle between the two top-flat back-to-back perp rows.
-    lot.add_zone(
-        PedestrianZone(
-            x_min=top_flat_perp_cx_start - dims_perp["width"] / 2.0 + margin,
-            x_max=top_flat_perp_cx_end + dims_perp["width"] / 2.0 - margin,
-            y_min=top_row2_nose_y + margin,
-            y_max=top_row1_nose_y - margin,
-        )
-    )
-    # Zone 4: aisle above notch perp bay nose faces (bays face +Y).
-    lot.add_zone(
-        PedestrianZone(
-            x_min=notch_perp_cx_start - dims_perp["width"] / 2.0 + margin,
-            x_max=notch_perp_cx_end + dims_perp["width"] / 2.0 - margin,
-            y_min=notch_nose_y + margin,
-            y_max=notch_nose_y + strip,
-        )
-    )
-    # Zone 5: strip left of right-wall parallel bay nose faces (bays face -X).
-    lot.add_zone(
-        PedestrianZone(
-            x_min=par_right_nose_x - strip,
-            x_max=par_right_nose_x - margin,
-            y_min=par_right_cy_start - dims_par["depth"] / 2.0 + margin,
-            y_max=par_right_y_end + dims_par["depth"] / 2.0 - margin,
-        )
-    )
-
-    # ------------------------------------------------------------------
-    # Interior obstacle: rectangular cone wall in the centre of the lot.
-    # ------------------------------------------------------------------
-    lot.add_obstacle(
-        x_min=OBSTACLE_X_MIN,
-        x_max=OBSTACLE_X_MAX,
-        y_min=OBSTACLE_Y_MIN,
-        y_max=OBSTACLE_Y_MAX,
-    )
+    # ---------- Interior obstacle --------------------------------------
+    lot.add_obstacle(*OBSTACLE)
 
     return lot.build()
+
+
+def _angled_default_clearance(lot: LotBuilder) -> float:
+    """@brief Default along-wall clearance for a 45-deg angled bay's leftmost corner."""
+    dims_ang = lot.dims["angled"]
+    return (
+        (dims_ang["depth"] / 2.0 + dims_ang["width"] / 2.0)
+        * math.cos(math.radians(45.0))
+        + lot.wall_gap
+    )
+
+
+def _diagonal_top_spawn(lot: LotBuilder) -> None:
+    """@brief Add the diagonal top-wall spawn 3 m inward from the wall slope."""
+    wall_dx = P7[0] - P6[0]    # -60
+    wall_dy = P7[1] - P6[1]    # +13
+    wall_len = math.hypot(wall_dx, wall_dy)
+    s2_y = P6[1] + (wall_dy / wall_dx) * (70.0 - P6[0])
+    yaw = math.degrees(math.atan2(wall_dx / wall_len, -wall_dy / wall_len)) % 360.0
+    x = round(70.0 + math.cos(math.radians(yaw)) * 3.0, 1)
+    y = round(s2_y + math.sin(math.radians(yaw)) * 3.0, 1)
+    lot.spawn(x=x, y=y, yaw_deg=round(yaw, 1))

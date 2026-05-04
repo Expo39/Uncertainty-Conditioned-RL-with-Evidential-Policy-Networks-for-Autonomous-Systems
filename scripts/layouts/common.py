@@ -5,11 +5,7 @@
 
 This module is the *engine* side of layout generation: it turns a layout dict
 (returned by LotBuilder.build()) into a CARLA-frame YAML file plus a bird's-eye
-PNG. It contains no layout-specific code and no DSL primitives.
-
-All bay-related concerns (constants, geometry primitives, validators, the DSL
-itself) live in builder.py. Floor plan modules import only from builder.py;
-generate_layouts.py imports the three engine functions from here.
+PNG.
 """
 
 import math
@@ -73,10 +69,6 @@ def to_world_frame(
     CCW-positive). CARLA uses UE4's left-handed frame (Y increases rightward,
     yaw CW-positive). This function applies rotation + translation in the
     math frame, then mirrors into CARLA's frame by negating Y and yaw.
-
-    The origin_x/origin_y constants in each layout module are specified in
-    CARLA world coordinates (left-handed). The internal math is done in the
-    right-handed frame and converted at the end.
 
     @param local_layout: Layout dict from one of the layout modules.
     @param origin_x: CARLA world-frame x of lot origin.

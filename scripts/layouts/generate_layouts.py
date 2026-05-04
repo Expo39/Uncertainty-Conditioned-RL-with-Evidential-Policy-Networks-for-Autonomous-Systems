@@ -5,35 +5,6 @@
 Generates pre-computed world-frame lot geometry (corners, bay positions, spawn
 transform, patrol waypoints, pedestrian zones) and writes layout YAML files
 consumed by CARLAParkingEnv. Optionally produces bird's-eye PNG plots.
-
-Three floor plan shapes are supported:
-
-  rectangle   - Standard axis-aligned rectangle (60x45 m). Training layout.
-  trapezoid   - Wider at entrance, narrower at rear (front=48, rear=30, depth=44 m).
-                 Training layout.
-  irregular_a - Nine-sided polygon with diagonal top wall and bottom notch
-                 (OOD, held out from training).
-
-Each shape is defined in its own module under scripts/layouts/floor_plans/:
-  scripts/layouts/floor_plans/rectangle.py
-  scripts/layouts/floor_plans/trapezoid.py
-  scripts/layouts/floor_plans/irregular_a.py
-
-Usage::
-
-  # Generate all three layouts:
-  make generate-layouts
-
-  # Generate one layout only:
-  make generate-layouts LAYOUT=trapezoid
-
-  # Override output directories:
-  python scripts/layouts/generate_layouts.py \
-      --output-dir configs/layouts --plot-dir outputs/layouts
-
-  # Generate one layout with custom origin:
-  python scripts/layouts/generate_layouts.py \
-      --layout rectangle --origin 2 -22.5 0.3 --heading 0
 """
 
 import argparse

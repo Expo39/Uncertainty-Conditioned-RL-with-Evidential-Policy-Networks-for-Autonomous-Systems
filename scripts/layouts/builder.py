@@ -1,18 +1,6 @@
 """
 @file builder.py
 @brief Declarative DSL for parking lot floor plan layouts.
-
-This module is the only entry point a floor plan needs. It owns:
-  - Bay-dimension constants (BAY_DIMS) and structural defaults (WALL_GAP,
-    PED_STRIP, PED_MARGIN, BAYS_PER_TYPE).
-  - The bay rectangle primitive (_bay_corners) and validators
-    (validate_bays_in_polygon, warn_narrow_corridors).
-  - Four DSL classes: LotBuilder, BayGroup, PedestrianZone, PatrolPath.
-
-A floor plan describes its lot using LotBuilder. The builder runs all
-validators automatically inside LotBuilder.build() and returns the layout
-dict shape that common.to_world_frame() expects. common.py owns no
-bay-related code; it is purely the I/O engine.
 """
 
 import math
@@ -504,6 +492,48 @@ def _vec_to_cardinal(vx: float, vy: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+# Edge type accepted by aisle_x / aisle_y. Either a single BayGroup, a list
+# of them (for clusters of multiple rows), or a raw float coordinate (acting
+# as a virtual axis-aligned edge).
+Edge = Any  # Union[BayGroup, List[BayGroup], float]
+
+
+def _edge_y_max(side: Edge) -> float:
+    """@brief Highest y of any bay corner in `side` (or float as raw y)."""
+    if isinstance(side, BayGroup):
+        return side.bbox[3]
+    if isinstance(side, list):
+        return max(_edge_y_max(s) for s in side)
+    return float(side)
+
+
+def _edge_y_min(side: Edge) -> float:
+    """@brief Lowest y of any bay corner in `side` (or float as raw y)."""
+    if isinstance(side, BayGroup):
+        return side.bbox[2]
+    if isinstance(side, list):
+        return min(_edge_y_min(s) for s in side)
+    return float(side)
+
+
+def _edge_x_max(side: Edge) -> float:
+    """@brief Rightmost x of any bay corner in `side` (or float as raw x)."""
+    if isinstance(side, BayGroup):
+        return side.bbox[1]
+    if isinstance(side, list):
+        return max(_edge_x_max(s) for s in side)
+    return float(side)
+
+
+def _edge_x_min(side: Edge) -> float:
+    """@brief Leftmost x of any bay corner in `side` (or float as raw x)."""
+    if isinstance(side, BayGroup):
+        return side.bbox[0]
+    if isinstance(side, list):
+        return min(_edge_x_min(s) for s in side)
+    return float(side)
+
+
 class PatrolPath:
     """
     @class PatrolPath
@@ -511,7 +541,13 @@ class PatrolPath:
 
     Waypoint order is the user's responsibility. Helper methods compute
     coordinates from BayGroup faces so the user does not need to extract
-    the same numbers by hand.
+    aisle midpoints or diagonal endpoints by hand.
+
+    Each helper accepts BayGroup, list of BayGroups, or a raw float for the
+    "side" arguments. A raw float is treated as a virtual axis-aligned edge
+    at that coordinate (useful for "midpoint to a virtual line at x=0",
+    common when patrol corridors are referenced against a notional internal
+    boundary rather than a physical wall).
     """
 
     def __init__(self) -> None:
@@ -522,23 +558,78 @@ class PatrolPath:
         self.waypoints.append((float(x), float(y)))
         return self
 
-    def add_midpoint_y(
+    def aisle_y(self, below: Edge, above: Edge) -> float:
+        """
+        @brief Y-midpoint of the aisle between a lower stack and upper stack.
+        @param below: Bay group(s) on the south side of the aisle, or a raw y.
+        @param above: Bay group(s) on the north side of the aisle, or a raw y.
+        @return Midpoint y between the upper edge of `below` and the lower
+                edge of `above`.
+        """
+        return (_edge_y_max(below) + _edge_y_min(above)) / 2.0
+
+    def aisle_x(self, left: Edge, right: Edge) -> float:
+        """
+        @brief X-midpoint of the aisle between a left stack and right stack.
+        @param left: Bay group(s) on the west side of the aisle, or a raw x.
+        @param right: Bay group(s) on the east side of the aisle, or a raw x.
+        @return Midpoint x between the right edge of `left` and the left
+                edge of `right`.
+        """
+        return (_edge_x_max(left) + _edge_x_min(right)) / 2.0
+
+    def add_in_aisle_y(
         self,
         x: float,
-        face_a_y: float,
-        face_b_y: float,
+        below: Edge,
+        above: Edge,
     ) -> "PatrolPath":
-        """@brief Append (x, midpoint of face_a_y and face_b_y)."""
-        return self.add(x, (face_a_y + face_b_y) / 2.0)
+        """
+        @brief Append a waypoint at (x, aisle_y(below, above)).
+        @return self.
+        """
+        return self.add(x, self.aisle_y(below, above))
 
-    def add_midpoint_x(
+    def add_in_aisle_x(
         self,
-        face_a_x: float,
-        face_b_x: float,
         y: float,
+        left: Edge,
+        right: Edge,
     ) -> "PatrolPath":
-        """@brief Append (midpoint of face_a_x and face_b_x, y)."""
-        return self.add((face_a_x + face_b_x) / 2.0, y)
+        """
+        @brief Append a waypoint at (aisle_x(left, right), y).
+        @return self.
+        """
+        return self.add(self.aisle_x(left, right), y)
+
+    def add_diag_from_prev(
+        self,
+        x_direction: str,
+        target_y: float,
+    ) -> "PatrolPath":
+        """
+        @brief Append a waypoint connected to the previous one by a 45-deg line.
+
+
+        @param x_direction: "left" (decreasing x) or "right" (increasing x).
+        @param target_y: y of the new waypoint.
+        @raises ValueError: If the path is empty.
+        """
+        if not self.waypoints:
+            raise ValueError(
+                "add_diag_from_prev requires at least one previous waypoint."
+            )
+        prev_x, prev_y = self.waypoints[-1]
+        dy = target_y - prev_y
+        if x_direction == "left":
+            dx = -abs(dy)
+        elif x_direction == "right":
+            dx = abs(dy)
+        else:
+            raise ValueError(
+                f"x_direction must be 'left' or 'right', got '{x_direction}'."
+            )
+        return self.add(prev_x + dx, target_y)
 
     def to_list(self) -> List[Dict[str, float]]:
         """@brief Convert to the list-of-dicts shape expected by to_world_frame."""
@@ -626,6 +717,34 @@ class LotBuilder:
         x_min, x_max = self.lot_x_extent()
         y_min, y_max = self.lot_y_extent()
         return ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
+
+    def wall_y(self, wall: int) -> float:
+        """
+        @brief Y-coordinate of an axis-aligned horizontal perimeter wall.
+        @param wall: Wall index (0..len(corners)-1).
+        @raises ValueError: If the wall is not horizontal.
+        """
+        p0 = self.corners[wall]
+        p1 = self.corners[(wall + 1) % len(self.corners)]
+        if abs(p0["y"] - p1["y"]) > 1e-6:
+            raise ValueError(
+                f"wall_y({wall}) is undefined for a non-horizontal wall."
+            )
+        return p0["y"]
+
+    def wall_x(self, wall: int) -> float:
+        """
+        @brief X-coordinate of an axis-aligned vertical perimeter wall.
+        @param wall: Wall index (0..len(corners)-1).
+        @raises ValueError: If the wall is not vertical.
+        """
+        p0 = self.corners[wall]
+        p1 = self.corners[(wall + 1) % len(self.corners)]
+        if abs(p0["x"] - p1["x"]) > 1e-6:
+            raise ValueError(
+                f"wall_x({wall}) is undefined for a non-vertical wall."
+            )
+        return p0["x"]
 
     # ------------------------------------------------------------------
     # Bay placement primitives
@@ -918,10 +1037,191 @@ class LotBuilder:
             bay_type=bay_type,
             bays=bays,
             direction=(wdx * advance_sign, wdy * advance_sign),
-            normal=(nx, ny),
+            normal=_yaw_to_normal(bay_yaw_deg),
             bay_width=bay_w,
             bay_depth=bay_d,
             spacing=spacing,
+        )
+        self._groups.append(group)
+        return group
+
+    def row_along_perimeter(
+        self,
+        bay_type: str,
+        n: int,
+        wall: int,
+        bay_angle_deg: float = 0.0,
+        centred: bool = False,
+        start_along: Optional[float] = None,
+        pack_from: str = "start",
+        bay_extras: Optional[Dict[str, Any]] = None,
+    ) -> BayGroup:
+        """
+        @brief Place a row of bays alongside one perimeter wall.
+
+        Wall index follows CCW polygon order: wall 0 is from corners[0] to
+        corners[1], wall 1 is corners[1] to corners[2], and so on. The
+        inward direction is auto-detected (CCW polygon convention).
+
+        @param bay_type: One of perpendicular, angled, parallel.
+        @param n: Number of bays.
+        @param wall: Perimeter wall index (0 to len(corners)-1).
+        @param bay_angle_deg: Bay yaw relative to the inward normal:
+                                0   - perpendicular, back to wall (typical).
+                              +/-45 - angled, leaning toward next/previous corner.
+                              +/-90 - parallel-to-wall.
+                              180   - perpendicular, head-in to wall.
+        @param centred: True centres the cluster of n bays in the wall span.
+        @param start_along: Distance from corners[wall] to the first bay
+                            centre. Defaults to the natural corner clearance.
+        @param pack_from: "start" packs from corners[wall] toward
+                          corners[wall+1]; "end" packs the other way.
+        @param bay_extras: Extra fields merged into every bay dict.
+        """
+        if not 0 <= wall < len(self.corners):
+            raise ValueError(
+                f"wall index {wall} out of range "
+                f"[0, {len(self.corners) - 1}]."
+            )
+        p0_dict = self.corners[wall]
+        p1_dict = self.corners[(wall + 1) % len(self.corners)]
+        p0 = (p0_dict["x"], p0_dict["y"])
+        p1 = (p1_dict["x"], p1_dict["y"])
+        return self.row_along_wall(
+            bay_type=bay_type,
+            n=n,
+            wall_p0=p0,
+            wall_p1=p1,
+            bay_angle_deg=bay_angle_deg,
+            side="ccw",
+            start_along=start_along,
+            pack_from=pack_from,
+            centred=centred,
+            bay_extras=bay_extras,
+        )
+
+    def row_along_obstacle_face(
+        self,
+        bay_type: str,
+        n: int,
+        obstacle: Tuple[float, float, float, float],
+        face: str,
+        bay_angle_deg: float = 180.0,
+        centred: bool = True,
+        start_along: Optional[float] = None,
+        pack_from: str = "start",
+        bay_extras: Optional[Dict[str, Any]] = None,
+    ) -> BayGroup:
+        """
+        @brief Place a row of bays on the outside of one face of a rectangular
+               obstacle.
+
+        Bays are placed in the lot aisle adjacent to the chosen obstacle face
+        (never inside the obstacle). The default bay_angle_deg=180 produces
+        head-in parking with the bay nose toward the obstacle, which is the
+        typical layout for parking around a central obstruction. Use
+        bay_angle_deg=0 for back-in parking with bay back toward the obstacle.
+
+        @param bay_type: One of perpendicular, angled, parallel.
+        @param n: Number of bays.
+        @param obstacle: (x_min, x_max, y_min, y_max) of the obstacle rectangle.
+        @param face: "north", "south", "east", or "west" - which face of the
+                     obstacle the bays sit alongside.
+        @param bay_angle_deg: Bay yaw relative to the obstacle-outward normal.
+                              180 (default) = head-in (nose toward obstacle).
+                              0 = back-in (back toward obstacle).
+        @param centred: True centres the cluster along the face extent.
+        @param start_along: Distance from the face start to the first bay.
+        @param pack_from: "start" or "end" along the face direction.
+        @param bay_extras: Extra fields merged into every bay dict.
+        """
+        x_min, x_max, y_min, y_max = obstacle
+        # Walk each face in obstacle-CCW order (bottom-left start). side="cw"
+        # then picks the "outward" normal (away from obstacle interior, into
+        # the surrounding aisle where bays sit).
+        if face == "south":
+            wall_p0, wall_p1 = (x_min, y_min), (x_max, y_min)
+        elif face == "east":
+            wall_p0, wall_p1 = (x_max, y_min), (x_max, y_max)
+        elif face == "north":
+            wall_p0, wall_p1 = (x_max, y_max), (x_min, y_max)
+        elif face == "west":
+            wall_p0, wall_p1 = (x_min, y_max), (x_min, y_min)
+        else:
+            raise ValueError(
+                f"face must be 'north'|'south'|'east'|'west', got '{face}'."
+            )
+        return self.row_along_wall(
+            bay_type=bay_type,
+            n=n,
+            wall_p0=wall_p0,
+            wall_p1=wall_p1,
+            bay_angle_deg=bay_angle_deg,
+            side="cw",
+            centred=centred,
+            start_along=start_along,
+            pack_from=pack_from,
+            bay_extras=bay_extras,
+        )
+
+    def facing_row(
+        self,
+        twin: BayGroup,
+        gap: float,
+        n: Optional[int] = None,
+        bay_extras: Optional[Dict[str, Any]] = None,
+    ) -> BayGroup:
+        """
+        @brief Place a row that faces an existing row across an aisle of `gap`.
+
+        The new row sits on the NOSE side of `twin` at distance `gap` (nose
+        face to nose face, with the aisle between them), with its own nose
+        pointing back toward `twin`. Same bay type, same spacing, same number
+        of bays as `twin` unless `n` is given. Useful for the opposing row
+        when the first row is placed directly against a wall (backs to wall,
+        noses into the lot interior).
+
+        @param twin: An existing BayGroup to mirror across an aisle.
+        @param gap: Aisle width between the two rows' nose faces (m).
+        @param n: Override number of bays in the new row (defaults to twin's).
+        @param bay_extras: Extra fields merged into every bay dict.
+        """
+        n = n if n is not None else twin.count
+        nx, ny = twin.normal  # nose direction of twin
+        offset = gap + twin.bay_depth  # centre-to-centre distance
+        first = twin.bays[0]
+        first_centre = (first["local_x"], first["local_y"])
+        dx, dy = twin.direction
+        # New row sits on the NOSE side of twin (offset by `+nose * offset`),
+        # with its own nose pointing back at twin (yaw flipped 180).
+        new_first_x = first_centre[0] + nx * offset
+        new_first_y = first_centre[1] + ny * offset
+        new_yaw_deg = (first["local_yaw_deg"] + 180.0) % 360.0
+        bay_w = twin.bay_width
+        bay_d = twin.bay_depth
+        bays: List[Dict[str, Any]] = []
+        extras = bay_extras or {}
+        for i in range(n):
+            cx = new_first_x + dx * twin.spacing * i
+            cy = new_first_y + dy * twin.spacing * i
+            bay = {
+                "bay_type": twin.bay_type,
+                "local_x": cx,
+                "local_y": cy,
+                "local_yaw_deg": new_yaw_deg,
+                "width": bay_w,
+                "depth": bay_d,
+            }
+            bay.update(extras)
+            bays.append(bay)
+        group = BayGroup(
+            bay_type=twin.bay_type,
+            bays=bays,
+            direction=(dx, dy),
+            normal=(-nx, -ny),
+            bay_width=bay_w,
+            bay_depth=bay_d,
+            spacing=twin.spacing,
         )
         self._groups.append(group)
         return group
