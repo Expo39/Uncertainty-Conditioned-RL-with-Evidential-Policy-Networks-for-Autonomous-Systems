@@ -59,6 +59,10 @@ logger = logging.getLogger(__name__)
 # Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
 
+# Shared empty info dict for intermediate action-repeat steps - avoids
+# allocating a new dict on each of the (action_repeat - 1) hot-path calls.
+_EMPTY_STEP_INFO: Dict[str, Any] = {}
+
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
     "CARLAParkingEnv",
@@ -126,7 +130,7 @@ class CARLAParkingEnv(gym.Env):
                cone spacing, bay occupancy, NPC counts).
         @param include_covariance: If True, obs includes EKF std devs.
                If False, covariance omitted (no ROS 2 subscription).
-        @param include_obstacle_obs: If True, obs includes 5 LiDAR clearance dims. 
+        @param include_obstacle_obs: If True, obs includes 5 LiDAR clearance dims.
                Set False to ablate obstacle awareness.
         @param vis_output_path: Path for vis_history.jsonl writes. If None,
                defaults to outputs/vis_history.jsonl. Writing only occurs when
@@ -176,9 +180,12 @@ class CARLAParkingEnv(gym.Env):
 
         self._uncertainty_std_max: float = max(uncertainty_std_max, 1e-6)
 
+        self._inv_uncertainty_std_max: float = 1.0 / self._uncertainty_std_max
+        self._inv_oob_threshold: float = 1.0 / OUT_OF_BOUNDS_THRESHOLD
+
         # Load GNSS noise profiles for per-episode RTK fix-state sampling.
         self._gnss_noise_tiers: List[Dict[str, Any]] = []
-        self._gnss_tier_weights: List[float] = []
+        self._gnss_tier_weights: np.ndarray = np.empty(0, dtype=np.float64)
         self._current_gnss_multiplier: float = 1.0
         self._current_gnss_tier: Optional[Dict[str, Any]] = None
         if gnss_noise_profiles_path:
@@ -277,10 +284,12 @@ class CARLAParkingEnv(gym.Env):
         # Pre-allocated observation buffer - reused every step to avoid
         # repeated small heap allocations.
         _obs_dim = self._compute_obs_dim()
+        self._obs_dim: int = _obs_dim
         self._obs_buffer: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
         self._obstacle_features_buffer: np.ndarray = np.zeros(
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
+        self._world_pose_buf: np.ndarray = np.empty(4, dtype=np.float32)
 
         # Full 2D rigid body transform from EKF odom frame to CARLA world frame,
         # computed once per episode in _calibrate_ekf_frame_offset() using the
@@ -295,7 +304,7 @@ class CARLAParkingEnv(gym.Env):
 
         # Target bay (world frame, set in reset). dx/dy/dyaw are computed each
         # step by reconstructing vehicle_world via _ekf_odom_offset and then
-        # differencing against this. 
+        # differencing against this.
         self._target_bay: Dict[str, Any] = {
             "x": 0.0,
             "y": 0.0,
@@ -303,17 +312,27 @@ class CARLAParkingEnv(gym.Env):
             "width": 2.5,
             "depth": 5.0,
         }
+        # Cached float scalars from _target_bay to avoid dict lookup + float()
+        # cast on every _compute_reward call.
+        self._target_x: float = 0.0
+        self._target_y: float = 0.0
+        self._target_yaw: float = 0.0
 
         # Current floor plan layout (loaded from YAML in reset)
         self._current_layout: Dict[str, Any] = {}
         self._current_floor_plan_name: str = ""
+        # Spawn pool built once per layout load.
+        self._spawn_pool: List[Any] = []
+        # Bay-type grouping built once per layout load.
+        self._bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        self._bay_type_keys: List[str] = []
 
         # Trajectory buffer for debug overlays (ring buffer of (x, y) tuples)
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied 
-        self._last_action = np.zeros(3, dtype=np.float32)
+        # Last action applied (2-dim: [steer, longitudinal])
+        self._last_action: np.ndarray = np.zeros(2, dtype=np.float32)
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -322,6 +341,12 @@ class CARLAParkingEnv(gym.Env):
             else Path("outputs/vis_history.jsonl")
         )
         self._vis_signal_path: Path = self._vis_history_path.parent / ".vis_active"
+        # Persistent append file handle; opened lazily, avoids per-step open().
+        self._vis_file: Optional[Any] = None
+        # Signal-file stat is cached and refreshed every N steps to avoid per-step
+        # filesystem calls when the visualiser is not active (the common case).
+        self._vis_active: bool = False
+        self._vis_check_counter: int = 0
         self._carla_timestep: float = carla_timestep
 
         self._action_repeat: int = action_repeat
@@ -334,6 +359,15 @@ class CARLAParkingEnv(gym.Env):
         self._actors_frozen: bool = False
         # Previous distance to target for potential-based reward shaping
         self._prev_distance: float = 0.0
+
+        # Cached CARLA zero objects - reused across calls to avoid per-call
+        # construction overhead in _freeze_all_actors and _teleport_vehicle.
+        if carla is not None:
+            self._zero_vec3: Any = carla.Vector3D(x=0.0, y=0.0, z=0.0)
+            self._zero_walker_ctrl: Any = carla.WalkerControl()
+        else:
+            self._zero_vec3 = None
+            self._zero_walker_ctrl = None
 
         # Observation and action spaces
         self.observation_space = spaces.Box(
@@ -354,6 +388,36 @@ class CARLAParkingEnv(gym.Env):
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
         if self._include_covariance:
             self._init_ros2()
+
+        # ------------------------------------------------------------------
+        # Stored callables for fixed-flag hot-path branches
+        # ------------------------------------------------------------------
+
+        # _read_ekf_state() -> (raw_pose, uncertainty) or (None, None)
+        if self._include_covariance and self._cov_subscriber is not None:
+            self._read_ekf_state = self._cov_subscriber.get_latest_state
+        else:
+            self._read_ekf_state = lambda: (None, None)
+
+        # _get_lidar_scan() -> scan array or None
+        if self._include_obstacle_obs:
+            self._get_lidar_scan = self._sensor_manager.get_latest_lidar_scan
+        else:
+            self._get_lidar_scan = lambda: None
+
+        # _uncertainty_scale_fn() -> float in [0, 1]
+        if self._include_covariance:
+            _inv = self._inv_uncertainty_std_max
+            _buf = self._obs_buffer
+
+            def _unc_scale_fn() -> float:
+                return min(
+                    max(max(float(_buf[1]), float(_buf[2])) * _inv, 0.0), 1.0
+                )
+        else:
+            def _unc_scale_fn() -> float:  # type: ignore[misc]
+                return 0.0
+        self._uncertainty_scale_fn = _unc_scale_fn
 
     # ------------------------------------------------------------------
     # Observation dimension helper
@@ -418,16 +482,18 @@ class CARLAParkingEnv(gym.Env):
             return
 
         self._gnss_noise_tiers = []
-        self._gnss_tier_weights = []
+        raw_weights: List[float] = []
         for name, tier in tiers.items():
             tier["name"] = name
             self._gnss_noise_tiers.append(tier)
-            self._gnss_tier_weights.append(float(tier.get("weight", 1.0)))
+            raw_weights.append(float(tier.get("weight", 1.0)))
 
-        # Normalise weights to sum to 1.0
-        total = sum(self._gnss_tier_weights)
+        # Normalise and store as ndarray so np_random.choice needs no conversion.
+        weights_arr = np.array(raw_weights, dtype=np.float64)
+        total = float(weights_arr.sum())
         if total > 0:
-            self._gnss_tier_weights = [w / total for w in self._gnss_tier_weights]
+            weights_arr /= total
+        self._gnss_tier_weights = weights_arr
 
         tier_names = [t["name"] for t in self._gnss_noise_tiers]
         logger.info(
@@ -453,7 +519,7 @@ class CARLAParkingEnv(gym.Env):
             )
             return
 
-        if not self._gnss_noise_tiers:
+        if len(self._gnss_noise_tiers) == 0:
             self._current_gnss_multiplier = 1.0
             self._current_gnss_tier = None
             return
@@ -506,6 +572,25 @@ class CARLAParkingEnv(gym.Env):
         self._current_layout = layout
         logger.info("Loaded floor plan: %s", name)
 
+        primary = layout.get("spawn_transform", {})
+        extras: List[Any] = (
+            layout.get("extra_spawn_transforms", [])
+            if self._use_extra_spawns
+            else []
+        )
+        self._spawn_pool = [primary] + list(extras)
+
+        eligible = [
+            b for b in layout.get("bays", [])
+            if not b.get("always_empty", False)
+        ]
+        bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for bay in eligible:
+            bay_type_key = bay.get("bay_type", "perpendicular")
+            bays_by_type.setdefault(bay_type_key, []).append(bay)
+        self._bays_by_type = bays_by_type
+        self._bay_type_keys = list(bays_by_type.keys())
+
     def _sample_target_bay(self) -> None:
         """
         @brief Stratified sample of target bay: 1/3 per type, then uniform within type.
@@ -513,41 +598,40 @@ class CARLAParkingEnv(gym.Env):
         Bay types: perpendicular, angled, parallel.
         Always-empty bays are excluded from target selection.
         """
-        bays = [
-            b for b in self._current_layout.get("bays", [])
-            if not b.get("always_empty", False)
-        ]
-
-        by_type: Dict[str, List[Dict[str, Any]]] = {}
-        for bay in bays:
-            bay_type = bay.get("bay_type", "perpendicular")
-            by_type.setdefault(bay_type, []).append(bay)
-
-        if not by_type:
+        if not self._bay_type_keys:
             raise RuntimeError("No eligible bays found in floor plan layout.")
 
-        bay_type = random.choice(list(by_type.keys()))
-        target = random.choice(by_type[bay_type])
+        bay_type = random.choice(self._bay_type_keys)
+        target = random.choice(self._bays_by_type[bay_type])
+
+        tx: float = float(target["x"])
+        ty: float = float(target["y"])
+        tyaw: float = (
+            float(target["yaw"])
+            if "yaw" in target
+            else math.radians(float(target.get("yaw_deg", 0.0)))
+        )
 
         self._target_bay = {
-            "x": float(target["x"]),
-            "y": float(target["y"]),
-            "yaw": (
-                float(target["yaw"])
-                if "yaw" in target
-                else math.radians(float(target.get("yaw_deg", 0.0)))
-            ),
+            "x": tx,
+            "y": ty,
+            "yaw": tyaw,
             "width": float(target.get("width", 2.5)),
             "depth": float(target.get("depth", 5.0)),
             "bay_type": bay_type,
             "bay_id": target.get("id", target.get("bay_id", "")),
         }
+
+        self._target_x = tx
+        self._target_y = ty
+        self._target_yaw = tyaw
+
         logger.info(
             "Target bay: type=%s, id=%s, x=%.1f, y=%.1f",
-            self._target_bay.get("bay_type", ""),
+            bay_type,
             self._target_bay.get("bay_id", ""),
-            self._target_bay["x"],
-            self._target_bay["y"],
+            tx,
+            ty,
         )
 
     # ------------------------------------------------------------------
@@ -556,16 +640,10 @@ class CARLAParkingEnv(gym.Env):
 
     def _select_spawn(self) -> Dict[str, Any]:
         """
-        @brief Choose a spawn transform for this episode from the layout YAML.
+        @brief Choose a spawn transform for this episode from the pre-built pool.
         @return Chosen spawn dict with keys x, y, z, yaw_deg.
         """
-        primary = self._current_layout.get("spawn_transform", {})
-        extras: List[Any] = (
-            self._current_layout.get("extra_spawn_transforms", [])
-            if self._use_extra_spawns
-            else []
-        )
-        return random.choice([primary] + list(extras))
+        return random.choice(self._spawn_pool)
 
     def _cache_blueprints(self) -> None:
         """
@@ -649,10 +727,16 @@ class CARLAParkingEnv(gym.Env):
     # Clearance and reward
     # ------------------------------------------------------------------
 
-    def _compute_reward(self) -> Tuple[float, bool, bool, Dict[str, float]]:
+    def _compute_reward(
+        self,
+        transform: Optional[Any] = None,
+        velocity: Optional[Any] = None,
+    ) -> Tuple[float, bool, bool, Dict[str, float]]:
         """
         @brief Compute reward and termination flags using CARLA ground truth.
 
+        @param transform: Pre-fetched vehicle transform. Fetched internally when None.
+        @param velocity: Pre-fetched vehicle velocity. Fetched internally when None.
         @return Tuple of (reward, terminated, success, diagnostics).
         """
         if self.vehicle is None:
@@ -664,19 +748,18 @@ class CARLAParkingEnv(gym.Env):
                 "progress_reward": 0.0,
             }
 
-        transform = self.vehicle.get_transform()
-        velocity = self.vehicle.get_velocity()
+        if transform is None:
+            transform = self.vehicle.get_transform()
+        if velocity is None:
+            velocity = self.vehicle.get_velocity()
+
         x = transform.location.x
         y = transform.location.y
         yaw = math.radians(transform.rotation.yaw)
-        speed = math.sqrt(velocity.x ** 2 + velocity.y ** 2)
+        speed = math.hypot(velocity.x, velocity.y)
 
-        target_x = float(self._target_bay["x"])
-        target_y = float(self._target_bay["y"])
-        target_yaw = float(self._target_bay["yaw"])
-
-        position_error = math.sqrt((x - target_x) ** 2 + (y - target_y) ** 2)
-        orientation_error = abs(wrap_angle_symmetric(yaw - target_yaw))
+        position_error = math.hypot(x - self._target_x, y - self._target_y)
+        orientation_error = abs(wrap_angle_symmetric(yaw - self._target_yaw))
 
         diag: Dict[str, float] = {
             "pos_error": position_error,
@@ -686,7 +769,9 @@ class CARLAParkingEnv(gym.Env):
             "progress_reward": 0.0,
         }
 
-        collision_detected, collision_ego_fault = self._sensor_manager.consume_collision()
+        collision_detected, collision_ego_fault = (
+            self._sensor_manager.consume_collision()
+        )
         if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
@@ -702,17 +787,13 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return 10.0, True, True, diag
 
-        progress = (self._prev_distance - position_error) / OUT_OF_BOUNDS_THRESHOLD
+        progress = (self._prev_distance - position_error) * self._inv_oob_threshold
         self._prev_distance = position_error
 
-        # Scale progress reward by localisation quality. std_x/std_y are at
-        # obs indices 1 and 2; read directly from the pre-built obs buffer so
-        # the reward sees the same values the policy sees.
-        std_x = float(self._obs_buffer[1]) if self._include_covariance else 0.0
-        std_y = float(self._obs_buffer[2]) if self._include_covariance else 0.0
-        uncertainty_scale = float(
-            np.clip(max(std_x, std_y) / self._uncertainty_std_max, 0.0, 1.0)
-        )
+        # Scale progress reward by localisation quality (std_x/std_y at obs
+        # indices 1-2).  Branch on _include_covariance is lifted into the
+        # stored callable set at construction.
+        uncertainty_scale = self._uncertainty_scale_fn()
         reward = progress * (1.0 - uncertainty_scale) - 0.01
 
         diag["progress_reward"] = float(progress)
@@ -733,13 +814,10 @@ class CARLAParkingEnv(gym.Env):
         Falls back to CARLA ground truth when EKF is unavailable (CI/tests).
         """
         if self.vehicle is None or self.world is None:
-            return np.zeros(len(self._obs_buffer), dtype=np.float32)
+            return np.zeros(self._obs_dim, dtype=np.float32)
 
-        # Read EKF pose + uncertainty in one file read.
-        raw_ekf_pose: Optional[np.ndarray] = None
-        uncertainty: Optional[np.ndarray] = None
-        if self._cov_subscriber is not None:
-            raw_ekf_pose, uncertainty = self._cov_subscriber.get_latest_state()
+        # Read EKF pose + uncertainty in one file read (no-op when EKF absent).
+        raw_ekf_pose, uncertainty = self._read_ekf_state()
 
         # Resolve EKF odom pose -> world frame.
         world_pose: Optional[np.ndarray] = None
@@ -748,13 +826,11 @@ class CARLAParkingEnv(gym.Env):
             ekf_odom_y = -float(raw_ekf_pose[1])
             ekf_odom_yaw = float(raw_ekf_pose[2])
             tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
-            wx = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
-            wy = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
-            wyaw = ekf_odom_yaw + r
-            world_pose = np.array(
-                [wx, wy, wyaw, float(raw_ekf_pose[3])],
-                dtype=np.float32,
-            )
+            self._world_pose_buf[0] = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
+            self._world_pose_buf[1] = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
+            self._world_pose_buf[2] = ekf_odom_yaw + r
+            self._world_pose_buf[3] = raw_ekf_pose[3]
+            world_pose = self._world_pose_buf
         else:
             # CI / tests fallback: use CARLA GT (no EKF available)
             self._debug_logger._logger.debug(
@@ -763,15 +839,14 @@ class CARLAParkingEnv(gym.Env):
             )
             t = self.vehicle.get_transform()
             av = self.vehicle.get_angular_velocity()
-            world_pose = np.array(
-                [t.location.x, t.location.y, math.radians(t.rotation.yaw),
-                 math.radians(av.z)],
-                dtype=np.float32,
-            )
+            self._world_pose_buf[0] = t.location.x
+            self._world_pose_buf[1] = t.location.y
+            self._world_pose_buf[2] = math.radians(t.rotation.yaw)
+            self._world_pose_buf[3] = math.radians(av.z)
+            world_pose = self._world_pose_buf
 
         obstacle_features = extract_obstacle_features(
-            self._sensor_manager.get_latest_lidar_scan()
-            if self._include_obstacle_obs else None,
+            self._get_lidar_scan(),
             self._obstacle_features_buffer,
         )
 
@@ -789,34 +864,54 @@ class CARLAParkingEnv(gym.Env):
     # Visualisation
     # ------------------------------------------------------------------
 
-    def _write_vis_state(self, end_reason: Optional[str] = None) -> None:
+    def _write_vis_state(
+        self,
+        end_reason: Optional[str] = None,
+        transform: Optional[Any] = None,
+        velocity: Optional[Any] = None,
+    ) -> None:
         """
         @brief Append a visualisation frame to the JSONL history file.
 
         Writing only occurs when the signal file (outputs/.vis_active) exists,
-        which is created by the visualiser process. This avoids unnecessary I/O
-        when nobody is watching. Each line is a complete JSON object with
-        sim_time so the visualiser can pace playback at real-time speed.
+        which is created by the visualiser process. A persistent
+        append file handle is kept open while the visualiser is active.
 
         @param end_reason: If set, written into the frame as "end_reason" so
                            the visualiser can log why the episode terminated.
                            One of: "collision", "success", "timeout".
                            None for mid-episode frames.
+        @param transform: Pre-fetched vehicle transform. Fetched internally when None.
+        @param velocity: Pre-fetched vehicle velocity. Fetched internally when None.
         """
         if self.vehicle is None:
             return
 
-        # Only write when the visualiser is actively watching
-        if not self._vis_signal_path.exists():
+        # Refresh the signal-file check every 30 calls.
+        self._vis_check_counter += 1
+        if self._vis_check_counter >= 30:
+            self._vis_check_counter = 0
+            new_active = self._vis_signal_path.exists()
+            if not new_active and self._vis_file is not None:
+                self._vis_file.close()
+                self._vis_file = None
+            self._vis_active = new_active
+
+        if not self._vis_active:
             return
 
-        transform = self.vehicle.get_transform()
-        vel = self.vehicle.get_velocity()
+        if transform is None:
+            transform = self.vehicle.get_transform()
+        if velocity is None:
+            velocity = self.vehicle.get_velocity()
+
         x = transform.location.x
         y = transform.location.y
         yaw = transform.rotation.yaw
 
         patrol_npcs = self._npc_controller.patrol_npcs
+        # Build an id-set for O(1) membership test in the actor loop.
+        patrol_npc_ids = {id(a) for a in patrol_npcs}
         actor_transforms = []
         for actor in patrol_npcs + self._lot_spawner.spawned_static_vehicles:
             if actor is not None and actor.is_alive:
@@ -826,7 +921,7 @@ class CARLAParkingEnv(gym.Env):
                         "x": at.location.x,
                         "y": at.location.y,
                         "yaw": at.rotation.yaw,
-                        "type": "npc" if actor in patrol_npcs else "static",
+                        "type": "npc" if id(actor) in patrol_npc_ids else "static",
                     }
                 )
 
@@ -859,9 +954,9 @@ class CARLAParkingEnv(gym.Env):
                 "x": x,
                 "y": y,
                 "yaw": yaw,
-                "vx": vel.x,
-                "vy": vel.y,
-                "speed": math.sqrt(vel.x**2 + vel.y**2),
+                "vx": velocity.x,
+                "vy": velocity.y,
+                "speed": math.hypot(velocity.x, velocity.y),
             },
             "action": {
                 "steer": float(self._last_action[0]),
@@ -883,11 +978,12 @@ class CARLAParkingEnv(gym.Env):
             state["debug"] = debug_dict
 
         try:
-            json_str = json.dumps(state)
-            self._vis_history_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(self._vis_history_path, "a") as f:
-                f.write(json_str + "\n")
+            if self._vis_file is None:
+                self._vis_history_path.parent.mkdir(parents=True, exist_ok=True)
+                self._vis_file = open(self._vis_history_path, "a")
+            self._vis_file.write(json.dumps(state))
+            self._vis_file.write("\n")
+            self._vis_file.flush()
         except Exception as exc:
             # Non-fatal - visualisation is optional
             logger.debug(f"Could not write vis state: {exc}")
@@ -1022,7 +1118,7 @@ class CARLAParkingEnv(gym.Env):
 
         # Zero velocity so the vehicle does not carry momentum from the
         # previous episode into the new one.
-        zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
+        zero = self._zero_vec3
         self.vehicle.set_target_velocity(zero)
         self.vehicle.set_target_angular_velocity(zero)
         self.vehicle.apply_control(carla.VehicleControl())
@@ -1096,21 +1192,23 @@ class CARLAParkingEnv(gym.Env):
         Uses set_target_velocity for instant stops rather than brake control,
         which takes multiple ticks to converge through physics.
         """
-        zero = carla.Vector3D(x=0.0, y=0.0, z=0.0)
+        zero = self._zero_vec3
 
         if self.vehicle is not None and self.vehicle.is_alive:
             self.vehicle.enable_constant_velocity(zero)
 
-        for npc in self._npc_controller.patrol_npcs:
-            if npc is not None and npc.is_alive:
-                # NPCs are destroyed in cleanup so the pin does not carry over.
-                npc.enable_constant_velocity(zero)
+        for npc in filter(
+            lambda a: a is not None and a.is_alive,
+            self._npc_controller.patrol_npcs,
+        ):
+            # NPCs are destroyed in cleanup so the pin does not carry over.
+            npc.enable_constant_velocity(zero)
 
-        for walker in self._npc_controller.pedestrian_actors:
-            if walker is not None and walker.is_alive:
-                ctrl = carla.WalkerControl()
-                ctrl.speed = 0.0
-                walker.apply_control(ctrl)
+        for walker in filter(
+            lambda w: w is not None and w.is_alive,
+            self._npc_controller.pedestrian_actors,
+        ):
+            walker.apply_control(self._zero_walker_ctrl)
 
     def _cleanup_actors(self, skip_ego: bool = False) -> None:
         """
@@ -1157,6 +1255,9 @@ class CARLAParkingEnv(gym.Env):
         self._episode_id += 1
         self.steps = 0
         self._trajectory_buffer.clear()
+        # Force signal-file recheck at episode start so new episodes don't
+        # inherit a stale cached value from the previous episode's final step.
+        self._vis_check_counter = 30
 
         # Sample GNSS noise tier for this episode (RTK fix-state variation).
         # Must happen before _spawn_sensors() so the multiplier is available.
@@ -1167,15 +1268,14 @@ class CARLAParkingEnv(gym.Env):
             self._connect_to_carla()
 
         if self.world is None:
-            return np.zeros(len(self._obs_buffer), dtype=np.float32), {}
+            return np.zeros(self._obs_dim, dtype=np.float32), {}
 
         # Determine whether to reuse the existing vehicle and sensors.
         # On the first episode (vehicle is None) or if the actor has gone stale,
         # do a full spawn.  On all subsequent episodes, teleport instead to avoid
         # the destroy/respawn cycle that causes the CARLA ROS bridge to accumulate
         # actor-stream registrations and eventually segfault (exit code -11).
-        vehicle_alive = self.vehicle is not None and self.vehicle.is_alive
-        reuse_vehicle = vehicle_alive
+        reuse_vehicle = self.vehicle is not None and self.vehicle.is_alive
 
         # Always clean up NPCs, cones, and static vehicles from the previous
         # episode - only skip sensor/ego-vehicle destruction when reusing.
@@ -1189,9 +1289,12 @@ class CARLAParkingEnv(gym.Env):
 
         # A world reload (generate_opendrive_world / load_world) resets all
         # CARLA settings to async defaults, so sync mode is re-applied here
-        # rather than relying on the bridge.
+        # rather than relying on the bridge. Both sync and no_rendering_mode
+        # checks share a single get_settings() / apply_settings() pair.
         if self.world is not None:
             settings = self.world.get_settings()
+            settings_changed = False
+
             if not settings.synchronous_mode:
                 logger.info(
                     "Applying synchronous mode (fixed_delta=%.3fs) ...",
@@ -1199,8 +1302,7 @@ class CARLAParkingEnv(gym.Env):
                 )
                 settings.synchronous_mode = True
                 settings.fixed_delta_seconds = self._carla_timestep
-                self.world.apply_settings(settings)
-                logger.info("Synchronous mode enabled.")
+                settings_changed = True
             else:
                 logger.info(
                     "Synchronous mode already active "
@@ -1210,12 +1312,16 @@ class CARLAParkingEnv(gym.Env):
             # Apply no_rendering_mode if enabled. Disables Unreal rendering pipeline
             # but physics and state sensors remain active. For state-based agents
             # (no camera input), this provides 3-4x speedup by skipping GPU rendering.
-            if self._no_rendering_mode:
-                settings = self.world.get_settings()
-                if not settings.no_rendering_mode:
-                    logger.info("Enabling no_rendering_mode (state-based agent, no cameras)...")
-                    settings.no_rendering_mode = True
-                    self.world.apply_settings(settings)
+            if self._no_rendering_mode and not settings.no_rendering_mode:
+                logger.info(
+                    "Enabling no_rendering_mode (state-based agent, no cameras)..."
+                )
+                settings.no_rendering_mode = True
+                settings_changed = True
+
+            if settings_changed:
+                self.world.apply_settings(settings)
+                if self._no_rendering_mode:
                     logger.info("No rendering mode enabled. Expected speedup: 3-4x.")
 
         # Load floor plan and sample target bay
@@ -1254,7 +1360,7 @@ class CARLAParkingEnv(gym.Env):
         if (
             self._include_covariance
             and self._cov_subscriber is not None
-            and self._gnss_noise_tiers
+            and len(self._gnss_noise_tiers) > 0
         ):
             datum_lat: Optional[float] = None
             datum_lon: Optional[float] = None
@@ -1310,9 +1416,9 @@ class CARLAParkingEnv(gym.Env):
         # Initialise prev_distance for potential-based reward shaping
         if self.vehicle is not None:
             t = self.vehicle.get_transform()
-            self._prev_distance = math.sqrt(
-                (t.location.x - self._target_bay["x"]) ** 2
-                + (t.location.y - self._target_bay["y"]) ** 2
+            self._prev_distance = math.hypot(
+                t.location.x - self._target_x,
+                t.location.y - self._target_y,
             )
         else:
             self._prev_distance = 0.0
@@ -1366,11 +1472,16 @@ class CARLAParkingEnv(gym.Env):
         """
         # On a new action (or first call), reset the repeat counter
         if self._action_repeat_counter == 0:
-            self._last_action = action.copy()
+            self._last_action[:] = action
 
         # Execute one sim-step
         self.steps += 1
         self._action_repeat_counter += 1
+
+        # post-tick transform and velocity (fetched once, shared with
+        # _compute_reward and _write_vis_state to avoid duplicate CARLA RPCs).
+        _post_transform: Optional[Any] = None
+        _post_velocity: Optional[Any] = None
 
         if self.vehicle is not None:
             steer = float(np.clip(action[0], -1.0, 1.0))
@@ -1385,11 +1496,11 @@ class CARLAParkingEnv(gym.Env):
             # Cut throttle when speed limit is exceeded. Appropriate for
             # parking lot manoeuvres (< 3 m/s).
             vel = self.vehicle.get_velocity()
-            current_speed = math.sqrt(vel.x ** 2 + vel.y ** 2)
-            if current_speed >= self._max_ego_speed_ms:
-                control.throttle = 0.0
-            else:
-                control.throttle = float(max(longitudinal, 0.0))
+            current_speed = math.hypot(vel.x, vel.y)
+            control.throttle = (
+                0.0 if current_speed >= self._max_ego_speed_ms
+                else float(max(longitudinal, 0.0))
+            )
 
             self.vehicle.apply_control(control)
 
@@ -1400,21 +1511,25 @@ class CARLAParkingEnv(gym.Env):
                 # than hanging the process indefinitely.
                 self.world.tick(10.0)
 
-                # Update trajectory buffer for vis state writer
-                t = self.vehicle.get_transform()
-                self._trajectory_buffer.append((t.location.x, t.location.y))
+                # Fetch transform + velocity once post-tick; reused by
+                # _compute_reward and _write_vis_state below.
+                _post_transform = self.vehicle.get_transform()
+                _post_velocity = self.vehicle.get_velocity()
+                self._trajectory_buffer.append(
+                    (_post_transform.location.x, _post_transform.location.y)
+                )
 
         # Only construct observations and compute rewards on the final repeat step.
-        # Intermediate steps return minimal state to avoid EKF covariance reads.
+        # Intermediate steps return the last-built obs buffer directly.
         if self._action_repeat_counter < self._action_repeat:
-            # Intermediate repeat step: return cached state, continue action
-            cached_state = self._get_state()
-            return cached_state, 0.0, False, False, {}
+            return self._obs_buffer, 0.0, False, False, _EMPTY_STEP_INFO
 
         # Final repeat step: construct full observation and reward
         self._action_repeat_counter = 0  # Reset for next action
         state = self._get_state()
-        reward, terminated, success, reward_diag = self._compute_reward()
+        reward, terminated, success, reward_diag = self._compute_reward(
+            transform=_post_transform, velocity=_post_velocity
+        )
 
         # Per-step debug diagnostics (no-op when debug=False).
         # Reuse values already computed by _compute_reward() to avoid duplicate
@@ -1459,7 +1574,11 @@ class CARLAParkingEnv(gym.Env):
         else:
             end_reason = None
 
-        self._write_vis_state(end_reason=end_reason)
+        self._write_vis_state(
+            end_reason=end_reason,
+            transform=_post_transform,
+            velocity=_post_velocity,
+        )
 
         info: Dict[str, Any] = {
             "steps": self.steps,
@@ -1516,6 +1635,13 @@ class CARLAParkingEnv(gym.Env):
 
         if self._cov_subscriber is not None:
             self._cov_subscriber = None
+
+        if self._vis_file is not None:
+            try:
+                self._vis_file.close()
+            except OSError:
+                pass
+            self._vis_file = None
 
         self.client = None
         self.world = None
