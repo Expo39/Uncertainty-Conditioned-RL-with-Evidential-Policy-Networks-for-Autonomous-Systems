@@ -78,7 +78,7 @@ class DebugLogger:
         cov_mag = 0.0
         if uncertainty is not None and len(uncertainty) >= 3:
             # Summarise as RMS of the three diagonal std elements (indices 0-2)
-            cov_mag = float(np.sqrt(np.mean(np.square(uncertainty[:3]))))
+            cov_mag = float(np.sqrt(np.mean(uncertainty[:3] ** 2)))
 
         steer = float(action[0]) if len(action) > 0 else 0.0
         throttle = float(action[1]) if len(action) > 1 else 0.0
