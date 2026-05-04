@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
+
+try:
+    from yaml import CSafeLoader as _YamlLoader
+except ImportError:
+    from yaml import SafeLoader as _YamlLoader  # type: ignore[assignment]
 import yaml
 
 try:
@@ -113,30 +118,21 @@ def make_env(
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
-    def _init() -> gym.Env:
+    # Compute per-worker connection params.
+    worker_port = config.get("carla_port", 2000) + rank * 1000
+    worker_host = f"uncertainty-rl-carla-{rank}"
 
-        # Each worker connects to its own CARLA server on a separate port and host.
-        worker_port = config.get("carla_port", 2000) + rank * 1000
-        worker_host = f"uncertainty-rl-carla-{rank}"
-
-        # Per-worker EKF state file so each worker reads from its own ros2-bridge.
-        # Worker 0 uses the default path (backward compatible with single-instance).
-        # Worker 1+ derive: ekf_state.json -> ekf_state_1.json, ekf_state_2.json, etc.
-        ros2_config = config.get("ros2", {}).copy()
-        if rank > 0:
-            base_ekf = ros2_config.get(
-                "ekf_state_file", "/workspace/outputs/ekf_state.json"
-            )
-            p = Path(base_ekf)
-            ros2_config["ekf_state_file"] = str(p.parent / f"{p.stem}_{rank}{p.suffix}")
-
-        # Per-worker vis_history file so make visualise WORKER=N shows the right env.
-        # Worker 0 uses the CARLAParkingEnv default (outputs/vis_history.jsonl).
-        # Worker N writes to outputs/vis_history_N.jsonl.
-        vis_path: Optional[str] = (
-            None if rank == 0 else f"outputs/vis_history_{rank}.jsonl"
+    ros2_config = config.get("ros2", {}).copy()
+    if rank > 0:
+        base_ekf = ros2_config.get(
+            "ekf_state_file", "/workspace/outputs/ekf_state.json"
         )
+        p = Path(base_ekf)
+        ros2_config["ekf_state_file"] = str(p.parent / f"{p.stem}_{rank}{p.suffix}")
 
+    vis_path: Optional[str] = None if rank == 0 else f"outputs/vis_history_{rank}.jsonl"
+
+    def _init() -> gym.Env:
         env = CARLAParkingEnv(
             carla_host=worker_host,
             carla_port=worker_port,
@@ -177,7 +173,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     @return Configuration dictionary.
     """
     with open(config_path, "r") as f:
-        config: Dict[str, Any] = yaml.safe_load(f)
+        config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader)
     return config
 
 
@@ -204,7 +200,7 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
     @return Fully merged environment configuration dictionary.
     """
     with open(env_config_path) as f:
-        env_config: Dict[str, Any] = yaml.safe_load(f) or {}
+        env_config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
 
     deployment_dir = Path(env_config_path).parent.parent
 
@@ -212,13 +208,13 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
     sensor_cfg_path = deployment_dir / "sensor_config.yaml"
     if sensor_cfg_path.exists():
         with open(sensor_cfg_path) as f:
-            sensor_cfg = yaml.safe_load(f) or {}
+            sensor_cfg = yaml.load(f, Loader=_YamlLoader) or {}
 
     agent_cfg: Dict[str, Any] = {}
     agent_cfg_path = deployment_dir / "agent_config.yaml"
     if agent_cfg_path.exists():
         with open(agent_cfg_path) as f:
-            agent_cfg = yaml.safe_load(f) or {}
+            agent_cfg = yaml.load(f, Loader=_YamlLoader) or {}
 
     # Merge: sensor_config < agent_config < env_config (env wins on conflict).
     merged: Dict[str, Any] = {**sensor_cfg, **agent_cfg, **env_config}
@@ -240,82 +236,65 @@ class EnvDiagnosticsCallback(BaseCallback):
     def __init__(self) -> None:
         """@brief Initialise accumulators."""
         super().__init__(verbose=0)
-        self._ep_pos_errors: List[float] = []
-        self._ep_orientation_errors: List[float] = []
-        self._ep_speeds: List[float] = []
-        self._ep_progress_rewards: List[float] = []
-        self._ep_successes: List[float] = []
-        self._ep_collisions: List[float] = []
-        self._ep_timeouts: List[float] = []
+        self._pos_sum = 0.0
+        self._ori_sum = 0.0
+        self._spd_sum = 0.0
+        self._prog_sum = 0.0
+        self._step_count = 0
+        self._success_sum = 0.0
+        self._collision_sum = 0.0
+        self._timeout_sum = 0.0
+        self._terminal_count = 0
 
     def _on_step(self) -> bool:
         """
         @brief Accumulate diagnostics from the latest env step.
         @return Always True (training continues).
         """
-        # self.locals["infos"] is a list of info dicts, one per parallel env.
         for info in self.locals.get("infos", []):
-            self._ep_pos_errors.append(float(info.get("pos_error", 0.0)))
-            self._ep_orientation_errors.append(
-                float(info.get("orientation_error", 0.0))
-            )
-            self._ep_speeds.append(float(info.get("speed", 0.0)))
-            self._ep_progress_rewards.append(float(info.get("progress_reward", 0.0)))
-            # Episode-terminal flags - count when episode ended.
-            is_terminal = (
-                info.get("success", False)
-                or info.get("collision", False)
-                or info.get("timeout", False)
-            )
-            if is_terminal:
-                self._ep_successes.append(1.0 if info.get("success", False) else 0.0)
-                self._ep_collisions.append(1.0 if info.get("collision", False) else 0.0)
-                self._ep_timeouts.append(1.0 if info.get("timeout", False) else 0.0)
+            self._pos_sum += info.get("pos_error", 0.0)
+            self._ori_sum += info.get("orientation_error", 0.0)
+            self._spd_sum += info.get("speed", 0.0)
+            self._prog_sum += info.get("progress_reward", 0.0)
+            self._step_count += 1
+            # Read each flag once and reuse for both is_terminal and individual recording.
+            success = info.get("success", False)
+            collision = info.get("collision", False)
+            timeout = info.get("timeout", False)
+            if success or collision or timeout:
+                self._success_sum += success
+                self._collision_sum += collision
+                self._timeout_sum += timeout
+                self._terminal_count += 1
         return True
 
     def _on_rollout_end(self) -> None:
         """
-        @brief Flush accumulated diagnostics to TensorBoard at rollout end."""
-        if self._ep_pos_errors:
-            self.logger.record(
-                "env/mean_pos_error_m",
-                float(np.mean(self._ep_pos_errors)),
-            )
-            self.logger.record(
-                "env/mean_orientation_error_rad",
-                float(np.mean(self._ep_orientation_errors)),
-            )
-            self.logger.record(
-                "env/mean_speed_ms",
-                float(np.mean(self._ep_speeds)),
-            )
-            self.logger.record(
-                "env/mean_progress_reward",
-                float(np.mean(self._ep_progress_rewards)),
-            )
+        @brief Flush accumulated diagnostics to TensorBoard at rollout end.
+        """
+        if self._step_count:
+            inv = 1.0 / self._step_count
+            self.logger.record("env/mean_pos_error_m", self._pos_sum * inv)
+            self.logger.record("env/mean_orientation_error_rad", self._ori_sum * inv)
+            self.logger.record("env/mean_speed_ms", self._spd_sum * inv)
+            self.logger.record("env/mean_progress_reward", self._prog_sum * inv)
 
-        if self._ep_successes:
-            self.logger.record(
-                "env/success_rate",
-                float(np.mean(self._ep_successes)),
-            )
-            self.logger.record(
-                "env/collision_rate",
-                float(np.mean(self._ep_collisions)),
-            )
-            self.logger.record(
-                "env/timeout_rate",
-                float(np.mean(self._ep_timeouts)),
-            )
+        if self._terminal_count:
+            inv_t = 1.0 / self._terminal_count
+            self.logger.record("env/success_rate", self._success_sum * inv_t)
+            self.logger.record("env/collision_rate", self._collision_sum * inv_t)
+            self.logger.record("env/timeout_rate", self._timeout_sum * inv_t)
 
         # Reset accumulators for the next rollout window.
-        self._ep_pos_errors.clear()
-        self._ep_orientation_errors.clear()
-        self._ep_speeds.clear()
-        self._ep_progress_rewards.clear()
-        self._ep_successes.clear()
-        self._ep_collisions.clear()
-        self._ep_timeouts.clear()
+        self._pos_sum = 0.0
+        self._ori_sum = 0.0
+        self._spd_sum = 0.0
+        self._prog_sum = 0.0
+        self._step_count = 0
+        self._success_sum = 0.0
+        self._collision_sum = 0.0
+        self._timeout_sum = 0.0
+        self._terminal_count = 0
 
 
 def train(
@@ -432,8 +411,7 @@ def train(
         seed=seed,
     )
 
-    # Create agent based on policy_type config
-    policy_type = config.get("policy_type", "evidential")
+    # Create agent based on policy_type config (read once at run-name build above)
     logger.info("Initialising %s PPO agent...", policy_type)
 
     model: PPO

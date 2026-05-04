@@ -19,6 +19,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
 
+try:
+    from yaml import CSafeLoader as _YamlLoader
+except ImportError:
+    from yaml import SafeLoader as _YamlLoader  # type: ignore[assignment]
 import yaml
 
 # Optuna is required for tuning
@@ -63,11 +67,18 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     """
     space = tuning_config.get("search_space", {})
 
+    # Cache each range once to avoid duplicate .get() calls and list allocations.
+    lr_range = space.get("learning_rate", [1e-5, 1e-3])
+    gamma_range = space.get("gamma", [0.98, 0.999])
+    ent_range = space.get("ent_coef", [1e-6, 0.01])
+    lreg_range = space.get("lambda_reg", [1e-5, 0.01])
+    warmup_range = space.get("lambda_reg_warmup_steps", [10000, 100000])
+
     # PPO Hyperparameters
     learning_rate = trial.suggest_float(
         "learning_rate",
-        float(space.get("learning_rate", [1e-5, 1e-3])[0]),
-        float(space.get("learning_rate", [1e-5, 1e-3])[1]),
+        float(lr_range[0]),
+        float(lr_range[1]),
         log=True,
     )
 
@@ -92,16 +103,16 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     # Gamma: sample 1 - (1 - gamma) on log scale for precision near 1.0
     one_minus_gamma = trial.suggest_float(
         "one_minus_gamma",
-        1 - float(space.get("gamma", [0.98, 0.999])[1]),
-        1 - float(space.get("gamma", [0.98, 0.999])[0]),
+        1 - float(gamma_range[1]),
+        1 - float(gamma_range[0]),
         log=True,
     )
     gamma = 1.0 - one_minus_gamma
 
     ent_coef = trial.suggest_float(
         "ent_coef",
-        float(space.get("ent_coef", [1e-6, 0.01])[0]),
-        float(space.get("ent_coef", [1e-6, 0.01])[1]),
+        float(ent_range[0]),
+        float(ent_range[1]),
         log=True,
     )
 
@@ -109,15 +120,15 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     # Disabling evidential regularisation defeats the architecture's purpose.
     lambda_reg = trial.suggest_float(
         "lambda_reg",
-        float(space.get("lambda_reg", [1e-5, 0.01])[0]),
-        float(space.get("lambda_reg", [1e-5, 0.01])[1]),
+        float(lreg_range[0]),
+        float(lreg_range[1]),
         log=True,
     )
 
     lambda_reg_warmup_steps = trial.suggest_float(
         "lambda_reg_warmup_steps",
-        float(space.get("lambda_reg_warmup_steps", [10000, 100000])[0]),
-        float(space.get("lambda_reg_warmup_steps", [10000, 100000])[1]),
+        float(warmup_range[0]),
+        float(warmup_range[1]),
         log=True,
     )
 
@@ -221,7 +232,7 @@ def apply_best_params(
     # Load original config
     try:
         with open(config_path) as f:
-            original_config = yaml.safe_load(f)
+            original_config = yaml.load(f, Loader=_YamlLoader)
     except Exception as e:
         logger.error("Failed to load original config: %s", e)
         raise
