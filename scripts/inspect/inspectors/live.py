@@ -121,13 +121,17 @@ class LiveInspector(_Inspector):
             print(f"  LiDAR callback firing: {len(lidar_data)} points per scan.")
             self._lidar_logged = True
 
+        # Bind hot callables to locals.
+        draw_point = debug.draw_point
+        transform_pt = sensor_transform.transform
+        dot_size = self._LIDAR_DOT_SIZE
+        life = self._LIDAR_LIFE
         for detection in lidar_data:
-            world_point = sensor_transform.transform(detection.point)
-            debug.draw_point(
-                world_point,
-                size=self._LIDAR_DOT_SIZE,
+            draw_point(
+                transform_pt(detection.point),
+                size=dot_size,
                 color=dot_colour,
-                life_time=self._LIDAR_LIFE,
+                life_time=life,
             )
 
     # ------------------------------------------------------------------
@@ -163,8 +167,16 @@ class LiveInspector(_Inspector):
         self._spawn_sensors()
 
         tick_hz = self._TICK_HZ
+        tick_period = 1.0 / tick_hz
         total_ticks = self._duration * tick_hz
         log_ticks = 30 * tick_hz
+
+        # Bind hot-path callables to locals.
+        world_tick = self._env.world.tick
+        update_patrol = self._env._update_patrol_npcs
+        update_peds = self._env._update_pedestrians
+        place_birds_eye = self._place_spectator_birds_eye
+        vehicle = self._env.vehicle
 
         print(
             f"Live sensor session for {self._duration}s.  Press Ctrl+C to exit early."
@@ -173,17 +185,15 @@ class LiveInspector(_Inspector):
 
         try:
             for i in range(total_ticks):
-                self._env.world.tick()
-                self._env._update_patrol_npcs()
-                self._env._update_pedestrians()
+                world_tick()
+                update_patrol()
+                update_peds()
 
-                if self._env.vehicle is not None:
-                    vt = self._env.vehicle.get_transform()
-                    self._place_spectator_birds_eye(
-                        vt.location.x, vt.location.y, vt.location.z, 80.0
-                    )
+                if vehicle is not None:
+                    vt = vehicle.get_transform()
+                    place_birds_eye(vt.location.x, vt.location.y, vt.location.z, 80.0)
 
-                time.sleep(1.0 / tick_hz)
+                time.sleep(tick_period)
 
                 if (i + 1) % log_ticks == 0:
                     elapsed = (i + 1) // tick_hz

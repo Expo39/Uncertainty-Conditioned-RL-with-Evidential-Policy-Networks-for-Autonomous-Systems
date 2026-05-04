@@ -46,11 +46,23 @@ class LayoutInspector(_Inspector):
         layout = self._env._current_layout
         corners = layout.get("corners", [])
         if corners:
-            xs = [float(c["x"]) for c in corners]
-            ys = [float(c["y"]) for c in corners]
-            cx = (min(xs) + max(xs)) / 2.0
-            cy = (min(ys) + max(ys)) / 2.0
-            span = max(max(xs) - min(xs), max(ys) - min(ys))
+            # Single-pass min/max
+            x_min = x_max = float(corners[0]["x"])
+            y_min = y_max = float(corners[0]["y"])
+            for c in corners[1:]:
+                cx_v = float(c["x"])
+                cy_v = float(c["y"])
+                if cx_v < x_min:
+                    x_min = cx_v
+                elif cx_v > x_max:
+                    x_max = cx_v
+                if cy_v < y_min:
+                    y_min = cy_v
+                elif cy_v > y_max:
+                    y_max = cy_v
+            cx = (x_min + x_max) * 0.5
+            cy = (y_min + y_max) * 0.5
+            span = max(x_max - x_min, y_max - y_min)
             cam_z = max(span * 1.1, 80.0)
         else:
             spawn = layout.get("spawn_transform", {})
