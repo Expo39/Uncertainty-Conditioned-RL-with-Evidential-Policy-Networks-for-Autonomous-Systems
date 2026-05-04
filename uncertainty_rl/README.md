@@ -22,7 +22,19 @@ from uncertainty_rl.envs import CARLAParkingEnv
 
 ## Package Exports
 
-- `EvidentialPolicyNetwork`
+**Networks** (`uncertainty_rl.networks`):
 - `EvidentialLayer`
+- `EvidentialPolicyNetwork`
 - `UncertaintyConditionedActor`
+- `EvidentialActorCriticPolicy`
+- `EvidentialDistribution`
+- `EvidentialPPO`
+
+**Environments** (`uncertainty_rl.envs`):
 - `CARLAParkingEnv`
+- `RealWorldDeployment`
+- `SafetyWrapper`
+
+Sub-modules are not eagerly imported at the package root (`uncertainty_rl/__init__.py`) because
+`torch`, `gymnasium`, and `carla` are not installed in the local `.venv`. Import directly from
+sub-modules when needed.
