@@ -1,0 +1,192 @@
+\begin{thebibliography}{10}
+
+\bibitem{yurtsever2020survey}
+E.~Yurtsever, J.~Lambert, A.~Carballo, and K.~Takeda.
+\newblock A survey of autonomous driving: Common practices and emerging technologies.
+\newblock {\em {IEEE} Access}, 8:58443--58469, 2020.
+
+\bibitem{iso26262}
+{International Organization for Standardization}.
+\newblock {ISO} 26262:2018 road vehicles -- functional safety.
+\newblock \url{https://www.iso.org/publication/PUB200262.html}, 2018.
+
+\bibitem{kendall2017uncertainties}
+A.~Kendall and Y.~Gal.
+\newblock What uncertainties do we need in {B}ayesian deep learning for computer vision?
+\newblock {\em arXiv preprint arXiv:1703.04977}, 2017.
+\newblock Also appeared at {NeurIPS} 2017.
+
+\bibitem{charpentier2022disentangling}
+B.~Charpentier, R.~Senanayake, M.~Kochenderfer, and S.~G\"{u}nnemann.
+\newblock Disentangling epistemic and aleatoric uncertainty in reinforcement learning.
+\newblock {\em arXiv preprint arXiv:2206.01558}, 2022.
+
+\bibitem{akgul2025eppo}
+A.~Akg\"{u}l, G.~Baykal, M.~Hau{\ss}mann, and M.~Kandemir.
+\newblock Overcoming non-stationary dynamics with evidential proximal policy optimization.
+\newblock {\em arXiv preprint arXiv:2503.01468}, 2025.
+\newblock Accepted to {TMLR} 2025.
+
+\bibitem{ham2025dro}
+H.~Ham and H.~Ahn.
+\newblock {DRO-EDL-MPC}: Evidential deep learning-based distributionally robust model predictive control for safe autonomous driving.
+\newblock {\em arXiv preprint arXiv:2507.05710}, 2025.
+
+\bibitem{stutts2024ceqr}
+A.~C. Stutts, D.~Erricolo, T.~Tulabandhula, and A.~R. Trivedi.
+\newblock Echoes of {S}ocratic doubt: Embracing uncertainty in calibrated evidential reinforcement learning.
+\newblock {\em arXiv preprint arXiv:2402.07107}, 2024.
+
+\bibitem{placed2020active}
+J.~A. Placed and J.~A. Castellanos.
+\newblock A deep reinforcement learning approach for active {SLAM}.
+\newblock {\em Appl. Sci.}, 10(23):8386, 2020.
+
+\bibitem{puthumanaillam2025guided}
+G.~Puthumanaillam, P.~Padrao, J.~Fuentes, L.~Bobadilla, and M.~Ornik.
+\newblock {GUIDEd} agents: Enhancing navigation policies through task-specific uncertainty abstraction in localization-limited environments.
+\newblock {\em arXiv preprint arXiv:2410.15178}, 2025.
+
+\bibitem{dosovitskiy2017carla}
+A.~Dosovitskiy, G.~Ros, F.~Codevilla, A.~Lopez, and V.~Koltun.
+\newblock {CARLA}: An open urban driving simulator.
+\newblock {\em arXiv preprint arXiv:1711.03938}, 2017.
+\newblock Also appeared at {CoRL} 2017.
+
+\bibitem{moore2014ekf}
+T.~Moore and D.~Stouch.
+\newblock A generalized extended {K}alman filter implementation for the {R}obot {O}perating {S}ystem.
+\newblock In {\em Intell. Auton. Syst. 13 ({IAS-13})}, pages 335--348, Cham, Switzerland, 2016. Springer.
+
+\bibitem{schulman2017ppo}
+J.~Schulman, F.~Wolski, P.~Dhariwal, A.~Radford, and O.~Klimov.
+\newblock Proximal policy optimization algorithms.
+\newblock {\em arXiv preprint arXiv:1707.06347}, 2017.
+
+\bibitem{amini2020deep}
+A.~Amini, W.~Schwarting, A.~Soleimany, and D.~Rus.
+\newblock Deep evidential regression.
+\newblock {\em arXiv preprint arXiv:1910.02600}, 2020.
+\newblock Also appeared at {NeurIPS} 2020.
+
+\bibitem{sutton2018rl}
+R.~S. Sutton and A.~G. Barto.
+\newblock {\em Reinforcement Learning: An Introduction}.
+\newblock {MIT} Press, Cambridge, MA, USA, 2nd edition, 2018.
+
+\bibitem{thrun2005probabilistic}
+S.~Thrun, W.~Burgard, and D.~Fox.
+\newblock {\em Probabilistic Robotics}.
+\newblock {MIT} Press, Cambridge, MA, USA, 2005.
+
+\bibitem{schulman2015gae}
+J.~Schulman, P.~Moritz, S.~Levine, M.~I. Jordan, and P.~Abbeel.
+\newblock High-dimensional continuous control using generalized advantage estimation.
+\newblock {\em arXiv preprint arXiv:1506.02438}, 2016.
+\newblock Also appeared at {ICLR} 2016.
+
+\bibitem{mnih2016a3c}
+V.~Mnih, A.~P. Badia, M.~Mirza, A.~Graves, T.~P. Lillicrap, T.~Harley, D.~Silver, and K.~Kavukcuoglu.
+\newblock Asynchronous methods for deep reinforcement learning.
+\newblock {\em arXiv preprint arXiv:1602.01783}, 2016.
+\newblock Also appeared at {ICML} 2016.
+
+\bibitem{raffin2021sb3}
+A.~Raffin, A.~Hill, A.~Gleave, A.~Kanervisto, M.~Ernestus, and N.~Dormann.
+\newblock Stable-{B}aselines3: Reliable reinforcement learning implementations.
+\newblock {\em J. Mach. Learn. Res.}, 22(268):1--8, 2021.
+
+\bibitem{sensoy2018evidential}
+M.~Sensoy, L.~Kaplan, and M.~Kandemir.
+\newblock Evidential deep learning to quantify classification uncertainty.
+\newblock {\em arXiv preprint arXiv:1806.01768}, 2018.
+\newblock Also appeared at {NeurIPS} 2018.
+
+\bibitem{oh2022improving}
+D.~Oh and B.~Shin.
+\newblock Improving evidential deep learning via multi-task learning.
+\newblock {\em arXiv preprint arXiv:2112.09368}, 2021.
+\newblock Also appeared at {AAAI} 2022.
+
+\bibitem{lakshminarayanan2017ensembles}
+B.~Lakshminarayanan, A.~Pritzel, and C.~Blundell.
+\newblock Simple and scalable predictive uncertainty estimation using deep ensembles.
+\newblock {\em arXiv preprint arXiv:1612.01474}, 2017.
+\newblock Also appeared at {NeurIPS} 2017.
+
+\bibitem{todorov2012mujoco}
+E.~Todorov, T.~Erez, and Y.~Tassa.
+\newblock {MuJoCo}: A physics engine for model-based control.
+\newblock In {\em Proc. {IEEE/RSJ} Int. Conf. Intell. Robots Syst. ({IROS})}, pages 5026--5033, 2012.
+
+\bibitem{kim2022unicon}
+C.~Kim, J.-K. Cho, H.-S. Yoon, S.-W. Seo, and S.-W. Kim.
+\newblock {UNICON}: Uncertainty-conditioned policy for robust behavior in unfamiliar scenarios.
+\newblock {\em {IEEE} Robot. Autom. Lett.}, 7(4):9099--9106, 2022.
+
+\bibitem{hoel2023ensemble}
+C.-J. Hoel, K.~Wolff, and L.~Laine.
+\newblock Ensemble quantile networks: Uncertainty-aware reinforcement learning with applications in autonomous driving.
+\newblock {\em {IEEE} Trans. Intell. Transp. Syst.}, 24(6):6030--6041, 2023.
+
+\bibitem{gal2016dropout}
+Y.~Gal and Z.~Ghahramani.
+\newblock Dropout as a {B}ayesian approximation: Representing model uncertainty in deep learning.
+\newblock {\em arXiv preprint arXiv:1506.02142}, 2016.
+\newblock Also appeared at {ICML} 2016.
+
+\bibitem{kovacs2025covariance}
+I.~Kovacs, M.~Stefanoni, R.~Pesti, D.~Csik, P.~Sarcevic, and A.~Odry.
+\newblock Evaluation of optimal covariance models for {EKF}-based wheeled mobile robot localization.
+\newblock {\em Acta Polytechnica Hungarica}, 22(12):143--158, 2025.
+
+\bibitem{haarnoja2018sac}
+T.~Haarnoja, A.~Zhou, P.~Abbeel, and S.~Levine.
+\newblock Soft actor-critic: Off-policy maximum entropy deep reinforcement learning with a stochastic actor.
+\newblock {\em arXiv preprint arXiv:1801.01290}, 2018.
+\newblock Also appeared at {ICML} 2018.
+
+\bibitem{fgsv2005ear}
+{Forschungsgesellschaft f\"{u}r Stra{\ss}en- und Verkehrswesen}.
+\newblock {EAR}~05: Empfehlungen f\"{u}r anlagen des ruhenden verkehrs [recommendations for stationary traffic facilities], 2005.
+\newblock {FGSV}~283.
+
+\bibitem{sick2026tim571}
+{SICK AG}.
+\newblock {\em {TiM571-2050101} 2D {LiDAR} Sensors: Data Sheet}.
+\newblock {SICK AG}, Waldkirch, Germany, 2026.
+\newblock Order no. 1075091.
+
+\bibitem{ng1999reward}
+A.~Y. Ng, D.~Harada, and S.~J. Russell.
+\newblock Policy invariance under reward transformations: Theory and application to reward shaping.
+\newblock In {\em Proc. 16th Int. Conf. Mach. Learn. ({ICML})}, pages 278--287. Morgan Kaufmann, 1999.
+
+\bibitem{vectornav2023vn100}
+{VectorNav Technologies}.
+\newblock {\em {VN-100 Rugged IMU/AHRS}: Sensor Datasheet (Hardware v7.0)}.
+\newblock {VectorNav Technologies, LLC}, Dallas, TX, USA, 2023.
+\newblock Doc. {DS100-CR-70}, Version 25-100-CR-70-R1.
+
+\bibitem{akiba2019optuna}
+T.~Akiba, S.~Sano, T.~Yanase, T.~Ohta, and M.~Koyama.
+\newblock {O}ptuna: A next-generation hyperparameter optimization framework.
+\newblock In {\em Proc. 25th {ACM} {SIGKDD} Int. Conf. Knowledge Discovery and Data Mining}, pages 2623--2631, 2019.
+
+\bibitem{andrychowicz2021onpolicy}
+M.~Andrychowicz, A.~Raichuk, P.~Sta\'nczyk, M.~Orsini, S.~Girgin, R.~Marinier, L.~Hussenot, M.~Geist, O.~Pietquin, M.~Michalski, S.~Gelly, and O.~Bachem.
+\newblock What matters for on-policy deep actor--critic methods? {A} large-scale study.
+\newblock In {\em Proc. 9th Int. Conf. Learning Representations ({ICLR})}, 2021.
+
+\bibitem{eimer2023hyperparams}
+T.~Eimer, M.~Lindauer, and R.~Raileanu.
+\newblock Hyperparameters in reinforcement learning and how to tune them.
+\newblock In {\em Proc. 40th Int. Conf. Machine Learning ({ICML})}, pages 9104--9149, 2023.
+
+\bibitem{codevilla2018offline}
+F.~Codevilla, A.~M. L\'{o}pez, V.~Koltun, and A.~Dosovitskiy.
+\newblock On offline evaluation of vision-based driving models.
+\newblock {\em arXiv preprint arXiv:1809.04843}, 2018.
+\newblock Also appeared at {ECCV} 2018.
+
+\end{thebibliography}

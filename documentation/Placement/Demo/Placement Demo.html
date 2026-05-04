@@ -1,0 +1,927 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Placement Demo — Antonio Galdes</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter+Tight:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="deck-stage.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'\\(',right:'\\)',display:false}],throwOnError:false});"></script>
+<style>
+  :root {
+    --ink:        #0d0c0a;
+    --paper:      #f5f1ea;
+    --paper-deep: #eae4d8;
+    --rule:       #1e1c18;
+    --rule-soft:  rgba(13,12,10,0.14);
+    --muted:      rgba(13,12,10,0.58);
+    --muted-hi:   rgba(13,12,10,0.78);
+    --accent:     #ff5a1f;
+    --accent-ink: #d6441a;
+
+    --dk-bg:      #0a0a0a;
+    --dk-panel:   #121211;
+    --dk-paper:   #efeae0;
+    --dk-muted:   rgba(239,234,224,0.55);
+    --dk-rule:    rgba(239,234,224,0.14);
+
+    --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+    --sans:  "Inter Tight", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --mono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  html, body { margin: 0; background: #000; font-family: var(--sans); color: var(--ink); }
+
+  section.slide {
+    background: var(--paper);
+    color: var(--ink);
+    padding: 96px 112px;
+    display: flex;
+    flex-direction: column;
+    font-family: var(--sans);
+    position: relative;
+  }
+  section.slide.dark { background: var(--dk-bg); color: var(--dk-paper); }
+  section.slide.dark .muted { color: var(--dk-muted); }
+  section.slide.dark .rule-top,
+  section.slide.dark .rule-bot { border-color: var(--dk-rule); }
+
+  /* -- Top chrome: slide number + section + tiny brand mark -- */
+  .chrome {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 22px;
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  section.slide.dark .chrome { color: var(--dk-muted); border-color: var(--dk-rule); }
+  .chrome .left { display: flex; gap: 28px; align-items: center; }
+  .chrome .num { color: var(--ink); font-weight: 600; }
+  section.slide.dark .chrome .num { color: var(--dk-paper); }
+  .chrome .tag { color: var(--accent); }
+  .chrome .right { display: flex; gap: 18px; align-items: center; }
+  .brand-mark {
+    display: inline-flex; align-items: center; gap: 10px;
+    font-family: var(--sans); font-size: 13px; letter-spacing: 0.02em;
+    text-transform: none; color: var(--muted-hi);
+  }
+  section.slide.dark .brand-mark { color: rgba(239,234,224,0.8); }
+  .brand-mark .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); display: inline-block;
+  }
+
+  /* -- Bottom chrome -- */
+  .footer {
+    margin-top: auto;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-top: 28px;
+    border-top: 1px solid var(--rule-soft);
+  }
+  section.slide.dark .footer { color: var(--dk-muted); border-color: var(--dk-rule); }
+
+  /* -- Typography scales -- */
+  h1.display {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 148px;
+    line-height: 0.94;
+    letter-spacing: -0.025em;
+    margin: 0;
+  }
+  h1.display em { font-style: italic; color: var(--accent-ink); }
+  section.slide.dark h1.display em { color: var(--accent); }
+
+  h2.title {
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: 96px;
+    line-height: 0.98;
+    letter-spacing: -0.02em;
+    margin: 0;
+  }
+  h2.title em { font-style: italic; color: var(--accent-ink); }
+  section.slide.dark h2.title em { color: var(--accent); }
+
+  h3.eyebrow {
+    font-family: var(--mono);
+    font-size: 14px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin: 0 0 20px 0;
+    font-weight: 500;
+  }
+
+  p.lede {
+    font-family: var(--serif);
+    font-size: 44px;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    max-width: 22ch;
+    text-wrap: pretty;
+    margin: 0;
+  }
+  section.slide.dark p.lede { color: var(--dk-paper); }
+
+  p.body {
+    font-size: 22px;
+    line-height: 1.45;
+    color: var(--muted-hi);
+    max-width: 46ch;
+    text-wrap: pretty;
+    margin: 0;
+  }
+  section.slide.dark p.body { color: rgba(239,234,224,0.82); }
+
+  .mono { font-family: var(--mono); }
+  .serif-it { font-family: var(--serif); font-style: italic; }
+  .accent { color: var(--accent); }
+
+  /* -- Numbered list utility -- */
+  .num-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 28px; }
+  .num-list li {
+    display: grid;
+    grid-template-columns: 52px 1fr;
+    column-gap: 22px;
+    align-items: baseline;
+  }
+  .num-list .n {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    padding-top: 8px;
+  }
+  .num-list .body-txt { font-size: 22px; line-height: 1.4; color: var(--muted-hi); }
+  .num-list .body-txt b {
+    font-weight: 600;
+    color: var(--ink);
+    font-family: var(--sans);
+  }
+  section.slide.dark .num-list .body-txt { color: rgba(239,234,224,0.82); }
+  section.slide.dark .num-list .body-txt b { color: var(--dk-paper); }
+
+  /* -- Inspector "device" placeholder frame -- */
+  .device {
+    position: relative;
+    border: 1px solid var(--rule-soft);
+    background: #121211;
+    border-radius: 6px;
+    overflow: hidden;
+    font-family: var(--mono);
+    color: #efeae0;
+  }
+  section.slide.dark .device { border-color: var(--dk-rule); }
+  .device .titlebar {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 14px 18px;
+    font-size: 12px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: rgba(239,234,224,0.68);
+    border-bottom: 1px solid rgba(239,234,224,0.1);
+    background: #161614;
+  }
+  .device .titlebar .lights { display: inline-flex; gap: 6px; }
+  .device .titlebar .lights span { width: 10px; height: 10px; border-radius: 50%; background: rgba(239,234,224,0.16); display:inline-block; }
+  .device .body {
+    position: relative;
+    background:
+      radial-gradient(ellipse at 50% 60%, rgba(255,90,31,0.05), transparent 55%),
+      repeating-linear-gradient(0deg, rgba(239,234,224,0.025) 0 1px, transparent 1px 28px),
+      repeating-linear-gradient(90deg, rgba(239,234,224,0.025) 0 1px, transparent 1px 28px),
+      #0e0e0c;
+  }
+  .device .caption {
+    font-family: var(--mono); font-size: 14px; color: rgba(239,234,224,0.5);
+    padding: 14px 18px; border-top: 1px solid rgba(239,234,224,0.08);
+    letter-spacing: 0.08em; text-transform: uppercase;
+    background: #121211;
+  }
+
+  /* Inspector scene */
+  .scene svg { width: 100%; height: 100%; display: block; }
+
+  /* -- Spec lists for tools -- */
+  .spec-row { display: grid; grid-template-columns: 200px 1fr; gap: 36px; padding: 18px 0; border-top: 1px solid var(--rule-soft); }
+  .spec-row:last-child { border-bottom: 1px solid var(--rule-soft); }
+  section.slide.dark .spec-row { border-color: var(--dk-rule); }
+  .spec-row .k {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.12em;
+    text-transform: uppercase; color: var(--muted); padding-top: 4px;
+  }
+  section.slide.dark .spec-row .k { color: var(--dk-muted); }
+  .spec-row .v { font-size: 20px; line-height: 1.45; color: var(--ink); }
+  .spec-row .v b { font-weight: 600; }
+  section.slide.dark .spec-row .v { color: var(--dk-paper); }
+  .spec-row .v code {
+    font-family: var(--mono); font-size: 15px; padding: 2px 7px;
+    background: rgba(13,12,10,0.06); border-radius: 3px;
+    color: var(--ink);
+  }
+  section.slide.dark .spec-row .v code { background: rgba(239,234,224,0.08); color: var(--dk-paper); }
+
+  /* Colour dot legend */
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 8px; vertical-align: baseline; transform: translateY(1px); }
+
+  /* Big number tile */
+  .stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; }
+  .stat {
+    padding: 24px 28px 24px 0;
+    border-left: 1px solid var(--rule-soft);
+    padding-left: 28px;
+  }
+  .stat:first-child { border-left: 0; padding-left: 0; }
+  section.slide.dark .stat { border-color: var(--dk-rule); }
+  .stat .v {
+    font-family: var(--serif); font-size: 92px; line-height: 0.9;
+    letter-spacing: -0.02em; color: var(--ink);
+  }
+  section.slide.dark .stat .v { color: var(--dk-paper); }
+  .stat .v em { font-style: italic; color: var(--accent); }
+  .stat .k { font-family: var(--mono); font-size: 13px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); margin-top: 14px; }
+  section.slide.dark .stat .k { color: var(--dk-muted); }
+
+  /* Pipeline boxes */
+  .pipeline { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; }
+  .pipe-card {
+    border: 1px solid var(--rule-soft);
+    background: rgba(13,12,10,0.02);
+    border-radius: 4px;
+    padding: 28px 28px 32px;
+    display: flex; flex-direction: column; gap: 14px;
+    min-height: 320px;
+  }
+  section.slide.dark .pipe-card { border-color: var(--dk-rule); background: rgba(239,234,224,0.02); }
+  .pipe-card .n {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em;
+    color: var(--accent); text-transform: uppercase;
+  }
+  .pipe-card h4 {
+    font-family: var(--serif); font-weight: 400; font-size: 44px; line-height: 1;
+    letter-spacing: -0.01em; margin: 0;
+  }
+  .pipe-card p { font-size: 17px; line-height: 1.45; color: var(--muted-hi); margin: 0; }
+  section.slide.dark .pipe-card p { color: rgba(239,234,224,0.78); }
+  .pipe-card ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+  .pipe-card li { font-family: var(--mono); font-size: 13px; color: var(--ink); letter-spacing: 0.02em; }
+  section.slide.dark .pipe-card li { color: var(--dk-paper); }
+  .pipe-card li::before { content: ">  "; color: var(--accent); }
+  .pipe-card .foot { margin-top: auto; font-family: var(--mono); font-size: 12px; color: var(--muted); letter-spacing: 0.1em; text-transform: uppercase; }
+  section.slide.dark .pipe-card .foot { color: var(--dk-muted); }
+
+  /* Flow arrows */
+  .flow { display: flex; align-items: center; gap: 18px; font-family: var(--mono); font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); }
+  .flow .arr { color: var(--accent); }
+  section.slide.dark .flow { color: rgba(239,234,224,0.72); }
+
+  /* Page-specific layouts */
+  .two-col { display: grid; grid-template-columns: 1fr 1.15fr; gap: 80px; flex: 1; min-height: 0; align-items: start; }
+  .two-col.vcenter { align-items: center; }
+
+  /* Tools catalogue */
+  .catalog { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border-top: 1px solid var(--rule-soft); }
+  section.slide.dark .catalog { border-color: var(--dk-rule); }
+  .catalog .mode {
+    border-right: 1px solid var(--rule-soft);
+    padding: 28px 28px 32px 28px;
+    display: flex; flex-direction: column; gap: 16px; min-height: 460px;
+  }
+  section.slide.dark .catalog .mode { border-color: var(--dk-rule); }
+  .catalog .mode:last-child { border-right: 0; padding-right: 0; }
+  .catalog .mode:first-child { padding-left: 0; }
+  .catalog .mode .mno { font-family: var(--mono); font-size: 12px; color: var(--accent); letter-spacing: 0.18em; }
+  .catalog .mode h4 { font-family: var(--serif); font-weight: 400; font-size: 52px; line-height: 1; margin: 0 0 4px; letter-spacing: -0.01em; }
+  .catalog .mode .sub { font-family: var(--mono); font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  section.slide.dark .catalog .mode .sub { color: var(--dk-muted); }
+  .catalog .mode p { font-size: 16px; line-height: 1.45; color: var(--muted-hi); margin: 0; }
+  section.slide.dark .catalog .mode p { color: rgba(239,234,224,0.78); }
+  .catalog .mode .cmd {
+    margin-top: auto;
+    font-family: var(--mono); font-size: 12px;
+    color: var(--ink);
+    padding: 10px 12px;
+    background: rgba(13,12,10,0.05);
+    border-left: 2px solid var(--accent);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  section.slide.dark .catalog .mode .cmd { color: var(--dk-paper); background: rgba(239,234,224,0.04); }
+
+  /* Observation schema table */
+  .obs-table { width: 100%; border-collapse: collapse; }
+  .obs-table td, .obs-table th { text-align: left; padding: 12px 0; border-bottom: 1px solid var(--rule-soft); font-size: 18px; }
+  section.slide.dark .obs-table td, section.slide.dark .obs-table th { border-color: var(--dk-rule); }
+  .obs-table th { font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted); padding-bottom: 12px; }
+  section.slide.dark .obs-table th { color: var(--dk-muted); }
+  .obs-table td.idx { font-family: var(--mono); color: var(--accent); font-size: 14px; width: 70px; }
+  .obs-table td.feat { font-family: var(--mono); font-size: 14px; }
+  .obs-table td.src { color: var(--muted); font-size: 16px; }
+  section.slide.dark .obs-table td.src { color: var(--dk-muted); }
+  section.slide.dark .obs-table td.feat { color: var(--dk-paper); }
+
+  /* LiDAR scene for sensors */
+  .sensor-diagram {
+    display: flex; align-items: center; justify-content: center;
+    padding: 32px;
+    background: #0e0e0c;
+    border-radius: 6px;
+    border: 1px solid var(--rule-soft);
+    position: relative;
+  }
+
+  .sep { height: 1px; background: var(--rule-soft); margin: 32px 0; }
+  section.slide.dark .sep { background: var(--dk-rule); }
+
+  /* Title slide spec */
+  .title-wrap { display: grid; grid-template-rows: 1fr auto; gap: 48px; flex: 1; }
+  .title-meta {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 40px;
+    padding-top: 32px;
+    border-top: 1px solid var(--rule-soft);
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  section.slide.dark .title-meta { border-color: var(--dk-rule); color: var(--dk-muted); }
+  .title-meta .k { display: block; margin-bottom: 8px; color: var(--accent); }
+  .title-meta .v { color: var(--ink); font-family: var(--sans); font-size: 17px; letter-spacing: 0; text-transform: none; }
+  section.slide.dark .title-meta .v { color: var(--dk-paper); }
+
+  /* Figure inside device */
+  .lot-svg { width: 100%; height: 100%; }
+
+</style>
+</head>
+<body>
+
+<script type="application/json" id="speaker-notes">
+[
+"Hello, I am Antonio. This is a walk-through of the work I did across the placement. The short version: the company is looking into teleoperation, which needs a simulation to prototype against, so I built that sim in CARLA and, importantly, the tooling around it so the rest of the team can use it without being CARLA experts. That is what this deck is about: the tools, what they do, and why they save time.",
+"The setting. Lemonworx is investigating teleoperation as a way to supervise vehicle deployments remotely. If that were to scale, much of the routine driving would need to be handled automatically so that one operator could potentially cover many sites. To prototype any of that you need a parking-lot simulator you can iterate on quickly. The placement built that. A CARLA environment containerised end to end, one command to start the full stack, with three lot geometries included out of the box and zero Unreal Engine skills required. An engineer on the team can author a new layout and validate the sensor rig without opening the Unreal Engine editor once.",
+"Three tools ended up being the bulk of my placement output. Tool one is the layout generator: you write a parking lot as a short Python file in local frame and it produces the YAML the sim consumes plus a bird's-eye PNG. Three lot shapes are already included: rectangle, trapezoid, and a nine-sided irregular. Bay dimensions follow the German EAR-05 guideline. Tool two is the inspector: one script, four modes, checks a lot layout, sensor rig, live LiDAR, or the full pipeline in windowed CARLA. Tool three is the live visualiser: a detachable bird's-eye viewer running on the host. Training stays headless; the viewer reads a trace file only while it is open, so overhead is zero when you are not watching. An MP4 is saved on close. All three tools read the same YAML configs the sim reads, so nothing can silently drift out of sync.",
+"For completeness, here is the full inspector catalogue. Mode one is layout: full lot in windowed CARLA with coloured overlays. Mode two is sensors: ego spawned with each mount point annotated in-world. Mode three is live: a real LiDAR renders every scan return as a debug dot so you can see the detection envelope. Mode four is dry-run: the full training pipeline runs with random or keyboard actions and no model, so every surface is exercised before a real run starts. Same argument style across all four, so there is nothing new to learn per mode.",
+"Modes one and two of the inspector. Mode one spawns the full lot and paints the geometry as coloured overlays: bay outlines colour-coded by type, perpendicular in blue, angled in yellow, parallel in violet, the target bay in green, patrol path in red. Somebody authoring a new layout can see in seconds whether the aisles are wide enough and the bays pack correctly. Mode two spawns the ego vehicle and annotates each sensor mount in-world: yellow for the IMU on the chassis, magenta for the GNSS antenna on the roof, cyan for the front-bumper LiDAR, with the FOV arc drawn at 30 metres. The mount positions come from the same YAML the simulator reads, so the diagram and the agent cannot drift apart.",
+"Modes three and four complete the inspector. Live mode spawns a real 2D LiDAR on the ego vehicle and renders every scan return as a red debug dot in the CARLA world, so you can literally see what the sensor is detecting and confirm the range and coverage look right. Dry-run mode runs the full training pipeline with either random actions or keyboard control and no model attached. Every stage gets exercised: environment reset, sensor fusion, observation construction, reward calculation, and step. If anything in the pipeline is broken, dry-run will surface it in a few seconds rather than letting it fail hours into a training run.",
+"The live visualiser is a detachable bird's-eye viewer that runs on the host while the sim stays headless in Docker. It reads a trace file only while the window is open, so overhead is zero when you are not watching. Three things it shows: the ego trail, the NPC vehicles nearby, and two uncertainty rings around the agent, the inner ring for aleatoric and the outer for epistemic. Closing the window saves an MP4 of the full run automatically. The idea is that you can attach the viewer to check a run is behaving, then close it and leave training to continue without any impact on throughput.",
+"The policy does not just output an action. It outputs a probability distribution over the action, parameterised as a Normal-Inverse-Gamma. From four numbers the network produces two distinct uncertainty types in a single forward pass, with no dropout or ensembles needed. Epistemic uncertainty reflects model ignorance, rising on lot geometries not seen during training, and is the signal to slow down and drive more conservatively. Aleatoric uncertainty reflects irreducible noise in the situation itself, rising when degraded GNSS makes the correct action genuinely ambiguous. That is the trigger for handing off to a remote operator.",
+"Two items remain. First, a safety wrapper that monitors policy confidence and alerts a remote operator only when uncertainty crosses a threshold, not on every step. Second, showing the team how to use the sim stack, walking colleagues through authoring new layouts, validating sensor rigs, and running experiments without needing to touch CARLA internals.",
+"That is the tour. Three tools around one simulator. The simulator is reproducible, and thanks to the tooling the rest of the team can now author a layout, check a sensor rig, or watch a run without touching Unreal Engine or CARLA internals. Happy to take questions on any of the three tools, on the sim itself, or on how this fits into the wider teleoperation research."
+]
+</script>
+
+<deck-stage width="1920" height="1080">
+
+  <!-- =================================================================
+       01 / TITLE
+       ================================================================= -->
+  <section class="slide dark" data-label="Title">
+    <div class="chrome">
+      <div class="left">
+        <span class="num">01 / 10</span>
+        <span>Placement Demo</span>
+      </div>
+      <div class="right">
+        <span class="brand-mark"><span class="dot"></span>Lemonworx · ARI5906</span>
+      </div>
+    </div>
+
+    <div class="title-wrap" style="padding-top:48px;">
+      <div>
+        <h3 class="eyebrow">Placement · April 2026</h3>
+        <h1 class="display" style="font-size:120px;">
+          A parking agent<br/>that knows when<br/>it doesn't <em>know.</em>
+        </h1>
+        <p class="body" style="margin-top:40px; font-size:24px; max-width:56ch; color:rgba(239,234,224,0.72);">
+          A CARLA simulation stack built around an evidential policy.
+          Localisation uncertainty is fed in through EKF covariance,
+          and the policy outputs two uncertainty measures that govern
+          how the system responds under degraded conditions.
+        </p>
+      </div>
+
+      <div class="title-meta">
+        <div><span class="k">Author</span><span class="v">Antonio Galdes</span></div>
+        <div><span class="k">Host</span><span class="v">Lemonworx LTD</span></div>
+        <div><span class="k">Domain</span><span class="v">Teleoperation · CARLA</span></div>
+        <div><span class="k">Date</span><span class="v">April 2026</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- =================================================================
+       02 / INDUSTRY CONTEXT
+       ================================================================= -->
+  <section class="slide" data-label="Industry Context">
+    <div class="chrome">
+      <div class="left"><span class="num">02 / 10</span><span>01 · Context</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>Lemonworx</span></div>
+    </div>
+
+    <div class="two-col vcenter" style="padding-top:80px;">
+      <div>
+        <h3 class="eyebrow">The setting</h3>
+        <h2 class="title">
+          Remote<br/>
+          supervision<br/>
+          over many sites.
+        </h2>
+      </div>
+      <div style="display:flex; flex-direction:column; gap:36px;">
+        <p class="body" style="font-size:26px;">
+          Lemonworx is investigating teleoperation as a way to supervise
+          vehicle deployments remotely, without operators being physically
+          on-site. If that were to scale, routine driving would need to
+          be handled automatically, allowing one operator to potentially
+          cover many sites. None of that is testable without a simulation
+          to prototype against.
+        </p>
+        <p class="body" style="font-size:26px;">
+          Prototyping will be carried out in a CARLA simulator, with tooling built
+          on top so anyone on the team can author new layouts, validate
+          sensor rigs, and watch experiments run without needing to
+          touch Unreal Engine.
+        </p>
+
+        <div class="stat-grid" style="margin-top:18px;">
+          <div class="stat">
+            <div class="v">CARLA</div>
+            <div class="k">Containerised, one command to start</div>
+          </div>
+          <div class="stat">
+            <div class="v">3</div>
+            <div class="k">Lot geometries: rectangle, trapezoid, irregular</div>
+          </div>
+          <div class="stat">
+            <div class="v">0</div>
+            <div class="k">Unreal Engine skills required</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Teleoperation · Placement context</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       03 / WHAT I BUILT
+       ================================================================= -->
+  <section class="slide dark" data-label="What I built">
+    <div class="chrome">
+      <div class="left"><span class="num">03 / 10</span><span>02 · What I built</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>Lemonworx</span></div>
+    </div>
+
+    <div style="padding-top:48px; display:flex; flex-direction:column; gap:40px; flex:1;">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:80px;">
+        <h2 class="title" style="max-width:16ch;">
+          Three tools<br/>around one sim.
+        </h2>
+        <p class="body" style="max-width:44ch; color:rgba(239,234,224,0.78); font-size:22px;">
+          Three focused tools that sit on top of the simulation.
+          All driven by the same YAML configs the sim reads, so nothing
+          can silently drift out of sync.
+        </p>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:28px; flex:1;">
+        <!-- Tool 01 -->
+        <div style="border:1px solid var(--dk-rule); border-radius:4px; padding:28px 28px 32px; display:flex; flex-direction:column; gap:16px;">
+          <div class="mono" style="font-size:12px; letter-spacing:0.14em; color:var(--accent); text-transform:uppercase;">Tool · 01</div>
+          <h3 style="font-family:var(--serif); font-weight:400; font-size:44px; margin:0; line-height:1; letter-spacing:-0.01em;">Layout generator</h3>
+          <p style="font-size:18px; line-height:1.5; color:rgba(239,234,224,0.78); margin:0;">
+            Describe a parking lot in local frame and get the YAML the
+            sim consumes plus a bird's-eye PNG. No CARLA required to
+            author a new lot.
+          </p>
+        </div>
+
+        <!-- Tool 02 -->
+        <div style="border:1px solid var(--dk-rule); border-radius:4px; padding:28px 28px 32px; display:flex; flex-direction:column; gap:16px;">
+          <div class="mono" style="font-size:12px; letter-spacing:0.14em; color:var(--accent); text-transform:uppercase;">Tool · 02</div>
+          <h3 style="font-family:var(--serif); font-weight:400; font-size:44px; margin:0; line-height:1; letter-spacing:-0.01em;">Inspector</h3>
+          <p style="font-size:18px; line-height:1.5; color:rgba(239,234,224,0.78); margin:0;">
+            One script, four modes. Answer every pre-flight question
+            before committing to a training run.
+          </p>
+        </div>
+
+        <!-- Tool 03 -->
+        <div style="border:1px solid var(--dk-rule); border-radius:4px; padding:28px 28px 32px; display:flex; flex-direction:column; gap:16px;">
+          <div class="mono" style="font-size:12px; letter-spacing:0.14em; color:var(--accent); text-transform:uppercase;">Tool · 03</div>
+          <h3 style="font-family:var(--serif); font-weight:400; font-size:44px; margin:0; line-height:1; letter-spacing:-0.01em;">Live visualiser</h3>
+          <p style="font-size:18px; line-height:1.5; color:rgba(239,234,224,0.78); margin:0;">
+            A detachable bird's-eye window on the host. The sim stays
+            headless. Attach when you want to watch, close when you
+            are done.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Overview · Placement </span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       04 / INSPECTOR — FOUR MODES CATALOGUE
+       ================================================================= -->
+  <section class="slide" data-label="Inspector · Four Modes">
+    <div class="chrome">
+      <div class="left"><span class="num">04 / 10</span><span>03 · Inspector · Full catalogue</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>Inspector</span></div>
+    </div>
+
+    <div style="padding-top:40px; display:flex; flex-direction:column; gap:24px; flex:1;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:40px;">
+        <h2 class="title" style="font-size:72px;">One script, four checks.</h2>
+        <p class="body" style="max-width:36ch; font-size:19px;">
+          Each mode answers a specific question before a training run
+          starts, the kind of question that otherwise shows up two hours
+          in if the required precautions are not taken. 
+        </p>
+      </div>
+
+      <div class="catalog" style="margin-top:20px;">
+        <div class="mode">
+          <div class="mno">MODE · 01</div>
+          <h4>Layout</h4>
+          <div class="sub">is the geometry right?</div>
+          <p>
+            Full lot in windowed CARLA. Bay outlines colour-coded by
+            type, target in green, pedestrian zones outlined, patrol
+            waypoint path traced.
+          </p>
+        </div>
+
+        <div class="mode">
+          <div class="mno">MODE · 02</div>
+          <h4>Sensors</h4>
+          <div class="sub">is the rig mounted right?</div>
+          <p>
+            Ego spawned, IMU, GNSS and LiDAR dots drawn at their
+            configured mount points
+            Bird's-eye, side, or front view.
+          </p>
+        </div>
+
+        <div class="mode">
+          <div class="mno">MODE · 03</div>
+          <h4>Live</h4>
+          <div class="sub">is the LiDAR actually seeing?</div>
+          <p>
+            Real 2D LiDAR spawned on the ego vehicle. Every scan return
+            renders as a red debug dot in the CARLA world. You can
+            literally see the detection envelope.
+          </p>
+        </div>
+
+        <div class="mode">
+          <div class="mno">MODE · 04</div>
+          <h4>Dry-run</h4>
+          <div class="sub">does the pipeline run?</div>
+          <p>
+            Full training pipeline with random or keyboard actions and
+            no model. Every surface exercised before training starts:
+            env, sensor fusion, observation construction, reward.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Modes 01-04 · Inspector</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       05 / INSPECTOR — LAYOUT + SENSORS
+       ================================================================= -->
+  <section class="slide" data-label="Inspector · Layout and Sensors">
+    <div class="chrome">
+      <div class="left"><span class="num">05 / 10</span><span>03 · Inspector · Layout + Sensors</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>modes 01 + 02</span></div>
+    </div>
+
+    <div style="padding-top:48px; display:flex; flex-direction:column; gap:32px; flex:1;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:40px;">
+        <h2 class="title" style="font-size:72px;">See it. Check it.</h2>
+        <p class="body" style="max-width:44ch; font-size:20px;">
+          The layout overlay colour-codes every bay by type and marks the target
+          in green. The sensor rig reads mount positions from the same YAML the
+          sim uses, so the two cannot drift apart.
+        </p>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:40px; align-items:start;">
+
+        <!-- Layout mode device -->
+        <div class="device" style="display:flex; flex-direction:column;">
+          <div class="titlebar">
+            <span>mode 01 · layout · geometry overlay</span>
+            <span class="lights"><span></span><span></span><span></span></span>
+          </div>
+          <div class="body" style="position:relative; aspect-ratio:16/9; overflow:hidden;">
+            <img src="rectangle.png" style="width:100%; height:100%; object-fit:cover; display:block;"/>
+          </div>
+          <div class="caption">bay outlines colour-coded by type, target bay, patrol path and spawn annotated</div>
+        </div>
+
+        <!-- Sensors mode device -->
+        <div class="device" style="display:flex; flex-direction:column; background:#0a0a0a;">
+          <div class="titlebar">
+            <span>mode 02 · sensors · mount points</span>
+            <span class="lights"><span></span><span></span><span></span></span>
+          </div>
+          <div class="body" style="position:relative; aspect-ratio:16/9; overflow:hidden;">
+            <img src="sensors.png" style="width:100%; height:100%; object-fit:cover; display:block;"/>
+          </div>
+          <div class="caption">mount positions from the same YAML the sim reads, so nothing can drift</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="footer"><span>Modes 01 + 02 · Layout and Sensors</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       06 / INSPECTOR — LIVE + DRY-RUN
+       ================================================================= -->
+  <section class="slide" data-label="Inspector · Live and Dry-run">
+    <div class="chrome">
+      <div class="left"><span class="num">06 / 10</span><span>03 · Inspector · Live View + Dry-run</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>modes 03 + 04</span></div>
+    </div>
+
+    <div style="padding-top:48px; display:flex; flex-direction:column; gap:32px; flex:1;">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; gap:40px;">
+        <h2 class="title" style="font-size:72px;">See it. Run it.</h2>
+        <p class="body" style="max-width:40ch; font-size:20px;">
+          The left panel shows a live LiDAR scan: the red dots are real returns
+          in the CARLA world, not an illustration. The right shows the dry-run terminal
+          output allowing cross reference with ground truth.
+        </p>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:40px; align-items:start;">
+
+        <!-- Live mode card -->
+        <div class="device" style="display:flex; flex-direction:column;">
+          <div class="titlebar">
+            <span>mode 03 · live · lidar returns</span>
+            <span class="lights"><span></span><span></span><span></span></span>
+          </div>
+          <div class="body" style="position:relative; aspect-ratio:16/9; overflow:hidden;">
+            <img src="live.png" style="width:100%; height:100%; object-fit:cover; display:block;"/>
+          </div>
+          <div class="caption">real 2D LiDAR · every scan return drawn as a debug dot · detection range visible</div>
+        </div>
+
+        <!-- Dry-run mode card -->
+        <div class="device" style="display:flex; flex-direction:column;">
+          <div class="titlebar">
+            <span>mode 04 · dry-run · pipeline check</span>
+            <span class="lights"><span></span><span></span><span></span></span>
+          </div>
+          <div class="body" style="position:relative; aspect-ratio:16/9; overflow:hidden;">
+            <img src="dryrun.png" style="width:100%; height:100%; object-fit:cover; display:block;"/>
+          </div>
+          <div class="caption">full training pipeline · random or keyboard actions · no model attached</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="footer"><span>Modes 03 + 04 · Live and Dry-run</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       07 / LIVE VISUALISER
+       ================================================================= -->
+  <section class="slide dark" data-label="Live Visualiser">
+    <div class="chrome">
+      <div class="left"><span class="num">07 / 10</span><span>03 · Live Visualiser</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>Visualiser</span></div>
+    </div>
+
+    <div class="two-col" style="padding-top:60px; grid-template-columns: 0.85fr 1fr;">
+      <div style="display:flex; flex-direction:column; gap:36px;">
+        <div>
+          <h3 class="eyebrow">Tool · Live Visualiser</h3>
+          <h2 class="title" style="font-size:80px;">Watch the run.</h2>
+        </div>
+        <p class="body" style="color:rgba(239,234,224,0.82); font-size:20px;">
+          A detachable bird's-eye viewer running on the host while the sim
+          stays headless in Docker. It reads a trace file only while the window
+          is open, so there is no overhead when you are not watching.
+          Closing the window saves an MP4 of the full run automatically.
+        </p>
+
+        <div style="display:flex; flex-direction:column; gap:0;">
+          <div class="spec-row" style="border-color:var(--dk-rule);">
+            <div class="k" style="font-family:var(--mono); font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--dk-muted);">Detachable</div>
+            <div class="v" style="color:var(--dk-paper);">window runs on host, training stays headless</div>
+          </div>
+          <div class="spec-row" style="border-color:var(--dk-rule);">
+            <div class="k" style="font-family:var(--mono); font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--dk-muted);">Overhead</div>
+            <div class="v" style="color:var(--dk-paper);">zero when the window is closed</div>
+          </div>
+          <div class="spec-row" style="border-color:var(--dk-rule);">
+            <div class="k" style="font-family:var(--mono); font-size:12px; letter-spacing:0.1em; text-transform:uppercase; color:var(--dk-muted);">Export</div>
+            <div class="v" style="color:var(--dk-paper);">MP4 saved automatically on close</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Bird's-eye visualiser window -->
+      <div class="device" style="display:flex; flex-direction:column; background:#0a0a0a;">
+        <div class="titlebar">
+          <span>live-visualiser · bird's-eye · run 042</span>
+          <span class="lights"><span></span><span></span><span></span></span>
+        </div>
+        <div class="body" style="position:relative; aspect-ratio:16/9; overflow:hidden;">
+          <img src="training.jpeg" style="width:100%; height:100%; object-fit:cover; display:block;"/>
+        </div>
+        <div class="caption">host viewer · headless training</div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Tool 03 · Live Visualiser</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       08 / EVIDENTIAL UNCERTAINTY DECOMPOSITION
+       ================================================================= -->
+  <section class="slide dark" data-label="Uncertainty Decomposition">
+    <div class="chrome">
+      <div class="left"><span class="num">08 / 10</span><span>04 · Evidential output</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>NIG head</span></div>
+    </div>
+
+    <div class="two-col vcenter" style="padding-top:60px; grid-template-columns:1fr 1fr; gap:80px;">
+      <div style="display:flex; flex-direction:column; gap:32px;">
+        <div>
+          <h3 class="eyebrow">Evidential deep learning</h3>
+          <h2 class="title" style="font-size:68px;">Two uncertainty types from one forward pass.</h2>
+        </div>
+        <p class="body" style="color:rgba(239,234,224,0.82); font-size:20px;">
+          The standard Gaussian actor head is replaced with a Normal-Inverse-Gamma
+          output layer. For each action dimension the network produces four parameters
+          and two uncertainty types fall out in closed form at no extra inference cost.
+          Varying EKF covariance input drives both outputs.
+        </p>
+        <div style="display:flex; flex-direction:column; gap:14px; border-top:1px solid var(--dk-rule); padding-top:20px;">
+          <div class="mono" style="font-size:12px; letter-spacing:0.14em; color:var(--dk-muted); text-transform:uppercase;">NIG decomposition (Amini et al. 2020)</div>
+          <div style="display:grid; grid-template-columns:110px 1fr; gap:10px; align-items:center;">
+            <span class="mono" style="color:var(--accent); font-size:13px; letter-spacing:0.1em; text-transform:uppercase;">Epistemic</span>
+            <span style="color:var(--dk-paper); font-size:20px;">\(\displaystyle\frac{\beta}{\nu(\alpha-1)}\)</span>
+          </div>
+          <div style="display:grid; grid-template-columns:110px 1fr; gap:10px; align-items:center;">
+            <span class="mono" style="color:#4ad8d4; font-size:13px; letter-spacing:0.1em; text-transform:uppercase;">Aleatoric</span>
+            <span style="color:var(--dk-paper); font-size:20px;">\(\displaystyle\frac{\beta}{\alpha-1}\)</span>
+          </div>
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:12px; padding-top:12px;">
+            <div style="background:rgba(239,234,224,0.05); border:1px solid var(--dk-rule); border-radius:4px; padding:12px 14px; display:flex; flex-direction:column; gap:4px;">
+              <span style="font-size:22px; color:var(--dk-paper);">\(\beta\)</span>
+              <span class="mono" style="font-size:11px; color:var(--dk-muted); letter-spacing:0.08em; text-transform:uppercase;">Rate parameter</span>
+              <span style="font-size:13px; color:rgba(239,234,224,0.65); line-height:1.4;">Overall scale of uncertainty</span>
+            </div>
+            <div style="background:rgba(239,234,224,0.05); border:1px solid var(--dk-rule); border-radius:4px; padding:12px 14px; display:flex; flex-direction:column; gap:4px;">
+              <span style="font-size:22px; color:var(--dk-paper);">\(\nu\)</span>
+              <span class="mono" style="font-size:11px; color:var(--dk-muted); letter-spacing:0.08em; text-transform:uppercase;">Pseudo-observation count</span>
+              <span style="font-size:13px; color:rgba(239,234,224,0.65); line-height:1.4;">Grows with evidence, shrinks epistemic</span>
+            </div>
+            <div style="background:rgba(239,234,224,0.05); border:1px solid var(--dk-rule); border-radius:4px; padding:12px 14px; display:flex; flex-direction:column; gap:4px;">
+              <span style="font-size:22px; color:var(--dk-paper);">\(\alpha\)</span>
+              <span class="mono" style="font-size:11px; color:var(--dk-muted); letter-spacing:0.08em; text-transform:uppercase;">Shape parameter</span>
+              <span style="font-size:13px; color:rgba(239,234,224,0.65); line-height:1.4;">Controls the variance of the distribution</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style="display:flex; flex-direction:column; gap:24px; justify-content:center;">
+        <div style="border:1px solid var(--dk-rule); border-radius:4px; padding:28px; display:flex; flex-direction:column; gap:12px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:var(--accent); flex-shrink:0;"></span>
+            <span class="mono" style="font-size:12px; letter-spacing:0.14em; color:var(--accent); text-transform:uppercase;">Epistemic uncertainty</span>
+          </div>
+          <p style="font-size:18px; line-height:1.5; color:rgba(239,234,224,0.82); margin:0;">
+            Model uncertainty. Rises when the policy encounters unfamiliar
+            situations, such as a lot geometry not seen during training.
+            A high reading is the signal to drive more conservatively.
+          </p>
+        </div>
+        <div style="border:1px solid var(--dk-rule); border-radius:4px; padding:28px; display:flex; flex-direction:column; gap:12px;">
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#4ad8d4; flex-shrink:0;"></span>
+            <span class="mono" style="font-size:12px; letter-spacing:0.14em; color:#4ad8d4; text-transform:uppercase;">Aleatoric uncertainty</span>
+          </div>
+          <p style="font-size:18px; line-height:1.5; color:rgba(239,234,224,0.82); margin:0;">
+            Irreducible noise. Rises when degraded GNSS makes the correct
+            action genuinely ambiguous regardless of training.
+            This is the trigger for a remote operator handoff.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <div class="footer"><span>Evidential output · NIG uncertainty decomposition</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       09 / NEXT STEPS
+       ================================================================= -->
+  <section class="slide dark" data-label="Next Steps">
+    <div class="chrome">
+      <div class="left"><span class="num">09 / 10</span><span>05 · Next Steps</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>Lemonworx</span></div>
+    </div>
+
+    <div style="padding-top:64px; display:flex; flex-direction:column; gap:56px; flex:1;">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; gap:80px;">
+        <h2 class="title" style="max-width:14ch;">
+          What comes<br/>next.
+        </h2>
+        <p class="body" style="max-width:44ch; color:rgba(239,234,224,0.78); font-size:22px;">
+          The simulation stack, the inspector tooling, and the evidential
+          policy are all in place. What remains is putting the
+          uncertainty outputs to work and making sure the team can carry
+          this forward independently.
+        </p>
+      </div>
+
+      <ul class="num-list" style="max-width:900px;">
+        <li>
+          <span class="n">01</span>
+          <span class="body-txt">
+            <b>Safety wrapper.</b> A runtime monitor utilising the epistemic
+            and aleatoric uncertainty outputs covered in the previous slide,
+            acting on each signal in a different way.
+          </span>
+        </li>
+        <li>
+          <span class="n">02</span>
+          <span class="body-txt">
+            <b>Show the team how to use it.</b> Walk colleagues through the
+            tooling so they can author new layouts, validate sensor rigs,
+            and run experiments without needing to touch CARLA internals.
+          </span>
+        </li>
+      </ul>
+    </div>
+
+    <div class="footer"><span>Next steps · Future work</span><span>Antonio Galdes · Placement 2026</span></div>
+  </section>
+
+  <!-- =================================================================
+       09 / THANK YOU
+       ================================================================= -->
+  <section class="slide dark" data-label="Thank you">
+    <div class="chrome">
+      <div class="left"><span class="num">10 / 10</span><span>End</span></div>
+      <div class="right"><span class="brand-mark"><span class="dot"></span>Lemonworx · ARI5906</span></div>
+    </div>
+
+    <div style="flex:1; display:grid; grid-template-rows:1fr auto; gap:60px; padding-top:40px;">
+      <div>
+        <h3 class="eyebrow">Placement · April 2026</h3>
+        <h1 class="display" style="font-size:180px;">
+          Thank<br/>
+          <em>you.</em>
+        </h1>
+      </div>
+
+      <div class="title-meta">
+        <div><span class="k">Author</span><span class="v">Antonio Galdes</span></div>
+        <div><span class="k">Contact</span><span class="v">antoniogaldes2@outlook.com</span></div>
+        <div><span class="k">Host</span><span class="v">Lemonworx LTD</span></div>
+        <div><span class="k">Date</span><span class="v">April 2026</span></div>
+      </div>
+    </div>
+  </section>
+
+</deck-stage>
+
+</body>
+</html>

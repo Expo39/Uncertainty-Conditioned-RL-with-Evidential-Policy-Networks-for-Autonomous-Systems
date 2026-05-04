@@ -1,0 +1,181 @@
+% ==========================================================================
+% Supervisor Meeting Agenda - 16 March 2026 (30 minutes)
+%
+% Compile with: pdflatex agenda.tex
+% ==========================================================================
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{xcolor}
+
+\definecolor{done}{RGB}{34,139,34}
+\definecolor{todo}{RGB}{200,50,50}
+\definecolor{question}{RGB}{0,90,180}
+
+\newcommand{\done}[1]{\textcolor{done}{\textbf{DONE:}} #1}
+\newcommand{\todo}[1]{\textcolor{todo}{\textbf{TODO:}} #1}
+\newcommand{\question}[1]{\textcolor{question}{\textbf{Q:}} #1}
+
+\title{Supervisor Meeting Agenda\\
+\large 16 March 2026 --- 30 minutes}
+\author{Antonio Galdes}
+\date{}
+
+\begin{document}
+\maketitle
+
+% ------------------------------------------------------------------
+\section*{1. Progress Update (5 min)}
+% ------------------------------------------------------------------
+
+\begin{itemize}[leftmargin=*]
+  \item \done{Tasks 1--8 code-complete. 163 unit tests passing, \texttt{make verify}
+    green. Full GPU stack verified (RTX 4070 Ti Super): CARLA 0.9.16, ros2-bridge
+    (Jazzy), training container (Humble/NGC PyTorch).}
+
+  \item \done{Localisation architecture decided and fully implemented: Cartographer
+    pure localisation against a frozen \texttt{.pbstream} map built from perimeter
+    traffic cones. Empty lot = all cones visible = low EKF covariance (easy). Dynamic
+    objects occluding cones = degraded scan match = high covariance (hard). Signal
+    is correctly correlated with driving difficulty.}
+
+  \item \done{One-time SLAM mapping workflow operational end-to-end:
+    \texttt{make docker-mapping-drive LAYOUT=rectangle} drives the patrol-waypoint loop
+    autonomously (2 loops, $\sim$90 s), Cartographer builds the map in real time,
+    and \texttt{make docker-save-map LAYOUT=rectangle} serialises the
+    \texttt{.pbstream} via the ROS 2 \texttt{/write\_state} service.
+    \texttt{rectangle.pbstream} successfully generated today.}
+
+  \item \done{NPC behaviour improved: patrol vehicles use a forward-cone proximity
+    check (no longer stopping for pedestrians behind them), throttle raised to 0.6,
+    pedestrians walk away from both ego and patrol NPCs using a combined repulsion
+    vector at 1.0\,m/s escape speed.}
+
+  \item \done{Stale \texttt{scripts/generate\_cartographer\_maps.py} (generated
+    unusable \texttt{.pgm} files) removed. Replaced by the Cartographer-native
+    \texttt{.pbstream} workflow above.}
+
+  \item \todo{Mapping runs for \texttt{trapezoid} and \texttt{irregular\_a} still
+    to be executed (same workflow, $\sim$90 s each).}
+
+  \item \todo{First training run (\texttt{make docker-train}) not yet started ---
+    mapping must complete for all three floor plans first.}
+\end{itemize}
+
+% ------------------------------------------------------------------
+\section*{2. Discussion Points (15 min)}
+% ------------------------------------------------------------------
+
+\subsection*{2.1 Simulation Scenario Sufficiency}
+
+The current simulation covers three floor plan geometries (rectangle, trapezoid,
+irregular\_a), two weather presets (ClearNoon, HardRainNoon), NPC patrol vehicles,
+random-walk pedestrians, and variable bay occupancy (0--100\%). Uncertainty varies
+naturally: an empty lot with no occlusion produces low EKF covariance, while a
+crowded lot with dynamic objects blocking cone returns produces high covariance.
+
+\question{Is the current set of conditions (3 layouts $\times$ 2 weather presets
+$\times$ variable occupancy/traffic/pedestrians) sufficient to produce a
+statistically meaningful degradation curve for the evaluation chapter, or should
+additional conditions (e.g.\ a third weather preset, additional floor plan variants)
+be added before beginning training?}
+
+\question{The covariance signal is driven entirely by cone occlusion from NPC cars
+and pedestrians. Does this mechanism produce a sufficiently wide and smooth range
+of uncertainty values to demonstrate the thesis claim (agent behaves more
+conservatively at high uncertainty), or is an additional artificial noise injection
+needed as a fallback?}
+
+\bigskip
+\subsection*{2.2 Cartographer Pure Localisation vs.\ SLAM During Training}
+
+Cartographer now runs in pure localisation mode during training: the pose graph is
+frozen, scans are matched against the pre-built cone map only, and no new submaps
+are created. This is the architecture that produces the correct (positively
+correlated) covariance signal.
+
+\question{Is the one-time SLAM mapping step per floor plan (run once, reuse
+\texttt{.pbstream} for all training episodes) academically acceptable, or does the
+examiner need to be satisfied that the mapping step is fully automated and
+reproducible? (It is: \texttt{make docker-mapping-drive} + \texttt{make docker-save-map}
+are the only commands required.)}
+
+\bigskip
+\subsection*{2.3 Ablation Study Design}
+
+The 2$\times$2 ablation compares: (1) vanilla PPO with no uncertainty in observation
+or policy, (2) uncertainty in observation only, (3) uncertainty in policy output
+only, and (4) the full method (both). All four share identical PPO hyperparameters,
+sensor noise, and training conditions.
+
+\question{Is a 2$\times$2 factorial ablation (4 conditions $\times$ 10 seeds each)
+the right evaluation design for the contribution, or would a single full-method run
+with a strong vanilla-PPO baseline be a simpler and equally convincing comparison?}
+
+\question{Should the ablation include a condition where the Cartographer localisation
+is replaced by ground-truth CARLA pose (zero uncertainty), to verify that the agent
+actually uses the covariance signal rather than ignoring it?}
+
+\bigskip
+\subsection*{2.4 Reward Function}
+
+The current reward combines a potential-based shaping term (distance to target bay),
+a heading alignment bonus, a time penalty, a collision penalty, and a success bonus.
+No reward tuning has been done yet --- this is Task 9, the first thing after the
+initial training run.
+
+\question{Any guidance on reward shaping priorities: should the agent first be
+rewarded for reaching any bay successfully before introducing the uncertainty-aware
+conservative behaviour objective?}
+
+% ------------------------------------------------------------------
+\section*{3. Timeline and Next Steps (5 min)}
+% ------------------------------------------------------------------
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Task} & \textbf{Est.\ Time} & \textbf{Status} \\
+\midrule
+Mapping runs (trapezoid, irregular\_a) & 0.5 days & Ready to run \\
+First training run (\texttt{make docker-train}) & 1 day & Unblocked after mapping \\
+Task 9: Reward function tuning & 1--2 weeks & After first run \\
+Full ablation (4 baselines $\times$ 10 seeds) & 2--4 weeks & After Task 9 \\
+Tasks 10--14: Evaluation + plots & 2 weeks & After training \\
+Dissertation writing & Ongoing & Can start now \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\question{Does this timeline remain feasible given the September 2026 submission
+deadline? Which tasks should be deprioritised if the schedule tightens?}
+
+% ------------------------------------------------------------------
+\section*{4. Dissertation Writing (5 min)}
+% ------------------------------------------------------------------
+
+\begin{itemize}[leftmargin=*]
+  \item The methodology chapter can be drafted now --- the architecture is stable
+    and all design decisions are resolved.
+  \item The background chapter (EKF, evidential deep learning, PPO, Cartographer)
+    is independent of experimental results and can be written in parallel with
+    training.
+  \item The experimental setup chapter is ready to write: floor plans, sensor suite,
+    NPC configuration, and the Cartographer pure localisation workflow are all fixed.
+\end{itemize}
+
+\question{Any guidance on dissertation structure, expected length, chapter ordering,
+or when to submit draft chapters for feedback?}
+
+\question{Should the Cartographer mapping workflow (one-time SLAM session to build
+the cone perimeter map) be described in the methodology chapter as part of the
+system design, or relegated to an appendix as a deployment detail?}
+
+\end{document}
