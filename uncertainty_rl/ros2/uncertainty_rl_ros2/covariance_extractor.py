@@ -11,7 +11,6 @@ import math
 import os
 from typing import List, Optional, Tuple
 
-import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
@@ -29,9 +28,13 @@ class CovarianceExtractorNode(Node):
     a CovarianceEstimate message for consumption by the RL agent.
     """
 
-    # Indices into the 6x6 EKF pose covariance for [x, y, yaw].
-    # Full order: [x, y, z, roll, pitch, yaw] -> indices 0, 1, 5.
-    _COV_INDICES: List[int] = [0, 1, 5]
+    # Flat indices into the 36-element pose covariance for the 3x3 [x, y, yaw]
+    # submatrix. Full 6x6 order: [x, y, z, roll, pitch, yaw].
+    # Row/col positions of [0,1,5] x [0,1,5] in row-major 6x6:
+    #   (0,0)=0  (0,1)=1  (0,5)=5
+    #   (1,0)=6  (1,1)=7  (1,5)=11
+    #   (5,0)=30 (5,1)=31 (5,5)=35
+    _COV_FLAT_IDX: Tuple[int, ...] = (0, 1, 5, 6, 7, 11, 30, 31, 35)
 
     # Default shared file paths. Overridden at runtime by the EKF_STATE_FILE
     # environment variable.
@@ -120,6 +123,7 @@ class CovarianceExtractorNode(Node):
         )
         self._initial_pose_path: str = initial_pose_path
         self._initial_pose_last_seq: int = 0
+        self._initial_pose_mtime_ns: int = 0
         self._initial_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, "/set_pose", 10
         )
@@ -167,11 +171,10 @@ class CovarianceExtractorNode(Node):
         vyaw = -msg.twist.twist.angular.z
 
         # -- Covariance ---------------------------------------------------------
-        # Extract 3x3 [x, y, yaw] submatrix from the 6x6 pose covariance.
-        covariance_3x3 = np.array(msg.pose.covariance).reshape(6, 6)[
-            np.ix_(self._COV_INDICES, self._COV_INDICES)
-        ]
-        cov_flat: List[float] = covariance_3x3.flatten().tolist()
+        # Extract the 3x3 [x, y, yaw] submatrix directly from the flat 36-element
+        # pose covariance using pre-computed indices.
+        raw_cov = msg.pose.covariance
+        cov_flat: List[float] = [raw_cov[i] for i in self._COV_FLAT_IDX]
 
         # -- Atomic shared-file write ------------------------------------------
         # Cross-distro access: training container (Humble) reads this file since
@@ -209,9 +212,10 @@ class CovarianceExtractorNode(Node):
         self._log_counter += 1
         if self._log_counter >= self._LOG_EVERY_N:
             self._log_counter = 0
-            std_x = math.sqrt(covariance_3x3[0, 0])
-            std_y = math.sqrt(covariance_3x3[1, 1])
-            std_yaw = math.sqrt(covariance_3x3[2, 2])
+            # Diagonal elements of the 3x3: indices 0 (xx), 4 (yy), 8 (yaw-yaw).
+            std_x = math.sqrt(cov_flat[0])
+            std_y = math.sqrt(cov_flat[4])
+            std_yaw = math.sqrt(cov_flat[8])
             self.get_logger().info(
                 f"Uncertainty - X: {std_x:.4f}m, "
                 f"Y: {std_y:.4f}m, Yaw: {math.degrees(std_yaw):.2f}deg"
@@ -253,9 +257,17 @@ class CovarianceExtractorNode(Node):
         projection in GnssNoiseRelayNode.
         """
         try:
+            mtime_ns = os.stat(self._initial_pose_path).st_mtime_ns
+        except OSError:
+            return
+        if mtime_ns == self._initial_pose_mtime_ns:
+            return
+        self._initial_pose_mtime_ns = mtime_ns
+
+        try:
             with open(self._initial_pose_path, "r") as f:
                 data = json.load(f)
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
+        except (json.JSONDecodeError, OSError):
             return
 
         seq = int(data.get("seq", 0))
