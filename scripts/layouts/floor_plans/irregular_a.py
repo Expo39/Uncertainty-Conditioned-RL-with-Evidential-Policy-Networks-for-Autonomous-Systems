@@ -6,7 +6,12 @@
 import math
 from typing import Any, Dict
 
-from scripts.layouts.builder import LotBuilder, PatrolPath, PedestrianZone
+from scripts.layouts.builder import (
+    LotBuilder,
+    PatrolPath,
+    PedestrianZone,
+    angled_corner_clearance,
+)
 
 ORIGIN_X = -3.0
 ORIGIN_Y = 25.0
@@ -66,14 +71,14 @@ def generate() -> Dict[str, Any]:
     lot.row_along_perimeter(
         bay_type="angled", n=4, wall=WALL_LEFT, bay_angle_deg=45.0,
         start_along=LEFT_ANG_BOTTOM_Y - lot.wall_y(WALL_BOTTOM_LEFT)
-        + _angled_default_clearance(lot) - lot.wall_gap,
+        + angled_corner_clearance(lot) - lot.wall_gap,
         pack_from="end",
     )
 
     # ---------- Diagonal top wall: 11 angled bays hugging P7 end -------
     diag_wall_len = math.hypot(P7[0] - P6[0], P7[1] - P6[1])
     ang_spacing = dims_ang["width"] / math.sin(math.radians(45.0))
-    end_clearance = _angled_default_clearance(lot)
+    end_clearance = angled_corner_clearance(lot)
     diag_ang = lot.row_along_perimeter(
         bay_type="angled", n=11, wall=WALL_TOP_DIAGONAL, bay_angle_deg=45.0,
         start_along=diag_wall_len - end_clearance - 11 * ang_spacing,
@@ -131,16 +136,6 @@ def generate() -> Dict[str, Any]:
     lot.add_obstacle(*OBSTACLE)
 
     return lot.build()
-
-
-def _angled_default_clearance(lot: LotBuilder) -> float:
-    """@brief Default along-wall clearance for a 45-deg angled bay's leftmost corner."""
-    dims_ang = lot.dims["angled"]
-    return (
-        (dims_ang["depth"] / 2.0 + dims_ang["width"] / 2.0)
-        * math.cos(math.radians(45.0))
-        + lot.wall_gap
-    )
 
 
 def _diagonal_top_spawn(lot: LotBuilder) -> None:

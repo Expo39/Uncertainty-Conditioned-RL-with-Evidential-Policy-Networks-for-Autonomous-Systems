@@ -93,13 +93,12 @@ def validate_bays_in_polygon(
     @raises ValueError: If any bay corner is outside the expanded polygon.
     """
     poly = [(c["x"], c["y"]) for c in corners]
-    cx_avg = sum(p[0] for p in poly) / len(poly)
-    cy_avg = sum(p[1] for p in poly) / len(poly)
+    n = len(poly)
+    cx_avg = sum(p[0] for p in poly) / n
+    cy_avg = sum(p[1] for p in poly) / n
+    scale = 1.0 + margin
     expanded = [
-        (
-            cx_avg + (1.0 + margin) * (px - cx_avg),
-            cy_avg + (1.0 + margin) * (py - cy_avg),
-        )
+        (cx_avg + scale * (px - cx_avg), cy_avg + scale * (py - cy_avg))
         for px, py in poly
     ]
     for bay in bays:
@@ -137,13 +136,9 @@ def warn_narrow_corridors(
             same_yaw = yaw_diff < 1.0 or abs(yaw_diff - 360.0) < 1.0
             if same_type and same_yaw:
                 continue
-            a_half_x = a["depth"] / 2.0
-            a_half_y = a["width"] / 2.0
-            b_half_x = b["depth"] / 2.0
-            b_half_y = b["width"] / 2.0
-            gap_x = abs(a["local_x"] - b["local_x"]) - a_half_x - b_half_x
-            gap_y = abs(a["local_y"] - b["local_y"]) - a_half_y - b_half_y
-            gap = max(gap_x, gap_y, 0.0) if gap_x > 0 or gap_y > 0 else 0.0
+            gap_x = abs(a["local_x"] - b["local_x"]) - a["depth"] / 2.0 - b["depth"] / 2.0
+            gap_y = abs(a["local_y"] - b["local_y"]) - a["width"] / 2.0 - b["width"] / 2.0
+            gap = max(gap_x, gap_y, 0.0)
             if gap < min_width:
                 print(
                     f"  WARNING [{shape_name}]: corridor between "
@@ -199,26 +194,27 @@ class BayGroup:
         @brief Axis-aligned bounding box of all bay rectangles.
         @return (x_min, x_max, y_min, y_max).
         """
-        xs: List[float] = []
-        ys: List[float] = []
-        for bay in self.bays:
-            for cx, cy in _bay_corners(
+        all_corners = [
+            pt
+            for bay in self.bays
+            for pt in _bay_corners(
                 bay["local_x"],
                 bay["local_y"],
                 bay["local_yaw_deg"],
                 bay["width"],
                 bay["depth"],
-            ):
-                xs.append(cx)
-                ys.append(cy)
+            )
+        ]
+        xs = [p[0] for p in all_corners]
+        ys = [p[1] for p in all_corners]
         return (min(xs), max(xs), min(ys), max(ys))
 
     def _is_axis_aligned(self) -> bool:
         """@brief True if every bay yaw is a multiple of 90 degrees."""
-        for bay in self.bays:
-            if abs(((bay["local_yaw_deg"] + 0.5) % 90.0) - 0.5) > 0.01:
-                return False
-        return True
+        return all(
+            abs(((bay["local_yaw_deg"] + 0.5) % 90.0) - 0.5) <= 0.01
+            for bay in self.bays
+        )
 
     @property
     def nose_y(self) -> float:
@@ -429,13 +425,13 @@ class PedestrianZone:
         """
         x0, y0 = wall_p0
         x1, y1 = wall_p1
+        sign = 1.0 if inward else -1.0
         if abs(x0 - x1) < 1e-6:
             wall_x = x0
             y_lo, y_hi = sorted((y0, y1))
             if along_range is not None:
                 y_lo = max(y_lo, along_range[0])
                 y_hi = min(y_hi, along_range[1])
-            sign = 1.0 if inward else -1.0
             return cls(
                 wall_x + margin if sign > 0 else wall_x - strip,
                 wall_x + strip if sign > 0 else wall_x - margin,
@@ -448,7 +444,6 @@ class PedestrianZone:
             if along_range is not None:
                 x_lo = max(x_lo, along_range[0])
                 x_hi = min(x_hi, along_range[1])
-            sign = 1.0 if inward else -1.0
             return cls(
                 x_lo + margin,
                 x_hi - margin,
@@ -637,6 +632,44 @@ _DEFAULT_BACK_TO_BACK_YAWS: Dict[str, Tuple[float, float]] = {
 }
 
 
+def _check_direction_and_type(
+    direction: str,
+    bay_type: str,
+    dims: Dict[str, Dict[str, float]],
+) -> None:
+    """
+    @brief Raise ValueError if direction or bay_type are not recognised.
+    @param direction: Direction string to validate.
+    @param bay_type: Bay type string to validate.
+    @param dims: Bay dimensions dict (typically LotBuilder.dims).
+    """
+    if direction not in _DIR_VECTORS:
+        raise ValueError(
+            f"direction must be one of {list(_DIR_VECTORS)}, got '{direction}'."
+        )
+    if bay_type not in dims:
+        raise ValueError(f"Unknown bay_type '{bay_type}'.")
+
+
+def angled_corner_clearance(lot: "LotBuilder", angle_deg: float = 45.0) -> float:
+    """
+    @brief Default along-wall clearance for an angled bay's leading corner.
+
+    Returns the distance from the wall start point to the first bay centre
+    such that the nearest bay corner clears the wall end by wall_gap.
+
+    @param lot: LotBuilder instance (provides dims and wall_gap).
+    @param angle_deg: Bay angle relative to the inward wall normal (degrees).
+    @return Clearance distance in metres.
+    """
+    dims_ang = lot.dims["angled"]
+    return (
+        (dims_ang["depth"] / 2.0 + dims_ang["width"] / 2.0)
+        * math.cos(math.radians(angle_deg))
+        + lot.wall_gap
+    )
+
+
 class LotBuilder:
     """
     @class LotBuilder
@@ -730,33 +763,29 @@ class LotBuilder:
         @param spacing: Centre-to-centre spacing (m). Defaults to bay width.
         @param bay_extras: Extra fields merged into every bay dict.
         """
-        if direction not in _DIR_VECTORS:
-            raise ValueError(
-                f"direction must be one of {list(_DIR_VECTORS)}, got '{direction}'."
-            )
-        if bay_type not in self.dims:
-            raise ValueError(f"Unknown bay_type '{bay_type}'.")
+        _check_direction_and_type(direction, bay_type, self.dims)
         dx, dy = _DIR_VECTORS[direction]
         bay_w = self.dims[bay_type]["width"]
         bay_d = self.dims[bay_type]["depth"]
         if spacing is None:
             spacing = bay_w
-        bays: List[Dict[str, Any]] = []
-        ax, ay = anchor
         extras = bay_extras or {}
-        for i in range(n):
-            cx = ax + dx * spacing * i
-            cy = ay + dy * spacing * i
-            bay = {
+        step_x = dx * spacing
+        step_y = dy * spacing
+        ax, ay = anchor
+        yaw_norm = yaw_deg % 360.0
+        bays: List[Dict[str, Any]] = [
+            {
                 "bay_type": bay_type,
-                "local_x": cx,
-                "local_y": cy,
-                "local_yaw_deg": yaw_deg % 360.0,
+                "local_x": ax + step_x * i,
+                "local_y": ay + step_y * i,
+                "local_yaw_deg": yaw_norm,
                 "width": bay_w,
                 "depth": bay_d,
+                **extras,
             }
-            bay.update(extras)
-            bays.append(bay)
+            for i in range(n)
+        ]
         group = BayGroup(
             bay_type=bay_type,
             bays=bays,
@@ -787,12 +816,7 @@ class LotBuilder:
         whenever the natural reference for the cluster is its centre rather
         than its leftmost/topmost bay.
         """
-        if direction not in _DIR_VECTORS:
-            raise ValueError(
-                f"direction must be one of {list(_DIR_VECTORS)}, got '{direction}'."
-            )
-        if bay_type not in self.dims:
-            raise ValueError(f"Unknown bay_type '{bay_type}'.")
+        _check_direction_and_type(direction, bay_type, self.dims)
         dx, dy = _DIR_VECTORS[direction]
         bay_w = self.dims[bay_type]["width"]
         if spacing is None:
@@ -836,12 +860,7 @@ class LotBuilder:
         @return (row_a, row_b) tuple. row_a is the row on the -axis side
                 of the centre (south or west); row_b is on the +axis side.
         """
-        if direction not in _DIR_VECTORS:
-            raise ValueError(
-                f"direction must be one of {list(_DIR_VECTORS)}, got '{direction}'."
-            )
-        if bay_type not in self.dims:
-            raise ValueError(f"Unknown bay_type '{bay_type}'.")
+        _check_direction_and_type(direction, bay_type, self.dims)
         bay_d = self.dims[bay_type]["depth"]
         if yaws is None:
             yaws = _DEFAULT_BACK_TO_BACK_YAWS[direction]
@@ -976,22 +995,20 @@ class LotBuilder:
         else:
             raise ValueError(f"pack_from must be 'start' or 'end', got '{pack_from}'.")
 
-        bays: List[Dict[str, Any]] = []
         extras = bay_extras or {}
-        for i in range(n):
-            along = anchor_along + advance_sign * spacing * i
-            cx = x0 + wdx * along + nx * inward
-            cy = y0 + wdy * along + ny * inward
-            bay = {
+        step = advance_sign * spacing
+        bays: List[Dict[str, Any]] = [
+            {
                 "bay_type": bay_type,
-                "local_x": cx,
-                "local_y": cy,
+                "local_x": x0 + wdx * (anchor_along + step * i) + nx * inward,
+                "local_y": y0 + wdy * (anchor_along + step * i) + ny * inward,
                 "local_yaw_deg": bay_yaw_deg,
                 "width": bay_w,
                 "depth": bay_d,
+                **extras,
             }
-            bay.update(extras)
-            bays.append(bay)
+            for i in range(n)
+        ]
 
         group = BayGroup(
             bay_type=bay_type,
@@ -1045,13 +1062,11 @@ class LotBuilder:
             )
         p0_dict = self.corners[wall]
         p1_dict = self.corners[(wall + 1) % len(self.corners)]
-        p0 = (p0_dict["x"], p0_dict["y"])
-        p1 = (p1_dict["x"], p1_dict["y"])
         return self.row_along_wall(
             bay_type=bay_type,
             n=n,
-            wall_p0=p0,
-            wall_p1=p1,
+            wall_p0=(p0_dict["x"], p0_dict["y"]),
+            wall_p1=(p1_dict["x"], p1_dict["y"]),
             bay_angle_deg=bay_angle_deg,
             side="ccw",
             start_along=start_along,
@@ -1150,30 +1165,27 @@ class LotBuilder:
         nx, ny = twin.normal  # nose direction of twin
         offset = gap + twin.bay_depth  # centre-to-centre distance
         first = twin.bays[0]
-        first_centre = (first["local_x"], first["local_y"])
         dx, dy = twin.direction
-        # New row sits on the NOSE side of twin (offset by `+nose * offset`),
-        # with its own nose pointing back at twin (yaw flipped 180).
-        new_first_x = first_centre[0] + nx * offset
-        new_first_y = first_centre[1] + ny * offset
+        new_first_x = first["local_x"] + nx * offset
+        new_first_y = first["local_y"] + ny * offset
         new_yaw_deg = (first["local_yaw_deg"] + 180.0) % 360.0
         bay_w = twin.bay_width
         bay_d = twin.bay_depth
-        bays: List[Dict[str, Any]] = []
         extras = bay_extras or {}
-        for i in range(n):
-            cx = new_first_x + dx * twin.spacing * i
-            cy = new_first_y + dy * twin.spacing * i
-            bay = {
+        step_x = dx * twin.spacing
+        step_y = dy * twin.spacing
+        bays: List[Dict[str, Any]] = [
+            {
                 "bay_type": twin.bay_type,
-                "local_x": cx,
-                "local_y": cy,
+                "local_x": new_first_x + step_x * i,
+                "local_y": new_first_y + step_y * i,
                 "local_yaw_deg": new_yaw_deg,
                 "width": bay_w,
                 "depth": bay_d,
+                **extras,
             }
-            bay.update(extras)
-            bays.append(bay)
+            for i in range(n)
+        ]
         group = BayGroup(
             bay_type=twin.bay_type,
             bays=bays,
@@ -1212,6 +1224,7 @@ class LotBuilder:
                 )
             bay_w = width
             bay_d = depth
+        extras = bay_extras or {}
         bay = {
             "bay_type": bay_type,
             "local_x": float(x),
@@ -1219,9 +1232,8 @@ class LotBuilder:
             "local_yaw_deg": yaw_deg % 360.0,
             "width": bay_w,
             "depth": bay_d,
+            **extras,
         }
-        if bay_extras:
-            bay.update(bay_extras)
         group = BayGroup(
             bay_type=bay_type,
             bays=[bay],
@@ -1308,6 +1320,16 @@ class LotBuilder:
         """
         poly: List[Point] = [(c["x"], c["y"]) for c in self.corners]
         n = len(poly)
+        # Pre-compute edge vectors and squared lengths once.
+        edges = []
+        for i in range(n):
+            p0 = poly[i]
+            p1 = poly[(i + 1) % n]
+            ex = p1[0] - p0[0]
+            ey = p1[1] - p0[1]
+            seg_len_sq = ex * ex + ey * ey
+            edges.append((p0, ex, ey, seg_len_sq))
+
         for bay in self._all_bays():
             corners = _bay_corners(
                 bay["local_x"],
@@ -1318,12 +1340,7 @@ class LotBuilder:
             )
             for cx, cy in corners:
                 min_d = float("inf")
-                for i in range(n):
-                    p0 = poly[i]
-                    p1 = poly[(i + 1) % n]
-                    ex = p1[0] - p0[0]
-                    ey = p1[1] - p0[1]
-                    seg_len_sq = ex * ex + ey * ey
+                for p0, ex, ey, seg_len_sq in edges:
                     if seg_len_sq < 1e-12:
                         continue
                     t = ((cx - p0[0]) * ex + (cy - p0[1]) * ey) / seg_len_sq
