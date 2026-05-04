@@ -29,13 +29,13 @@ container) and a subpackage of `uncertainty_rl`. Node code lives in one place on
 
 `launch/carla_bridge.launch.py` orchestrates the full simulation pipeline:
 
-1. **CARLA ROS bridge** -- publishes sensor topics from CARLA (passive mode, no tick)
-2. **Static TF publishers** -- connect sensor frames to the `ego_vehicle` body frame
-3. **GnssNoiseRelayNode** -- injects per-episode GNSS noise, projects lat/lon to local XY
+1. **CARLA ROS bridge** - publishes sensor topics from CARLA (passive mode, no tick)
+2. **Static TF publishers** - connect sensor frames to the `ego_vehicle` body frame
+3. **GnssNoiseRelayNode** - injects per-episode GNSS noise, projects lat/lon to local XY
    via flat-earth, publishes `/odometry/gps` (Odometry) and `/gnss/heading` (COG)
-4. **ImuNoiseRelayNode** -- stamps realistic VN-100 covariance on CARLA IMU messages
-5. **robot_localisation EKF** -- fuses GNSS Odometry + IMU, outputs `/odometry/filtered`
-6. **CovarianceExtractorNode** -- extracts 3x3 covariance, writes `ekf_state.json`
+4. **ImuNoiseRelayNode** - stamps realistic VN-100 covariance on CARLA IMU messages
+5. **robot_localisation EKF** - fuses GNSS Odometry + IMU, outputs `/odometry/filtered`
+6. **CovarianceExtractorNode** - extracts 3x3 covariance, writes `ekf_state.json`
 
 ## Nodes
 
@@ -65,5 +65,5 @@ Parameters set via `configs/ros2_config.yaml`:
 ## QoS
 
 RELIABLE profile for input subscriptions; BEST_EFFORT for outputs to
-`robot_localisation` (which subscribes BEST_EFFORT -- a RELIABLE publisher
+`robot_localisation` (which subscribes BEST_EFFORT - a RELIABLE publisher
 paired with a BEST_EFFORT subscriber delivers no messages in ROS 2).
