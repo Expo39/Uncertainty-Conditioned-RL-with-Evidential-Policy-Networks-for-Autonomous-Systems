@@ -37,7 +37,7 @@ class TestLinearSchedule:
 
     def test_progress_one_gives_initial_value(self) -> None:
         """
-        @brief progress_remaining=1.0 is the start of training -- LR equals initial.
+        @brief progress_remaining=1.0 is the start of training - LR equals initial.
         """
         initial = 3e-4
         schedule = linear_schedule(initial)
@@ -45,7 +45,7 @@ class TestLinearSchedule:
 
     def test_progress_zero_gives_zero(self) -> None:
         """
-        @brief progress_remaining=0.0 is end of training -- LR decays to zero.
+        @brief progress_remaining=0.0 is end of training - LR decays to zero.
         """
         schedule = linear_schedule(1e-3)
         assert schedule(0.0) == pytest.approx(0.0)
@@ -260,7 +260,7 @@ class TestMakeEnvParallel:
 
     Verifies that each rank gets the correct CARLA port (base + rank*1000) and
     the correct per-instance EKF state file path. Does not require CARLA or
-    a GPU -- CARLAParkingEnv construction is mocked.
+    a GPU - CARLAParkingEnv construction is mocked.
     """
 
     _BASE_CONFIG = {

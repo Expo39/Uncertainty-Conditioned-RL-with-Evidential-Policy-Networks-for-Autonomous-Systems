@@ -4,7 +4,7 @@
 
 Tests cover JSON file reading, seq-based staleness guard, cache invalidation,
 get_latest_uncertainty(), get_latest_pose(), get_latest_state(), and has_data
--- all without requiring ROS 2 or rclpy.  The _CovarianceSubscriber is
+- all without requiring ROS 2 or rclpy.  The _CovarianceSubscriber is
 constructed with _ROS2_AVAILABLE forced to False so no Node superclass
 initialisation occurs.
 """
@@ -316,7 +316,7 @@ class TestStalenessGuard:
 
     The guard rejects a file whose `seq` field is <= _valid_after_seq,
     preventing stale pre-reset data from leaking across episode boundaries.
-    This is clock-skew-proof -- no file mtime comparison is performed.
+    This is clock-skew-proof - no file mtime comparison is performed.
     """
 
     def test_rejects_file_with_seq_equal_to_valid_after_seq(self) -> None:
@@ -392,7 +392,7 @@ class TestStalenessGuard:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            # No seq field -- old extractor format
+            # No seq field - old extractor format
             data = {
                 "x": 1.0,
                 "y": 2.0,
@@ -408,7 +408,7 @@ class TestStalenessGuard:
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
-                sub._valid_after_seq = 0  # default -- seq=0 file not accepted
+                sub._valid_after_seq = 0  # default - seq=0 file not accepted
                 result = sub._read_file()
 
         # seq=0 (default) is NOT > barrier 0, so it is rejected
@@ -526,7 +526,7 @@ class TestGetLatest:
 
     def test_get_latest_uncertainty_returns_copy(self) -> None:
         """
-        @brief get_latest_uncertainty() returns a copy -- mutating it does not
+        @brief get_latest_uncertainty() returns a copy - mutating it does not
                affect the cached value.
         """
         import uncertainty_rl.envs.covariance_subscriber as mod

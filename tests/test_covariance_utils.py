@@ -14,6 +14,7 @@ from uncertainty_rl.utils import (
     get_covariance_dimension,
     validate_covariance_matrix,
 )
+from uncertainty_rl.utils.covariance_utils import make_diagonal_covariance
 
 # ---------------------------------------------------------------------------
 # extract_2d_covariance_features
@@ -147,7 +148,7 @@ class TestValidateCovarianceMatrix:
         """
         cov = np.eye(3)
         cov[0, 1] = 0.5
-        # cov[1, 0] left as 0 -- not symmetric
+        # cov[1, 0] left as 0 - not symmetric
         assert validate_covariance_matrix(cov) is False
 
     def test_negative_eigenvalue_is_invalid(self) -> None:
@@ -208,3 +209,48 @@ class TestGetCovarianceDimension:
         """
         features = extract_2d_covariance_features(np.eye(3))
         assert len(features) == get_covariance_dimension()
+
+
+# ---------------------------------------------------------------------------
+# make_diagonal_covariance
+# ---------------------------------------------------------------------------
+
+
+class TestMakeDiagonalCovariance:
+    """
+    @class TestMakeDiagonalCovariance
+    @brief Tests for building a flat 36-element ROS covariance from a diagonal.
+    """
+
+    def test_output_length_is_36(self) -> None:
+        """
+        @brief Output must always be a flat list of 36 elements.
+        """
+        result = make_diagonal_covariance([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        assert len(result) == 36
+
+    def test_diagonal_values_placed_correctly(self) -> None:
+        """
+        @brief Diagonal values must appear at indices 0, 7, 14, 21, 28, 35.
+        """
+        diag = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        result = make_diagonal_covariance(diag)
+        for i, v in enumerate(diag):
+            assert result[i * 7] == pytest.approx(v), f"Index {i*7} should be {v}"
+
+    def test_off_diagonal_elements_are_zero(self) -> None:
+        """
+        @brief All off-diagonal elements must be zero.
+        """
+        diag = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        result = make_diagonal_covariance(diag)
+        for i in range(36):
+            if i % 7 != 0:
+                assert result[i] == pytest.approx(0.0), f"Off-diagonal index {i} should be 0"
+
+    def test_all_zeros_diagonal(self) -> None:
+        """
+        @brief Zero diagonal must produce an all-zero 36-element list.
+        """
+        result = make_diagonal_covariance([0.0] * 6)
+        assert all(v == 0.0 for v in result)
