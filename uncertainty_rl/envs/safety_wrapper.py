@@ -13,7 +13,7 @@ Two uncertainty types produce two distinct responses:
 """
 
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 import gymnasium as gym
 import numpy as np

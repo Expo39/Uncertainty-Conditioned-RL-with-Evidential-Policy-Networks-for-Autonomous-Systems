@@ -578,30 +578,6 @@ class PatrolPath:
         """
         return (_edge_x_max(left) + _edge_x_min(right)) / 2.0
 
-    def add_in_aisle_y(
-        self,
-        x: float,
-        below: Edge,
-        above: Edge,
-    ) -> "PatrolPath":
-        """
-        @brief Append a waypoint at (x, aisle_y(below, above)).
-        @return self.
-        """
-        return self.add(x, self.aisle_y(below, above))
-
-    def add_in_aisle_x(
-        self,
-        y: float,
-        left: Edge,
-        right: Edge,
-    ) -> "PatrolPath":
-        """
-        @brief Append a waypoint at (aisle_x(left, right), y).
-        @return self.
-        """
-        return self.add(self.aisle_x(left, right), y)
-
     def add_diag_from_prev(
         self,
         x_direction: str,
@@ -701,22 +677,6 @@ class LotBuilder:
     # ------------------------------------------------------------------
     # Lot polygon helpers
     # ------------------------------------------------------------------
-
-    def lot_x_extent(self) -> Tuple[float, float]:
-        """@brief Min and max x of the lot polygon."""
-        xs = [c["x"] for c in self.corners]
-        return (min(xs), max(xs))
-
-    def lot_y_extent(self) -> Tuple[float, float]:
-        """@brief Min and max y of the lot polygon."""
-        ys = [c["y"] for c in self.corners]
-        return (min(ys), max(ys))
-
-    def lot_centre(self) -> Point:
-        """@brief Midpoint of the lot bbox."""
-        x_min, x_max = self.lot_x_extent()
-        y_min, y_max = self.lot_y_extent()
-        return ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
 
     def wall_y(self, wall: int) -> float:
         """

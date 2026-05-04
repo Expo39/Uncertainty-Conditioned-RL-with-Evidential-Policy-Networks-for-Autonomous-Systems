@@ -77,7 +77,6 @@ class SensorManager:
         # Collision state - set by _on_collision(), consumed by CARLAParkingEnv.
         self._collision_detected: bool = False
         self._collision_ego_fault: bool = False
-        self._collision_impulse: float = 0.0
 
         # Reference to the NPC controller's patrol IDs set (shared by reference).
         # Populated by spawn() via the patrol_npc_ids argument.
@@ -100,11 +99,6 @@ class SensorManager:
         """
         return self._collision_detected
 
-    @property
-    def collision_impulse(self) -> float:
-        """@brief Impulse magnitude (N*s) of the last collision event."""
-        return self._collision_impulse
-
     def consume_collision(self) -> Tuple[bool, bool]:
         """
         @brief Read and clear the collision flag.
@@ -117,7 +111,6 @@ class SensorManager:
         ego_fault = self._collision_ego_fault
         self._collision_detected = False
         self._collision_ego_fault = False
-        self._collision_impulse = 0.0
         return detected, ego_fault
 
     def get_latest_lidar_scan(self) -> Optional[np.ndarray]:
@@ -209,7 +202,6 @@ class SensorManager:
 
         self._collision_detected = False
         self._collision_ego_fault = False
-        self._collision_impulse = 0.0
 
         # Clear stale scan so previous episode points are not used at the
         # start of the next episode before the first LiDAR tick arrives.
@@ -226,7 +218,6 @@ class SensorManager:
         """
         self._collision_detected = False
         self._collision_ego_fault = False
-        self._collision_impulse = 0.0
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
 
@@ -395,7 +386,6 @@ class SensorManager:
         )
 
         self._collision_detected = True
-        self._collision_impulse = impulse_magnitude
 
         if is_dynamic:
             # Fault determined by ego speed, not impulse. Impulse reflects relative

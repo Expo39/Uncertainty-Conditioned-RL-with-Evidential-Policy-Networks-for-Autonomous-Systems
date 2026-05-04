@@ -17,8 +17,6 @@ except ImportError:
     # be available; tests that need them should be skipped via pytest.importorskip.
     torch = None  # type: ignore[assignment]
 
-from uncertainty_rl.utils.constants import ACTION_DIM
-
 # ---------------------------------------------------------------------------
 # Constants for network tests. Network tests use a small arbitrary state dim
 # (not the full 12-dim env obs) for fast unit test execution. Env obs space
@@ -50,40 +48,6 @@ def single_state():
     """
     pytest.importorskip("torch")
     return torch.randn(1, STATE_DIM)
-
-
-@pytest.fixture
-def action_batch():
-    """
-    @brief Random action batch shaped (BATCH_SIZE, ACTION_DIM).
-    """
-    pytest.importorskip("torch")
-    return torch.randn(BATCH_SIZE, ACTION_DIM)
-
-
-@pytest.fixture
-def low_uncertainty_state():
-    """
-    @brief State with very low EKF localisation uncertainty (indices 6-8 near zero).
-    """
-    pytest.importorskip("torch")
-    state = torch.randn(1, STATE_DIM)
-    state[0, 6:9] = 0.01
-    state[0, 9:15] = 0.0001
-    return state
-
-
-@pytest.fixture
-def high_uncertainty_state():
-    """
-    @brief State with high EKF localisation uncertainty (indices 6-8 large).
-    """
-    pytest.importorskip("torch")
-    state = torch.randn(1, STATE_DIM)
-    state[0, 6:9] = 1.0
-    state[0, 9:12] = 1.0
-    state[0, 12:15] = 0.5
-    return state
 
 
 # ---------------------------------------------------------------------------

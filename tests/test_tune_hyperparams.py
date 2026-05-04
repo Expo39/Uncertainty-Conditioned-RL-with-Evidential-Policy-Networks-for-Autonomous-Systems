@@ -6,7 +6,6 @@ CPU-only unit tests for sample_hyperparams, apply_best_params, and
 TrialEvalCallback. No CARLA, ROS 2, or GPU required.
 """
 
-import json
 import tempfile
 from pathlib import Path
 from typing import Any, Dict
@@ -250,7 +249,6 @@ class TestApplyBestParams:
                 yaml.dump(train_config_template, f)
 
             # Patch the apply_best_params to use our temp backup dir
-            import sys
             import os
             original_cwd = os.getcwd()
             try:
