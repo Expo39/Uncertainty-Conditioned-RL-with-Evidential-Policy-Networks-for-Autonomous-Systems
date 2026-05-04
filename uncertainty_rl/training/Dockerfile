@@ -65,7 +65,6 @@ COPY pyproject.toml /workspace/pyproject.toml
 # Minimal stub so pip install -e resolves the package at build time.
 # The real source is provided at runtime via the bind-mount in docker-compose.yml,
 # which overlays /workspace/uncertainty_rl with the live host files.
-# No COPY uncertainty_rl/ -- avoids busting the pip install layer on every .py edit.
 RUN mkdir -p /workspace/uncertainty_rl && \
     echo '__version__ = "0.1.0"\n__author__ = "Antonio Galdes"' \
     > /workspace/uncertainty_rl/__init__.py
