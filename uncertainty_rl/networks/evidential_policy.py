@@ -68,21 +68,14 @@ class EvidentialLayer(nn.Module):
                 - beta: Rate parameter (batch_size, output_dim)
         """
         out = self.linear(x)
-        # Reshape to (batch_size, output_dim, 4)
-        out = out.view(-1, self.output_dim, 4)
+        n = self.output_dim
 
-        # Split into 4 parameters
-        gamma = out[..., 0]  # Mean (no constraint)
-        nu = F.softplus(out[..., 1]) + 1e-6  # Precision (positive)
-        alpha = F.softplus(out[..., 2]) + 1.0  # Shape (> 1 for finite variance)
-        beta = F.softplus(out[..., 3]) + 1e-6  # Rate (positive)
-
-        # Clamp NIG parameters to prevent divergence in RL training.
-        # Unbounded growth of nu/alpha/beta destabilises the log-penalty regularisation
-        # (EvidentialPPO) and the NLL loss. max=100.0 is a conservative ceiling.
-        nu = torch.clamp(nu, max=100.0)
-        alpha = torch.clamp(alpha, max=100.0)
-        beta = torch.clamp(beta, max=100.0)
+        # Split along the flat output dimension to match bias layout [gamma | nu | alpha | beta].
+        gamma = out[:, :n]
+        pos = F.softplus(out[:, n:]).clamp_(max=100.0)  # one kernel for nu/alpha/beta
+        nu = pos[:, :n] + 1e-6
+        alpha = pos[:, n : 2 * n] + 1.0
+        beta = pos[:, 2 * n :] + 1e-6
 
         return gamma, nu, alpha, beta
 
@@ -179,9 +172,10 @@ class EvidentialPolicyNetwork(nn.Module):
                 epistemic and aleatoric uncertainty estimates.
         """
         gamma, nu, alpha, beta = self.forward(state)
-        
-        aleatoric_uncertainty = beta / (alpha - 1)
-        epistemic_uncertainty = beta / (nu * (alpha - 1))
+
+        alpha_m1 = alpha - 1
+        aleatoric_uncertainty = beta / alpha_m1
+        epistemic_uncertainty = beta / (nu * alpha_m1)
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
 
         # For deterministic action, use mean
@@ -228,17 +222,18 @@ class EvidentialPolicyNetwork(nn.Module):
         @note This is a standalone supervised regression loss used in unit tests
               and standalone experiments. 
         """
+        diff = target - gamma
         omega = 2 * beta * (1 + nu)
         nll = (
             0.5 * torch.log(torch.pi / nu)
             - alpha * torch.log(omega)
-            + (alpha + 0.5) * torch.log(nu * (target - gamma) ** 2 + omega)
+            + (alpha + 0.5) * torch.log(nu * diff ** 2 + omega)
             + torch.lgamma(alpha)
             - torch.lgamma(alpha + 0.5)
         )
 
         # Regularisation term to penalise high evidence on wrong predictions
-        error = torch.abs(target - gamma)
+        error = diff.abs()
         reg = error * (2 * nu + alpha)
 
         loss = nll.mean() + lambda_reg * reg.mean()

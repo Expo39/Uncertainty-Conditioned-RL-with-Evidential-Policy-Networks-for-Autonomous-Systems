@@ -402,25 +402,29 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @return Tuple of (actions, values, log_prob).
         """
         features = self.extract_features(obs, self.pi_features_extractor)
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
-        else:
-            pi_features = cast(th.Tensor, features)
-            vf_features = self.extract_features(obs, self.vf_features_extractor)
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
-
-        values = self.value_net(latent_vf)
-
         if self.use_uncertainty_conditioning:
-            # latent_pi not used for the actor here; dual-encoder reads raw obs.
+            # Dual-encoder: actor reads raw obs directly; only critic MLP is needed.
+            if self.share_features_extractor:
+                _, latent_vf = self.mlp_extractor(features)
+            else:
+                vf_features = self.extract_features(obs, self.vf_features_extractor)
+                latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
             gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
             distribution = cast(
                 EvidentialDistribution,
                 self.action_dist.proba_distribution(gamma, nu, alpha, beta),
             )
         else:
+            if self.share_features_extractor:
+                latent_pi, latent_vf = self.mlp_extractor(features)
+            else:
+                pi_features = cast(th.Tensor, features)
+                vf_features = self.extract_features(obs, self.vf_features_extractor)
+                latent_pi = self.mlp_extractor.forward_actor(pi_features)
+                latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
             distribution = self._get_action_dist_from_latent(latent_pi)
+
+        values = self.value_net(latent_vf)
 
         actions = distribution.get_actions(deterministic=deterministic)
         log_prob = distribution.log_prob(actions)
@@ -447,10 +451,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 EvidentialDistribution,
                 self.action_dist.proba_distribution(gamma, nu, alpha, beta),
             )
-        # Flat MLP path: MLP extractor latent -> EvidentialLayer.
+        # Flat MLP path: actor MLP latent -> EvidentialLayer.
         features = self.extract_features(obs, self.pi_features_extractor)
         if self.share_features_extractor:
-            latent_pi, _ = self.mlp_extractor(features)
+            latent_pi = self.mlp_extractor.forward_actor(features)
         else:
             latent_pi = self.mlp_extractor.forward_actor(cast(th.Tensor, features))
         return self._get_action_dist_from_latent(latent_pi)
@@ -492,30 +496,34 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         # No extractor argument: when share_features_extractor=False, SB3 returns
         # a (pi_features, vf_features) tuple which we unpack below.
         features = self.extract_features(obs)
-        if self.share_features_extractor:
-            latent_pi, latent_vf = self.mlp_extractor(features)
-        else:
-            pi_features, vf_features = features
-            latent_pi = self.mlp_extractor.forward_actor(pi_features)
-            latent_vf = self.mlp_extractor.forward_critic(vf_features)
-
         if self.use_uncertainty_conditioning:
-            # Dual-encoder: raw obs -> split -> UncertaintyConditionedActor.
-            # latent_pi is not used for the actor in this mode.
+            # Dual-encoder: only the critic MLP is needed; actor reads raw obs directly.
+            if self.share_features_extractor:
+                _, latent_vf = self.mlp_extractor(features)
+            else:
+                _, vf_features = cast(Tuple[th.Tensor, th.Tensor], features)
+                latent_vf = self.mlp_extractor.forward_critic(vf_features)
             gamma, nu, alpha, beta = self._get_nig_from_obs(cast(th.Tensor, obs))
             distribution = cast(
                 EvidentialDistribution,
                 self.action_dist.proba_distribution(gamma, nu, alpha, beta),
             )
         else:
+            if self.share_features_extractor:
+                latent_pi, latent_vf = self.mlp_extractor(features)
+            else:
+                pi_features, vf_features = cast(Tuple[th.Tensor, th.Tensor], features)
+                latent_pi = self.mlp_extractor.forward_actor(pi_features)
+                latent_vf = self.mlp_extractor.forward_critic(vf_features)
             distribution = self._get_action_dist_from_latent(latent_pi)
+            gamma, nu, alpha, beta = distribution.nig_params
 
         log_prob = distribution.log_prob(actions)
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
 
         # Cache NIG params for EvidentialPPO.train()
-        self._cached_nig_params = distribution.nig_params
+        self._cached_nig_params = (gamma, nu, alpha, beta)
 
         return values, log_prob, entropy
 
@@ -544,17 +552,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             if self.use_uncertainty_conditioning:
                 gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
             else:
-                features = self.extract_features(obs)
-                if self.share_features_extractor:
-                    latent_pi, _ = self.mlp_extractor(features)
-                else:
-                    pi_features, _ = features
-                    latent_pi = self.mlp_extractor.forward_actor(pi_features)
+                features = self.extract_features(obs, self.pi_features_extractor)
+                latent_pi = self.mlp_extractor.forward_actor(cast(th.Tensor, features))
                 flat = cast(EvidentialLayer, self.action_net)
                 gamma, nu, alpha, beta = flat(latent_pi)
 
-            aleatoric = th.clamp(beta / (alpha - 1), min=1e-6)
-            epistemic = beta / (nu * (alpha - 1))
+            alpha_m1 = alpha - 1
+            aleatoric = th.clamp(beta / alpha_m1, min=1e-6)
+            epistemic = beta / (nu * alpha_m1)
             total = epistemic + aleatoric
 
             if deterministic:
@@ -651,7 +656,10 @@ class EvidentialPPO(PPO):
         # Linearly anneal lambda_reg from 0 to self.lambda_reg over the first
         # lambda_reg_warmup_steps environment steps. This lets the NLL loss
         # establish good predictions before the evidential regularisation fires.
-        ramp = min(1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps))
+        if self.lambda_reg_warmup_steps > 0:
+            ramp = min(1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps))
+        else:
+            ramp = 1.0
         current_lambda_reg = self.lambda_reg * ramp
 
         clip_range_fn = cast(Schedule, self.clip_range)
@@ -661,13 +669,15 @@ class EvidentialPPO(PPO):
             clip_range_vf_fn = cast(Schedule, self.clip_range_vf)
             clip_range_vf = clip_range_vf_fn(self._current_progress_remaining)
 
-        entropy_losses: List[float] = []
-        pg_losses: List[float] = []
-        value_losses: List[float] = []
-        evidential_reg_losses: List[float] = []
-        clip_fractions: List[float] = []
-        epistemic_uncertainties: List[float] = []
-        aleatoric_uncertainties: List[float] = []
+        # Accumulate as detached tensors to minimise GPU->CPU syncs.
+        # Only approx_kl_div is synced per-batch (required for early-stopping control flow).
+        entropy_losses: List[th.Tensor] = []
+        pg_losses: List[th.Tensor] = []
+        value_losses: List[th.Tensor] = []
+        evidential_reg_losses: List[th.Tensor] = []
+        clip_fractions: List[th.Tensor] = []
+        epistemic_uncertainties: List[th.Tensor] = []
+        aleatoric_uncertainties: List[th.Tensor] = []
 
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
@@ -680,7 +690,7 @@ class EvidentialPPO(PPO):
             for rollout_data in self.rollout_buffer.get(self.batch_size):
                 actions = rollout_data.actions
                 if isinstance(self.action_space, spaces.Discrete):
-                    actions = rollout_data.actions.long().flatten()
+                    actions = actions.long().flatten()
 
                 # evaluate_actions caches NIG params
                 values, log_prob, entropy = self.policy.evaluate_actions(
@@ -693,16 +703,16 @@ class EvidentialPPO(PPO):
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
                 evidential_reg = (
-                    th.mean(th.log(nu / _nu_prior + 1.0))
-                    + th.mean(th.log(alpha / _alpha_prior + 1.0))
+                    th.log1p(nu / _nu_prior).mean()
+                    + th.log1p(alpha / _alpha_prior).mean()
                 )
 
-                # Log uncertainties 
                 with th.no_grad():
-                    aleatoric = (beta / (alpha - 1)).mean()
-                    epistemic = (beta / (nu * (alpha - 1))).mean()
-                    epistemic_uncertainties.append(epistemic.item())
-                    aleatoric_uncertainties.append(aleatoric.item())
+                    alpha_m1 = alpha - 1
+                    aleatoric = (beta / alpha_m1).mean()
+                    epistemic = (beta / (nu * alpha_m1)).mean()
+                    epistemic_uncertainties.append(epistemic.detach())
+                    aleatoric_uncertainties.append(aleatoric.detach())
 
                 # Normalise advantage
                 advantages = rollout_data.advantages
@@ -719,9 +729,10 @@ class EvidentialPPO(PPO):
                 )
                 policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
-                pg_losses.append(policy_loss.item())
-                clip_fraction = th.mean((th.abs(ratio - 1) > clip_range).float()).item()
-                clip_fractions.append(clip_fraction)
+                pg_losses.append(policy_loss.detach())
+                clip_fractions.append(
+                    th.mean((th.abs(ratio - 1) > clip_range).float()).detach()
+                )
 
                 # Value loss
                 if clip_range_vf is None:
@@ -733,14 +744,10 @@ class EvidentialPPO(PPO):
                         clip_range_vf,
                     )
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
-                value_losses.append(value_loss.item())
+                value_losses.append(value_loss.detach())
 
-                # Entropy loss
-                if entropy is None:
-                    entropy_loss = -th.mean(-log_prob)
-                else:
-                    entropy_loss = -th.mean(entropy)
-                entropy_losses.append(entropy_loss.item())
+                entropy_loss = -th.mean(entropy)
+                entropy_losses.append(entropy_loss.detach())
 
                 # Combined loss with annealed evidential regularisation
                 loss = (
@@ -749,15 +756,15 @@ class EvidentialPPO(PPO):
                     + self.vf_coef * value_loss
                     + current_lambda_reg * evidential_reg
                 )
-                evidential_reg_losses.append(evidential_reg.item())
+                evidential_reg_losses.append(evidential_reg.detach())
 
-                # KL divergence for early stopping
+                # KL divergence for early stopping - synced per batch for control flow.
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
-                    approx_kl_div = (
-                        th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu().numpy()
+                    approx_kl_div = float(
+                        th.mean((th.exp(log_ratio) - 1) - log_ratio).cpu()
                     )
-                    approx_kl_divs.append(float(approx_kl_div))
+                    approx_kl_divs.append(approx_kl_div)
 
                 if self.target_kl is not None and approx_kl_div > 1.5 * self.target_kl:
                     continue_training = False
@@ -782,17 +789,20 @@ class EvidentialPPO(PPO):
             if not continue_training:
                 break
 
+        def _mean(tensors: List[th.Tensor]) -> float:
+            return th.stack(tensors).mean().item()
+
         explained_var = explained_variance(
             self.rollout_buffer.values.flatten(),
             self.rollout_buffer.returns.flatten(),
         )
 
         # Standard PPO logs. `loss` is the last-batch tensor - SB3 convention.
-        self.logger.record("train/entropy_loss", np.mean(entropy_losses))
-        self.logger.record("train/policy_gradient_loss", np.mean(pg_losses))
-        self.logger.record("train/value_loss", np.mean(value_losses))
+        self.logger.record("train/entropy_loss", _mean(entropy_losses))
+        self.logger.record("train/policy_gradient_loss", _mean(pg_losses))
+        self.logger.record("train/value_loss", _mean(value_losses))
         self.logger.record("train/approx_kl", np.mean(approx_kl_divs))
-        self.logger.record("train/clip_fraction", np.mean(clip_fractions))
+        self.logger.record("train/clip_fraction", _mean(clip_fractions))
         self.logger.record("train/loss", loss.item())
         self.logger.record("train/explained_variance", explained_var)
         self.logger.record(
@@ -805,16 +815,7 @@ class EvidentialPPO(PPO):
             self.logger.record("train/clip_range_vf", clip_range_vf)
 
         # Evidential-specific logs
-        self.logger.record(
-            "train/evidential_reg_loss",
-            np.mean(evidential_reg_losses),
-        )
-        self.logger.record(
-            "train/epistemic_uncertainty",
-            np.mean(epistemic_uncertainties),
-        )
-        self.logger.record(
-            "train/aleatoric_uncertainty",
-            np.mean(aleatoric_uncertainties),
-        )
+        self.logger.record("train/evidential_reg_loss", _mean(evidential_reg_losses))
+        self.logger.record("train/epistemic_uncertainty", _mean(epistemic_uncertainties))
+        self.logger.record("train/aleatoric_uncertainty", _mean(aleatoric_uncertainties))
         self.logger.record("train/lambda_reg", current_lambda_reg)
