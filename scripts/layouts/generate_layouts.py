@@ -133,23 +133,21 @@ def main() -> None:
 
     if args.layout is not None:
         # Single layout mode.
-        module = _LAYOUTS[args.layout]
+        name = args.layout
+        module = _LAYOUTS[name]
         ox = args.origin[0] if args.origin else module.ORIGIN_X
         oy = args.origin[1] if args.origin else module.ORIGIN_Y
         oz = args.origin[2] if args.origin else module.ORIGIN_Z
         hdg = args.heading if args.heading is not None else module.HEADING_DEG
-        print(
-            f"Generating {args.layout} layout "
-            f"(origin={ox},{oy},{oz}, heading={hdg} deg)"
-        )
+        print(f"Generating {name} layout (origin={ox},{oy},{oz}, heading={hdg} deg)")
         _generate_one(
-            name=args.layout,
+            name=name,
             origin_x=ox,
             origin_y=oy,
             origin_z=oz,
             heading_deg=hdg,
-            output_path=out_dir / f"{args.layout}.yaml",
-            plot_path=None if args.no_plot else plot_dir / f"{args.layout}.png",
+            output_path=out_dir / f"{name}.yaml",
+            plot_path=None if args.no_plot else plot_dir / f"{name}.png",
             ood=module.OOD,
         )
     else:
