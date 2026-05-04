@@ -106,7 +106,7 @@ class RealWorldInferenceLoop:
             ros2_cfg.get("actuation_topic", "/cmd_vel")
         )
 
-        # Thread-safe operator stop flag -- set by external signal or geofence.
+        # Thread-safe operator stop flag - set by external signal or geofence.
         self._operator_stop: threading.Event = threading.Event()
 
     @classmethod
@@ -177,7 +177,7 @@ class RealWorldInferenceLoop:
 
         @raises RuntimeError if sensors do not become ready within the configured
                 covariance_timeout.
-        @warning datum_loaded() is checked but not enforced -- if the datum was
+        @warning datum_loaded() is checked but not enforced - if the datum was
                  not loaded, the identity transform is used and a warning is logged.
         """
         if not self._deployment.datum_loaded():
@@ -368,7 +368,7 @@ class RealWorldInferenceLoop:
         monitor to request a graceful mission abort. The loop will publish
         a zero-velocity Twist before returning.
         """
-        logger.info("request_stop() called -- setting operator stop flag.")
+        logger.info("request_stop() called - setting operator stop flag.")
         self._operator_stop.set()
 
     def _init_ros2(self) -> None:
