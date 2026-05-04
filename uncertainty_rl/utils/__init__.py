@@ -31,11 +31,7 @@ from uncertainty_rl.utils.geometry import (
 )
 from uncertainty_rl.utils.actuation_calibration import ActuationCalibration
 from uncertainty_rl.utils.logging import DebugLogger
-from uncertainty_rl.utils.visualisation import (
-    plot_training_curves,
-    plot_trajectory,
-    plot_uncertainty_evolution,
-)
+from uncertainty_rl.utils.visualisation import VisStateWriter
 
 __all__ = [
     # Actuation calibration
@@ -43,9 +39,7 @@ __all__ = [
     # Logging
     "DebugLogger",
     # Visualisation
-    "plot_uncertainty_evolution",
-    "plot_trajectory",
-    "plot_training_curves",
+    "VisStateWriter",
     # Constants
     "ACTION_DIM",
     "CLEARANCE_THRESHOLD",
