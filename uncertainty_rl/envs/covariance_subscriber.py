@@ -20,6 +20,9 @@ import numpy as np
 
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
+# Cached mtime sentinel meaning "never read"
+_MTIME_UNSET: int = -1
+
 # Default shared file path
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
@@ -69,6 +72,9 @@ class _CovarianceSubscriber:
         self._last_read_seq: int = 0
         # Monotonically increasing counter for initial_pose.json writes.
         self._initial_pose_seq: int = 0
+        # Last observed mtime (nanoseconds) of the EKF state file.
+        # Unchanged mtime means the file content has not changed - skip parse.
+        self._last_mtime_ns: int = _MTIME_UNSET
 
         # Per-worker EKF state file path
         config = ros2_config or {}
@@ -103,6 +109,10 @@ class _CovarianceSubscriber:
         )
         # Monotonically increasing counter for gnss_noise_config.json writes.
         self._gnss_noise_config_seq: int = 0
+
+        # Ensure output directory exists once at construction time.
+        output_dir = self._ekf_state_path.parent
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         # Remove stale JSON files from previous sessions so the ros2-bridge
         # nodes do not pick up old state on startup.
@@ -146,6 +156,9 @@ class _CovarianceSubscriber:
             self._valid_after_seq = self._last_read_seq
             self._latest_uncertainty = None
             self._latest_pose = None
+            # Reset mtime cache so next _read_file() always re-parses the file
+            # rather than seeing a match against pre-reset content.
+            self._last_mtime_ns = _MTIME_UNSET
 
     def _read_file(self) -> bool:
         """
@@ -164,42 +177,57 @@ class _CovarianceSubscriber:
         @return True if fresh (post-invalidation) data was read successfully.
         """
         try:
-            if not self._ekf_state_path.exists():
-                return False
+            stat = self._ekf_state_path.stat()
+        except FileNotFoundError:
+            return False
+
+        mtime_ns: int = stat.st_mtime_ns
+
+        with self._lock:
+            valid_after_seq = self._valid_after_seq
+            last_mtime = self._last_mtime_ns
+            cached_pose = self._latest_pose
+            cached_seq = self._last_read_seq
+
+        # If file has not changed and post-invalidation data is available, skip parse.
+        if mtime_ns == last_mtime and cached_pose is not None and cached_seq > valid_after_seq:
+            return True
+
+        try:
             data = json.loads(self._ekf_state_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+
+        try:
             seq: int = int(data.get("seq", 0))
-            with self._lock:
-                valid_after_seq = self._valid_after_seq
             if seq <= valid_after_seq:
                 return False
-            cov_3x3 = np.array(data["covariance"]).reshape(3, 3)
+            cov_3x3 = np.asarray(data["covariance"], dtype=np.float64).reshape(3, 3)
             features = extract_2d_covariance_features(cov_3x3)
             pose = np.array(
-                [
-                    data["x"],
-                    data["y"],
-                    data["yaw"],
-                    data["vyaw"],
-                ],
+                [data["x"], data["y"], data["yaw"], data["vyaw"]],
                 dtype=np.float64,
             )
-            # Reject NaN/Inf writes. Treating these as "no data" causes the
-            # env to fall back to the CARLA ground-truth pose rather than feeding
-            # NaN observations directly into the policy.
-            if not np.all(np.isfinite(pose)) or not np.all(np.isfinite(features)):
-                logger.warning(
-                    "Rejecting EKF state write (seq=%d): contains NaN/Inf "
-                    "(EKF may still be initialising).",
-                    seq,
-                )
-                return False
-            with self._lock:
-                self._latest_pose = pose
-                self._latest_uncertainty = features
-                self._last_read_seq = seq
-            return True
-        except (json.JSONDecodeError, KeyError, ValueError):
+        except (KeyError, ValueError):
             return False
+
+        # Reject NaN/Inf writes. Treating these as "no data" causes the
+        # env to fall back to the CARLA ground-truth pose rather than feeding
+        # NaN observations directly into the policy.
+        if not np.all(np.isfinite(pose)) or not np.all(np.isfinite(features)):
+            logger.warning(
+                "Rejecting EKF state write (seq=%d): contains NaN/Inf "
+                "(EKF may still be initialising).",
+                seq,
+            )
+            return False
+
+        with self._lock:
+            self._latest_pose = pose
+            self._latest_uncertainty = features
+            self._last_read_seq = seq
+            self._last_mtime_ns = mtime_ns
+        return True
 
     def get_latest_state(
         self,
@@ -283,10 +311,9 @@ class _CovarianceSubscriber:
             "yaw": float(yaw),
         }
         try:
-            os.makedirs(self._initial_pose_path.parent, exist_ok=True)
             with open(self._initial_pose_tmp, "w") as f:
                 json.dump(data, f)
-            os.replace(str(self._initial_pose_tmp), str(self._initial_pose_path))
+            os.replace(self._initial_pose_tmp, self._initial_pose_path)
             logger.info(
                 "Initial pose written: x=%.2f y=%.2f yaw=%.1fdeg (seq=%d)",
                 x,
@@ -338,13 +365,9 @@ class _CovarianceSubscriber:
         if spawn_yaw is not None:
             data["spawn_yaw"] = spawn_yaw
         try:
-            os.makedirs(self._gnss_noise_config_path.parent, exist_ok=True)
             with open(self._gnss_noise_config_tmp, "w") as f:
                 json.dump(data, f)
-            os.replace(
-                str(self._gnss_noise_config_tmp),
-                str(self._gnss_noise_config_path),
-            )
+            os.replace(self._gnss_noise_config_tmp, self._gnss_noise_config_path)
             logger.info(
                 "GNSS noise config written: tier=%s (seq=%d)",
                 tier_name,

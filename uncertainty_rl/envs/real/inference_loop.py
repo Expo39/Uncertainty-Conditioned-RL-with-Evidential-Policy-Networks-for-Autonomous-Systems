@@ -443,7 +443,7 @@ class RealWorldInferenceLoop:
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @return Tuple (modulated_action, handoff_triggered).
         """
-        modulated, handoff = SafetyWrapper.apply(
+        modulated, handoff, _aleatoric_scale = SafetyWrapper.apply(
             action,
             epistemic=epistemic,
             aleatoric=aleatoric,

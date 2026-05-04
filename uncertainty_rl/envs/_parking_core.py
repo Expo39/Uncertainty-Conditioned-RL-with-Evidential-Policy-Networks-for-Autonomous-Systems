@@ -10,6 +10,7 @@ ROS 2 imports, no hardware dependencies.
 import logging
 import math
 import random
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -89,13 +90,13 @@ def build_observation(
     @param obs_buffer: Pre-allocated float32 buffer of the correct length.
     @return Copy of obs_buffer populated with current observation.
     """
-    obs_buffer[:] = 0.0
-
     if ekf_pose is not None:
         x = float(ekf_pose[0])
         y = float(ekf_pose[1])
         yaw = float(ekf_pose[2])
-        vyaw = float(np.clip(ekf_pose[3], -math.pi, math.pi))
+        # Python min/max avoids a numpy scalar allocation
+        raw_vyaw = float(ekf_pose[3])
+        vyaw = raw_vyaw if -math.pi <= raw_vyaw <= math.pi else max(-math.pi, min(math.pi, raw_vyaw))
 
         dx, dy, dyaw = _compute_relative_target_pose(
             x, y, yaw,
@@ -114,17 +115,22 @@ def build_observation(
         obs_buffer[3] = dyaw
         if include_obstacle_obs:
             obs_buffer[4:4 + OBSTACLE_FEATURES_DIM] = obstacle_features
+        else:
+            obs_buffer[4:4 + OBSTACLE_FEATURES_DIM] = 0.0
         return obs_buffer.copy()
 
     # With covariance: [vyaw(1), cov(3), target(3), obstacle(5)]
     obs_buffer[0] = vyaw
 
     if uncertainty is not None:
-        unc = uncertainty.astype(np.float32)
+        # asarray avoids a copy when already float32
+        unc = np.asarray(uncertainty, dtype=np.float32)
         if not np.any(unc):
             logger.debug("[obs] EKF covariance all-zeros - policy sees no uncertainty")
         obs_buffer[1:1 + COVARIANCE_FEATURES_DIM] = unc
-    # else: covariance dims remain zero (EKF not yet publishing)
+    else:
+        # Covariance dims remain zero (EKF not yet publishing)
+        obs_buffer[1:1 + COVARIANCE_FEATURES_DIM] = 0.0
 
     cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 4
     obs_buffer[cov_end] = dx
@@ -134,6 +140,9 @@ def build_observation(
     if include_obstacle_obs:
         tgt_end = cov_end + TARGET_POSE_DIM  # index 7
         obs_buffer[tgt_end:tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
+    else:
+        tgt_end = cov_end + TARGET_POSE_DIM
+        obs_buffer[tgt_end:tgt_end + OBSTACLE_FEATURES_DIM] = 0.0
 
     return obs_buffer.copy()
 
@@ -159,36 +168,45 @@ def extract_obstacle_features(
     if scan is None or len(scan) == 0:
         return out
 
-    dists = np.sqrt(scan[:, 0] ** 2 + scan[:, 1] ** 2)
+    x = scan[:, 0]
+    y = scan[:, 1]
 
-    # Strip self-returns and rear hemisphere
-    valid = (dists >= 1.0) & (scan[:, 0] > 0.0)
-    if not np.any(valid):
+    # Filter using squared distance to avoid full-array sqrt
+    sq = x * x + y * y
+    valid = (sq >= 1.0) & (x > 0.0)
+    if not valid.any():
         return out
 
     # Only zero the buffer once we know we have valid returns to write
     out[:] = 0.0
 
-    dists = dists[valid]
-    scan = scan[valid]
-    bearings = np.arctan2(scan[:, 1], scan[:, 0])
+    x = x[valid]
+    y = y[valid]
+    sq = sq[valid]
+    bearings = np.arctan2(y, x)
 
-    # Non-overlapping sectors: left (> +15 deg), forward (+/-15 deg), right (< -15 deg)
+    _INF = np.inf
+
+    # Non-overlapping sectors: left (> +15 deg), forward (+/-15 deg), right (< -15 deg).
     left_mask = bearings > _SECTOR_BOUNDARY
-    if np.any(left_mask):
-        idx = int(np.argmin(dists[left_mask]))
-        out[0] = float(dists[left_mask][idx])
-        out[1] = float(bearings[left_mask][idx])
+    if left_mask.any():
+        # sq_left keeps squared distances only in the left sector; elsewhere +inf
+        sq_left = np.where(left_mask, sq, _INF)
+        idx = int(sq_left.argmin())
+        out[0] = math.sqrt(float(sq[idx]))
+        out[1] = float(bearings[idx])
 
     right_mask = bearings < -_SECTOR_BOUNDARY
-    if np.any(right_mask):
-        idx = int(np.argmin(dists[right_mask]))
-        out[2] = float(dists[right_mask][idx])
-        out[3] = float(bearings[right_mask][idx])
+    if right_mask.any():
+        sq_right = np.where(right_mask, sq, _INF)
+        idx = int(sq_right.argmin())
+        out[2] = math.sqrt(float(sq[idx]))
+        out[3] = float(bearings[idx])
 
-    forward_mask = np.abs(bearings) <= _SECTOR_BOUNDARY
-    if np.any(forward_mask):
-        out[4] = float(np.min(dists[forward_mask]))
+    fwd_mask = np.abs(bearings) <= _SECTOR_BOUNDARY
+    if fwd_mask.any():
+        sq_fwd = np.where(fwd_mask, sq, _INF)
+        out[4] = math.sqrt(float(sq_fwd.min()))
 
     return out
 
@@ -274,8 +292,6 @@ def calibrate_ekf_frame_offset(
 
     @note See documentation/detailed_notes/ekf_pipeline.md for derivation.
     """
-    import time
-
     start = time.monotonic()
     prev_tx: Optional[float] = None
     prev_ty: Optional[float] = None
@@ -375,8 +391,6 @@ def wait_for_ekf(
     @param tick_interval: Sleep duration between poll iterations (seconds).
     @raises RuntimeError listing missing inputs if timeout is exceeded.
     """
-    import time
-
     start = time.monotonic()
     while True:
         lidar_ready = has_lidar()
