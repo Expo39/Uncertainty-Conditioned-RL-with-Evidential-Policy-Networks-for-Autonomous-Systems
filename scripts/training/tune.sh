@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # @file scripts/training/tune.sh
 # @brief Wrapper for Optuna hyperparameter tuning inside Docker container.
-#
-# Filters ROS 2 noise (debug logs, QoS warnings) and forwards all args
-# to uncertainty_rl.training.tune_hyperparams:main via the console script.
 
 set -euo pipefail
 
