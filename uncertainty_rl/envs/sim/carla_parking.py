@@ -176,11 +176,6 @@ class CARLAParkingEnv(gym.Env):
 
         self._uncertainty_std_max: float = max(uncertainty_std_max, 1e-6)
 
-        # Per-step uncertainty estimates set externally (by policy or wrapper).
-        # Used for uncertainty-aware reward shaping when enabled.
-        self._step_epistemic: float = 0.0
-        self._step_aleatoric: float = 0.0
-
         # Load GNSS noise profiles for per-episode RTK fix-state sampling.
         self._gnss_noise_tiers: List[Dict[str, Any]] = []
         self._gnss_tier_weights: List[float] = []
@@ -653,19 +648,6 @@ class CARLAParkingEnv(gym.Env):
     # ------------------------------------------------------------------
     # Clearance and reward
     # ------------------------------------------------------------------
-
-    def set_step_uncertainty(
-        self,
-        epistemic: float,
-        aleatoric: float,
-    ) -> None:
-        """
-        @brief Set the current step's uncertainty estimates from the policy.
-        @param epistemic: Mean epistemic uncertainty from evidential actor.
-        @param aleatoric: Mean aleatoric uncertainty from evidential actor.
-        """
-        self._step_epistemic = epistemic
-        self._step_aleatoric = aleatoric
 
     def _compute_reward(self) -> Tuple[float, bool, bool, Dict[str, float]]:
         """
