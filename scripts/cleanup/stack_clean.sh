@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
 # @file stack_clean.sh
 # @brief Stop all containers for a given stack, then remove volumes/images.
-#
-# Usage:
-#   bash scripts/cleanup/stack_clean.sh [STACK] [--rmi]
-#
-#   STACK : all (default) | training | inspect
-#   --rmi : also remove images (for docker-clean-all behaviour)
-#
-# Examples:
-#   bash scripts/cleanup/stack_clean.sh
-#   bash scripts/cleanup/stack_clean.sh training
-#   bash scripts/cleanup/stack_clean.sh inspect --rmi
 
 set -euo pipefail
 

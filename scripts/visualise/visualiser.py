@@ -5,22 +5,6 @@
 Tails outputs/vis_history.jsonl and renders each frame as it arrives using
 Pygame. Creates outputs/.vis_active so the environment starts writing frames;
 removing it (on window close) stops the env writing.
-
-Layers drawn (back to front):
-  1. Lot boundary polygon (light grey fill)
-  2. Bay outlines by type: perpendicular=blue, angled=yellow, parallel=violet
-  3. Target bay (bright green, thick outline + heading arrows)
-  4. Static parked vehicles (orange rectangles)
-  5. Patrol NPC vehicles (red rectangles)
-  6. Pedestrians (teal circles)
-  7. Ego trajectory trail (faded cyan)
-  8. Ego vehicle (cyan rectangle + heading arrow)
-  9. HUD overlay (episode info)
- 10. Debug HUD (errors, reward, covariance) - only when present in frame
-
-Usage:
-    python scripts/visualise/visualiser.py
-    make visualise
 """
 
 import json

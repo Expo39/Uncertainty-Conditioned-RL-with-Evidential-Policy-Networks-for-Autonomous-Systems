@@ -1,17 +1,6 @@
 #!/usr/bin/env bash
 # @file workers_down.sh
 # @brief Tear down N env workers (CARLA server + ros2-bridge pairs).
-#
-# N defaults to parallel_workers in configs/train_config.yaml if not given.
-# Mirrors workers_up.sh: computes the same per-worker env vars so Compose
-# identifies the correct named containers to stop and remove.
-#
-# Usage:
-#   bash scripts/multi_workers/workers_down.sh [N] [compose_file]
-#
-# Examples:
-#   bash scripts/multi_workers/workers_down.sh
-#   bash scripts/multi_workers/workers_down.sh 3
 
 set -euo pipefail
 

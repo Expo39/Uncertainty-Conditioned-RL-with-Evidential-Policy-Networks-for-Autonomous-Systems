@@ -2,12 +2,6 @@
 # @file train.sh
 # @brief Run train_ppo.py inside the training container, filtering known
 #        benign ROS 2 DDS noise from stderr.
-#
-# Called by `make docker-train` and `make docker-train-short`.
-# Runs inside the training container (not on the host).
-#
-# Usage:
-#   scripts/training/train.sh [--total-timesteps N] [extra train_ppo.py args...]
 
 set -euo pipefail
 
