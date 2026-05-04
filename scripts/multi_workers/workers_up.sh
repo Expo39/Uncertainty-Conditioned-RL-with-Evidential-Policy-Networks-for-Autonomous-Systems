@@ -1,21 +1,6 @@
 #!/usr/bin/env bash
 # @file workers_up.sh
 # @brief Bring up N env workers (CARLA server + ros2-bridge pairs).
-#
-# N defaults to parallel_workers in configs/train_config.yaml if not given.
-#
-# Each worker r gets:
-#   CARLA ports : 2000+r*1000 to 2002+r*1000
-#   ROS domain  : 42+r
-#   EKF state   : /workspace/outputs/ekf_state.json   (r=0)
-#                 /workspace/outputs/ekf_state_r.json  (r>0)
-#
-# Usage:
-#   bash scripts/multi_workers/workers_up.sh [N] [compose_file]
-#
-# Examples:
-#   bash scripts/multi_workers/workers_up.sh
-#   bash scripts/multi_workers/workers_up.sh 2
 
 set -euo pipefail
 

@@ -1,18 +1,6 @@
 """
 @file demo_drive.py
 @brief Load a trained checkpoint and drive in CARLA for visual inspection.
-
-No metrics, no condition sweep, no plots. Just loads the model and runs
-deterministic episodes in a loop so you can watch the agent park. Works
-with both the 2D bird's-eye visualiser (make visualise) and the 3D CARLA
-spectator view (--render flag).
-
-Usage:
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model \
-        --render
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model \
-        --episodes 5
 """
 
 import argparse

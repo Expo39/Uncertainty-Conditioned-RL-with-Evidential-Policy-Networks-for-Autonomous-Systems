@@ -2,11 +2,6 @@
 @file __init__.py
 @brief Centralised colour palette for all parking lot and sensor visualisations.
 
-Single source of truth for all visualisation colours, used by:
-  - scripts/layouts/common.py          (generate_layouts PNG output)
-  - scripts/inspect/lot_inspector.py   (CARLA lot + sensor debug overlay)
-  - scripts/visualise/visualiser.py    (live training bird's-eye view)
-
 Bay and lot colours are defined as hex strings (#RRGGBB). CARLA consumers convert
 to carla.Color via hex_to_carla_color(). Matplotlib consumers use hex strings directly.
 

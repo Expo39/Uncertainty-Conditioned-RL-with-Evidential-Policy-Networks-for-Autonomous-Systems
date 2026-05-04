@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # @file ensure_stack.sh
 # @brief Start the core training stack if it is not already running.
-#
-# Only starts containers if the training service is not already up.
-# Never touches the inspect stack (docker-compose.inspect.yml).
-#
-# Usage:
-#   bash scripts/multi_workers/ensure_stack.sh
 
 set -euo pipefail
 
