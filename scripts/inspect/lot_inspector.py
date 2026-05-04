@@ -8,8 +8,6 @@ import sys
 import warnings
 from typing import Any, Dict, Optional
 
-import yaml
-
 try:
     import carla  # noqa: F401 - imported for the sys.exit guard below
 except ImportError:

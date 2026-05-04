@@ -42,7 +42,6 @@ def generate() -> Dict[str, Any]:
     p3 = (LEFT_X, WIDTH_FRONT)                # top-left (front)
 
     lot = LotBuilder(name="trapezoid", corners=[p0, p1, p2, p3])
-    dims_perp = lot.dims["perpendicular"]
     dims_par = lot.dims["parallel"]
 
     # ---------- Bays ---------------------------------------------------

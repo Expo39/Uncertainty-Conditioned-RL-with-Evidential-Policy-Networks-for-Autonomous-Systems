@@ -50,7 +50,6 @@ def generate() -> Dict[str, Any]:
         name="irregular_a",
         corners=[P0, P1, P2, P3, P4, P5, P6, P7, P8],
     )
-    dims_perp = lot.dims["perpendicular"]
     dims_ang = lot.dims["angled"]
 
     # ---------- Bays around central obstacle ---------------------------
