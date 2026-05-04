@@ -509,7 +509,7 @@ class DryRunInspector(_Inspector):
                         if _gt_dist <= 0.5:
                             print(
                                 f"\n  [GT proximity] {_gt_dist:.2f}m from target "
-                                f"-- ending episode early"
+                                f"- ending episode early"
                             )
                             self._print_obs(obs, step, episode)
                             _gt_done = True

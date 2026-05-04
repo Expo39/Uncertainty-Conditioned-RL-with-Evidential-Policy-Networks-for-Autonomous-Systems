@@ -19,14 +19,14 @@ def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
 
     Handles two YAML formats produced by scripts/generate_layouts.py:
 
-    Format A -- explicit extents::
+    Format A - explicit extents::
 
         x_min: <float>
         x_max: <float>
         y_min: <float>
         y_max: <float>
 
-    Format B -- centre + half-extents::
+    Format B - centre + half-extents::
 
         centre_x: <float>
         centre_y: <float>
@@ -150,7 +150,7 @@ def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float
     @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
 
     Uses the standard ZYX Euler decomposition. Only valid for 2D operation
-    (z-axis rotation only -- roll and pitch are assumed zero).
+    (z-axis rotation only - roll and pitch are assumed zero).
 
     @param q_x: Quaternion x component.
     @param q_y: Quaternion y component.
