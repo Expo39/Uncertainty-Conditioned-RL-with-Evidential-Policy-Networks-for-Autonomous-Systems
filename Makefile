@@ -318,8 +318,8 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs (no CARLA neede
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
 # Two use cases:
-#   make visualise          -- training already running, just open the viewer
-#   make eval-visualise-2d  -- start checkpoint demo drive + open viewer
+#   make visualise          - training already running, just open the viewer
+#   make eval-visualise-2d  - start checkpoint demo drive + open viewer
 # ----------------------------------------------------------------------
 
 # WORKER selects which env worker's vis_history file to watch.
