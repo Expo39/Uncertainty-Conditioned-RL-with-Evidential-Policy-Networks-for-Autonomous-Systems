@@ -8,7 +8,7 @@ MSc dissertation codebase - trains in CARLA simulation, evaluates across uncerta
 
 ### Three-Container Architecture
 
-1. **carla-server** - CARLA 0.9.16 headless simulation with GPU passthrough. Generates realistic sensor noise, weather, traffic.
+1. **carla-server** - CARLA 0.9.16 headless simulation with GPU passthrough. Generates realistic sensor noise and NPC traffic.
 2. **ros2-bridge** - ROS 2 Jazzy running `robot_localization` EKF + CARLA bridge. Publishes real covariance from noisy sensors.
 3. **training** - NVIDIA NGC PyTorch container. Training/evaluation happens here. Subscribes to EKF covariance via ROS 2 DDS.
 
@@ -87,19 +87,19 @@ Use `-> None` for void functions. Import from `typing`. Use `Optional[X]` not `X
 - `snake_case` functions/variables, `PascalCase` classes, `UPPER_SNAKE_CASE` constants.
 - **ASCII only - no non-ASCII characters anywhere**. Every character must be printable ASCII (U+0020 to U+007E). No Greek letters, em-dashes, multiplication signs, degree symbols, smart quotes, or arrows. Use `gamma` not the Greek letter, `-` not em-dash, `3x3` with letter x, `deg` not degree symbol, `->` not arrow.
 - Never hardcode hyperparameters - use YAML config with `.get()` defaults.
-- Use `constants.py` for structural values: import dimensions and thresholds from `uncertainty_rl.utils.constants` rather than hardcoding `18`, `9`, `6`, `3`, `0.5`, `0.1`, etc.
+- Use `constants.py` for structural values: import dimensions and thresholds from `uncertainty_rl.utils.constants` rather than hardcoding `17`, `12`, `11`, `6`, `5`, `3`, `2`, `0.5`, `0.1`, etc.
 - Specific exceptions, not bare `except:`.
 
 ## Technical Context
 
 - **Evidential deep learning** on the **actor only** (not critic). Outputs NIG distribution: (gamma, nu, alpha, beta).
-- **State space**: 20-dim default - `[vx, vy, vyaw, std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw, cov_xy, cov_xyaw, cov_yyaw, dx, dy, dyaw, left_dist, left_bearing, right_dist, right_bearing, forward_dist]`. Indices 0-2 EKF velocity; 3-11 EKF covariance; 12-14 relative target pose (ego body frame); 15-19 hemispheric LiDAR clearance. 2D only, no z-axis. Ablation: 15-dim (no obstacle), 11-dim (no covariance), 6-dim (neither).
+- **State space**: 17-dim default - `[vx, vy, vyaw, std_x, std_y, std_yaw, cov_xy, cov_xyaw, cov_yyaw, dx, dy, dyaw, left_dist, left_bearing, right_dist, right_bearing, forward_dist]`. Indices 0-2 EKF velocity; 3-8 EKF covariance features (std devs + off-diagonal cross-cov; diagonal variances dropped); 9-11 relative target pose (ego body frame); 12-16 hemispheric LiDAR clearance. 2D only, no z-axis. Ablation flags `include_covariance` and `include_obstacle_obs` reduce dims to 12/11/6.
 - **Localisation**: EKF via `robot_localization`. Covariance extracted from 6x6 at indices [0,1,5] for [x, y, yaw].
 - **RL**: PPO via Stable-Baselines3.
 - **Simulator**: CARLA 0.9.16 with ROS 2 Jazzy bridge.
 - **Uncertainty formulae**: epistemic = `beta/(alpha-1)`, aleatoric = `beta/(nu*(alpha-1))`.
 - **Evidential loss**: `L = NLL(gamma,nu,alpha,beta,y) + lambda*|y-gamma|*(2*nu+alpha)`.
-- **Uncertainty source**: CARLA simulates physical conditions (noisy sensors, weather, fog, traffic) that cause the `robot_localisation` EKF to produce real covariance. Docker + ROS 2 always required for training.
+- **Uncertainty source**: Per-episode RTK fix-state tier sampling (from `configs/gnss_noise_profiles.yaml`) varies GNSS sensor noise, which drives EKF covariance variation. NPC vehicles/pedestrians and varying bay occupancy provide secondary variation. No weather effects - FlatPlane does not render them. Docker + ROS 2 always required for training.
 
 ## Documentation Links
 
@@ -137,10 +137,10 @@ Consult these when modifying Dockerfiles, docker-compose.yml, or debugging conta
 Core novel component. `EvidentialLayer` outputs 4 NIG params per action dim. `EvidentialPolicyNetwork` is the full actor. `UncertaintyConditionedActor` has dual encoders (state + uncertainty). `LayerNorm` used, not `BatchNorm`. Softplus + offset constraints on nu, alpha, beta are mandatory. `get_action()` must always return `(action, uncertainty_dict)` with keys: `epistemic`, `aleatoric`, `total`, `gamma`, `nu`, `alpha`, `beta`.
 
 ### `uncertainty_rl/envs/`
-Gymnasium-compatible CARLA parking env. 20-dim state (0-2 velocity, 3-11 EKF covariance, 12-14 relative target pose, 15-19 hemispheric LiDAR clearance), 3-dim action `[steering, throttle, brake]`. EKF uncertainty comes from real `robot_localisation` covariance via ROS 2 (Docker required). No standalone fallback for training. Reward: potential-based shaping (progress / OUT_OF_BOUNDS_THRESHOLD - 0.01/step). Terminal: collision -10, success +10, out-of-bounds -5. Success: <0.5m, <10deg, <0.1 m/s.
+Gymnasium-compatible CARLA parking env. 17-dim state (0-2 velocity, 3-8 EKF covariance, 9-11 relative target pose, 12-16 hemispheric LiDAR clearance), 3-dim action `[steering, throttle, brake]`. EKF uncertainty comes from real `robot_localisation` covariance via ROS 2 (Docker required). No standalone fallback for training. Reward: potential-based shaping (progress / OUT_OF_BOUNDS_THRESHOLD - 0.01/step). Terminal: collision -10, success +10, out-of-bounds -5. Success: <0.5m, <10deg, <0.1 m/s.
 
 ### `uncertainty_rl/training/`
-`train_ppo.py` implements SB3 PPO training with config-driven hyperparameters. `VecNormalize` wraps envs. Eval env uses `training=False`. Currently uses standard `MlpPolicy` - the evidential policy is not yet integrated as a custom SB3 policy class.
+`train_ppo.py` implements SB3 PPO training with config-driven hyperparameters. `VecNormalize` wraps envs. Eval env uses `training=False`. Uses `EvidentialActorCriticPolicy` (custom SB3 policy subclass) with optional dual-encoder (`use_uncertainty_conditioning` config flag).
 
 ### `uncertainty_rl/evaluation/`
 Sweeps across `eval_conditions` (weather, fog, sensor noise multipliers, traffic) to test degradation. `EvaluationMetrics` collects success rate, reward, position/orientation errors, uncertainty estimates. Generates CSV + seaborn plots. The condition sweep is the centrepiece of the dissertation's experimental chapter.
@@ -225,13 +225,13 @@ max_steps = config.get("max_steps", 500)
 
 ## Data Flow - How Uncertainty Gets Into RL
 
-1. **CARLA sensors** produce noisy IMU + GNSS (configured in `train_config.yaml` -> `carla_sensors`)
-2. **CARLA bridge** publishes sensor topics to ROS 2 (`/carla/imu`, `/carla/gnss`)
-3. **robot_localization EKF** fuses sensors, outputs `/odometry/filtered` with 6x6 covariance
-4. **CovarianceExtractorNode** (`uncertainty_rl/ros2/`) subscribes to `/odometry/filtered`, extracts 3x3 [x,y,yaw] submatrix, publishes `CovarianceEstimate` custom message
-5. **CARLAParkingEnv** (`uncertainty_rl/envs/carla_parking.py`) runs a daemon thread with `_CovarianceSubscriber` (rclpy node), caches latest 9-element uncertainty vector via `extract_2d_covariance_features()`
-6. **Gymnasium `step()`** concatenates velocity (3D) + uncertainty features (9D) + relative target (3D) + hemispheric clearance (5D) -> 20D observation
-7. **Evidential policy** receives 15D state, outputs NIG params (gamma, nu, alpha, beta), decomposes into epistemic/aleatoric uncertainty
+1. **GNSS noise relay** (`GnssNoiseRelayNode`) samples an RTK fix-state tier per episode from `gnss_noise_profiles.yaml` and injects that noise level onto CARLA's GNSS sensor output
+2. **CARLA bridge** publishes noisy GNSS + IMU to ROS 2 (`/carla/gnss`, `/carla/imu`)
+3. **robot_localization EKF** fuses GNSS + IMU, outputs `/odometry/filtered` with 6x6 covariance
+4. **CovarianceExtractorNode** (`uncertainty_rl/ros2/`) subscribes to `/odometry/filtered`, extracts 3x3 [x,y,yaw] submatrix, writes `ekf_state.json` (DDS bypass for training container)
+5. **CARLAParkingEnv** (`uncertainty_rl/envs/carla_parking.py`) polls `ekf_state.json` via `_CovarianceSubscriber`, caches latest pose + 6-element covariance features via `extract_2d_covariance_features()`
+6. **Gymnasium `step()`** concatenates velocity (3D) + covariance features (6D) + relative target (3D) + hemispheric clearance (5D) -> 17D observation
+7. **Evidential policy** receives 17D observation, outputs NIG params (gamma, nu, alpha, beta), decomposes into epistemic/aleatoric uncertainty
 
 **Critical**: Training container must subscribe to ROS 2 topics via DDS. Set `ROS_DOMAIN_ID=42` in all containers (already in `docker-compose.yml`).
 
@@ -262,13 +262,13 @@ L = NLL(gamma, nu, alpha, beta, y) + lambda * |y - gamma| * (2*nu + alpha)
 
 ## Evaluation Condition Sweep
 
-The dissertation's core experiment: test agent across escalating uncertainty levels. `eval_config.yaml` defines ordered conditions:
-1. **clear_low_noise** - 0.5x sensor noise, no traffic, clear weather
-2. **clear_nominal** - 1.0x noise, light traffic
-3. **cloudy_moderate** - 1.5x noise, fog 10, 20 vehicles
-4. **rain_degraded** - 2.0x noise, fog 20, rain
-5. **heavy_rain_noisy** - 3.0x noise, fog 30, heavy rain, dense traffic
-6. **fog_moderate** - 5.0x GNSS noise (multipath), fog 50
+The dissertation's core experiment: test agent across escalating localisation uncertainty. `eval_config.yaml` defines ordered conditions keyed on `gnss_noise_multiplier` (scales the GNSS noise tier):
+1. **clear_low_noise** - 0.5x GNSS noise multiplier, no NPC traffic
+2. **clear_nominal** - 1.0x noise, light NPC traffic
+3. **noisy_moderate** - 1.5x noise, moderate NPC traffic + pedestrians
+4. **noisy_degraded** - 2.0x noise, dense NPC traffic
+5. **high_noise** - 3.0x noise, dense traffic + pedestrians
+6. **extreme_noise** - 5.0x GNSS noise (simulates multipath / RTK loss of fix)
 
 Each condition runs 100 episodes. Metrics collected:
 - Success rate (position <0.5m, orientation <10deg, velocity <0.1 m/s)
@@ -302,18 +302,18 @@ Mark integration tests: `@pytest.mark.integration` (requires CARLA/ROS 2, skip w
 
 ## Stable-Baselines3 Integration
 
-Currently uses standard `MlpPolicy`. Evidential policy not yet integrated as custom SB3 policy class.
+Uses `EvidentialActorCriticPolicy` - a custom SB3 `ActorCriticPolicy` subclass with `EvidentialPPO`.
 
 Training flow (`uncertainty_rl/training/train_ppo.py`):
 1. Load config from YAML
 2. Create vectorised envs via `make_env()` callable (allows per-env CARLA port offset)
 3. Wrap in `VecNormalize(training=True)` for obs/reward normalisation
 4. Create eval env with `VecNormalize(training=False, norm_reward=False)`
-5. Instantiate `PPO` with `MlpPolicy`, network arch from config
+5. Instantiate `EvidentialPPO` with `EvidentialActorCriticPolicy`, network arch from config
 6. Register `CheckpointCallback` (every 50k steps), `EvalCallback` (every 10k steps)
 7. Train with `model.learn(total_timesteps, callbacks)`
 
-Custom policy TODO: Subclass `ActorCriticPolicy`, override `_build_mlp_extractor()` to use `EvidentialPolicyNetwork`.
+When `use_uncertainty_conditioning=True` in config, the actor uses `UncertaintyConditionedActor` (dual-encoder splitting velocity vs covariance features). When `False`, a flat MLP + `EvidentialLayer` is used.
 
 ## ROS 2 Custom Messages
 

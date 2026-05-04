@@ -2,7 +2,7 @@
 
 Offline tooling for layout generation, CARLA inspection, training visualisation,
 and experiment orchestration. None of these scripts are imported by the training
-pipeline -- they are invoked exclusively via `make` targets.
+pipeline - they are invoked exclusively via `make` targets.
 
 ## Subdirectories
 

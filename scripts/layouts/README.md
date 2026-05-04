@@ -115,19 +115,24 @@ of an interior obstacle rectangle.
 
 ## Shared Modules
 
+### `builder.py`
+
+Declarative DSL for assembling floor plans. New layouts should use this instead of calling `common.py` helpers directly.
+
+| Symbol | Type | Description |
+|--------|------|-------------|
+| `LotBuilder` | class | Top-level builder: define polygon, place bays, add spawns/zones/patrol/obstacles, call `build()` |
+| `BayGroup` | class | Returned by every row method; exposes `.bbox`, `.nose_y`, `.back_y`, `.nose_x`, `.back_x` for zone/patrol alignment |
+| `PedestrianZone` | class | Axis-aligned zone; construct via `along_row()`, `between_rows()`, `beside_wall()`, or explicit bounds |
+| `PatrolPath` | class | Ordered waypoints with `aisle_y()`, `aisle_x()`, `add_in_aisle_y()`, `add_in_aisle_x()` helpers |
+
 ### `common.py`
 
-Geometry helpers and constants shared by all layout modules.
+Low-level engine: world-frame transform, YAML writer, PNG plotter, and validators. Called by `generate_layouts.py` and `builder.py`; floor plan modules should not import from it directly.
 
 | Symbol | Type | Description |
 |--------|------|-------------|
 | `BAY_DIMS` | dict | Standard EAR 05 bay dimensions: perpendicular (2.5x5.0 m, aisle 6.0 m), angled (2.5x5.4 m, aisle 3.6 m), parallel (2.5x8.0 m, aisle 4.0 m) |
-| `BAYS_PER_TYPE` | int | Base bay count per type (5). Layouts may exceed this with a named constant and comment. |
-| `angled_bays_along_wall()` | function | Places N angled bays along an arbitrary wall defined by direction vector, offset, and start position. Used for diagonal walls (trapezoid, irregular_a). |
-| `ang_offset_from_wall()` | function | Perpendicular offset from wall to bay centre for an angled bay. |
-| `ang_x_margin()` | function | Minimum along-wall margin so the first bay corner clears the wall endpoint. |
-| `validate_bays_in_polygon()` | function | Raises `ValueError` if any bay centre falls outside the perimeter polygon. |
-| `warn_narrow_corridors()` | function | Warns if any bay pair is closer than the minimum aisle width. |
 | `to_world_frame()` | function | Applies rotation + translation from local frame to CARLA world frame. |
 | `write_layout_yaml()` | function | Serialises the layout dict to a YAML file consumed by `CARLAParkingEnv`. |
 | `plot_layout()` | function | Renders a bird's-eye PNG of the layout using Matplotlib. |
