@@ -21,6 +21,18 @@ from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from scripts.inspect._drawing import _draw_layout_overlays
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
+# ---------------------------------------------------------------------------
+# ANSI colour constants
+# ---------------------------------------------------------------------------
+
+_ANSI_WHITE = "\033[97m"
+_ANSI_YELLOW = "\033[33m"
+_ANSI_RED = "\033[31m"
+_ANSI_CYAN = "\033[36m"
+_ANSI_RESET = "\033[0m"
+
+# Squared threshold for GT proximity.
+_GT_PROXIMITY_SQ: float = 0.25  
 
 # ---------------------------------------------------------------------------
 # Keyboard controller for manual dryrun mode
@@ -42,7 +54,7 @@ class KeyboardController:
 
     def __init__(self) -> None:
         """@brief Initialise controller with zeroed latched state."""
-        import tty  # noqa: F401 
+        import tty  # noqa: F401
         import termios  # noqa: F401
 
         self._steer: float = 0.0
@@ -224,31 +236,35 @@ class DryRunInspector(_Inspector):
         if self._env.vehicle is None or self._env.world is None or self._view == "free":
             return
         vt = self._env.vehicle.get_transform()
-        yaw_rad = math.radians(vt.rotation.yaw)
+        vx = vt.location.x
+        vy = vt.location.y
+        vz = vt.location.z
+        vyaw = vt.rotation.yaw
+        yaw_rad = math.radians(vyaw)
+        cos_y = math.cos(yaw_rad)
+        sin_y = math.sin(yaw_rad)
         spectator = self._env.world.get_spectator()
 
         if self._view == "third_person":
             spectator.set_transform(
                 carla.Transform(
                     carla.Location(
-                        x=vt.location.x - 20.0 * math.cos(yaw_rad),
-                        y=vt.location.y - 20.0 * math.sin(yaw_rad),
-                        z=vt.location.z + 10.0,
+                        x=vx - 20.0 * cos_y,
+                        y=vy - 20.0 * sin_y,
+                        z=vz + 10.0,
                     ),
-                    carla.Rotation(pitch=-25.0, yaw=vt.rotation.yaw),
+                    carla.Rotation(pitch=-25.0, yaw=vyaw),
                 )
             )
         elif self._view == "side":
-            sx = vt.location.x - 15.0 * math.sin(yaw_rad)
-            sy = vt.location.y + 15.0 * math.cos(yaw_rad)
+            sx = vx - 15.0 * sin_y
+            sy = vy + 15.0 * cos_y
             spectator.set_transform(
                 carla.Transform(
-                    carla.Location(x=sx, y=sy, z=vt.location.z),
+                    carla.Location(x=sx, y=sy, z=vz),
                     carla.Rotation(
                         pitch=0.0,
-                        yaw=math.degrees(
-                            math.atan2(vt.location.y - sy, vt.location.x - sx)
-                        ),
+                        yaw=math.degrees(math.atan2(vy - sy, vx - sx)),
                     ),
                 )
             )
@@ -256,24 +272,22 @@ class DryRunInspector(_Inspector):
             spectator.set_transform(
                 carla.Transform(
                     carla.Location(
-                        x=vt.location.x - 20.0 * math.cos(yaw_rad),
-                        y=vt.location.y - 20.0 * math.sin(yaw_rad),
-                        z=vt.location.z,
+                        x=vx - 20.0 * cos_y,
+                        y=vy - 20.0 * sin_y,
+                        z=vz,
                     ),
-                    carla.Rotation(pitch=0.0, yaw=vt.rotation.yaw),
+                    carla.Rotation(pitch=0.0, yaw=vyaw),
                 )
             )
         else:  # front
-            fx = vt.location.x + 15.0 * math.cos(yaw_rad)
-            fy = vt.location.y + 15.0 * math.sin(yaw_rad)
+            fx = vx + 15.0 * cos_y
+            fy = vy + 15.0 * sin_y
             spectator.set_transform(
                 carla.Transform(
-                    carla.Location(x=fx, y=fy, z=vt.location.z),
+                    carla.Location(x=fx, y=fy, z=vz),
                     carla.Rotation(
                         pitch=0.0,
-                        yaw=math.degrees(
-                            math.atan2(vt.location.y - fy, vt.location.x - fx)
-                        ),
+                        yaw=math.degrees(math.atan2(vy - fy, vx - fx)),
                     ),
                 )
             )
@@ -292,25 +306,20 @@ class DryRunInspector(_Inspector):
         @param step: Current step within the episode.
         @param episode: Current episode index.
         """
-        _WHITE = "\033[97m"
-        _YELLOW = "\033[33m"
-        _RED = "\033[31m"
-        _RESET = "\033[0m"
-        _CYAN = "\033[36m"
-
         if obs is None or len(obs) < 3:
             return
 
-        W = _WHITE
-        Y = _YELLOW
-        R = _RED
-        X = _RESET
+        W = _ANSI_WHITE
+        Y = _ANSI_YELLOW
+        R = _ANSI_RED
+        C = _ANSI_CYAN
+        X = _ANSI_RESET
         lines = []
 
-        _live_tier = _read_live_tier()
+        live_tier = _read_live_tier()
         lines.append(
             f"--- ep={episode}  step={step}  "
-            + _CYAN + f"tier={_live_tier}" + X
+            + C + f"tier={live_tier}" + X
             + " " + "-" * 28
         )
 
@@ -319,7 +328,7 @@ class DryRunInspector(_Inspector):
         if self._env.vehicle is not None:
             t = self._env.vehicle.get_transform()
             v = self._env.vehicle.get_velocity()
-            spd = math.sqrt(v.x**2 + v.y**2)
+            spd = math.hypot(v.x, v.y)
             lines.append(
                 Y + f"GT   pos=({t.location.x:.2f},{t.location.y:.2f})"
                 f"  yaw={t.rotation.yaw:+.1f}deg  spd={spd:.2f}m/s" + X
@@ -341,10 +350,9 @@ class DryRunInspector(_Inspector):
                 wyaw_rad = math.atan2(
                     math.sin(ekf_yaw + r), math.cos(ekf_yaw + r)
                 )
-                wyaw = math.degrees(wyaw_rad)
                 lines.append(
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
-                    f"  yaw={wyaw:+.1f}deg" + X
+                    f"  yaw={math.degrees(wyaw_rad):+.1f}deg" + X
                 )
 
         if len(obs) >= 4:
@@ -422,6 +430,7 @@ class DryRunInspector(_Inspector):
         episode = 0
         total_steps = 0
         _latest_obs = None
+        _tick_period = 1.0 / self._TICK_HZ
 
         mode_desc = (
             "keyboard control"
@@ -472,25 +481,27 @@ class DryRunInspector(_Inspector):
                     if self._env._cov_subscriber is not None and self._env.vehicle is not None:
                         _ep = self._env._cov_subscriber.get_latest_pose()
                         if _ep is not None:
+                            _ep0 = float(_ep[0])
+                            _ep1 = -float(_ep[1])
+                            _ep2 = float(_ep[2])
                             _tx, _ty, _cr, _sr, _rr = self._env._ekf_odom_offset
-                            _wx = _cr * float(_ep[0]) - _sr * (-float(_ep[1])) + _tx
-                            _wy = _sr * float(_ep[0]) + _cr * (-float(_ep[1])) + _ty
+                            _wx = _cr * _ep0 - _sr * _ep1 + _tx
+                            _wy = _sr * _ep0 + _cr * _ep1 + _ty
                             _gt = self._env.vehicle.get_transform()
-                            _pos_err = math.sqrt(
-                                (_wx - _gt.location.x) ** 2
-                                + (_wy - _gt.location.y) ** 2
-                            )
+                            _dx = _wx - _gt.location.x
+                            _dy = _wy - _gt.location.y
+                            # Accumulate squared error directly.
+                            _rmse_pos_sq += _dx * _dx + _dy * _dy
                             _ekf_wyaw = math.atan2(
-                                math.sin(float(_ep[2]) + _rr),
-                                math.cos(float(_ep[2]) + _rr),
+                                math.sin(_ep2 + _rr),
+                                math.cos(_ep2 + _rr),
                             )
                             _gt_yaw = math.radians(_gt.rotation.yaw)
                             _yaw_err = math.atan2(
                                 math.sin(_ekf_wyaw - _gt_yaw),
                                 math.cos(_ekf_wyaw - _gt_yaw),
                             )
-                            _rmse_pos_sq += _pos_err ** 2
-                            _rmse_yaw_sq += _yaw_err ** 2
+                            _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
                     time.sleep(
@@ -502,11 +513,10 @@ class DryRunInspector(_Inspector):
                     if self._env.vehicle is not None:
                         _vt = self._env.vehicle.get_transform()
                         _tgt = self._env._target_bay
-                        _gt_dist = math.sqrt(
-                            (_vt.location.x - _tgt["x"]) ** 2
-                            + (_vt.location.y - _tgt["y"]) ** 2
-                        )
-                        if _gt_dist <= 0.5:
+                        _ddx = _vt.location.x - _tgt["x"]
+                        _ddy = _vt.location.y - _tgt["y"]
+                        if _ddx * _ddx + _ddy * _ddy <= _GT_PROXIMITY_SQ:
+                            _gt_dist = math.sqrt(_ddx * _ddx + _ddy * _ddy)
                             print(
                                 f"\n  [GT proximity] {_gt_dist:.2f}m from target "
                                 f"- ending episode early"
@@ -528,16 +538,16 @@ class DryRunInspector(_Inspector):
                         "truncated" if truncated else "terminated",
                     )
                 )
-                _C = "\033[36m"
-                _R = "\033[0m"
                 if _rmse_n > 0:
                     _pos_rmse = math.sqrt(_rmse_pos_sq / _rmse_n)
                     _yaw_rmse = math.degrees(math.sqrt(_rmse_yaw_sq / _rmse_n))
                     _rmse_str = (
-                        _C + f"pos_rmse={_pos_rmse:.3f}m  yaw_rmse={_yaw_rmse:.2f}deg" + _R
+                        _ANSI_CYAN
+                        + f"pos_rmse={_pos_rmse:.3f}m  yaw_rmse={_yaw_rmse:.2f}deg"
+                        + _ANSI_RESET
                     )
                 else:
-                    _rmse_str = _C + "pos_rmse=n/a  yaw_rmse=n/a" + _R
+                    _rmse_str = _ANSI_CYAN + "pos_rmse=n/a  yaw_rmse=n/a" + _ANSI_RESET
                 print(
                     f"  Episode {episode} ended: {reason}"
                     f"  steps={step}  total_steps={total_steps}  "
@@ -553,10 +563,11 @@ class DryRunInspector(_Inspector):
                         "(Ctrl+C to skip) ..."
                     )
                     pause_end = time.monotonic() + self._termination_pause
+                    world_tick = self._env.world.tick
                     while time.monotonic() < pause_end:
-                        self._env.world.tick()
+                        world_tick()
                         self._update_spectator()
-                        time.sleep(1.0 / self._TICK_HZ)
+                        time.sleep(_tick_period)
 
         except KeyboardInterrupt:
             print("\nInterrupted.")

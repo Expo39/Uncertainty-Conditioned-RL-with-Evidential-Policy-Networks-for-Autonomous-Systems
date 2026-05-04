@@ -51,8 +51,11 @@ class SensorInspector(LayoutInspector):
         if self._env.world is None:
             return
 
-        if self._view in ("side", "front") and self._env.vehicle is not None:
-            vt = self._env.vehicle.get_transform()
+        if self._env.vehicle is None:
+            return
+        vt = self._env.vehicle.get_transform()
+
+        if self._view in ("side", "front"):
             if self._view == "side":
                 self._place_spectator_side(vt)
                 print("Spectator: side profile view.")
@@ -61,9 +64,6 @@ class SensorInspector(LayoutInspector):
                 print("Spectator: front profile view.")
             return
 
-        if self._env.vehicle is None:
-            return
-        vt = self._env.vehicle.get_transform()
         cx, cy, sz = vt.location.x, vt.location.y, vt.location.z
 
         sensors_cfg = self._train_cfg.get("carla_sensors", {})
