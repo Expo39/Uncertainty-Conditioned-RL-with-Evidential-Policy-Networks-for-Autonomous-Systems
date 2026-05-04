@@ -16,41 +16,6 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
-# Low-level rotation/translation primitives used by to_world_frame
-# ---------------------------------------------------------------------------
-
-
-def _rotate(x: float, y: float, heading_rad: float) -> Tuple[float, float]:
-    """
-    @brief Rotate point (x, y) by heading_rad about the origin.
-    """
-    cos_h = math.cos(heading_rad)
-    sin_h = math.sin(heading_rad)
-    return (cos_h * x - sin_h * y, sin_h * x + cos_h * y)
-
-
-def _translate(
-    x: float,
-    y: float,
-    origin_x: float,
-    origin_y: float,
-    heading_rad: float,
-) -> Tuple[float, float]:
-    """
-    @brief Rotate then translate a local point to world frame.
-    """
-    rx, ry = _rotate(x, y, heading_rad)
-    return (rx + origin_x, ry + origin_y)
-
-
-def _world_yaw(local_yaw_deg: float, heading_deg: float) -> float:
-    """
-    @brief Convert a local yaw angle to world-frame yaw.
-    """
-    return (local_yaw_deg + heading_deg) % 360.0
-
-
-# ---------------------------------------------------------------------------
 # World-frame transformation
 # ---------------------------------------------------------------------------
 
@@ -78,38 +43,61 @@ def to_world_frame(
     @return CARLA world-frame layout dict ready for YAML serialisation.
     """
     h_rad = math.radians(heading_deg)
+    cos_h = math.cos(h_rad)
+    sin_h = math.sin(h_rad)
     # The origin is in CARLA's left-handed frame. Negate origin_y so the
     # intermediate math stays in the right-handed frame; then negate the
     # final Y output to return to CARLA frame.
-    rh_origin_y = -origin_y
+    rh_oy = -origin_y
 
-    def _to_carla(x_rh: float, y_rh: float) -> Tuple[float, float]:
-        """Convert right-handed (x, y) to CARLA left-handed (x, -y)."""
+    def _xform(x: float, y: float) -> Tuple[float, float]:
+        """Rotate + translate right-handed (x,y), then mirror to CARLA frame."""
+        rx = cos_h * x - sin_h * y
+        ry = sin_h * x + cos_h * y
         # + 0.0 avoids negative zero in YAML output.
-        return (x_rh + 0.0, -y_rh + 0.0)
+        return (rx + origin_x + 0.0, -(ry + rh_oy) + 0.0)
 
-    def _carla_yaw(yaw_rh_deg: float) -> float:
-        """Convert right-handed yaw (CCW+) to CARLA yaw (CW+)."""
-        return (-yaw_rh_deg) % 360.0
+    def _yaw_to_carla(local_yaw_deg: float) -> float:
+        """Convert local yaw (CCW+) to CARLA yaw (CW+)."""
+        return (-(local_yaw_deg + heading_deg)) % 360.0
 
-    world_corners = []
-    for c in local_layout["corners"]:
-        wx, wy = _translate(c["x"], c["y"], origin_x, rh_origin_y, h_rad)
-        cx, cy = _to_carla(wx, wy)
-        world_corners.append({"x": round(cx, 3), "y": round(cy, 3)})
+    def _xform_spawn(sp: Dict[str, Any]) -> Dict[str, Any]:
+        cx, cy = _xform(sp["x"], sp["y"])
+        return {
+            "x": round(cx, 3),
+            "y": round(cy, 3),
+            "z": origin_z,
+            "yaw_deg": round(_yaw_to_carla(sp["yaw_deg"]), 2),
+        }
+
+    def _xform_box(box: Dict[str, float]) -> Dict[str, float]:
+        """Transform a min/max box to world-frame centre + half-extents."""
+        lx = (box["x_min"] + box["x_max"]) / 2.0
+        ly = (box["y_min"] + box["y_max"]) / 2.0
+        cx, cy = _xform(lx, ly)
+        return {
+            "centre_x": round(cx, 3),
+            "centre_y": round(cy, 3),
+            "half_width": round((box["x_max"] - box["x_min"]) / 2.0, 3),
+            "half_height": round((box["y_max"] - box["y_min"]) / 2.0, 3),
+        }
+
+    world_corners = [
+        {"x": round(cx, 3), "y": round(cy, 3)}
+        for c in local_layout["corners"]
+        for cx, cy in (_xform(c["x"], c["y"]),)
+    ]
 
     world_bays = []
     for i, b in enumerate(local_layout["bays"]):
-        wx, wy = _translate(b["local_x"], b["local_y"], origin_x, rh_origin_y, h_rad)
-        cx, cy = _to_carla(wx, wy)
-        world_yaw = _carla_yaw(_world_yaw(b["local_yaw_deg"], heading_deg))
+        cx, cy = _xform(b["local_x"], b["local_y"])
         world_bay: Dict[str, Any] = {
             "id": f"{b['bay_type']}_{i}",
             "bay_type": b["bay_type"],
             "x": round(cx, 3),
             "y": round(cy, 3),
             "z": origin_z,
-            "yaw_deg": round(world_yaw, 2),
+            "yaw_deg": round(_yaw_to_carla(b["local_yaw_deg"]), 2),
             "width": b["width"],
             "depth": b["depth"],
         }
@@ -119,86 +107,33 @@ def to_world_frame(
             world_bay["occupant"] = b["occupant"]
         world_bays.append(world_bay)
 
-    sp = local_layout["spawn"]
-    sx, sy = _translate(sp["x"], sp["y"], origin_x, rh_origin_y, h_rad)
-    csx, csy = _to_carla(sx, sy)
-    world_spawn = {
-        "x": round(csx, 3),
-        "y": round(csy, 3),
-        "z": origin_z,
-        "yaw_deg": round(
-            _carla_yaw(_world_yaw(sp["yaw_deg"], heading_deg)), 2
-        ),
-    }
+    world_patrol = [
+        {"x": round(cx, 3), "y": round(cy, 3)}
+        for wp in local_layout["patrol_waypoints"]
+        for cx, cy in (_xform(wp["x"], wp["y"]),)
+    ]
 
-    world_extra_spawns = []
-    for esp in local_layout.get("extra_spawns", []):
-        esx, esy = _translate(esp["x"], esp["y"], origin_x, rh_origin_y, h_rad)
-        cesx, cesy = _to_carla(esx, esy)
-        world_extra_spawns.append(
-            {
-                "x": round(cesx, 3),
-                "y": round(cesy, 3),
-                "z": origin_z,
-                "yaw_deg": round(
-                    _carla_yaw(_world_yaw(esp["yaw_deg"], heading_deg)), 2
-                ),
-            }
-        )
+    world_extra_spawns = [
+        _xform_spawn(esp) for esp in local_layout.get("extra_spawns", [])
+    ]
 
-    world_patrol = []
-    for wp in local_layout["patrol_waypoints"]:
-        wx, wy = _translate(wp["x"], wp["y"], origin_x, rh_origin_y, h_rad)
-        cx, cy = _to_carla(wx, wy)
-        world_patrol.append({"x": round(cx, 3), "y": round(cy, 3)})
+    world_ped_zones = [
+        _xform_box(zone) for zone in local_layout["pedestrian_zones"]
+    ]
 
-    world_ped_zones = []
-    for zone in local_layout["pedestrian_zones"]:
-        zx = (zone["x_min"] + zone["x_max"]) / 2.0
-        zy = (zone["y_min"] + zone["y_max"]) / 2.0
-        half_w = (zone["x_max"] - zone["x_min"]) / 2.0
-        half_h = (zone["y_max"] - zone["y_min"]) / 2.0
-        wcx, wcy = _translate(zx, zy, origin_x, rh_origin_y, h_rad)
-        ccx, ccy = _to_carla(wcx, wcy)
-        world_ped_zones.append(
-            {
-                "centre_x": round(ccx, 3),
-                "centre_y": round(ccy, 3),
-                "half_width": round(half_w, 3),
-                "half_height": round(half_h, 3),
-            }
-        )
+    world_obstacles = [
+        _xform_box(obs) for obs in local_layout.get("obstacles", [])
+    ]
 
-    # Transform obstacle rectangles to world frame.
-    # Each obstacle is stored as centre + half-extents so the CARLA spawner
-    # can place cones around the perimeter without re-computing the bounds.
-    world_obstacles = []
-    for obs in local_layout.get("obstacles", []):
-        cx_loc = (obs["x_min"] + obs["x_max"]) / 2.0
-        cy_loc = (obs["y_min"] + obs["y_max"]) / 2.0
-        half_w = (obs["x_max"] - obs["x_min"]) / 2.0
-        half_h = (obs["y_max"] - obs["y_min"]) / 2.0
-        wcx, wcy = _translate(cx_loc, cy_loc, origin_x, rh_origin_y, h_rad)
-        ccx, ccy = _to_carla(wcx, wcy)
-        world_obstacles.append(
-            {
-                "centre_x": round(ccx, 3),
-                "centre_y": round(ccy, 3),
-                "half_width": round(half_w, 3),
-                "half_height": round(half_h, 3),
-            }
-        )
-
-    result: Dict[str, Any] = {
+    return {
         "corners": world_corners,
         "bays": world_bays,
-        "spawn_transform": world_spawn,
+        "spawn_transform": _xform_spawn(local_layout["spawn"]),
         "extra_spawn_transforms": world_extra_spawns,
         "patrol_waypoints": world_patrol,
         "pedestrian_zones": world_ped_zones,
         "obstacles": world_obstacles,
     }
-    return result
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +218,20 @@ def plot_layout(
     try:
         import matplotlib.patches as mpatches
         import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Polygon as MPoly
+        from matplotlib.patheffects import withStroke
     except ImportError:
         print("  WARNING: matplotlib not available, skipping plot.")
         return
+
+    from scripts.colours import (
+        BAY_HEX,
+        HEX_LOT,
+        HEX_PATROL_PATH,
+        HEX_PEDESTRIAN_ZONE,
+        HEX_PEDESTRIAN_ZONE_EDGE,
+    )
 
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_aspect("equal")
@@ -297,55 +243,35 @@ def plot_layout(
     ax.invert_yaxis()
 
     corner_pts = [(c["x"], c["y"]) for c in world_layout["corners"]]
-    from matplotlib.patches import Polygon as MPoly
-
     lot_patch = MPoly(
         corner_pts, closed=True, facecolor="#DDDDDD", edgecolor="none", linewidth=0
     )
     ax.add_patch(lot_patch)
 
-    # Draw full perimeter - no gaps (spawns are inside the lot, not on the wall).
-    n = len(corner_pts)
-    for i in range(n):
-        p0 = corner_pts[i]
-        p1 = corner_pts[(i + 1) % n]
-        ax.plot(
-            [p0[0], p1[0]],
-            [p0[1], p1[1]],
-            color="black",
-            linewidth=2,
-            solid_capstyle="butt",
-        )
-
-    from scripts.colours import (
-        BAY_HEX,
-        HEX_LOT,
-        HEX_PATROL_PATH,
-        HEX_PEDESTRIAN_ZONE,
-        HEX_PEDESTRIAN_ZONE_EDGE,
+    # Draw full perimeter as a single closed polygon outline.
+    perim_patch = MPoly(
+        corner_pts,
+        closed=True,
+        facecolor="none",
+        edgecolor="black",
+        linewidth=2,
+        capstyle="butt",
     )
+    ax.add_patch(perim_patch)
 
     for bay in world_layout["bays"]:
         bay_type = bay["bay_type"]
-        is_motorcycle = bay_type == "motorcycle"
-        colour = "#888888" if is_motorcycle else BAY_HEX.get(bay_type, "grey")
+        colour = "#888888" if bay_type == "motorcycle" else BAY_HEX.get(bay_type, "grey")
         bx, by = bay["x"], bay["y"]
         yaw_rad = math.radians(bay["yaw_deg"])
-        w, d = bay["width"], bay["depth"]
-        local_corners = [
-            (-d / 2.0, -w / 2.0),
-            (d / 2.0, -w / 2.0),
-            (d / 2.0, w / 2.0),
-            (-d / 2.0, w / 2.0),
-        ]
+        cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
+        hw, hd = bay["width"] / 2.0, bay["depth"] / 2.0
+        local_corners = [(-hd, -hw), (hd, -hw), (hd, hw), (-hd, hw)]
         world_rect = [
-            (
-                bx + math.cos(yaw_rad) * lx - math.sin(yaw_rad) * ly,
-                by + math.sin(yaw_rad) * lx + math.cos(yaw_rad) * ly,
-            )
+            (bx + cos_y * lx - sin_y * ly, by + sin_y * lx + cos_y * ly)
             for lx, ly in local_corners
         ]
-        rect_patch = MPoly(
+        ax.add_patch(MPoly(
             world_rect,
             closed=True,
             facecolor=colour,
@@ -353,19 +279,13 @@ def plot_layout(
             linewidth=1.5,
             alpha=0.6,
             zorder=3,
-        )
-        ax.add_patch(rect_patch)
+        ))
 
     for zone in world_layout.get("pedestrian_zones", []):
-        zw = zone["half_width"] * 2.0
-        zh = zone["half_height"] * 2.0
-        cloud = mpatches.FancyBboxPatch(
-            (
-                zone["centre_x"] - zone["half_width"],
-                zone["centre_y"] - zone["half_height"],
-            ),
-            zw,
-            zh,
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (zone["centre_x"] - zone["half_width"], zone["centre_y"] - zone["half_height"]),
+            zone["half_width"] * 2.0,
+            zone["half_height"] * 2.0,
             boxstyle="round,pad=0.4",
             facecolor=HEX_PEDESTRIAN_ZONE,
             edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
@@ -373,103 +293,65 @@ def plot_layout(
             linewidth=1.5,
             linestyle="--",
             zorder=4,
-        )
-        ax.add_patch(cloud)
+        ))
 
     for obs in world_layout.get("obstacles", []):
-        obs_patch = mpatches.Rectangle(
-            (
-                obs["centre_x"] - obs["half_width"],
-                obs["centre_y"] - obs["half_height"],
-            ),
+        ax.add_patch(mpatches.Rectangle(
+            (obs["centre_x"] - obs["half_width"], obs["centre_y"] - obs["half_height"]),
             obs["half_width"] * 2.0,
             obs["half_height"] * 2.0,
             linewidth=2.5,
             edgecolor="black",
             facecolor="white",
             zorder=5,
-        )
-        ax.add_patch(obs_patch)
+        ))
 
+    stroke_effect = [withStroke(linewidth=2, foreground="black")]
+    tri_local = [(1.2, 0.0), (-0.72, 0.72), (-0.72, -0.72)]
     for idx, sp in enumerate(
-        [world_layout["spawn_transform"]]
-        + world_layout.get("extra_spawn_transforms", [])
+        [world_layout["spawn_transform"]] + world_layout.get("extra_spawn_transforms", [])
     ):
         yaw_rad = math.radians(sp["yaw_deg"])
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
-        tri_size = 1.2
-        tri_local = [
-            (tri_size, 0.0),
-            (-tri_size * 0.6, tri_size * 0.6),
-            (-tri_size * 0.6, -tri_size * 0.6),
-        ]
         tri_world = [
-            (
-                sp["x"] + cos_y * lx - sin_y * ly,
-                sp["y"] + sin_y * lx + cos_y * ly,
-            )
+            (sp["x"] + cos_y * lx - sin_y * ly, sp["y"] + sin_y * lx + cos_y * ly)
             for lx, ly in tri_local
         ]
-        tri_patch = MPoly(
+        ax.add_patch(MPoly(
             tri_world,
             closed=True,
             facecolor="cyan",
             edgecolor="white",
             linewidth=1,
             zorder=6,
-        )
-        ax.add_patch(tri_patch)
-        label = f"SPAWN {idx + 1}"
+        ))
         label_offset_perp = 1.5 if idx > 0 else 1.9
         label_y_nudge = 2.0 if idx > 0 else -0.5
         ax.text(
             sp["x"] + cos_y * 0.2 - sin_y * label_offset_perp,
             sp["y"] + sin_y * 0.2 + cos_y * label_offset_perp + label_y_nudge,
-            label,
+            f"SPAWN {idx + 1}",
             fontsize=10,
             color="cyan",
             fontweight="bold",
             zorder=7,
-            path_effects=[
-                __import__(
-                    "matplotlib.patheffects", fromlist=["withStroke"]
-                ).withStroke(linewidth=2, foreground="black")
-            ],
+            path_effects=stroke_effect,
         )
 
     patrol = world_layout["patrol_waypoints"]
     if patrol:
         px = [wp["x"] for wp in patrol] + [patrol[0]["x"]]
         py = [wp["y"] for wp in patrol] + [patrol[0]["y"]]
-        ax.plot(
-            px,
-            py,
-            "--",
-            color=HEX_PATROL_PATH,
-            linewidth=1.5,
-            alpha=0.9,
-            label="Patrol path",
-        )
-
-    from matplotlib.lines import Line2D
+        ax.plot(px, py, "--", color=HEX_PATROL_PATH, linewidth=1.5, alpha=0.9, label="Patrol path")
 
     handles = [
         mpatches.Patch(color=BAY_HEX["perpendicular"], label="Perpendicular bays"),
         mpatches.Patch(color=BAY_HEX["angled"], label="Angled (45 deg) bays"),
         mpatches.Patch(color=BAY_HEX["parallel"], label="Parallel bays"),
         mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
-        Line2D(
-            [0],
-            [0],
-            color=HEX_PATROL_PATH,
-            linestyle="--",
-            linewidth=1.5,
-            label="Patrol path",
-        ),
+        Line2D([0], [0], color=HEX_PATROL_PATH, linestyle="--", linewidth=1.5, label="Patrol path"),
         mpatches.FancyBboxPatch(
-            (0, 0),
-            1,
-            1,
+            (0, 0), 1, 1,
             boxstyle="round,pad=0.2",
             facecolor=HEX_PEDESTRIAN_ZONE,
             edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,

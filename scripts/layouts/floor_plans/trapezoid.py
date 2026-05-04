@@ -6,7 +6,12 @@
 import math
 from typing import Any, Dict
 
-from scripts.layouts.builder import LotBuilder, PatrolPath, PedestrianZone
+from scripts.layouts.builder import (
+    LotBuilder,
+    PatrolPath,
+    PedestrianZone,
+    angled_corner_clearance,
+)
 
 ORIGIN_X = 2.0
 ORIGIN_Y = 30.0
@@ -54,7 +59,7 @@ def generate() -> Dict[str, Any]:
     )
     bottom_ang = lot.row_along_perimeter(
         "angled", n=9, wall=WALL_BOTTOM, bay_angle_deg=45.0,
-        start_along=_angled_default_clearance(lot) + ANGLED_GATE_OFFSET,
+        start_along=angled_corner_clearance(lot) + ANGLED_GATE_OFFSET,
     )
     par_top = lot.row_along_perimeter(
         "parallel", n=4, wall=WALL_TOP, bay_angle_deg=-90.0,
@@ -88,16 +93,6 @@ def generate() -> Dict[str, Any]:
     lot.add_zone(PedestrianZone.along_row(par_right, side="west"))
 
     return lot.build()
-
-
-def _angled_default_clearance(lot: LotBuilder) -> float:
-    """@brief Default along-wall clearance for a 45-deg angled bay's leftmost corner."""
-    dims_ang = lot.dims["angled"]
-    return (
-        (dims_ang["depth"] / 2.0 + dims_ang["width"] / 2.0)
-        * math.cos(math.radians(45.0))
-        + lot.wall_gap
-    )
 
 
 def _diagonal_bottom_spawn(lot: LotBuilder, p0, p1) -> None:
