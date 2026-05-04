@@ -4,10 +4,6 @@
 
 This module implements a ROS 2 node that subscribes to odometry messages from
 robot_localization and extracts the covariance matrix for use in RL training.
-Publishes a custom CovarianceEstimate message with semantic fields per Henki
-ROS 2 best practices.
-
-@author Antonio Galdes
 """
 
 import json
@@ -38,15 +34,11 @@ class CovarianceExtractorNode(Node):
     _COV_INDICES: List[int] = [0, 1, 5]
 
     # Default shared file paths. Overridden at runtime by the EKF_STATE_FILE
-    # environment variable so that multiple ros2-bridge instances (parallel
-    # CARLA workers) each write to a separate file without race conditions.
-    # Worker 0: ekf_state.json (default), Worker 1: ekf_state_1.json, etc.
+    # environment variable.
     _DEFAULT_SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
 
     # File-based /set_pose signal written by the training container.
     # The training container writes {seq, x, y, yaw} in CARLA world frame.
-    # This node watches the file and publishes /set_pose locally so
-    # the EKF (same Jazzy DDS domain) receives it.
     _DEFAULT_INITIAL_POSE_PATH: str = "/workspace/outputs/initial_pose.json"
 
     # Log every N odometry callbacks (~100 at 20 Hz = every 5 s).
@@ -65,9 +57,7 @@ class CovarianceExtractorNode(Node):
         self.declare_parameter("publish_rate", 10.0)  # Hz
         # Kept for launch file compatibility; no longer used.
         self.declare_parameter("twist_in_odom_frame", False)
-        # Per-instance EKF state file path. Defaults to EKF_STATE_FILE env var
-        # (set by docker-compose.parallel.yml for worker 1+), then falls back to
-        # _DEFAULT_SHARED_PATH for worker 0 / single-instance deployment.
+        # Per-instance EKF state file path.
         self.declare_parameter(
             "ekf_state_file",
             os.environ.get("EKF_STATE_FILE", self._DEFAULT_SHARED_PATH),
@@ -111,10 +101,6 @@ class CovarianceExtractorNode(Node):
         self._write_seq: int = 0
 
         # Ensure the outputs directory exists before the first file write.
-        # The container may not have /workspace/outputs on first run;
-        # this guard prevents a FileNotFoundError on the first odom_callback.
-        # Uses the instance-specific path so parallel workers each create their
-        # own output directory if it differs from the default.
         os.makedirs(os.path.dirname(os.path.abspath(self._SHARED_PATH)), exist_ok=True)
 
         self.get_logger().info(
@@ -129,8 +115,6 @@ class CovarianceExtractorNode(Node):
         # The training container (Humble) writes initial_pose.json at episode
         # reset. This node watches the file and publishes on /set_pose so the
         # EKF resets its state to the vehicle spawn pose.
-        # NOTE: robot_localization 3.8.3 (Jazzy) subscribes to "set_pose",
-        # NOT "/initialpose". The /initialpose topic is a ROS 1 convention.
         initial_pose_path: str = os.environ.get(
             "INITIAL_POSE_FILE", self._DEFAULT_INITIAL_POSE_PATH
         )
@@ -170,11 +154,6 @@ class CovarianceExtractorNode(Node):
 
         # Convert quaternion to yaw. Negate because the y-axis flip mirrors
         # the rotation direction (left-hand vs right-hand convention).
-        # Wrap explicitly to [-pi, pi]: robot_localization's EKF yaw state
-        # can drift past +/-pi when two_d_mode=true accumulates yaw without
-        # normalisation, producing values like -270 deg = -4.71 rad.
-        # Re-deriving yaw from the published quaternion (which IS normalised)
-        # rather than reading the EKF state directly avoids this.
         qx = msg.pose.pose.orientation.x
         qy = msg.pose.pose.orientation.y
         qz = msg.pose.pose.orientation.z
@@ -189,7 +168,6 @@ class CovarianceExtractorNode(Node):
 
         # -- Covariance ---------------------------------------------------------
         # Extract 3x3 [x, y, yaw] submatrix from the 6x6 pose covariance.
-        # Full order: [x, y, z, roll, pitch, yaw] -> indices _COV_INDICES = [0,1,5].
         covariance_3x3 = np.array(msg.pose.covariance).reshape(6, 6)[
             np.ix_(self._COV_INDICES, self._COV_INDICES)
         ]
@@ -198,12 +176,6 @@ class CovarianceExtractorNode(Node):
         # -- Atomic shared-file write ------------------------------------------
         # Cross-distro access: training container (Humble) reads this file since
         # DDS wire protocol is incompatible between Jazzy and Humble containers.
-        # Atomic rename prevents partial reads by the training container.
-        # `seq` is a monotonically increasing counter; the training container
-        # tracks the last-seen seq and only accepts a read whose seq is strictly
-        # greater than the seq at the time of the last invalidate() call.
-        # This is clock-skew-proof - mtime comparisons across Docker container
-        # clocks are unreliable on some host configurations.
         self._write_seq += 1
         data = {
             "seq": self._write_seq,
@@ -215,8 +187,6 @@ class CovarianceExtractorNode(Node):
         }
         # Log a one-shot warning when the EKF first produces NaN so the
         # container log shows exactly when and what the EKF published.
-        # robot_localization logs "Critical Error, NaNs were detected" itself,
-        # but it can be buried - this warning is searchable in docker logs.
         if math.isnan(x) or math.isnan(y) or math.isnan(yaw):
             self.get_logger().warn(
                 f"EKF output contains NaN (seq={self._write_seq}): "
@@ -306,11 +276,7 @@ class CovarianceExtractorNode(Node):
         msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
         msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
         # Tight covariance forces the EKF to snap to the given spawn pose
-        # rather than treating it as a soft hint. Without tight covariance,
-        # the EKF blends the reset pose with its prior state, leaving a
-        # residual yaw error (~5 deg) that persists through calibration.
-        #   xx/yy: 0.01 m^2 = 10 cm stddev (RTK-fixed quality)
-        #   yaw-yaw: 1e-4 rad^2 = 0.57 deg stddev (effectively known heading)
+        # rather than treating it as a soft hint.
         msg.pose.covariance[0] = 0.01  # xx
         msg.pose.covariance[7] = 0.01  # yy
         msg.pose.covariance[35] = 1.0e-4  # yaw-yaw

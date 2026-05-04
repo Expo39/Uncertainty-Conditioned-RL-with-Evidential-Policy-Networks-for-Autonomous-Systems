@@ -3,13 +3,7 @@
 @brief Actuation calibration layer for sim-to-real transfer.
 
 Maps normalised policy actions [steering, longitudinal] to physical actuator
-commands. In simulation the mapping is identity. For real-world deployment,
-per-actuator gain, deadband, and bias are loaded from
-configs/deployment/real/actuation_calibration.yaml.
-
-@see documentation/detailed_notes/real_world_deployment.md for calibration
-     procedure and parameter derivation.
-@author Antonio Galdes
+commands.
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -59,19 +53,6 @@ class ActuationCalibration:
     """
     @class ActuationCalibration
     @brief Maps policy [steering, longitudinal] outputs to physical actuator commands.
-
-    In simulation (identity mode): pass-through with no transformation.
-    In real-world deployment: applies per-actuator gain/deadband/bias from
-    configs/actuation_calibration.yaml.
-
-    Usage:
-        calibration = ActuationCalibration.from_config(config_path)
-        steering_cmd, longitudinal_cmd = calibration.apply(steering, longitudinal)
-
-    @note All parameters default to identity. The calibration YAML is populated
-          from a measured calibration run on the real vehicle before deployment.
-    @see documentation/detailed_notes/real_world_deployment.md for calibration
-         procedure and parameter derivation.
     """
 
     # ------------------------------------------------------------------

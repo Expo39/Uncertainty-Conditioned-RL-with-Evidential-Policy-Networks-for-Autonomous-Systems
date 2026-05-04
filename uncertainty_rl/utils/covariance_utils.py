@@ -17,21 +17,10 @@ def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
     """
     @brief Extract 2D covariance features from covariance matrix.
 
-    Extracts [std_x, std_y, std_yaw] for use as RL state input.
-    Off-diagonal terms (cov_xy, cov_xyaw, cov_yyaw) are omitted: they
-    scale with the same GNSS degradation as the diagonal stds and carry
-    no independent information for the policy.
-
     @param cov_matrix: Covariance matrix (3x3 for [x, y, yaw] or 6x6 for
                        full 3D pose).
     @return: 1D array of 3 covariance features [std_x, std_y, std_yaw].
     @raises ValueError: If matrix shape is not 3x3 or 6x6.
-
-    Example:
-        >>> cov_6d = np.eye(6) * 0.1  # 10 cm std on all axes
-        >>> features = extract_2d_covariance_features(cov_6d)
-        >>> assert features.shape == (3,)
-        >>> assert np.isclose(features[0], np.sqrt(0.1))  # std_x
     """
     if cov_matrix.shape == (6, 6):
         # Full 6D pose covariance [x, y, z, roll, pitch, yaw]
