@@ -48,7 +48,7 @@ class ActuatorMap:
         """
         shifted = value - self.deadband_offset
         if abs(shifted) < self.deadband:
-            # Inside deadband -- output is zero (or bias if non-zero).
+            # Inside deadband - output is zero (or bias if non-zero).
             mapped = self.bias
         else:
             mapped = self.gain * shifted + self.bias

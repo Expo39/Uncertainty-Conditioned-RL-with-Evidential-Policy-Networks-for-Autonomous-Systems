@@ -34,7 +34,7 @@ _SENSOR_PATCH = (
 )
 assert _SENSOR_TARGET in original, (
     f"patch_bridge.py: patch target not found in {p}. "
-    "ros-bridge may have been updated -- review and update the patch."
+    "ros-bridge may have been updated - review and update the patch."
 )
 p.write_text(original.replace(_SENSOR_TARGET, _SENSOR_PATCH))
 
@@ -61,6 +61,6 @@ _FACTORY_PATCH = (
 )
 assert _FACTORY_TARGET in original, (
     f"patch_bridge.py: patch target not found in {p}. "
-    "ros-bridge may have been updated -- review and update the patch."
+    "ros-bridge may have been updated - review and update the patch."
 )
 p.write_text(original.replace(_FACTORY_TARGET, _FACTORY_PATCH))

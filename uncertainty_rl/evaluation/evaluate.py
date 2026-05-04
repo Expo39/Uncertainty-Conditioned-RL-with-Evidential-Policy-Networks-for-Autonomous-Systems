@@ -303,7 +303,7 @@ def evaluate_agent(
             obs = cast(np.ndarray, step_result[0])
             reward = cast(np.ndarray, step_result[1])
             done_arr = cast(np.ndarray, step_result[2])
-            # DummyVecEnv.step() returns (obs, rewards, dones, infos) -- 4 elements.
+            # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
             infos = cast(List[Dict[str, Any]], step_result[3])
 
             episode_reward += float(reward[0])
@@ -389,7 +389,7 @@ def evaluate_across_conditions(
     for condition in conditions:
         name = condition.get("name", "unknown")
         description = condition.get("description", "")
-        logger.info("Evaluating condition: %s -- %s", name, description)
+        logger.info("Evaluating condition: %s - %s", name, description)
 
         # Create environment for this condition
         base_env = make_eval_env(condition, eval_config, base_sensors, env_config)

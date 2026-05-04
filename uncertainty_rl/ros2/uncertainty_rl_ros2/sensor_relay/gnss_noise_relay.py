@@ -269,7 +269,7 @@ class GnssNoiseRelayNode(Node):
             else:
                 self._datum_latched = False
                 self.get_logger().warn(
-                    "No datum_lat/datum_lon in GNSS noise config -- "
+                    "No datum_lat/datum_lon in GNSS noise config - "
                     "auto-latching datum on next GNSS callback. "
                     "EKF may drift briefly at episode start."
                 )

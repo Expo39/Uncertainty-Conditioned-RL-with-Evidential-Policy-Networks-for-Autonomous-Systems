@@ -139,7 +139,7 @@ class CovarianceExtractorNode(Node):
         self._initial_pose_pub = self.create_publisher(
             PoseWithCovarianceStamped, "/set_pose", 10
         )
-        # Poll at 10 Hz -- fast enough to catch the file within 0.1 s of write.
+        # Poll at 10 Hz - fast enough to catch the file within 0.1 s of write.
         self._initial_pose_timer = self.create_timer(
             0.1, self._check_initial_pose_file
         )
@@ -202,7 +202,7 @@ class CovarianceExtractorNode(Node):
         # `seq` is a monotonically increasing counter; the training container
         # tracks the last-seen seq and only accepts a read whose seq is strictly
         # greater than the seq at the time of the last invalidate() call.
-        # This is clock-skew-proof -- mtime comparisons across Docker container
+        # This is clock-skew-proof - mtime comparisons across Docker container
         # clocks are unreliable on some host configurations.
         self._write_seq += 1
         data = {
@@ -216,7 +216,7 @@ class CovarianceExtractorNode(Node):
         # Log a one-shot warning when the EKF first produces NaN so the
         # container log shows exactly when and what the EKF published.
         # robot_localization logs "Critical Error, NaNs were detected" itself,
-        # but it can be buried -- this warning is searchable in docker logs.
+        # but it can be buried - this warning is searchable in docker logs.
         if math.isnan(x) or math.isnan(y) or math.isnan(yaw):
             self.get_logger().warn(
                 f"EKF output contains NaN (seq={self._write_seq}): "

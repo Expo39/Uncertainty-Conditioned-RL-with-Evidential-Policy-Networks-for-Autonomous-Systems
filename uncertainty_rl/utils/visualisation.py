@@ -25,7 +25,7 @@ class VisStateWriter:
     @class VisStateWriter
     @brief Writes vis_state.json every step for the detachable 2D visualiser.
 
-    Atomic write via tmp file + os.replace -- the visualiser process never reads
+    Atomic write via tmp file + os.replace - the visualiser process never reads
     partial data. Training writes to outputs/vis_state.json; the visualiser polls
     that file every 100 ms and redraws on change.
 
@@ -34,7 +34,7 @@ class VisStateWriter:
         writer.write(ego_transform, actor_transforms, target_bay, episode_info)
 
     Visualiser reads outputs/vis_state.json.
-    Close the visualiser window at any time -- training is unaffected.
+    Close the visualiser window at any time - training is unaffected.
     """
 
     # ------------------------------------------------------------------
@@ -188,7 +188,7 @@ def plot_trajectory(
             pos = positions[idx]
             cov = uncertainties[idx]
 
-            # Eigenvalue decomposition (eigvalsh for symmetric matrices -- real,
+            # Eigenvalue decomposition (eigvalsh for symmetric matrices - real,
             # sorted eigenvalues guaranteed)
             eigenvalues, eigenvectors = np.linalg.eigh(cov)
             angle = np.degrees(np.arctan2(eigenvectors[1, 0], eigenvectors[0, 0]))

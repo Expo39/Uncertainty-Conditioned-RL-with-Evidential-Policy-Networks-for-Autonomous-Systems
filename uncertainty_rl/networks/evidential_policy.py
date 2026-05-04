@@ -188,7 +188,7 @@ class EvidentialPolicyNetwork(nn.Module):
         if deterministic:
             action = gamma
         else:
-            # Epistemic uncertainty (Var[mu]) is not added to action noise --
+            # Epistemic uncertainty (Var[mu]) is not added to action noise -
             # it quantifies model uncertainty over gamma, not per-sample noise.
             std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
             dist = Normal(gamma, std)

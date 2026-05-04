@@ -83,7 +83,7 @@ class DebugLogger:
         @param obstacle_dist: Distance to nearest obstacle from LiDAR (metres).
         @param ekf_drift: Distance between EKF filtered position and CARLA
                           ground truth (metres). Non-zero indicates localisation
-                          error -- key signal for sim-to-real debugging.
+                          error - key signal for sim-to-real debugging.
         @param lidar_points: Number of points in the latest LiDAR scan. Zero
                              indicates the sensor has not ticked yet or returned
                              no returns (e.g. open area, sensor failure).
