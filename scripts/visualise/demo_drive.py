@@ -5,6 +5,7 @@
 
 import argparse
 import os
+from pathlib import Path
 from typing import Any, Dict, List, cast
 
 import numpy as np
@@ -115,18 +116,19 @@ def main() -> None:
     env = base_env
 
     # Apply normalisation statistics if available
-    vec_normalize_path = os.path.join(
-        os.path.dirname(args.checkpoint), "vec_normalize.pkl"
-    )
-    if os.path.exists(vec_normalize_path):
-        env = VecNormalize.load(vec_normalize_path, base_env)
+    vec_normalize_path = Path(args.checkpoint).parent / "vec_normalize.pkl"
+    if vec_normalize_path.exists():
+        env = VecNormalize.load(str(vec_normalize_path), base_env)
         env.training = False
         env.norm_reward = False
-        print(f"Loaded normalisation stats from {vec_normalize_path}")
+        print(f"Loaded normalisation stats from {vec_normalize_path!s}")
 
     is_evidential = isinstance(model, EvidentialPPO) and hasattr(
         model.policy, "get_action_with_uncertainty"
     )
+
+    # Hoist evidential policy handles outside the step loop.
+    _get_action = model.policy.get_action_with_uncertainty if is_evidential else None
 
     episode = 0
     print("Driving. Close the visualiser or Ctrl+C to stop.")
@@ -139,11 +141,8 @@ def main() -> None:
             episode += 1
 
             while not done_arr[0]:
-                if is_evidential:
-                    obs_tensor = th.as_tensor(obs)
-                    policy = model.policy
-                    get_action = policy.get_action_with_uncertainty
-                    action_tensor, _ = get_action(obs_tensor, deterministic=True)
+                if is_evidential and _get_action is not None:
+                    action_tensor, _ = _get_action(th.as_tensor(obs), deterministic=True)
                     action = action_tensor.cpu().numpy()
                 else:
                     action, _ = model.predict(obs, deterministic=True)
@@ -158,11 +157,9 @@ def main() -> None:
                 if args.render:
                     env.render()
 
-                if done_arr[0]:
-                    success = infos[0].get("success", False)
-                    result = "SUCCESS" if success else "FAIL"
-                    print(f"  Episode {episode}: {result} ({steps} steps)")
-                    break
+            success = infos[0].get("success", False)
+            result = "SUCCESS" if success else "FAIL"
+            print(f"  Episode {episode}: {result} ({steps} steps)")
 
     except KeyboardInterrupt:
         print(f"\nStopped after {episode} episodes.")
