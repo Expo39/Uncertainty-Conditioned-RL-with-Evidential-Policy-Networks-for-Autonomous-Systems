@@ -44,12 +44,17 @@ class KeyboardController:
     @class KeyboardController
     @brief Latching TTY keyboard input for manual dryrun control.
 
-    Each key latches its axis on until the opposite key or a neutral press
-    cancels it.  Up/Down = throttle/brake, Left/Right = steer, Space = stop.
+    Key bindings (action space: [steer, drive, brake]):
+      Up arrow   - increase forward drive (positive drive), clears reverse and brake
+      Down arrow - increase reverse drive (negative drive), clears forward and brake
+      b          - apply brake, clears drive
+      Left/Right - steer left / right
+      Space      - full stop (zero all axes)
+      Ctrl+C     - quit
     """
 
     _STEER_STEP: float = 0.1
-    _THROTTLE_STEP: float = 0.1
+    _DRIVE_STEP: float = 0.1
     _BRAKE_STEP: float = 0.2
 
     def __init__(self) -> None:
@@ -58,7 +63,8 @@ class KeyboardController:
         import termios  # noqa: F401
 
         self._steer: float = 0.0
-        self._longitudinal: float = 0.0
+        self._drive: float = 0.0
+        self._brake: float = 0.0
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -69,7 +75,7 @@ class KeyboardController:
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
         print(
-            "  Keyboard control (incremental): Up=+throttle  Down=+brake"
+            "  Keyboard control: Up=forward  Down=reverse  b=brake"
             "  Left/Right=steer  Space=stop  Ctrl+C=quit"
         )
 
@@ -79,11 +85,11 @@ class KeyboardController:
 
     def get_action(self) -> np.ndarray:
         """
-        @brief Return the current latched [steer, longitudinal] action.
-        @return numpy array of shape (2,) with values in [-1.0, 1.0].
+        @brief Return the current latched [steer, drive, brake] action.
+        @return numpy array of shape (3,) with steer/drive in [-1, 1] and brake in [0, 1].
         """
         with self._lock:
-            return np.array([self._steer, self._longitudinal], dtype=np.float32)
+            return np.array([self._steer, self._drive, self._brake], dtype=np.float32)
 
     def _read_loop(self) -> None:
         """@brief Read raw escape sequences from stdin and update latched state."""
@@ -117,27 +123,29 @@ class KeyboardController:
                 if ch == " ":
                     with self._lock:
                         self._steer = 0.0
-                        self._longitudinal = 0.0
+                        self._drive = 0.0
+                        self._brake = 0.0
                 elif ch == "\x1b":
                     rest = sys.stdin.read(2)
                     seq = ch + rest
                     with self._lock:
                         if seq == "\x1b[A":
-                            self._longitudinal = min(
-                                1.0, self._longitudinal + self._THROTTLE_STEP
-                            )
+                            # Up arrow: forward drive, clear reverse and brake
+                            self._brake = 0.0
+                            self._drive = min(1.0, max(0.0, self._drive) + self._DRIVE_STEP)
                         elif seq == "\x1b[B":
-                            self._longitudinal = max(
-                                -1.0, self._longitudinal - self._BRAKE_STEP
-                            )
+                            # Down arrow: reverse drive, clear forward and brake
+                            self._brake = 0.0
+                            self._drive = max(-1.0, min(0.0, self._drive) - self._DRIVE_STEP)
                         elif seq == "\x1b[D":
-                            self._steer = max(
-                                -1.0, self._steer - self._STEER_STEP
-                            )
+                            self._steer = max(-1.0, self._steer - self._STEER_STEP)
                         elif seq == "\x1b[C":
-                            self._steer = min(
-                                1.0, self._steer + self._STEER_STEP
-                            )
+                            self._steer = min(1.0, self._steer + self._STEER_STEP)
+                # 'b' key: apply brake, clear drive
+                elif ch == "b":
+                    with self._lock:
+                        self._drive = 0.0
+                        self._brake = min(1.0, self._brake + self._BRAKE_STEP)
         finally:
             try:
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)

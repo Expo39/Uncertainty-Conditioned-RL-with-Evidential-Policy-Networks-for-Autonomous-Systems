@@ -27,8 +27,6 @@ LEFT_X = -5.0
 Y_OFFSET = (WIDTH_FRONT - WIDTH_REAR) / 2.0   # = 10 (top/bottom wall taper).
 CENTRE_X_SHIFT = -1.5 - 3.63                  # Cluster left-shift from depth/2.
 PERP_AISLE = 6.0                              # Aisle between back-to-back perp rows.
-ANGLED_GATE_OFFSET = 3.0                      # Skip 3 m past angled-clearance for entrance gate.
-TOP_PAR_GATE_OFFSET = 9.0                     # Skip 9 m past p0 for top parallel group.
 
 # Walls (CCW polygon order: bottom -> right -> top -> left).
 WALL_BOTTOM = 0
@@ -52,22 +50,32 @@ def generate() -> Dict[str, Any]:
     # ---------- Bays ---------------------------------------------------
     centre_low, centre_high = lot.row_pair_back_to_back(
         bay_type="perpendicular",
-        n=8,
+        n=9,
         centre=(DEPTH / 2.0 + CENTRE_X_SHIFT, WIDTH_FRONT / 2.0),
         direction="east",
         gap=PERP_AISLE,
     )
     bottom_ang = lot.row_along_perimeter(
-        "angled", n=9, wall=WALL_BOTTOM, bay_angle_deg=45.0,
-        start_along=angled_corner_clearance(lot) + ANGLED_GATE_OFFSET,
+        "angled", n=8, wall=WALL_BOTTOM, bay_angle_deg=45.0,
+        start_along=angled_corner_clearance(lot) + 8.0,
     )
     par_top = lot.row_along_perimeter(
-        "parallel", n=4, wall=WALL_TOP, bay_angle_deg=-90.0,
-        start_along=TOP_PAR_GATE_OFFSET + dims_par["depth"] / 2.0,
+        "parallel", n=5, wall=WALL_TOP, bay_angle_deg=-90.0,
+        centred=True,
     )
     par_right = lot.row_along_perimeter(
-        "parallel", n=3, wall=WALL_RIGHT, bay_angle_deg=-90.0,
+        "parallel", n=4, wall=WALL_RIGHT, bay_angle_deg=-90.0,
         centred=True,
+    )
+    # Left wall: two groups of 2 either side of the entrance spawn (y=30).
+    # Lower group centred at y=15, upper group centred at y=45.
+    par_left_low = lot.row_along_perimeter(
+        "parallel", n=2, wall=WALL_LEFT, bay_angle_deg=90.0,
+        start_along=15.0 - dims_par["depth"] / 2.0,
+    )
+    par_left_high = lot.row_along_perimeter(
+        "parallel", n=2, wall=WALL_LEFT, bay_angle_deg=90.0,
+        start_along=45.0 - dims_par["depth"] / 2.0,
     )
 
     # ---------- Spawns -------------------------------------------------

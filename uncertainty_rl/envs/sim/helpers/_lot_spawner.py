@@ -467,7 +467,7 @@ class LotSpawner:
 
         bays = current_layout.get("bays", [])
         target_id = target_bay.get("bay_id", "")
-        excluded_ids = {target_id} | set(self._adjacent_bay_ids(target_id))
+        excluded_ids = {target_id}
         z_spawn = floor_contact_z + self._VEHICLE_Z_OFFSET
         pending: List[Tuple[Any, float, float, float]] = []
 
@@ -513,17 +513,3 @@ class LotSpawner:
         logger.debug("Spawned %d static vehicles (settling).", len(pending))
         return pending
 
-    @staticmethod
-    def _adjacent_bay_ids(target_id: str) -> List[str]:
-        """
-        @brief Return IDs of the bays immediately left/right of target_id.
-
-        @param target_id: Bay ID of the selected target.
-        @return List of adjacent IDs (empty list for end bays or bad IDs).
-        """
-        try:
-            bay_type, idx_str = target_id.rsplit("_", 1)
-            idx = int(idx_str)
-        except ValueError:
-            return []
-        return [f"{bay_type}_{idx - 1}", f"{bay_type}_{idx + 1}"]

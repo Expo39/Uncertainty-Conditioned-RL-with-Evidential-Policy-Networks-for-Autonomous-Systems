@@ -58,10 +58,11 @@ TOTAL_OBS_DIM = (
 # Action Space Dimensions
 # ---------------------------------------------------------------------------
 
-# Continuous action: [steering, longitudinal]
-# steering     : [-1, 1]  left to right
-# longitudinal : [-1, 1]  negative = brake, positive = throttle
-ACTION_DIM = 2
+# Continuous action: [steering, drive, brake]
+# steering : [-1, 1]  left to right
+# drive    : [-1, 1]  negative = reverse throttle, positive = forward throttle
+# brake    : [ 0, 1]  friction brake (independent of drive direction)
+ACTION_DIM = 3
 
 # ---------------------------------------------------------------------------
 # Environment Safety and Termination Thresholds

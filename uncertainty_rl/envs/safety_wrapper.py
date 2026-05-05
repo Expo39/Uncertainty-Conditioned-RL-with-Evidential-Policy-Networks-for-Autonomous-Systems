@@ -8,7 +8,7 @@ outputs. Training runs WITHOUT the wrapper (the policy learns freely).
 Evaluation runs WITH the wrapper (safety layer active).
 
 Two uncertainty types produce two distinct responses:
-- Aleatoric (outcome noise): cap the forward longitudinal limit (slower driving).
+- Aleatoric (outcome noise): cap the forward drive limit (slower driving).
 - Epistemic (novelty/ignorance): full stop when above handoff_threshold.
 """
 
@@ -96,10 +96,10 @@ class SafetyWrapper(gym.Wrapper):
         Static method so it can be called by both SafetyWrapper.step() (sim eval)
         and RealWorldInferenceLoop (real deployment) without duplicating logic.
 
-        @param action: Raw policy action [steering, longitudinal].
+        @param action: Raw policy action [steering, drive, brake].
         @param epistemic: Epistemic uncertainty from evidential actor.
         @param aleatoric: Aleatoric uncertainty from evidential actor.
-        @param aleatoric_scaling: Scaling factor for longitudinal cap.
+        @param aleatoric_scaling: Scaling factor for drive cap.
         @param handoff_threshold: Epistemic level above which full stop is triggered.
         @return Tuple (modulated_action, handoff_triggered, aleatoric_scale).
         """
@@ -108,7 +108,7 @@ class SafetyWrapper(gym.Wrapper):
         if handoff:
             return np.zeros_like(action), True, 0.0
 
-        # Aleatoric: cap longitudinal only - steering is unrestricted.
+        # Aleatoric: cap drive magnitude only - steering is unrestricted.
         # High aleatoric = unpredictable outcomes (e.g. pedestrian cutting across).
         # Reducing speed lowers collision risk without compromising directional control.
         aleatoric_scale = 1.0 / (1.0 + aleatoric_scaling * aleatoric)
