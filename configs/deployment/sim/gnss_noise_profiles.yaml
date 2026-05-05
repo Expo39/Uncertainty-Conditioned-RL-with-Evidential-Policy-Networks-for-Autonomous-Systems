@@ -3,46 +3,46 @@
 # into NavSatFix.position_covariance so the EKF receives correctly scaled
 # measurement noise.
 #
-# CARLA GNSS noise is in degrees lat/lon.
 # Training weights: 70% high-accuracy (rtk_fixed + rtk_float) so the agent
 # learns to park, 30% degraded so it learns when NOT to attempt parking.
+#
+# See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 
 tiers:
   rtk_fixed:
     # RTK fixed-integer solution: cm-level accuracy.
     # Parking is easy; policy learns nominal manoeuvring.
-    lat_stddev_deg: 0.0000002  # ~0.02 m stddev
+    lat_stddev_deg: 0.0000002 
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
-    metric_stddev_m: 0.02
+    metric_stddev_m: 0.020
     weight: 0.4
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
   rtk_float:
     # RTK float solution: decimetre-level accuracy.
     # Parking is tight; uncertainty penalty starts biting.
-    lat_stddev_deg: 0.0000027  # ~0.30 m stddev
-    lon_stddev_deg: 0.0000027
+    lat_stddev_deg: 0.0000032  # 0.360 m 1-sigma
+    lon_stddev_deg: 0.0000032
     alt_stddev_m: 0.5
-    metric_stddev_m: 0.30
+    metric_stddev_m: 0.360
     weight: 0.3
-    description: "RTK float (~30 cm). Marginal accuracy for 2.5 m bays."
+    description: "RTK float (~36 cm). Marginal accuracy for 2.5 m bays."
 
   standalone:
     # Standalone GNSS (RTK lost): metre-level accuracy.
     # Progress reward nearly zero; policy learns to wait.
-    lat_stddev_deg: 0.000018  # ~2.0 m stddev
-    lon_stddev_deg: 0.000018
+    lat_stddev_deg: 0.0000162  # 1.802 m 1-sigma 
+    lon_stddev_deg: 0.0000162
     alt_stddev_m: 5.0
-    metric_stddev_m: 2.0
+    metric_stddev_m: 1.802
     weight: 0.2
-    description: "Standalone GNSS (~2 m). RTK lost; parking unsafe."
+    description: "Standalone GNSS (~1.8 m). RTK lost; parking unsafe."
 
   degraded:
-    # Severely degraded GNSS (multipath, heavy obstruction).
     # Progress reward saturates to zero; policy learns hard abort.
-    lat_stddev_deg: 0.000045  # ~5.0 m stddev
-    lon_stddev_deg: 0.000045
+    lat_stddev_deg: 0.0000449  # 5.0 m 1-sigma 
+    lon_stddev_deg: 0.0000449
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
     weight: 0.1

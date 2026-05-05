@@ -1262,6 +1262,9 @@ class CARLAParkingEnv(gym.Env):
         # Sample GNSS noise tier for this episode (RTK fix-state variation).
         # Must happen before _spawn_sensors() so the multiplier is available.
         self._sample_gnss_noise_tier()
+        # Draw TiM571 systematic range bias once per training run (NaN sentinel
+        # in SensorManager makes subsequent calls no-ops).
+        self._sensor_manager.sample_lidar_noise_bias(self.np_random)
 
         # Connect to CARLA on first reset
         if self.client is None:
@@ -1377,7 +1380,7 @@ class CARLAParkingEnv(gym.Env):
                     )
             tier = self._get_current_gnss_tier()
             if tier is not None:
-                self._cov_subscriber.publish_gnss_noise_config(
+                self._cov_subscriber.publish_episode_config(
                     tier_name=str(tier.get("name", "")),
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,

@@ -18,16 +18,16 @@ except ImportError:
 
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
-_GNSS_NOISE_CONFIG_PATH = Path("/workspace/outputs/gnss_noise_config.json")
+_EPISODE_CONFIG_PATH = Path("/workspace/outputs/episode_config.json")
 
 
 def _read_live_tier() -> str:
     """
-    @brief Read the current GNSS tier name from gnss_noise_config.json.
+    @brief Read the current GNSS tier name from episode_config.json.
     @return Tier name string, or 'unknown' if the file is absent or unreadable.
     """
     try:
-        with open(_GNSS_NOISE_CONFIG_PATH) as _f:
+        with open(_EPISODE_CONFIG_PATH) as _f:
             return str(json.load(_f).get("tier_name", "unknown"))
     except Exception:
         return "unknown"

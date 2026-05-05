@@ -90,11 +90,14 @@ gnss_noise_relay:
 imu_noise_relay:
   imu_input_topic: "/carla/ego_vehicle/imu"
   imu_output_topic: "/carla/ego_vehicle/imu/stamped"
-  enable_imu_noise: false  # false = pass through (real driver stamps its own covariance).
-  imu_gyro_variance: 1.0e-7  # VN-100 gyro variance (rad/s)^2.
-  zupt_threshold_rad_s: 0.015  # Clamp vyaw to zero below this to suppress standstill bias.
-  imu_accel_variance: 3.76e-5  # VN-100 accel variance (m/s^2)^2.
-  accel_zupt_threshold_ms2: 0.2  # Clamp ax/ay to zero at standstill when ZUPT active.
+  enable_imu_noise: true
+  imu_gyro_variance: 7.4631e-8  # (rad/s)^2 
+  imu_accel_variance: 3.77245e-5  # (m/s^2)^2
+  zupt_threshold_rad_s: 0.015
+  accel_zupt_threshold_ms2: 0.2
+  enable_imu_value_noise: true
+  imu_gyro_bias_limit_rad_s: 2.42407e-5  # rad/s
+  imu_accel_bias_limit_ms2: 3.924e-4  # m/s^2
 
 # CovarianceExtractorNode: subscribes to EKF output and writes ekf_state.json.
 odom_topic: "/odometry/filtered"

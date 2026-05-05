@@ -30,15 +30,24 @@ _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 _TIER_INDEX: Dict[str, int] = {name: i for i, name in enumerate(_TIER_ORDER)}
 
 # Noise parameters for each tier (fallback if config file is absent).
-# Values match configs/deployment/sim/gnss_noise_profiles.yaml.
+# See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
+    # RTK fixed:
+    # Conservative 0.020 m used to cover antenna phase-centre offset 
+    # 0.020 / 111320 = 1.797e-7 deg.
     "rtk_fixed":  {"lat_stddev_deg": 0.0000002, "lon_stddev_deg": 0.0000002,
-                   "alt_stddev_m": 0.05,  "metric_stddev_m": 0.02},
-    "rtk_float":  {"lat_stddev_deg": 0.0000027, "lon_stddev_deg": 0.0000027,
-                   "alt_stddev_m": 0.5,   "metric_stddev_m": 0.30},
-    "standalone": {"lat_stddev_deg": 0.000018,  "lon_stddev_deg": 0.000018,
-                   "alt_stddev_m": 5.0,   "metric_stddev_m": 2.0},
-    "degraded":   {"lat_stddev_deg": 0.000045,  "lon_stddev_deg": 0.000045,
+                   "alt_stddev_m": 0.05,  "metric_stddev_m": 0.020},
+    # RTK float: 
+    # 0.360 / 111320 = 3.233e-6 deg.
+    "rtk_float":  {"lat_stddev_deg": 0.0000032, "lon_stddev_deg": 0.0000032,
+                   "alt_stddev_m": 0.5,   "metric_stddev_m": 0.360},
+    # Standalone PVT:
+    # 1.802 / 111320 = 1.619e-5 deg.
+    "standalone": {"lat_stddev_deg": 0.0000162, "lon_stddev_deg": 0.0000162,
+                   "alt_stddev_m": 5.0,   "metric_stddev_m": 1.802},
+    # Degraded: 
+    # 5.0 / 111320 = 4.492e-5 deg.
+    "degraded":   {"lat_stddev_deg": 0.0000449, "lon_stddev_deg": 0.0000449,
                    "alt_stddev_m": 10.0,  "metric_stddev_m": 5.0},
 }
 
@@ -60,7 +69,7 @@ class GnssNoiseRelayNode(Node):
     @see documentation/design/gnss_markov_transitions.md
     """
 
-    _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/gnss_noise_config.json"
+    _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/episode_config.json"
 
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
         """
@@ -73,7 +82,7 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("output_topic", "/gnss/noisy")
         self.declare_parameter(
             "config_file",
-            os.environ.get("GNSS_NOISE_CONFIG_FILE", self._DEFAULT_CONFIG_PATH),
+            os.environ.get("EPISODE_CONFIG_FILE", self._DEFAULT_CONFIG_PATH),
         )
         self.declare_parameter("base_metric_stddev_m", 0.02)
         self.declare_parameter("enable_markov_transitions", True)
@@ -254,7 +263,7 @@ class GnssNoiseRelayNode(Node):
                 self._apply_tier(tier_name)
             else:
                 self.get_logger().warn(
-                    f"gnss_noise_config.json has unknown or missing tier_name"
+                    f"episode_config.json has unknown or missing tier_name"
                     f" '{tier_name}', keeping current tier."
                 )
 
@@ -307,7 +316,7 @@ class GnssNoiseRelayNode(Node):
 
     def _write_active_tier(self, tier_name: str) -> None:
         """
-        @brief Write the current active tier back to gnss_noise_config.json.
+        @brief Write the current active tier back to episode_config.json.
         @param tier_name: Active RTK fix-state tier name.
         """
         tmp_path = self._config_path + ".markov.tmp"
