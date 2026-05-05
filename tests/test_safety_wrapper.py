@@ -29,8 +29,8 @@ def _make_mock_env(obs_shape: int = 12) -> MagicMock:
     return env
 
 
-def _make_action(steer: float = 0.0, lon: float = 0.5) -> np.ndarray:
-    return np.array([steer, lon], dtype=np.float32)
+def _make_action(steer: float = 0.0, lon: float = 0.5, brake: float = 0.0) -> np.ndarray:
+    return np.array([steer, lon, brake], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -49,7 +49,7 @@ class TestSafetyWrapperApply:
         @brief Zero uncertainty should leave the action unchanged.
         """
         action = _make_action(steer=0.3, lon=0.8)
-        modulated, handoff = SafetyWrapper.apply(
+        modulated, handoff, _ = SafetyWrapper.apply(
             action, epistemic=0.0, aleatoric=0.0,
             aleatoric_scaling=0.5, handoff_threshold=5.0,
         )
@@ -57,12 +57,12 @@ class TestSafetyWrapperApply:
         assert modulated[0] == pytest.approx(0.3)
         assert modulated[1] == pytest.approx(0.8)
 
-    def test_aleatoric_caps_longitudinal(self) -> None:
+    def test_aleatoric_caps_drive(self) -> None:
         """
-        @brief High aleatoric uncertainty caps the longitudinal component.
+        @brief High aleatoric uncertainty caps the drive component.
         """
         action = _make_action(lon=1.0)
-        modulated, handoff = SafetyWrapper.apply(
+        modulated, handoff, _ = SafetyWrapper.apply(
             action, epistemic=0.0, aleatoric=4.0,
             aleatoric_scaling=0.5, handoff_threshold=5.0,
         )
@@ -76,7 +76,7 @@ class TestSafetyWrapperApply:
         @brief Aleatoric uncertainty must not change the steering component.
         """
         action = _make_action(steer=0.9, lon=0.5)
-        modulated, _ = SafetyWrapper.apply(
+        modulated, _, _s = SafetyWrapper.apply(
             action, epistemic=0.0, aleatoric=10.0,
             aleatoric_scaling=1.0, handoff_threshold=5.0,
         )
@@ -87,19 +87,19 @@ class TestSafetyWrapperApply:
         @brief Epistemic >= handoff_threshold must zero the action and return handoff=True.
         """
         action = _make_action(steer=0.5, lon=0.9)
-        modulated, handoff = SafetyWrapper.apply(
+        modulated, handoff, _ = SafetyWrapper.apply(
             action, epistemic=5.0, aleatoric=0.0,
             aleatoric_scaling=0.5, handoff_threshold=5.0,
         )
         assert handoff
-        np.testing.assert_array_equal(modulated, np.zeros(2))
+        np.testing.assert_array_equal(modulated, np.zeros(3))
 
     def test_epistemic_below_threshold_no_handoff(self) -> None:
         """
         @brief Epistemic just below threshold must not trigger handoff.
         """
         action = _make_action(lon=0.8)
-        modulated, handoff = SafetyWrapper.apply(
+        modulated, handoff, _ = SafetyWrapper.apply(
             action, epistemic=4.99, aleatoric=0.0,
             aleatoric_scaling=0.5, handoff_threshold=5.0,
         )
@@ -118,12 +118,12 @@ class TestSafetyWrapperApply:
         )
         np.testing.assert_array_equal(action, original)
 
-    def test_negative_longitudinal_clipped_to_minus_one(self) -> None:
+    def test_negative_drive_clipped_to_minus_one(self) -> None:
         """
-        @brief Large reverse commands are still clamped to -1.0.
+        @brief Large reverse drive commands are still clamped to -1.0.
         """
-        action = np.array([0.0, -2.0], dtype=np.float32)
-        modulated, _ = SafetyWrapper.apply(
+        action = np.array([0.0, -2.0, 0.0], dtype=np.float32)
+        modulated, _, _s = SafetyWrapper.apply(
             action, epistemic=0.0, aleatoric=0.0,
             aleatoric_scaling=0.5, handoff_threshold=5.0,
         )

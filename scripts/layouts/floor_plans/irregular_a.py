@@ -103,7 +103,7 @@ def generate() -> Dict[str, Any]:
         bay_angle_deg=90.0, centred=True,
     )
     right_par = lot.row_along_perimeter(
-        bay_type="parallel", n=3, wall=WALL_RIGHT,
+        bay_type="parallel", n=4, wall=WALL_RIGHT,
         bay_angle_deg=90.0, centred=True,
     )
 

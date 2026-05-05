@@ -2,7 +2,7 @@
 @file actuation_calibration.py
 @brief Actuation calibration layer for sim-to-real transfer.
 
-Maps normalised policy actions [steering, longitudinal] to physical actuator
+Maps normalised policy actions [steering, drive, brake] to physical actuator
 commands.
 """
 
@@ -50,7 +50,7 @@ class ActuatorMap:
 class ActuationCalibration:
     """
     @class ActuationCalibration
-    @brief Maps policy [steering, longitudinal] outputs to physical actuator commands.
+    @brief Maps policy [steering, drive, brake] outputs to physical actuator commands.
     """
 
     # ------------------------------------------------------------------
@@ -60,15 +60,18 @@ class ActuationCalibration:
     def __init__(
         self,
         steering: Optional[ActuatorMap] = None,
-        longitudinal: Optional[ActuatorMap] = None,
+        drive: Optional[ActuatorMap] = None,
+        brake: Optional[ActuatorMap] = None,
     ) -> None:
         """
         @brief Construct with per-actuator maps. Defaults to identity if None.
         @param steering: Steering actuation map. None = identity.
-        @param longitudinal: Longitudinal (throttle/brake) actuation map. None = identity.
+        @param drive: Drive (signed throttle / reverse) actuation map. None = identity.
+        @param brake: Friction brake actuation map. None = identity.
         """
         self._steering = steering or ActuatorMap({})
-        self._longitudinal = longitudinal or ActuatorMap({})
+        self._drive = drive or ActuatorMap({})
+        self._brake = brake or ActuatorMap({})
 
     @classmethod
     def identity(cls) -> "ActuationCalibration":
@@ -94,16 +97,18 @@ class ActuationCalibration:
                 doc = yaml.safe_load(f) or {}
             cal = doc.get("calibration", {})
             steering_map = ActuatorMap(cal.get("steering", {}))
-            longitudinal_map = ActuatorMap(cal.get("longitudinal", {}))
-            return cls(steering=steering_map, longitudinal=longitudinal_map)
+            drive_map = ActuatorMap(cal.get("drive", {}))
+            brake_map = ActuatorMap(cal.get("brake", {}))
+            return cls(steering=steering_map, drive=drive_map, brake=brake_map)
         except (OSError, KeyError):
             return cls.identity()
 
-    def apply(self, steering: float, longitudinal: float) -> Tuple[float, float]:
+    def apply(self, steering: float, drive: float, brake: float) -> Tuple[float, float, float]:
         """
         @brief Apply calibration to policy action outputs.
         @param steering: Policy steering output in [-1, 1].
-        @param longitudinal: Policy longitudinal output in [-1, 1].
-        @return Tuple (steering_cmd, longitudinal_cmd) mapped to physical range.
+        @param drive: Policy drive output in [-1, 1]; negative = reverse.
+        @param brake: Policy brake output in [0, 1].
+        @return Tuple (steering_cmd, drive_cmd, brake_cmd) mapped to physical range.
         """
-        return self._steering.apply(steering), self._longitudinal.apply(longitudinal)
+        return self._steering.apply(steering), self._drive.apply(drive), self._brake.apply(brake)

@@ -331,8 +331,8 @@ class CARLAParkingEnv(gym.Env):
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied (2-dim: [steer, longitudinal])
-        self._last_action: np.ndarray = np.zeros(2, dtype=np.float32)
+        # Last action applied (3-dim: [steer, drive, brake])
+        self._last_action: np.ndarray = np.zeros(3, dtype=np.float32)
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -377,10 +377,13 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action space: [throttle, steer, brake], all in [-1, 1]. Throttle and brake
+        # Action space: [steer, drive, brake]
+        # steer : [-1, 1]  left to right
+        # drive : [-1, 1]  negative = reverse throttle, positive = forward throttle
+        # brake : [ 0, 1]  friction brake (independent of drive direction)
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0]),
-            high=np.array([1.0, 1.0]),
+            low=np.array([-1.0, -1.0, 0.0]),
+            high=np.array([1.0, 1.0, 1.0]),
             dtype=np.float32,
         )
 
@@ -960,7 +963,8 @@ class CARLAParkingEnv(gym.Env):
             },
             "action": {
                 "steer": float(self._last_action[0]),
-                "longitudinal": float(self._last_action[1]),
+                "drive": float(self._last_action[1]),
+                "brake": float(self._last_action[2]),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -1467,9 +1471,10 @@ class CARLAParkingEnv(gym.Env):
         Observations are only constructed on the final step of the repeat sequence,
         reducing EKF covariance reads and state construction by action_repeat factor.
 
-        @param action: 2-dim action vector [steering, longitudinal].
-                steering     in [-1, 1]: left to right.
-                longitudinal in [-1, 1]: negative = brake, positive = throttle.
+        @param action: 3-dim action vector [steering, drive, brake].
+                steering in [-1, 1]: left to right.
+                drive    in [-1, 1]: negative = reverse throttle, positive = forward throttle.
+                brake    in [ 0, 1]: friction brake (applied regardless of drive direction).
                 Mapped to CARLA throttle/brake internally.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
@@ -1488,21 +1493,20 @@ class CARLAParkingEnv(gym.Env):
 
         if self.vehicle is not None:
             steer = float(np.clip(action[0], -1.0, 1.0))
-            longitudinal = float(np.clip(action[1], -1.0, 1.0))
+            drive = float(np.clip(action[1], -1.0, 1.0))
+            brake = float(np.clip(action[2], 0.0, 1.0))
 
-            # Split longitudinal into CARLA throttle/brake.
-            # Positive longitudinal -> throttle, negative -> brake.
-            control = carla.VehicleControl()
-            control.steer = steer
-            control.brake = float(max(-longitudinal, 0.0))
-
-            # Cut throttle when speed limit is exceeded. Appropriate for
-            # parking lot manoeuvres (< 3 m/s).
             vel = self.vehicle.get_velocity()
             current_speed = math.hypot(vel.x, vel.y)
+
+            control = carla.VehicleControl()
+            control.steer = steer
+            control.brake = brake
+            control.reverse = drive < 0.0
+            # Cut throttle when speed limit is exceeded.
             control.throttle = (
                 0.0 if current_speed >= self._max_ego_speed_ms
-                else float(max(longitudinal, 0.0))
+                else abs(drive)
             )
 
             self.vehicle.apply_control(control)

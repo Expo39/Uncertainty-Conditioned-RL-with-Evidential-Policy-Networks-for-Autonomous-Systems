@@ -30,7 +30,7 @@ WALL_LEFT = 3
 # Top-wall parallel cluster: leftmost bay back-edge x.
 PAR_TOP_LEFT_X = 5.0
 # Right-wall parallel cluster: bottom y of leftmost bay's back face.
-PAR_RIGHT_Y_START = 13.0
+PAR_RIGHT_Y_START = 14.0
 # Aisle width between the right-wall parallel column and the inner column.
 INNER_PAR_AISLE = 9.0
 
@@ -54,8 +54,8 @@ def generate() -> Dict[str, Any]:
         "angled", n=7, wall=WALL_BOTTOM, bay_angle_deg=45.0, pack_from="end",
     )
     par_top = lot.row_along_perimeter(
-        "parallel", n=4, wall=WALL_TOP, bay_angle_deg=90.0,
-        start_along=DEPTH - PAR_TOP_LEFT_X - 4 * dims_par["depth"]
+        "parallel", n=6, wall=WALL_TOP, bay_angle_deg=90.0,
+        start_along=DEPTH - PAR_TOP_LEFT_X - 6 * dims_par["depth"]
         + dims_par["depth"] / 2.0,
     )
     par_right = lot.row_along_perimeter(
