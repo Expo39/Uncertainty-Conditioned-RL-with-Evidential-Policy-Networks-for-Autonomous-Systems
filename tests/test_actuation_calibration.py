@@ -109,18 +109,20 @@ class TestActuationCalibrationIdentity:
         @brief identity().apply() must return inputs unchanged.
         """
         cal = ActuationCalibration.identity()
-        s, lon = cal.apply(0.3, -0.5)
+        s, drv, brk = cal.apply(0.3, -0.5, 0.2)
         assert s == pytest.approx(0.3)
-        assert lon == pytest.approx(-0.5)
+        assert drv == pytest.approx(-0.5)
+        assert brk == pytest.approx(0.2)
 
     def test_default_constructor_is_identity(self) -> None:
         """
         @brief ActuationCalibration() with no args must behave as identity.
         """
         cal = ActuationCalibration()
-        s, lon = cal.apply(0.8, 0.2)
+        s, drv, brk = cal.apply(0.8, 0.2, 0.0)
         assert s == pytest.approx(0.8)
-        assert lon == pytest.approx(0.2)
+        assert drv == pytest.approx(0.2)
+        assert brk == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -147,37 +149,40 @@ class TestActuationCalibrationFromConfig:
             self._write_config(p, {
                 "calibration": {
                     "steering": {"gain": 0.5},
-                    "longitudinal": {},
+                    "drive": {},
+                    "brake": {},
                 }
             })
             cal = ActuationCalibration.from_config(str(p))
-            s, _ = cal.apply(1.0, 0.0)
+            s, _, _b = cal.apply(1.0, 0.0, 0.0)
             assert s == pytest.approx(0.5)
 
-    def test_loads_longitudinal_deadband(self) -> None:
+    def test_loads_drive_deadband(self) -> None:
         """
-        @brief Longitudinal deadband from YAML must suppress small inputs.
+        @brief Drive deadband from YAML must suppress small inputs.
         """
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "cal.yaml"
             self._write_config(p, {
                 "calibration": {
                     "steering": {},
-                    "longitudinal": {"deadband": 0.15},
+                    "drive": {"deadband": 0.15},
+                    "brake": {},
                 }
             })
             cal = ActuationCalibration.from_config(str(p))
-            _, lon = cal.apply(0.0, 0.05)
-            assert lon == pytest.approx(0.0)
+            _, drv, _b = cal.apply(0.0, 0.05, 0.0)
+            assert drv == pytest.approx(0.0)
 
     def test_missing_file_returns_identity(self) -> None:
         """
         @brief from_config() must return identity when the file does not exist.
         """
         cal = ActuationCalibration.from_config("/nonexistent/path/cal.yaml")
-        s, lon = cal.apply(0.6, -0.3)
+        s, drv, brk = cal.apply(0.6, -0.3, 0.5)
         assert s == pytest.approx(0.6)
-        assert lon == pytest.approx(-0.3)
+        assert drv == pytest.approx(-0.3)
+        assert brk == pytest.approx(0.5)
 
     def test_empty_yaml_returns_identity(self) -> None:
         """
@@ -187,16 +192,18 @@ class TestActuationCalibrationFromConfig:
             p = Path(d) / "empty.yaml"
             p.write_text("")
             cal = ActuationCalibration.from_config(str(p))
-            s, lon = cal.apply(0.4, 0.9)
+            s, drv, brk = cal.apply(0.4, 0.9, 0.0)
             assert s == pytest.approx(0.4)
-            assert lon == pytest.approx(0.9)
+            assert drv == pytest.approx(0.9)
+            assert brk == pytest.approx(0.0)
 
-    def test_apply_returns_tuple_of_two_floats(self) -> None:
+    def test_apply_returns_tuple_of_three_floats(self) -> None:
         """
-        @brief apply() must return a 2-tuple of floats.
+        @brief apply() must return a 3-tuple of floats.
         """
         cal = ActuationCalibration.identity()
-        result = cal.apply(0.1, 0.2)
-        assert len(result) == 2
+        result = cal.apply(0.1, 0.2, 0.3)
+        assert len(result) == 3
         assert isinstance(result[0], float)
         assert isinstance(result[1], float)
+        assert isinstance(result[2], float)
