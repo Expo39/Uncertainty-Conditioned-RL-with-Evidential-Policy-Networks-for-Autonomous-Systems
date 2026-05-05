@@ -36,6 +36,7 @@ at the top level of this directory.
 | `layout/patrol_paths.md` | `envs/sim/_npc_controller.py` | Proportional heading controller, waypoint loop, avoidance cone geometry |
 | `real_world_deployment.md` | `envs/real/deployment_utils.py`, `envs/real/inference_loop.py` | Sensor data flow, EKF frame calibration, surveyed datum, actuation calibration, GNSS/IMU driver notes |
 | `hyperparameter_search.md` | `training/tune_hyperparams.py` | Optuna search space design, sampler/pruner rationale, literature references |
+| `sensor_noise_models.md` | `envs/sim/helpers/_sensor_manager.py`, `ros2/sensor_relay/imu_noise_relay.py` | SICK TiM571 LiDAR noise derivation (systematic/statistical/angular) and VN-100 IMU noise derivation (covariance stamping, Gaussian injection, ZUPT) |
 
 ## See also
 

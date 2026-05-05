@@ -27,7 +27,7 @@ carla_sensors:
     sensor_tick: 0.05  # Publish rate (seconds). IMU noise injected by ImuNoiseRelayNode.
 
   lidar:  # 2D LiDAR (SICK TiM571). Obstacle detection only - not used for localisation.
-    # Values match real TiM571 hardware. See detailed_notes/observation_space.md.
+    # Values match real TiM571 hardware. See documentation/detailed_notes/sensor_noise_models.md.
     channels: 1  # Single horizontal scan plane.
     range: 25.0  # Max range (metres).
     points_per_second: 12150  # ~810 pts/scan at 15 Hz. Min-distance features are density-invariant.
@@ -35,6 +35,13 @@ carla_sensors:
     upper_fov: 0.0  # Flat 2D plane.
     lower_fov: 0.0  # Flat 2D plane.
     sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
+
+    noise:
+      enabled: true
+      range_random_stddev_m: 0.020  # m 1-sigma - see sensor_noise_models.md
+      range_bias_limit_m: 0.060     # m half-range - see sensor_noise_models.md
+      dropout_rate: 0.0             # no datasheet basis for non-zero value
+      min_range_m: 0.05             # sensor minimum working range (m)
 
   gnss:  # RTK-GNSS receiver. Noise injected by GnssNoiseRelayNode, not here.
     sensor_tick: 0.05  # Publish rate (seconds).

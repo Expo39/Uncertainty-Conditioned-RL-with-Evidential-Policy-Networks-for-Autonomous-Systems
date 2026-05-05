@@ -16,7 +16,7 @@ CovarianceExtractorNode                _CovarianceSubscriber
   subscribes /odometry/filtered          polls ekf_state.json
   writes ekf_state.json  ------------>   reads ekf_state.json
   reads initial_pose.json <-----------   writes initial_pose.json
-  reads gnss_noise_config.json <------   writes gnss_noise_config.json
+  reads episode_config.json <------   writes episode_config.json
   publishes /set_pose (DDS, Jazzy)       (no DDS in training container)
   publishes to GnssNoiseRelayNode
 ```
@@ -52,11 +52,11 @@ to give false-positives (accepting a stale file as fresh).
 Default paths (single-worker):
 - `ekf_state.json` - `/workspace/outputs/ekf_state.json`
 - `initial_pose.json` - `/workspace/outputs/initial_pose.json`
-- `gnss_noise_config.json` - `/workspace/outputs/gnss_noise_config.json`
+- `episode_config.json` - `/workspace/outputs/episode_config.json`
 
 Per-worker paths for parallel training (multi-worker):
 - Set via `ros2_config["ekf_state_file"]` in train_config.yaml, or
-- `EKF_STATE_FILE` / `INITIAL_POSE_FILE` / `GNSS_NOISE_CONFIG_FILE` environment variables
+- `EKF_STATE_FILE` / `INITIAL_POSE_FILE` / `EPISODE_CONFIG_FILE` environment variables
   (set per container in `docker-compose.env_workers.yml`).
 
 ## Per-file semantics
@@ -65,7 +65,7 @@ Per-worker paths for parallel training (multi-worker):
 |------|-----------|---------|---------|
 | `ekf_state.json` | CovarianceExtractorNode (~20 Hz) | _CovarianceSubscriber (per step) | EKF pose + covariance for observation |
 | `initial_pose.json` | _CovarianceSubscriber (per episode reset) | CovarianceExtractorNode | Signal spawn pose for /set_pose |
-| `gnss_noise_config.json` | _CovarianceSubscriber (per episode reset) | GnssNoiseRelayNode | Signal per-episode GNSS noise tier + datum |
+| `episode_config.json` | _CovarianceSubscriber (per episode reset) | GnssNoiseRelayNode, ImuNoiseRelayNode | Signal per-episode noise parameters + datum |
 
 ## COG heading derivation (GnssNoiseRelayNode)
 
@@ -103,7 +103,7 @@ degraded       [  0.0000,   0.0000,    0.0050,     0.9950 ]
 
 Transition probabilities are overridden by `gnss_noise_profiles.yaml` at
 runtime. The initial tier for each episode is set by the training container
-via `gnss_noise_config.json`; subsequent per-step transitions are sampled by
+via `episode_config.json`; subsequent per-step transitions are sampled by
 the node using `np.random.default_rng()` (single persistent Generator instance,
 no per-callback allocation).
 
