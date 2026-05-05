@@ -30,7 +30,7 @@ _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 _INITIAL_POSE_PATH = Path("/workspace/outputs/initial_pose.json")
 
 # File-based GNSS noise config signal
-_GNSS_NOISE_CONFIG_PATH = Path("/workspace/outputs/gnss_noise_config.json")
+_EPISODE_CONFIG_PATH = Path("/workspace/outputs/episode_config.json")
 
 logger = logging.getLogger(__name__)
 
@@ -95,20 +95,19 @@ class _CovarianceSubscriber:
             ".json.tmp"
         )
 
-        # GNSS noise config file path
-        self._gnss_noise_config_path: Path = Path(
+        self._episode_config_path: Path = Path(
             config.get(
-                "gnss_noise_config_file",
+                "episode_config_file",
                 os.environ.get(
-                    "GNSS_NOISE_CONFIG_FILE", str(_GNSS_NOISE_CONFIG_PATH)
+                    "EPISODE_CONFIG_FILE", str(_EPISODE_CONFIG_PATH)
                 ),
             )
         )
-        self._gnss_noise_config_tmp: Path = (
-            self._gnss_noise_config_path.with_suffix(".json.tmp")
+        self._episode_config_tmp: Path = (
+            self._episode_config_path.with_suffix(".json.tmp")
         )
-        # Monotonically increasing counter for gnss_noise_config.json writes.
-        self._gnss_noise_config_seq: int = 0
+        # Monotonically increasing counter for episode_config.json writes.
+        self._episode_config_seq: int = 0
 
         # Ensure output directory exists once at construction time.
         output_dir = self._ekf_state_path.parent
@@ -120,8 +119,8 @@ class _CovarianceSubscriber:
             self._ekf_state_path,
             self._initial_pose_path,
             self._initial_pose_tmp,
-            self._gnss_noise_config_path,
-            self._gnss_noise_config_tmp,
+            self._episode_config_path,
+            self._episode_config_tmp,
         ]:
             try:
                 stale.unlink(missing_ok=True)
@@ -324,7 +323,7 @@ class _CovarianceSubscriber:
         except OSError as exc:
             logger.warning("Failed to write initial_pose.json: %s", exc)
 
-    def publish_gnss_noise_config(
+    def publish_episode_config(
         self,
         tier_name: str,
         datum_lat: Optional[float] = None,
@@ -334,7 +333,7 @@ class _CovarianceSubscriber:
         """
         @brief Signal the GNSS noise tier, spawn datum, and initial yaw to the ros2-bridge.
 
-        Writes gnss_noise_config.json with the episode's RTK fix-state tier
+        Writes episode_config.json with the episode's RTK fix-state tier
         name, the geolocation of the vehicle spawn point, and the spawn yaw.
         
         Re-latching the datum each episode ensures that GNSS Odometry (0, 0)
@@ -353,9 +352,9 @@ class _CovarianceSubscriber:
                before the first valid COG reading. When None, the relay waits
                for the first valid COG reading before publishing any heading.
         """
-        self._gnss_noise_config_seq += 1
+        self._episode_config_seq += 1
         data: Dict[str, Any] = {
-            "seq": self._gnss_noise_config_seq,
+            "seq": self._episode_config_seq,
             "tier_name": tier_name,
         }
         if datum_lat is not None:
@@ -365,16 +364,16 @@ class _CovarianceSubscriber:
         if spawn_yaw is not None:
             data["spawn_yaw"] = spawn_yaw
         try:
-            with open(self._gnss_noise_config_tmp, "w") as f:
+            with open(self._episode_config_tmp, "w") as f:
                 json.dump(data, f)
-            os.replace(self._gnss_noise_config_tmp, self._gnss_noise_config_path)
+            os.replace(self._episode_config_tmp, self._episode_config_path)
             logger.info(
                 "GNSS noise config written: tier=%s (seq=%d)",
                 tier_name,
-                self._gnss_noise_config_seq,
+                self._episode_config_seq,
             )
         except OSError as exc:
-            logger.warning("Failed to write gnss_noise_config.json: %s", exc)
+            logger.warning("Failed to write episode_config.json: %s", exc)
 
     @property
     def has_data(self) -> bool:

@@ -63,6 +63,8 @@ class SensorManager:
         "noise_lon_bias",
         "noise_lon_stddev",
     )
+    # CARLA blueprint attribute zeroed for LiDAR; all noise applied in _apply_lidar_noise().
+    _LIDAR_NOISE_ATTRS: Tuple[str, ...] = ("noise_stddev",)
 
     # ------------------------------------------------------------------
     # Construction
@@ -91,6 +93,21 @@ class SensorManager:
 
         self._patrol_npc_ids: Set[int] = set()
         self._ego_vehicle: Optional[Any] = None
+
+        # LiDAR noise model parameters parsed once from sensors_config.
+        _lidar_noise_cfg: Dict[str, Any] = sensors_config.get("lidar", {}).get("noise", {})
+        self._lidar_noise_enabled: bool = bool(_lidar_noise_cfg.get("enabled", False))
+        self._lidar_range_random_stddev: float = float(
+            _lidar_noise_cfg.get("range_random_stddev_m", 0.0)
+        )
+        self._lidar_range_bias_limit: float = float(
+            _lidar_noise_cfg.get("range_bias_limit_m", 0.0)
+        )
+        self._lidar_dropout_rate: float = float(_lidar_noise_cfg.get("dropout_rate", 0.0))
+        self._lidar_min_range: float = float(_lidar_noise_cfg.get("min_range_m", 0.05))
+        # Per-episode systematic range bias (metres). Resampled each episode via
+        # sample_lidar_noise_bias() called from CARLAParkingEnv.reset().
+        self._lidar_range_bias_m: float = 0.0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -190,6 +207,7 @@ class SensorManager:
 
         self._collision_detected = False
         self._collision_ego_fault = False
+        self._lidar_range_bias_m = 0.0
 
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
@@ -202,6 +220,7 @@ class SensorManager:
         """
         self._collision_detected = False
         self._collision_ego_fault = False
+        self._lidar_range_bias_m = 0.0
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
 
@@ -265,6 +284,11 @@ class SensorManager:
             ("sensor_tick", 0.05),
         ]:
             lidar_bp.set_attribute(attr, str(lidar_config.get(attr, default)))
+
+        # Noise applied in _lidar_callback
+        for attr in self._LIDAR_NOISE_ATTRS:
+            if lidar_bp.has_attribute(attr):
+                lidar_bp.set_attribute(attr, "0.0")
 
         lidar_sensor = world.spawn_actor(
             lidar_bp,
@@ -369,13 +393,89 @@ class SensorManager:
                     math.hypot(impulse.x, impulse.y, impulse.z),
                 )
 
+    def sample_lidar_noise_bias(self, rng: np.random.Generator) -> None:
+        """
+        @brief Sample a per-episode systematic range bias for the noise model.
+
+        Draws one scalar from Uniform(-range_bias_limit_m, +range_bias_limit_m) and
+        stores it in _lidar_range_bias_m. Called once per episode from
+        CARLAParkingEnv.reset(). A no-op when noise is disabled or the limit is zero.
+
+        @param rng: numpy Generator (np_random from CARLAParkingEnv) for reproducibility.
+        @see documentation/detailed_notes/sensor_noise_models.md
+        """
+        if not self._lidar_noise_enabled or self._lidar_range_bias_limit == 0.0:
+            self._lidar_range_bias_m = 0.0
+        else:
+            self._lidar_range_bias_m = float(
+                rng.uniform(-self._lidar_range_bias_limit, self._lidar_range_bias_limit)
+            )
+            logger.debug(
+                "LiDAR systematic bias sampled: %.4f m (limit=+-%.3f m)",
+                self._lidar_range_bias_m,
+                self._lidar_range_bias_limit,
+            )
+
+    def _apply_lidar_noise(self, points_xyz: np.ndarray) -> np.ndarray:
+        """
+        @brief Apply the sensor noise model to a raw LiDAR point cloud.
+
+        Models two error sources from the TiM571 datasheet (P/N 1075091). No angular
+        error is modelled - the datasheet gives no angular accuracy specification.
+
+        @param points_xyz: (N, 3) float32 array in vehicle frame (x-forward, y-left, z-up)
+                           after _LIDAR_SIGN_FLIP has been applied.
+        @return (M, 3) float32 array with M <= N after noise and range filtering.
+        @see documentation/detailed_notes/sensor_noise_models.md
+        """
+        if not self._lidar_noise_enabled or len(points_xyz) == 0:
+            return points_xyz
+
+        x = points_xyz[:, 0]
+        y = points_xyz[:, 1]
+        z = points_xyz[:, 2]
+
+        r = np.hypot(x, y)
+        theta = np.arctan2(y, x)
+
+        rng = np.random.default_rng()
+
+        # 1. Range noise: fixed per-episode bias + zero-mean Gaussian random per point.
+        r_noisy = r + self._lidar_range_bias_m
+        if self._lidar_range_random_stddev > 0.0:
+            r_noisy = r_noisy + (
+                rng.standard_normal(len(r)).astype(np.float32)
+                * self._lidar_range_random_stddev
+            )
+
+        # 2. Discard returns that fell below the sensor minimum working range.
+        valid = r_noisy >= self._lidar_min_range
+        r_noisy = r_noisy[valid]
+        theta = theta[valid]
+        z = z[valid]
+
+        if len(r_noisy) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+
+        # 3. Optional point dropout (Bernoulli mask).
+        if self._lidar_dropout_rate > 0.0:
+            keep = rng.random(len(r_noisy)) >= self._lidar_dropout_rate
+            r_noisy = r_noisy[keep]
+            theta = theta[keep]
+            z = z[keep]
+
+        if len(r_noisy) == 0:
+            return np.empty((0, 3), dtype=np.float32)
+
+        # 4. Convert back to Cartesian; z is preserved unchanged.
+        x_noisy = (r_noisy * np.cos(theta)).astype(np.float32)
+        y_noisy = (r_noisy * np.sin(theta)).astype(np.float32)
+        return np.column_stack([x_noisy, y_noisy, z.astype(np.float32)])
+
     def _lidar_callback(self, lidar_data: Any) -> None:
         """
-        @brief CARLA LiDAR sensor callback - caches point cloud for obstacle features.
+        @brief CARLA LiDAR sensor callback - applies noise model then caches scan.
 
-        Converts raw measurement to (N, 3) float32 in vehicle frame via a single
-        numpy multiply with _LIDAR_SIGN_FLIP, replacing the separate copy.
-        
         @param lidar_data: carla.LidarMeasurement from the ray_cast sensor.
         """
         n_points = len(lidar_data.raw_data) // self._LIDAR_BYTES_PER_POINT
@@ -384,6 +484,7 @@ class SensorManager:
 
         arr = np.frombuffer(lidar_data.raw_data, dtype=np.float32).reshape(n_points, 4)
         points_xyz = arr[:, :3] * _LIDAR_SIGN_FLIP
+        points_xyz = self._apply_lidar_noise(points_xyz)
 
         with self._lidar_scan_lock:
             self._latest_lidar_scan = points_xyz
