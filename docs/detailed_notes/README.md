@@ -13,7 +13,7 @@ preserving the full reasoning for future reference.
 - One topic per file. Use a clear, lowercase filename (e.g. `ekf_pipeline.md`).
 - Begin each file with a one-line `# Title` and a short paragraph saying which source file(s)
   the content was extracted from and why it lives here rather than there.
-- Cross-reference from code using: `# See documentation/detailed_notes/<filename>.md`
+- Cross-reference from code using: `# See docs/detailed_notes/<filename>.md`
 - British English, ASCII-only characters throughout.
 - Files are created on demand as checkpoints reach them; not every topic listed in the project
   plan will necessarily exist.

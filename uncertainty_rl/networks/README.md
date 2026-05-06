@@ -161,4 +161,4 @@ keeps $\nu$ and $\alpha$ near their initialisation priors without requiring targ
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [envs/README.md](../envs/README.md) - observation layout that feeds this network
 - [training/README.md](../training/README.md) - how EvidentialPPO is wired into the training loop
-- [documentation/detailed_notes/evidential_nig_initialisation.md](../../documentation/detailed_notes/evidential_nig_initialisation.md) - derivation of NIG initialisation and clamping choices
+- [docs/detailed_notes/evidential_nig_initialisation.md](../../docs/detailed_notes/evidential_nig_initialisation.md) - derivation of NIG initialisation and clamping choices

@@ -408,7 +408,7 @@ Each subpackage and script directory has its own README with deeper detail.
 | CARLA inspector modes, CLI flags | [scripts/inspect/README.md](scripts/inspect/README.md) |
 | 2D visualiser, JSONL schema, Pygame controls | [scripts/visualise/README.md](scripts/visualise/README.md) |
 | Sim deployment config files and their consumers | [configs/deployment/sim/README.md](configs/deployment/sim/README.md) |
-| Technical notes index (NIG init, obs space, EKF, layouts) | [documentation/detailed_notes/README.md](documentation/detailed_notes/README.md) |
+| Technical notes index (NIG init, obs space, EKF, layouts) | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/BUILDER.md](scripts/layouts/BUILDER.md) |
 | All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
 <!-- 
