@@ -22,13 +22,18 @@ hardware-specific implementation before closed-loop testing. See
 
 ## Data Flow
 
-```
-/odometry/filtered  -->  _CovarianceSubscriber  -->  obs buffer (std_x, std_y, std_yaw)
-/cmd_vel (Twist)    <--  RealWorldInferenceLoop <--  EvidentialPPO.predict()
-                                                      |
-                                               SafetyWrapper.apply()
-                                                      |
-                                               ActuationCalibration.calibrate_action()
+```mermaid
+flowchart LR
+    ODO["/odometry/filtered"]
+    COV["_CovarianceSubscriber"]
+    OBS["obs buffer\nstd_x, std_y, std_yaw"]
+    PPO["EvidentialPPO.predict()"]
+    SAF["SafetyWrapper.apply()"]
+    CAL["ActuationCalibration\n.calibrate_action()"]
+    LOOP["RealWorldInferenceLoop"]
+    CMD["/cmd_vel (Twist)"]
+
+    ODO --> COV --> OBS --> PPO --> SAF --> CAL --> LOOP --> CMD
 ```
 
 ---
