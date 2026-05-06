@@ -104,7 +104,7 @@ bound the supervised NIG loss term.
 
 ## Evidential regularisation
 
-**Prior-anchoring log-penalty** (RL-stable alternative to the Amini 2020 supervised term):
+**Prior-anchoring log-penalty**:
 
 ```math
 \mathcal{L}_{\text{reg}} = \left\langle \log\!\left(\frac{\nu}{\nu_0} + 1\right) + \log\!\left(\frac{\alpha}{\alpha_0} + 1\right) \right\rangle
@@ -120,7 +120,7 @@ Total training loss:
 $\lambda_{\text{reg}}$ is linearly annealed from $0$ over `lambda_reg_warmup_steps` (both in
 `configs/train_config.yaml` under `evidential`).
 
-**Why not the Amini 2020 supervised term?**
+**Why not the supervised term?**
 
 ```math
 \mathcal{L}_{\text{Amini}} = \left\langle |\text{action} - \gamma| \cdot (2\nu + \alpha) \right\rangle \quad \text{-- ill-defined in RL}
