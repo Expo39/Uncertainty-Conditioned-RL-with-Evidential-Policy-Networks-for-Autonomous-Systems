@@ -35,22 +35,38 @@ signals high uncertainty.
 
 ## System Overview
 
-```
-  [carla-server]       [ros2-bridge]                [training]
+```mermaid
+flowchart TB
+    subgraph carla["carla-server"]
+        S1["RTK-GNSS"]
+        S2["IMU"]
+        S3["2D LiDAR"]
+    end
 
-  RTK-GNSS --[ROS]--> GnssNoiseRelayNode -+
-  IMU      --[ROS]--> ImuNoiseRelayNode   +--> robot_localisation EKF
-                                                    /odometry/filtered
-                                                           |
-                                             CovarianceExtractorNode
-                                             ekf_state.json --------> CARLAParkingEnv
-  2D LiDAR ---[CARLA API]-------------------------------------------> (12-dim obs)
-                                                                             |
-                                                                       EvidentialPPO
-                                                                             |
-                                                           EvidentialActorCriticPolicy
-                                                           NIG actor + standard critic
-  VehicleControl <--[CARLA API]--------------------------------------- action
+    subgraph ros2["ros2-bridge"]
+        R1["GnssNoiseRelayNode"]
+        R2["ImuNoiseRelayNode"]
+        EKF["robot_localisation EKF"]
+        EXT["CovarianceExtractorNode"]
+    end
+
+    subgraph train["training"]
+        ENV["CARLAParkingEnv\n12-dim obs"]
+        PPO["EvidentialPPO"]
+        POL["EvidentialActorCriticPolicy\nNIG actor + critic"]
+    end
+
+    S1 -->|ROS topic| R1
+    S2 -->|ROS topic| R2
+    R1 --> EKF
+    R2 --> EKF
+    EKF --> EXT
+    EXT -->|ekf_state.json| ENV
+    S3 -->|CARLA API| ENV
+    ENV -->|obs + reward| PPO
+    PPO -->|update| POL
+    POL -->|action| ENV
+    ENV -->|VehicleControl| carla
 ```
 
 ---
