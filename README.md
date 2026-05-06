@@ -35,32 +35,22 @@ signals high uncertainty.
 
 ## System Overview
 
-```mermaid
-flowchart LR
-    subgraph SIM["CARLA Simulator (carla-server)"]
-        SENSORS["RTK-GNSS + IMU + 2D LiDAR"]
-    end
+```
+  [carla-server]       [ros2-bridge]                [training]
 
-    subgraph ROS["ROS 2 Bridge (ros2-bridge)"]
-        RELAY["GnssNoiseRelayNode\nImuNoiseRelayNode"]
-        EKF["robot_localisation EKF\n/odometry/filtered"]
-        EXTRACTOR["CovarianceExtractorNode\n/ekf_uncertainty/covariance"]
-    end
-
-    subgraph TRAIN["Training Container (training)"]
-        ENV["CARLAParkingEnv\n12-dim obs"]
-        POLICY["EvidentialActorCriticPolicy\nNIG actor + standard critic"]
-        PPO["EvidentialPPO\nPPO + evidential regularisation"]
-    end
-
-    SENSORS -->|ROS topics| RELAY
-    RELAY -->|noisy odometry| EKF
-    EKF -->|covariance| EXTRACTOR
-    EXTRACTOR -->|ekf_state.json| ENV
-    ENV -->|obs + reward| PPO
-    PPO -->|update| POLICY
-    POLICY -->|action| ENV
-    ENV -->|VehicleControl| SIM
+  RTK-GNSS --[ROS]--> GnssNoiseRelayNode -+
+  IMU      --[ROS]--> ImuNoiseRelayNode   +--> robot_localisation EKF
+                                                    /odometry/filtered
+                                                           |
+                                             CovarianceExtractorNode
+                                             ekf_state.json --------> CARLAParkingEnv
+  2D LiDAR ---[CARLA API]-------------------------------------------> (12-dim obs)
+                                                                             |
+                                                                       EvidentialPPO
+                                                                             |
+                                                           EvidentialActorCriticPolicy
+                                                           NIG actor + standard critic
+  VehicleControl <--[CARLA API]--------------------------------------- action
 ```
 
 ---
@@ -456,8 +446,8 @@ Each subpackage and script directory has its own README with deeper detail.
 | Technical notes index (NIG init, obs space, EKF, layouts) | [documentation/detailed_notes/README.md](documentation/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/builder.md](scripts/layouts/builder.md) |
 | All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
-
-<!-- ---
+<!-- 
+---
 
 ## Publications
 
