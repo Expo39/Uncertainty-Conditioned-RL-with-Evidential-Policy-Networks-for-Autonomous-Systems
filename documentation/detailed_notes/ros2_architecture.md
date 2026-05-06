@@ -9,16 +9,19 @@ container uses ROS 2 Jazzy (Ubuntu 24.04). These are different DDS domains - dir
 topic subscription across distros would require careful QoS negotiation and can silently
 fail. The chosen design avoids DDS entirely at the Python training boundary:
 
-```
-ros2-bridge (Jazzy)                   training container (Humble)
--------------------------------        ------------------------------
-CovarianceExtractorNode                _CovarianceSubscriber
-  subscribes /odometry/filtered          polls ekf_state.json
-  writes ekf_state.json  ------------>   reads ekf_state.json
-  reads initial_pose.json <-----------   writes initial_pose.json
-  reads episode_config.json <------   writes episode_config.json
-  publishes /set_pose (DDS, Jazzy)       (no DDS in training container)
-  publishes to GnssNoiseRelayNode
+```mermaid
+flowchart LR
+    subgraph jazzy["ros2-bridge (Jazzy)"]
+        CEX["CovarianceExtractorNode\nsubscribes /odometry/filtered\npublishes /set_pose"]
+        GNSS["GnssNoiseRelayNode"]
+    end
+    subgraph humble["training container (Humble - no DDS)"]
+        CSub["_CovarianceSubscriber"]
+    end
+
+    CEX -->|"ekf_state.json"| CSub
+    CSub -->|"initial_pose.json"| CEX
+    CSub -->|"episode_config.json"| GNSS
 ```
 
 All three files live on a Docker shared volume (`outputs/`) mounted read-write in both
@@ -76,12 +79,18 @@ Speed estimate: `speed = displacement / dt`, where both displacement and `dt`
 come from NavSatFix message timestamps and the flat-earth-projected positions.
 
 Heading variance (error propagation of `atan2(dy, dx)` from two independent
-noisy fixes):
+noisy fixes, where dist is the displacement between the two fix positions):
 
 ```
-var(heading) ~= 2 * sigma_pos^2 / dist^2
-              = 2 * sigma_pos^2 / (speed * dt)^2
+var(heading) = 2 * sigma_pos^2 / dist^2
 ```
+
+The implementation substitutes `speed = dist / dt` and uses `speed^2` directly
+(`raw_var = 2 * sigma^2 / speed^2`). Since `1/speed^2 = dt^2/dist^2`, the
+implementation computes `2 * sigma^2 * dt^2 / dist^2`, differing from the
+theoretical formula by `dt^2`. At a fixed GNSS publish rate (constant `dt`),
+this is a constant scale factor, not a systematic drift. See `sensor_noise_models.md`
+for the implementation form.
 
 At low speed (below `cog_min_speed_ms`, default 0.3 m/s) the variance grows
 without bound; heading is held at its last valid value until speed exceeds the

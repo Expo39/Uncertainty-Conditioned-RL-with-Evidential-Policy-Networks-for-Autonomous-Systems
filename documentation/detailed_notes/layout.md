@@ -13,7 +13,6 @@ Geometry derivations and design rationale for the three parking-lot layouts used
 
 - `documentation/detailed_notes/observation_space.md` - LiDAR sector derivation that depends
   on lot geometry.
-- `scripts/layouts/CLAUDE.md` - authoring rules for layout scripts.
 
 ---
 
@@ -57,8 +56,57 @@ Five-waypoint CCW orbit around the central obstacle:
 
 ## Bay sampling
 
-_To be added._
+Source: `_LotSpawner._spawn_static_vehicles()` in `envs/sim/helpers/_lot_spawner.py`.
+
+Each episode a fresh occupancy rate is drawn:
+
+    bay_occupancy_rate ~ Uniform(bay_occupancy_min, bay_occupancy_max)
+
+For every bay in the layout YAML the spawner applies three exclusion checks in order:
+
+1. `bay_id` matches the target bay - always excluded (agent must be able to enter it).
+2. `always_empty: true` flag in the YAML - layout-level reservation. Never occupied
+   regardless of occupancy rate.
+3. `random.random() > bay_occupancy_rate` - probabilistic occupancy. At the minimum
+   rate the lot is mostly empty; at the maximum it is nearly full.
+
+Bays that pass all three checks receive a randomly selected CARLA car blueprint with a
+randomly chosen colour. A 50 % coin flip then rotates the parked car 180 deg, simulating
+both nose-in and nose-out orientations for the same bay.
+
+`motorcycle` bay type bypasses all three checks: its occupant blueprint is fixed by the
+`occupant` key in the YAML and is always spawned.
+
+The per-episode `bay_occupancy_rate` is the primary source of difficulty variation for the
+LiDAR obstacle clearance features. High occupancy forces the ego to navigate narrow gaps;
+low occupancy produces wide clearances with little obstacle signal.
 
 ## Cone interpolation
 
-_To be added._
+Source: `_interpolate_cone_positions()` in `uncertainty_rl/utils/geometry.py`,
+called by `_LotSpawner._spawn_perimeter_cones()` and `_spawn_obstacle_cones()`.
+
+### Perimeter cones
+
+`_interpolate_cone_positions(corners, spacing)` walks the closed polygon formed by the
+layout `corners` list. For each directed edge it computes the number of cones that fit at
+the requested spacing, then adjusts (adaptive spacing) so the final cone of each edge lands
+exactly at the far corner rather than leaving a gap. Each cone gets a `yaw_deg` equal to
+the edge direction so the marker faces along the wall.
+
+Optionally, cones within `entrance_half_width` metres (default 4.0 m) of a named entrance
+point are omitted, leaving a driveable gap. The perimeter cone set is layout-keyed and
+cached across episodes: if the layout is unchanged and all actors are alive the set is
+reused without re-spawning.
+
+### Obstacle cones
+
+Interior obstacle rectangles (from the `obstacles` key of the layout YAML, stored as
+`centre_x`, `centre_y`, `half_width`, `half_height`) are outlined with a separate grid:
+
+- Top and bottom edges: `np.arange(-hw, hw + eps, spacing)` steps along X at fixed Y.
+- Left and right edges: `np.arange(-hh + spacing, hh - eps, spacing)` steps along Y.
+  The vertical pass starts one spacing in from each corner to avoid double-placing a cone
+  at each corner (the horizontal pass already covers them).
+
+Obstacle cones are re-spawned every episode (not cached).

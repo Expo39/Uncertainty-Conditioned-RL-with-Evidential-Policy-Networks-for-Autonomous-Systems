@@ -12,6 +12,8 @@ source files to keep inline comments concise.
 
 ## 1. SICK TiM571 2D LiDAR (P/N 1075091)
 
+Datasheet: [TiM571-2050101, P/N 1075091](https://www.sick.com/media/pdf/4/44/444/dataSheet_TiM571-2050101_1075091_en.pdf)
+
 ### Physical characteristics
 
 | Spec | Datasheet value |
@@ -90,19 +92,21 @@ so that all noise is applied in Python and is fully configurable from YAML.
 
 ## 2. VectorNav VN-100 IMU (Hardware v7.0)
 
+Datasheet: [VN-100 Product Brief / Datasheet](https://www.navtechgps.com/wp-content/uploads/VN100_ProductBrief_DS.pdf)
+
 ### Physical characteristics
 
 | Spec | Datasheet value |
 |------|----------------|
 | Gyro range | +-2000 deg/s |
 | Gyro noise density | 0.0035 deg/s/sqrt(Hz) |
-| Gyro in-run bias stability | 5 deg/hr typical, 10 deg/hr max |
-| Gyro bandwidth | 265 Hz |
+| Gyro in-run bias stability | 5-7 deg/hr typical, < 10 deg/hr (Allan variance) |
+| Gyro bandwidth | 256 Hz |
 | Accel range | +-16 g |
 | Accel noise density | 0.14 mg/sqrt(Hz) |
-| Accel in-run bias stability | 0.04 mg typical |
-| Accel bandwidth | 230 Hz |
-| Sample rate | 800 Hz (IMU), 400 Hz (AHRS) |
+| Accel in-run bias stability | < 0.04 mg |
+| Accel bandwidth | 260 Hz |
+| Output rate | up to 800 Hz (IMU), up to 400 Hz (Attitude) |
 
 The EKF runs at 20 Hz and CARLA publishes sensor data at 20 Hz
 (`carla_sensors.imu.sensor_tick = 0.05 s`).
@@ -182,8 +186,8 @@ In simulation it is modelled as a fixed offset resampled each episode:
 
 Derivation (both computed exactly in code):
 
-    gyro:  5 * pi/180 / 3600 = 2.42407e-5 rad/s    [5 deg/hr from Table 3]
-    accel: 0.04e-3 * 9.81    = 3.92400e-4 m/s^2    [0.04 mg from Table 2]
+    gyro:  5 * pi/180 / 3600 = 2.42407e-5 rad/s    [5 deg/hr: low end of 5-7 deg/hr typical; slightly optimistic]
+    accel: 0.04e-3 * 9.81    = 3.92400e-4 m/s^2    [< 0.04 mg from datasheet; upper bound used]
 
 The bias is held constant for the entire training run since `ImuNoiseRelayNode`
 is a long-running process that is not restarted between episodes.
@@ -209,7 +213,7 @@ zupt_active` guards in `_imu_callback`), so ZUPT and noise injection are consist
 
 ## 3. u-blox ZED-F9P-05B RTK-GNSS
 
-Datasheet: UBXDOC-963802114-12824, Revision R02, 16-Oct-2024.
+Datasheet: [UBXDOC-963802114-12824, Revision R02, 16 October 2024](https://content.u-blox.com/sites/default/files/documents/ZED-F9P-05B_DataSheet_UBXDOC-963802114-12824.pdf)
 All position accuracy values are from Table 3 (GPS+GLO+GAL+BDS mode).
 
 ### Physical characteristics
@@ -248,7 +252,7 @@ zero-mean Gaussian per GNSS fix in `GnssNoiseRelayNode._gnss_callback()`.
 
 Datasheet Table 3: horizontal accuracy = 0.010 m CEP + 1 ppm.
 
-    1-sigma = 0.010 / 0.8326 = 0.01202 m
+    1-sigma = 0.010 / 0.8326 = 0.01201 m
 
 The 1 ppm baseline term: at a parking-lot baseline of 100 m from the base station,
 1 ppm = 0.0001 m - negligible. Excluded from the model.
@@ -274,8 +278,8 @@ Industry-standard figure from RTK literature (e.g. Trimble, Leica application
 notes): approximately 0.300 m CEP at short baselines under good conditions.
 
     1-sigma = 0.300 / 0.8326 = 0.360 m
-    lat_stddev_deg  = 0.360 / 111320 = 3.233e-6 deg  (rounded to 3.2e-6)
-    lon_stddev_deg  = 0.360 / 111320 = 3.233e-6 deg
+    lat_stddev_deg  = 0.360 / 111320 = 3.234e-6 deg  (rounded to 3.2e-6)
+    lon_stddev_deg  = 0.360 / 111320 = 3.234e-6 deg
 
 This is an estimate, not a datasheet value. It is conservative relative to the
 fixed tier and represents marginal accuracy for a 2.5 m wide parking bay.
@@ -342,8 +346,11 @@ moving-base figure and is the correct model for COG-based heading.
 
 ## 4. Cross-references
 
-| File | Role |
-|------|------|
+| Source | Role |
+|--------|------|
+| [SICK TiM571 datasheet](https://www.sick.com/media/pdf/4/44/444/dataSheet_TiM571-2050101_1075091_en.pdf) | Systematic error (+-60 mm), statistical error (<20 mm), angular resolution (0.33 deg), range (0.05-25 m) |
+| [VectorNav VN-100 datasheet](https://www.navtechgps.com/wp-content/uploads/VN100_ProductBrief_DS.pdf) | Gyro noise density (0.0035 deg/s/sqrt(Hz)), accel noise density (0.14 mg/sqrt(Hz)), gyro bias (5-7 deg/hr typ.), accel bias (< 0.04 mg) |
+| [u-blox ZED-F9P-05B datasheet](https://content.u-blox.com/sites/default/files/documents/ZED-F9P-05B_DataSheet_UBXDOC-963802114-12824.pdf) | RTK fixed CEP (Table 3), standalone CEP (Table 3), moving-base heading (Table 6), convergence time (Table 2) |
 | `uncertainty_rl/envs/sim/helpers/_sensor_manager.py` | `_apply_lidar_noise()`, `sample_lidar_noise_bias()` |
 | `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/imu_noise_relay.py` | `ImuNoiseRelayNode.__init__()`, `_imu_callback()` |
 | `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | `GnssNoiseRelayNode._gnss_callback()`, `_TIER_DEFAULTS` |

@@ -45,9 +45,18 @@ directly on a linear scale. This gives uniform precision near 1.0, where
 small differences in gamma (0.99 vs 0.999) have large effects on effective
 horizon length, whereas differences near 0.9 matter less [4].
 
-## Literature references
+## References
 
-[1] Andrychowicz et al., "What Matters In On-Policy RL?", ICLR 2021.
-[2] Eimer et al., "Hyperparameters in RL and How To Tune Them", ICML 2023.
-[3] Watanabe, "Tree-Structured Parzen Estimator", arXiv:2304.11127, 2023.
-[4] Raffin, "Automatic Hyperparameter Tuning In Practice", ICRA tutorial, 2022.
+[1] M. Andrychowicz et al., "What Matters for On-Policy Deep Actor-Critic Methods?
+    A Large-Scale Study," in Proc. Int. Conf. Learning Representations (ICLR), May 2021.
+
+[2] T. Eimer, A. Biedenkapp, M. Reimer, S. Adriaensen, F. Hutter, and M. Lindauer,
+    "Hyperparameters in Reinforcement Learning and How To Tune Them," in Proc. Int.
+    Conf. Machine Learning (ICML), Honolulu, HI, USA, Jul. 2023.
+
+[3] S. Watanabe, "Tree-Structured Parzen Estimator: Understanding Its Algorithm
+    Components and Their Roles for Better Empirical Performance," arXiv:2304.11127,
+    Apr. 2023.
+
+[4] A. Raffin, "Automatic Hyperparameter Tuning in Practice," Tutorial at IEEE Int.
+    Conf. Robotics and Automation (ICRA), Philadelphia, PA, USA, May 2022.
