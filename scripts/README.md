@@ -56,7 +56,7 @@ make generate-layouts                   # All three layouts
 make generate-layouts LAYOUT=rectangle  # Single layout
 ```
 
-Writes `configs/layouts/<name>.yaml` and `outputs/layouts/<name>.png` for each layout. Never edit the YAML files by hand - regenerate from the floor plan Python modules. See [layouts/README.md](layouts/README.md) for the layout module reference and [layouts/builder.md](layouts/builder.md) for the `LotBuilder` DSL.
+Writes `configs/layouts/<name>.yaml` and `outputs/layouts/<name>.png` for each layout. Never edit the YAML files by hand - regenerate from the floor plan Python modules. See [layouts/README.md](layouts/README.md) for the layout module reference and [layouts/BUILDER.md](layouts/BUILDER.md) for the `LotBuilder` DSL.
 
 ### `inspect/`
 
