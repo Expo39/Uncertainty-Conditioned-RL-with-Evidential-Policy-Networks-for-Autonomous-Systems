@@ -1,97 +1,149 @@
 # networks/
 
-Core novel component - evidential deep learning policy networks for uncertainty-aware action selection.
+Core novel component. Evidential deep learning policy networks for uncertainty-aware parking action selection.
 
-## Module: `evidential_policy.py`
+## At a glance
 
-### Classes
+- NIG evidential actor outputs four parameters per action dimension: gamma (mean), nu, alpha, beta
+- Aleatoric uncertainty: `beta / (alpha - 1)` -- action std uses `sqrt(aleatoric)` only
+- Epistemic uncertainty: `beta / (nu * (alpha - 1))` -- model confidence, not added to action noise
+- All NIG params clamped to max 100.0 for RL stability
+- Two actor modes: flat MLP or dual-encoder (state + covariance separate pathways)
+- Evidential loss applies to the actor only -- standard Gaussian critic unchanged
+- Prior-anchoring log-penalty regularisation (RL-stable; replaces the Amini 2020 supervised term)
 
-| Class | Purpose |
-|-------|---------|
-| `EvidentialLayer` | Output layer producing Normal-Inverse-Gamma (NIG) parameters (gamma, nu, alpha, beta) per action dimension. **NIG parameters are clamped to max 100.0 to prevent divergence during RL training.** |
-| `EvidentialPolicyNetwork` | Full actor network: feature extraction backbone + evidential output head |
-| `UncertaintyConditionedActor` | Dual-encoder variant that processes state and uncertainty components through separate pathways before merging |
+## Modules
 
-### Key Interface
+| Module | Classes / functions |
+|--------|-------------------|
+| `evidential_policy.py` | `EvidentialLayer`, `EvidentialPolicyNetwork`, `UncertaintyConditionedActor` |
+| `sb3_integration.py` | `EvidentialDistribution`, `EvidentialActorCriticPolicy`, `EvidentialPPO` |
+| `__init__.py` | Re-exports all six public names above |
 
-During evaluation and deployment, use `EvidentialActorCriticPolicy.get_action_with_uncertainty()`:
+## Internal data flow
+
+```mermaid
+flowchart TB
+    subgraph actor["Actor (evidential)"]
+        direction TB
+        OBS["obs\n12-dim"]
+
+        subgraph flat["Flat mode (use_uncertainty_conditioning=False)"]
+            MLP["MLP extractor\nfull obs"] --> EL["EvidentialLayer"]
+        end
+
+        subgraph dual["Dual-encoder mode (use_uncertainty_conditioning=True)"]
+            SE["state encoder\nobs[0:1] vyaw"]
+            UE["uncertainty encoder\nobs[1:4] std_x/y/yaw"]
+            CAT["concat + fusion MLP"] --> EL2["EvidentialLayer"]
+            SE --> CAT
+            UE --> CAT
+        end
+
+        OBS --> MLP
+        OBS --> SE & UE
+    end
+
+    EL --> NIG["NIG params\ngamma, nu, alpha, beta"]
+    EL2 --> NIG
+    NIG -->|"std = sqrt(beta/(alpha-1))"| ACT["sampled action"]
+    NIG --> REG["EvidentialPPO\nreg loss"]
+
+    subgraph critic["Critic (standard)"]
+        MLP2["MLP extractor\nfull obs"] --> VF["value head"]
+    end
+```
+
+> In dual-encoder mode, only obs[0:1] (vyaw) and obs[1:4] (std_x/y/yaw) reach the actor.
+> Indices 4-11 (target pose, LiDAR) feed the critic but not the actor.
+
+## Key interfaces
+
+### Inference and deployment
 
 ```python
+# Get action with full uncertainty breakdown
 action, uncertainty_dict = policy.get_action_with_uncertainty(obs_tensor)
 # uncertainty_dict keys: epistemic, aleatoric, total, gamma, nu, alpha, beta
 ```
 
-`EvidentialPolicyNetwork.get_action()` provides the same interface but is a standalone test harness only - not used in the RL training pipeline.
+### Training (SB3 integration)
 
-### Uncertainty Formulae
+```python
+from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
 
-- **Aleatoric** (data uncertainty, E[sigma^2]): `beta / (alpha - 1)`
-- **Epistemic** (model uncertainty, Var[mu]): `beta / (nu * (alpha - 1))`
+model = EvidentialPPO(
+    policy=EvidentialActorCriticPolicy,
+    env=env,
+    # All hyperparameters come from configs/train_config.yaml
+)
+model.learn(total_timesteps=1_000_000)
+```
 
-### NIG Parameter Clamping
+### Standalone test harness (unit tests only)
 
-During RL training, unbounded growth of nu, alpha, beta destabilises both the NLL loss and the prior-anchoring log-penalty regularisation used by `EvidentialPPO`. Upper bounds of **100.0** are enforced on all three parameters in `EvidentialLayer.forward()`.
+```python
+from uncertainty_rl.networks import EvidentialPolicyNetwork
 
-### Constraints
+# NOTE: not used in the RL training pipeline - test harness only
+net = EvidentialPolicyNetwork(state_dim=12, action_dim=3, hidden_dims=[256, 256])
+action, uncertainty_dict = net.get_action(obs_tensor)
+```
 
-- Evidential learning applies to the **actor only** (never the critic).
-- `softplus + offset` on nu, alpha, beta ensures finite variance and positivity.
-- NIG parameters clamped to max 100.0 for RL stability.
-- LayerNorm used (not BatchNorm).
-- `EvidentialPolicyNetwork` is a standalone test harness only - NOT used in the RL training pipeline.
-- `compute_evidential_loss` is a supervised regression loss for unit tests only - NOT the training loss.
+## NIG parameter constraints
 
-## Module: `sb3_integration.py`
+| Param | Activation | Offset | Clamp |
+|-------|-----------|--------|-------|
+| gamma | none | 0 | none |
+| nu | softplus | +1e-6 | max 100.0 |
+| alpha | softplus | +1.0 | max 100.0 |
+| beta | softplus | +1e-6 | max 100.0 |
 
-### Classes
+Clamping prevents divergence in RL training where no ground-truth action targets exist to bound the supervised NIG loss term.
 
-| Class | Purpose |
-|-------|---------|
-| `EvidentialDistribution` | SB3 `Distribution` subclass: Gaussian approximation of NIG predictive. `std = sqrt(aleatoric)` only - epistemic uncertainty is not added to action noise. Caches NIG params for the regularisation loss. |
-| `EvidentialActorCriticPolicy` | SB3 `ActorCriticPolicy` subclass with evidential actor head and standard critic. Supports flat MLP (`use_uncertainty_conditioning=False`) and dual-encoder (`True`) modes. |
-| `EvidentialPPO` | SB3 `PPO` subclass adding evidential regularisation to the PPO loss. Uses **prior-anchoring log-penalty**. Linearly anneals `lambda_reg` from 0 over `lambda_reg_warmup_steps`. |
+## Evidential regularisation
 
-### Evidential Regularisation Loss
+**Prior-anchoring log-penalty** (RL-stable alternative to Amini 2020 supervised term):
 
-**Prior-anchoring log-penalty** (RL-stable):
 ```
 reg = mean(log(nu / nu_prior + 1)) + mean(log(alpha / alpha_prior + 1))
 ```
 
-`nu_prior = 1.24`, `alpha_prior = 2.24` (hardcoded constants in `EvidentialPPO.train()`).
+- `nu_prior = 1.24`, `alpha_prior = 2.24`
+- `lambda_reg` linearly annealed from 0 over `lambda_reg_warmup_steps` (both in `configs/train_config.yaml`)
+- Total loss: `PPO_loss + lambda_reg * reg`
 
-Replaces `|actions - gamma| * (2*nu + alpha)`, which is ill-defined in RL:
-- Supervised term assumes ground-truth action targets (don't exist in RL)
-- In RL, `|actions - gamma|` is just policy sampling noise, not prediction error
-- Unbounded growth with lack of signal - regularisation loss explodes
+The supervised term `|actions - gamma| * (2*nu + alpha)` is ill-defined in RL because `|actions - gamma|` is policy sampling noise, not prediction error. The log-penalty is bounded and keeps nu/alpha near initialisation priors.
 
-Log-penalty approach:
-- Bounded (finite for all nu, alpha values)
-- Penalises drift from initialisation priors without action coupling
-- Works well with NIG clamping (max 100.0)
+## Actor modes
 
-### Actor Modes
+| `use_uncertainty_conditioning` | Actor class | Obs consumed by actor |
+|-------------------------------|-------------|----------------------|
+| `False` | Flat MLP + `EvidentialLayer` | Full obs (all 12 dims) |
+| `True` | `UncertaintyConditionedActor` | obs[0:1] (vyaw) + obs[1:4] (std_x/y/yaw) only |
 
-| `use_uncertainty_conditioning` | Actor | Obs input |
-|-------------------------------|-------|-----------|
-| `False` | Flat MLP extractor + `EvidentialLayer` | Full obs vector |
-| `True` | `UncertaintyConditionedActor` (dual-encoder) | `obs[:1]` (vyaw) + `obs[1:4]` (std_x/y/yaw) only - indices 4+ are not used |
+## TensorBoard logs (evidential-specific)
 
-### Sampling std
+| Tag | Meaning |
+|-----|---------|
+| `train/evidential_reg_loss` | `mean(log(nu/nu_prior+1)) + mean(log(alpha/alpha_prior+1))` |
+| `train/epistemic_uncertainty` | Mean `beta / (nu * (alpha-1))` per update |
+| `train/aleatoric_uncertainty` | Mean `beta / (alpha-1)` per update |
+| `train/lambda_reg` | Current annealed regularisation weight |
 
-```
-std = sqrt(beta / (alpha - 1))  # aleatoric std only
-```
+## Configuration keys consumed
 
-Epistemic uncertainty (`beta / (nu * (alpha - 1))`) quantifies model uncertainty over `gamma` and is NOT added to action noise.
+| Config file | Keys |
+|-------------|------|
+| `configs/train_config.yaml` | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.use_uncertainty_conditioning` |
+| `uncertainty_rl/utils/constants.py` | `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3), `ACTION_DIM` (3) |
 
-### TensorBoard Logs (evidential-specific)
+<!-- gif:placeholder name="uncertainty_evolution" caption="Epistemic and aleatoric uncertainty during a parking episode" -->
+![Uncertainty evolution placeholder](docs/media/uncertainty_evolution.gif)
 
-- `train/evidential_reg_loss` - prior-anchoring regularisation term: `mean(log(nu/nu_prior+1)) + mean(log(alpha/alpha_prior+1))`
-- `train/epistemic_uncertainty` - mean `beta / (nu * (alpha - 1))` per update
-- `train/aleatoric_uncertainty` - mean `beta / (alpha - 1)` per update
-- `train/lambda_reg` - current annealed regularisation weight
+## See also
 
-### Python Logging
-
-Both modules use `logging.getLogger("uncertainty_rl.networks.*")`. Level is controlled by `debug: true/false` in `configs/train_config.yaml` (or `eval_config.yaml`), which sets `logging.basicConfig` in the respective entry-point `main()`.
+- [uncertainty_rl/README.md](../README.md) - package overview
+- [envs/README.md](../envs/README.md) - observation layout that feeds this network
+- [training/README.md](../training/README.md) - how EvidentialPPO is wired into the training loop
+- [documentation/detailed_notes/evidential_nig_initialisation.md](../../documentation/detailed_notes/evidential_nig_initialisation.md) - derivation of NIG initialisation and clamping choices
