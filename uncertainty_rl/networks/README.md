@@ -4,11 +4,11 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 
 ## At a glance
 
-- NIG evidential actor outputs four parameters per action dimension: gamma (mean), nu, alpha, beta
-- Aleatoric uncertainty: `beta / (alpha - 1)` -- action std uses `sqrt(aleatoric)` only
-- Epistemic uncertainty: `beta / (nu * (alpha - 1))` -- model confidence, not added to action noise
-- All NIG params clamped to max 100.0 for RL stability
-- Two actor modes: flat MLP or dual-encoder (state + covariance separate pathways)
+- NIG evidential actor outputs four parameters per action dimension: `gamma` (mean), `nu`, `alpha`, `beta`
+- Aleatoric uncertainty (data noise): `beta / (alpha - 1)` -- action std uses `sqrt(aleatoric)` only
+- Epistemic uncertainty (model confidence): `beta / (nu * (alpha - 1))` -- not added to action noise
+- All NIG params clamped to `max = 100.0` for RL stability
+- Two actor modes: flat MLP or dual-encoder (state and covariance through separate pathways)
 - Evidential loss applies to the actor only -- standard Gaussian critic unchanged
 - Prior-anchoring log-penalty regularisation (RL-stable; replaces the Amini 2020 supervised term)
 
@@ -24,45 +24,43 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 
 ```mermaid
 flowchart TB
-    subgraph actor["Actor (evidential)"]
-        direction TB
-        OBS["obs\n12-dim"]
+    OBS["obs  (12-dim)"]
 
-        subgraph flat["Flat mode (use_uncertainty_conditioning=False)"]
-            MLP["MLP extractor\nfull obs"] --> EL["EvidentialLayer"]
-        end
-
-        subgraph dual["Dual-encoder mode (use_uncertainty_conditioning=True)"]
-            SE["state encoder\nobs[0:1] vyaw"]
-            UE["uncertainty encoder\nobs[1:4] std_x/y/yaw"]
-            CAT["concat + fusion MLP"] --> EL2["EvidentialLayer"]
-            SE --> CAT
-            UE --> CAT
-        end
-
-        OBS --> MLP
-        OBS --> SE & UE
+    subgraph flat["Flat mode  (use_uncertainty_conditioning = False)"]
+        F1["MLP extractor\nfull obs"] --> EL1["EvidentialLayer"]
     end
 
-    EL --> NIG["NIG params\ngamma, nu, alpha, beta"]
+    subgraph dual["Dual-encoder mode  (use_uncertainty_conditioning = True)"]
+        SE["state encoder\nobs[0]  vyaw"] --> CAT["concat + fusion MLP"]
+        UE["uncertainty encoder\nobs[1:4]  std_x, std_y, std_yaw"] --> CAT
+        CAT --> EL2["EvidentialLayer"]
+    end
+
+    OBS --> flat
+    OBS --> dual
+    EL1 --> NIG["NIG params\ngamma    nu    alpha    beta"]
     EL2 --> NIG
-    NIG -->|"std = sqrt(beta/(alpha-1))"| ACT["sampled action"]
-    NIG --> REG["EvidentialPPO\nreg loss"]
-
-    subgraph critic["Critic (standard)"]
-        MLP2["MLP extractor\nfull obs"] --> VF["value head"]
-    end
+    NIG --> ACT["sampled action\nstd = sqrt(beta / (alpha - 1))"]
+    NIG --> REG["reg loss\nlog(nu / nu_prior + 1) + log(alpha / alpha_prior + 1)"]
+    OBS --> CRIT["critic MLP  (full obs)  ->  value"]
 ```
 
-> In dual-encoder mode, only obs[0:1] (vyaw) and obs[1:4] (std_x/y/yaw) reach the actor.
-> Indices 4-11 (target pose, LiDAR) feed the critic but not the actor.
+> In dual-encoder mode, only `obs[0]` (vyaw) and `obs[1:4]` (std_x, std_y, std_yaw) reach the
+> actor. Indices 4-11 (target pose, LiDAR) feed the critic but not the actor.
+
+## NIG uncertainty decomposition
+
+```
+aleatoric   = beta / (alpha - 1)          # E[sigma^2]  -- data noise
+epistemic   = beta / (nu * (alpha - 1))   # Var[mu]     -- model uncertainty
+action std  = sqrt(aleatoric)             # epistemic is NOT added to action noise
+```
 
 ## Key interfaces
 
 ### Inference and deployment
 
 ```python
-# Get action with full uncertainty breakdown
 action, uncertainty_dict = policy.get_action_with_uncertainty(obs_tensor)
 # uncertainty_dict keys: epistemic, aleatoric, total, gamma, nu, alpha, beta
 ```
@@ -85,7 +83,7 @@ model.learn(total_timesteps=1_000_000)
 ```python
 from uncertainty_rl.networks import EvidentialPolicyNetwork
 
-# NOTE: not used in the RL training pipeline - test harness only
+# Not used in the RL training pipeline -- test harness only
 net = EvidentialPolicyNetwork(state_dim=12, action_dim=3, hidden_dims=[256, 256])
 action, uncertainty_dict = net.get_action(obs_tensor)
 ```
@@ -94,41 +92,58 @@ action, uncertainty_dict = net.get_action(obs_tensor)
 
 | Param | Activation | Offset | Clamp |
 |-------|-----------|--------|-------|
-| gamma | none | 0 | none |
-| nu | softplus | +1e-6 | max 100.0 |
-| alpha | softplus | +1.0 | max 100.0 |
-| beta | softplus | +1e-6 | max 100.0 |
+| `gamma` | none | 0 | none |
+| `nu` | softplus | `+1e-6` | `max 100.0` |
+| `alpha` | softplus | `+1.0` | `max 100.0` |
+| `beta` | softplus | `+1e-6` | `max 100.0` |
 
-Clamping prevents divergence in RL training where no ground-truth action targets exist to bound the supervised NIG loss term.
+Clamping prevents divergence in RL training where no ground-truth action targets exist to
+bound the supervised NIG loss term.
 
 ## Evidential regularisation
 
-**Prior-anchoring log-penalty** (RL-stable alternative to Amini 2020 supervised term):
+**Prior-anchoring log-penalty** (RL-stable alternative to the Amini 2020 supervised term):
 
 ```
 reg = mean(log(nu / nu_prior + 1)) + mean(log(alpha / alpha_prior + 1))
+
+nu_prior    = 1.24
+alpha_prior = 2.24
 ```
 
-- `nu_prior = 1.24`, `alpha_prior = 2.24`
-- `lambda_reg` linearly annealed from 0 over `lambda_reg_warmup_steps` (both in `configs/train_config.yaml`)
-- Total loss: `PPO_loss + lambda_reg * reg`
+Total training loss:
 
-The supervised term `|actions - gamma| * (2*nu + alpha)` is ill-defined in RL because `|actions - gamma|` is policy sampling noise, not prediction error. The log-penalty is bounded and keeps nu/alpha near initialisation priors.
+```
+loss = PPO_loss + lambda_reg * reg
+```
+
+`lambda_reg` is linearly annealed from `0` over `lambda_reg_warmup_steps` (both in
+`configs/train_config.yaml` under `evidential`).
+
+**Why not the Amini 2020 supervised term?**
+
+```
+reg_amini = mean(|action - gamma| * (2*nu + alpha))   # ill-defined in RL
+```
+
+In RL there are no ground-truth action targets. `|action - gamma|` is policy sampling noise,
+not prediction error, so this term grows unboundedly. The log-penalty is bounded and keeps
+`nu` and `alpha` near their initialisation priors without requiring target labels.
 
 ## Actor modes
 
 | `use_uncertainty_conditioning` | Actor class | Obs consumed by actor |
 |-------------------------------|-------------|----------------------|
 | `False` | Flat MLP + `EvidentialLayer` | Full obs (all 12 dims) |
-| `True` | `UncertaintyConditionedActor` | obs[0:1] (vyaw) + obs[1:4] (std_x/y/yaw) only |
+| `True` | `UncertaintyConditionedActor` | `obs[0:1]` (vyaw) + `obs[1:4]` (std_x, std_y, std_yaw) only |
 
 ## TensorBoard logs (evidential-specific)
 
-| Tag | Meaning |
-|-----|---------|
+| Tag | Expression logged |
+|-----|------------------|
 | `train/evidential_reg_loss` | `mean(log(nu/nu_prior+1)) + mean(log(alpha/alpha_prior+1))` |
-| `train/epistemic_uncertainty` | Mean `beta / (nu * (alpha-1))` per update |
-| `train/aleatoric_uncertainty` | Mean `beta / (alpha-1)` per update |
+| `train/epistemic_uncertainty` | `mean(beta / (nu * (alpha - 1)))` |
+| `train/aleatoric_uncertainty` | `mean(beta / (alpha - 1))` |
 | `train/lambda_reg` | Current annealed regularisation weight |
 
 ## Configuration keys consumed
