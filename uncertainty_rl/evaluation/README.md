@@ -1,6 +1,6 @@
 # evaluation/
 
-Performance evaluation across varying physical conditions - the centrepiece of the dissertation's experimental chapter. Tests whether the uncertainty-conditioned policy degrades more gracefully than baselines as localisation uncertainty increases.
+Performance evaluation across varying physical conditions. Tests whether the uncertainty-conditioned policy degrades more gracefully than baselines as localisation uncertainty increases.
 
 ## At a glance
 
@@ -59,7 +59,7 @@ flowchart TB
 
 ## Evaluation conditions
 
-Primary uncertainty axis: GNSS noise tier (RTK fix state). `gnss_noise_multiplier` scales the base RTK-fixed stddev (0.02 m). No weather variation - FlatPlane does not render weather effects.
+Primary uncertainty axis: GNSS noise tier (RTK fix state). `gnss_noise_multiplier` scales the base RTK-fixed stddev (0.02 m). No weather variation.
 
 ### Condition ladder
 
