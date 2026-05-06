@@ -110,5 +110,5 @@ Pygame and numpy only. Both are installed in the project `.venv/` (via `make ins
 ## See also
 
 - [scripts/README.md](../README.md) - all Make targets overview
-- [scripts/colours/README.md](../colours/README.md) - colour palette reference
+- `scripts/colours/__init__.py` - colour palette reference
 - [uncertainty_rl/envs/README.md](../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that writes the JSONL frames

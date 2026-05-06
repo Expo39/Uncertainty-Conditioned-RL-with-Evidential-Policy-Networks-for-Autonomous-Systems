@@ -357,6 +357,8 @@ scripts/layouts/
 |-- common.py            # engine: world-frame transform, YAML writer, PNG plotter
 |-- generate_layouts.py  # orchestrator: calls module.generate() then engine functions
 |-- BUILDER.md           # this document
+|-- README.md            # scripts/layouts/ onboarding and usage guide
+|-- __init__.py          # package marker
 |-- floor_plans/
     |-- rectangle.py     # training layout (53 bays)
     |-- trapezoid.py     # training layout (39 bays)

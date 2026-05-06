@@ -14,7 +14,7 @@ Controls the Optuna study run by `make docker-tune`. After tuning completes, the
 trial's values are written automatically back into `configs/train_config.yaml`.
 
 ```bash
-make docker-tune         # Run the study (15-18 hours for 35 trials on RTX 4070 Ti Super)
+make docker-tune         # Run the study
 make docker-tune-dry     # Print what would run without training
 ```
 

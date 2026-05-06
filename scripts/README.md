@@ -95,7 +95,7 @@ Single source of truth for all visualisation colours (bay types, pedestrian zone
 from scripts.colours import HEX_EGO, HEX_TARGET_BAY, BAY_HEX
 ```
 
-See [colours/README.md](colours/README.md) for the full palette reference.
+See `scripts/colours/__init__.py` for the full palette reference.
 
 ### `training/`
 
@@ -121,5 +121,5 @@ Stack teardown helper (`stack_clean.sh`). Removes dangling containers and volume
 - [scripts/layouts/README.md](layouts/README.md) - layout module reference and regeneration
 - [scripts/inspect/README.md](inspect/README.md) - inspector argument reference
 - [scripts/visualise/README.md](visualise/README.md) - visualiser protocol and JSONL schema
-- [scripts/colours/README.md](colours/README.md) - palette constants
+- `scripts/colours/__init__.py` - palette constants
 - [uncertainty_rl/README.md](../uncertainty_rl/README.md) - package overview
