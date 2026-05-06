@@ -86,3 +86,8 @@ logs/tuning/results/
 
 # Generated layout artefacts and visualiser state
 outputs/
+
+# Documentation (only detailed_notes is version-controlled)
+documentation/
+!documentation/detailed_notes/
+!documentation/detailed_notes/**
