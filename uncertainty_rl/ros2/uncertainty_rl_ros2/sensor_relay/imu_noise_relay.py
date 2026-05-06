@@ -29,8 +29,8 @@ class ImuNoiseRelayNode(Node):
     @brief Stamps realistic covariance onto CARLA IMU messages.
 
     Subscribes to the raw CARLA IMU topic (zero covariance) and republishes
-    with diagonal angular_velocity_covariance and linear_acceleration_covariance
-    derived from the VectorNav VN-100 datasheet. The orientation_covariance
+    with diagonal angular_velocity_covariance and linear_acceleration_covariance. 
+    The orientation_covariance
     sentinel (-1) is set so robot_localization does not attempt Mahalanobis
     gating on the identity quaternion that CARLA always publishes.
     """
@@ -198,7 +198,7 @@ class ImuNoiseRelayNode(Node):
         """
         @brief Relay IMU with realistic covariance stamped and ZUPT applied.
 
-        Stamps VN-100 datasheet variances on angular_velocity and
+        Stamps variances on angular_velocity and
         linear_acceleration. Applies gyro ZUPT (clamp vyaw to zero when below
         threshold) and accel ZUPT (clamp ax/ay to zero when both gyro and accel
         indicate standstill). The EKF's ax/ay correction then pins vx/vy near
