@@ -71,10 +71,6 @@ from uncertainty_rl.utils import (
 )
 ```
 
-> `torch`, `gymnasium`, and `carla` are not installed in the local `.venv`. Sub-module imports require
-> the training container (`make docker-shell`). The package root (`__init__.py`) does not eagerly
-> import sub-modules for this reason.
-
 ## Configuration keys consumed
 
 | Config file | Keys |
