@@ -177,55 +177,6 @@ make docker-down
 
 ## Architecture
 
-Package dependencies at a glance - arrows show what each layer builds on:
-
-```mermaid
-flowchart TB
-    classDef pkgNode   fill:#0d2137,stroke:#4a9eff,color:#cce4ff
-    classDef infraNode fill:#0d2b0d,stroke:#4aaa4a,color:#d0f0d0
-    classDef cfgNode   fill:#2d1800,stroke:#cc8833,color:#ffe4cc
-    classDef scriptNode fill:#1e0d2d,stroke:#9966cc,color:#ead6ff
-
-    subgraph DOCKER["  Docker Stack  "]
-        direction LR
-        SIM["carla-server\nCARLA 0.9.16 headless\nGPU passthrough"]
-        ROS["ros2-bridge\nGnssNoiseRelayNode  ImuNoiseRelayNode\nrobot_localisation EKF\nCovarianceExtractorNode"]
-    end
-
-    subgraph PKG["  uncertainty_rl/  "]
-        direction TB
-        UTILS["utils/\nconstants  covariance_utils\ngeometry  logging  VisStateWriter"]
-        NET["networks/\nEvidentialLayer\nEvidentialActorCriticPolicy  EvidentialPPO"]
-        ENV["envs/\nCARLAParkingEnv  _parking_core\nSafetyWrapper"]
-        TRAIN["training/\ntrain_ppo  tune_hyperparams\nEnvDiagnosticsCallback"]
-        EVAL["evaluation/\nevaluate_agent  EvaluationMetrics\nplot_evaluation_results"]
-    end
-
-    CFG["configs/\ntrain  eval  env\nbaselines  layouts"]
-    SCR["scripts/\nlayouts  inspect\nvisualise  colours"]
-
-    SIM -->|"sensor ROS topics"| ROS
-    ROS -->|"ekf_state.json\nfile bridge"| ENV
-    UTILS --> NET
-    UTILS --> ENV
-    NET --> ENV
-    ENV --> TRAIN
-    NET --> TRAIN
-    TRAIN --> EVAL
-    CFG --> TRAIN
-    CFG --> ENV
-    CFG --> EVAL
-    SCR -->|"layout YAMLs"| CFG
-
-    class UTILS,NET,ENV,TRAIN,EVAL pkgNode
-    class SIM,ROS infraNode
-    class CFG cfgNode
-    class SCR scriptNode
-```
-
-<details>
-<summary><strong>Full file tree</strong></summary>
-
 ```
 Uncertainty-Conditioned-RL.../
 |
@@ -295,8 +246,6 @@ Uncertainty-Conditioned-RL.../
 |-- documentation/                     Technical notes
 +-- docker-compose.yml                 Three-container stack orchestration
 ```
-
-</details>
 
 ---
 
