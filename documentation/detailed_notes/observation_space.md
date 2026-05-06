@@ -1,6 +1,6 @@
 # observation_space
 
-Extracted from `uncertainty_rl/envs/_parking_core.py` and `uncertainty_rl/envs/CLAUDE.md`.
+Extracted from `uncertainty_rl/envs/_parking_core.py`.
 
 ## 12-dimensional default observation vector
 
