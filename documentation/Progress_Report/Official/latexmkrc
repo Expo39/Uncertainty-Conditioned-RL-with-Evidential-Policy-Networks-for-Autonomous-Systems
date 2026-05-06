@@ -1,2 +1,0 @@
-$pdf_mode = 1;          # use pdflatex
-$bibtex_use = 2;        # run bibtex when needed

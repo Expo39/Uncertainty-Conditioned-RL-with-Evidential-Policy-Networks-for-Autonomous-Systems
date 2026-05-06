@@ -11,33 +11,26 @@ physical vehicle.
 On the real vehicle the data flow mirrors simulation exactly, with hardware
 drivers replacing the CARLA ROS bridge:
 
-```
-SIM:
-  CARLA sensors --> CARLA ROS bridge --> /imu/data, /gnss/fix
-                                                |
-                                      robot_localisation EKF (/odometry/filtered)
-                                                |
-                                    CovarianceExtractorNode
-                                                |
-                                        ekf_state.json
-                                                |
-                                    _CovarianceSubscriber
-                                                |
-                                      RealWorldInferenceLoop._get_observation()
+```mermaid
+flowchart TB
+    subgraph sim["Simulation"]
+        CARLA["CARLA sensors"] --> Bridge["CARLA ROS bridge"]
+    end
+    subgraph real["Real vehicle"]
+        PhyIMU["Physical IMU"] --> IMUDrv["IMU driver node"]
+        PhyGNSS["Physical GNSS"] --> GNSSDrv["GNSS driver node"]
+    end
 
-REAL:
-  Physical IMU  --> IMU driver node  --> /imu/data
-  Physical GNSS --> GNSS driver node --> /gnss/fix
-                                                |
-                                      robot_localisation EKF (/odometry/filtered)
-                                                |
-                                    CovarianceExtractorNode  (same code, same container)
-                                                |
-                                        ekf_state.json
-                                                |
-                                    _CovarianceSubscriber    (same code)
-                                                |
-                                      RealWorldInferenceLoop._get_observation()
+    Bridge -->|"/imu/data"| EKF
+    Bridge -->|"/gnss/fix"| EKF
+    IMUDrv -->|"/imu/data"| EKF
+    GNSSDrv -->|"/gnss/fix"| EKF
+
+    subgraph shared["Shared pipeline - same code, same container"]
+        EKF["robot_localisation EKF"] -->|"/odometry/filtered"| CEX["CovarianceExtractorNode"]
+        CEX -->|"ekf_state.json"| CSub["_CovarianceSubscriber"]
+        CSub --> GetObs["RealWorldInferenceLoop\n._get_observation()"]
+    end
 ```
 
 `CovarianceExtractorNode` and `_CovarianceSubscriber` are unchanged between
