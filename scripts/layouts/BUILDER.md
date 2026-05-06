@@ -296,20 +296,20 @@ lot.set_patrol(patrol)
 ## Placement method selection guide
 
 ```mermaid
-flowchart TD
-    A{"Anchored to a wall?"}
-    A -- "no" --> FREE{"Cluster shape?"}
-    A -- "yes" --> WALL{"Which wall?"}
+flowchart LR
+    A{"Wall-\nanchored?"}
+    A -- no --> FREE{"Free\ncluster"}
+    A -- yes --> WALL{"Wall\ntype"}
 
-    FREE -- "centred at a point" --> RC["row_centred()"]
-    FREE -- "specific anchor" --> R["row()"]
-    FREE -- "two rows facing each other" --> BtB["row_pair_back_to_back()"]
-    FREE -- "mirror an existing row across an aisle" --> FR["facing_row(twin, gap)"]
-    FREE -- "single bay (e.g. motorcycle)" --> PB["place_bay()"]
+    FREE -- centred --> RC["row_centred()"]
+    FREE -- anchored --> R["row()"]
+    FREE -- back-to-back --> BtB["row_pair_back_to_back()"]
+    FREE -- mirror --> FR["facing_row()"]
+    FREE -- single-bay --> PB["place_bay()"]
 
-    WALL -- "perimeter\n(axis-aligned)" --> RAP["row_along_perimeter(wall_index)"]
-    WALL -- "interior obstacle\n(rectangular)" --> RAF["row_along_obstacle_face(obstacle, face)"]
-    WALL -- "arbitrary\n(e.g. diagonal)" --> RAW["row_along_wall(wall_p0, wall_p1)"]
+    WALL -- perimeter --> RAP["row_along_perimeter()"]
+    WALL -- obstacle --> RAF["row_along_obstacle_face()"]
+    WALL -- diagonal --> RAW["row_along_wall()"]
 ```
 
 ---
@@ -358,8 +358,8 @@ scripts/layouts/
 |-- generate_layouts.py  # orchestrator: calls module.generate() then engine functions
 |-- BUILDER.md           # this document
 |-- floor_plans/
-|   |-- rectangle.py     # training layout (53 bays)
-|   |-- trapezoid.py     # training layout (39 bays)
-|   +-- irregular_a.py   # OOD evaluation layout (58 bays)
-+-- CLAUDE.md            # repo conventions for layout modules
+    |-- rectangle.py     # training layout (53 bays)
+    |-- trapezoid.py     # training layout (39 bays)
+    +-- irregular_a.py   # OOD evaluation layout (58 bays)
+
 ```
