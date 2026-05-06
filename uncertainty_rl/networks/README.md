@@ -4,10 +4,10 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 
 ## At a glance
 
-- NIG evidential actor outputs four parameters per action dimension: `gamma` (mean), `nu`, `alpha`, `beta`
-- Aleatoric uncertainty (data noise): `beta / (alpha - 1)` -- action std uses `sqrt(aleatoric)` only
-- Epistemic uncertainty (model confidence): `beta / (nu * (alpha - 1))` -- not added to action noise
-- All NIG params clamped to `max = 100.0` for RL stability
+- NIG evidential actor outputs four parameters per action dimension: $\gamma$ (mean), $\nu$, $\alpha$, $\beta$
+- Aleatoric uncertainty (data noise): $\beta / (\alpha - 1)$ -- action std uses $\sqrt{\text{aleatoric}}$ only
+- Epistemic uncertainty (model confidence): $\beta / (\nu(\alpha - 1))$ -- not added to action noise
+- All NIG params clamped to $\max = 100.0$ for RL stability
 - Two actor modes: flat MLP or dual-encoder (state and covariance through separate pathways)
 - Evidential loss applies to the actor only -- standard Gaussian critic unchanged
 - Prior-anchoring log-penalty regularisation (RL-stable; replaces the Amini 2020 supervised term)
@@ -50,10 +50,12 @@ flowchart TB
 
 ## NIG uncertainty decomposition
 
-```
-aleatoric   = beta / (alpha - 1)          # E[sigma^2]  -- data noise
-epistemic   = beta / (nu * (alpha - 1))   # Var[mu]     -- model uncertainty
-action std  = sqrt(aleatoric)             # epistemic is NOT added to action noise
+```math
+\begin{aligned}
+\sigma^2_{\text{aleatoric}} &= \frac{\beta}{\alpha - 1} && \text{(data noise, } \mathbb{E}[\sigma^2] \text{)} \\[6pt]
+\sigma^2_{\text{epistemic}} &= \frac{\beta}{\nu(\alpha - 1)} && \text{(model uncertainty, } \mathrm{Var}[\mu] \text{)} \\[6pt]
+\sigma_{\text{action}}      &= \sqrt{\sigma^2_{\text{aleatoric}}} && \text{(epistemic NOT included in action noise)}
+\end{aligned}
 ```
 
 ## Key interfaces
@@ -104,31 +106,29 @@ bound the supervised NIG loss term.
 
 **Prior-anchoring log-penalty** (RL-stable alternative to the Amini 2020 supervised term):
 
-```
-reg = mean(log(nu / nu_prior + 1)) + mean(log(alpha / alpha_prior + 1))
-
-nu_prior    = 1.24
-alpha_prior = 2.24
+```math
+\mathcal{L}_{\text{reg}} = \left\langle \log\!\left(\frac{\nu}{\nu_0} + 1\right) + \log\!\left(\frac{\alpha}{\alpha_0} + 1\right) \right\rangle
+\qquad \nu_0 = 1.24,\quad \alpha_0 = 2.24
 ```
 
 Total training loss:
 
-```
-loss = PPO_loss + lambda_reg * reg
+```math
+\mathcal{L} = \mathcal{L}_{\text{PPO}} + \lambda_{\text{reg}} \cdot \mathcal{L}_{\text{reg}}
 ```
 
-`lambda_reg` is linearly annealed from `0` over `lambda_reg_warmup_steps` (both in
+$\lambda_{\text{reg}}$ is linearly annealed from $0$ over `lambda_reg_warmup_steps` (both in
 `configs/train_config.yaml` under `evidential`).
 
 **Why not the Amini 2020 supervised term?**
 
-```
-reg_amini = mean(|action - gamma| * (2*nu + alpha))   # ill-defined in RL
+```math
+\mathcal{L}_{\text{Amini}} = \left\langle |\text{action} - \gamma| \cdot (2\nu + \alpha) \right\rangle \quad \text{-- ill-defined in RL}
 ```
 
-In RL there are no ground-truth action targets. `|action - gamma|` is policy sampling noise,
-not prediction error, so this term grows unboundedly. The log-penalty is bounded and keeps
-`nu` and `alpha` near their initialisation priors without requiring target labels.
+In RL there are no ground-truth action targets. $|\text{action} - \gamma|$ is policy sampling
+noise, not prediction error, so this term grows unboundedly. The log-penalty is bounded and
+keeps $\nu$ and $\alpha$ near their initialisation priors without requiring target labels.
 
 ## Actor modes
 
@@ -141,10 +141,10 @@ not prediction error, so this term grows unboundedly. The log-penalty is bounded
 
 | Tag | Expression logged |
 |-----|------------------|
-| `train/evidential_reg_loss` | `mean(log(nu/nu_prior+1)) + mean(log(alpha/alpha_prior+1))` |
-| `train/epistemic_uncertainty` | `mean(beta / (nu * (alpha - 1)))` |
-| `train/aleatoric_uncertainty` | `mean(beta / (alpha - 1))` |
-| `train/lambda_reg` | Current annealed regularisation weight |
+| `train/evidential_reg_loss` | $\langle \log(\nu/\nu_0 + 1) + \log(\alpha/\alpha_0 + 1) \rangle$ |
+| `train/epistemic_uncertainty` | $\langle \beta / (\nu(\alpha - 1)) \rangle$ |
+| `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$ |
+| `train/lambda_reg` | Current annealed $\lambda_{\text{reg}}$ |
 
 ## Configuration keys consumed
 
