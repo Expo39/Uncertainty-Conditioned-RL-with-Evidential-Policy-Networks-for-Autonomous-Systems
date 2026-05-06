@@ -20,19 +20,14 @@ The visualiser tails the JSONL file in real time, groups lines into episodes, an
 ```mermaid
 sequenceDiagram
     participant V as visualiser.py (host)
-    participant F as outputs/.vis_active
-    participant J as outputs/vis_history.jsonl
     participant E as carla_parking.py (Docker)
 
-    V->>F: create signal file
-    loop every step
-        E->>F: check exists
-        E->>J: append JSONL frame
-        V->>J: tail new lines
-        V->>V: render frame (Pygame)
+    V->>E: create outputs/.vis_active
+    loop each step
+        E->>V: append frame to outputs/vis_history.jsonl
+        V->>V: tail JSONL, render frame (Pygame)
     end
-    V->>F: remove signal file
-    V->>J: delete history
+    V->>E: remove outputs/.vis_active, delete JSONL
 ```
 
 <!-- gif:placeholder name="visualiser_2d" caption="Detachable 2D bird's-eye visualiser during a parking episode" -->
