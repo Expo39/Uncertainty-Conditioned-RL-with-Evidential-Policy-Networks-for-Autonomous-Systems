@@ -50,5 +50,5 @@ database at `logs/tuning/optuna_study.db`. No configuration change needed.
 
 - [configs/README.md](../README.md) - full configs directory map
 - [configs/train_config.yaml](../train_config.yaml) - base training hyperparameters (updated by tuning)
-- [documentation/detailed_notes/hyperparameter_search.md](../../documentation/detailed_notes/hyperparameter_search.md) - search space rationale
+- [docs/detailed_notes/hyperparameter_search.md](../../docs/detailed_notes/hyperparameter_search.md) - search space rationale
 - [uncertainty_rl/training/README.md](../../uncertainty_rl/training/README.md) - training and tuning entry points
