@@ -23,17 +23,21 @@ hardware-specific implementation before closed-loop testing. See
 ## Data Flow
 
 ```mermaid
-flowchart LR
-    ODO["/odometry/filtered"]
-    COV["_CovarianceSubscriber"]
-    OBS["obs buffer\nstd_x, std_y, std_yaw"]
-    PPO["EvidentialPPO.predict()"]
-    SAF["SafetyWrapper.apply()"]
-    CAL["ActuationCalibration\n.calibrate_action()"]
-    LOOP["RealWorldInferenceLoop"]
-    CMD["/cmd_vel (Twist)"]
+flowchart TD
+    subgraph input["Localisation input"]
+        ODO["/odometry/filtered"] --> COV["_CovarianceSubscriber"] --> OBS["obs buffer\nstd_x / std_y / std_yaw"]
+    end
 
-    ODO --> COV --> OBS --> PPO --> SAF --> CAL --> LOOP --> CMD
+    subgraph inference["Inference pipeline"]
+        PPO["EvidentialPPO.predict()"] --> SAF["SafetyWrapper.apply()"] --> CAL["ActuationCalibration\n.calibrate_action()"]
+    end
+
+    subgraph output["Actuation output"]
+        LOOP["RealWorldInferenceLoop"] --> CMD["/cmd_vel (Twist)"]
+    end
+
+    OBS --> PPO
+    CAL --> LOOP
 ```
 
 ---
