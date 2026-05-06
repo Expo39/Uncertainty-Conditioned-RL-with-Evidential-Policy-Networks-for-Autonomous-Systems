@@ -171,4 +171,4 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [training/README.md](../training/README.md) - training the model evaluated here
 - [networks/README.md](../networks/README.md) - evidential policy providing uncertainty estimates
-- [documentation/detailed_notes/observation_space.md](../../documentation/detailed_notes/observation_space.md) - observation design that underpins the evaluation metrics
+- [docs/detailed_notes/observation_space.md](../../docs/detailed_notes/observation_space.md) - observation design that underpins the evaluation metrics

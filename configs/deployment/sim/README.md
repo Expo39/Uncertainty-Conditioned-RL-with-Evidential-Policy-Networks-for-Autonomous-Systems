@@ -50,7 +50,7 @@ merged env config passed to CARLAParkingEnv
 | `action_repeat` | `1` | Steps per policy call. |
 | `no_rendering_mode` | `true` | Disables Unreal rendering (~3-4x speed-up). Cameras are empty; physics is active. |
 
-**Sensors** - noise values match real hardware; see `documentation/detailed_notes/sensor_noise_models.md`
+**Sensors** - noise values match real hardware; see `docs/detailed_notes/sensor_noise_models.md`
 
 | Sensor | Key prefix | Notes |
 |--------|-----------|-------|
@@ -107,4 +107,4 @@ loading the FlatPlane world.
 - [configs/README.md](../../README.md) - full configs directory map and loading chain
 - [configs/deployment/README.md](../README.md) - shared sensor and agent configs
 - [uncertainty_rl/envs/README.md](../../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that consumes these files
-- [documentation/detailed_notes/sensor_noise_models.md](../../../documentation/detailed_notes/sensor_noise_models.md) - LiDAR and IMU noise derivation
+- [docs/detailed_notes/sensor_noise_models.md](../../../docs/detailed_notes/sensor_noise_models.md) - LiDAR and IMU noise derivation

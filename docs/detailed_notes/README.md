@@ -1,0 +1,31 @@
+# detailed_notes
+
+Long-form explanations, derivations, and design rationale which deserves its on section.
+
+## Purpose
+
+Every `.md` file here covers one topic that was previously embedded as a multi-paragraph comment
+inside a `.py` or `.yaml` file. Keeping long explanations here lets the code stay navigable while
+preserving the full reasoning for future reference.
+
+## Contributing
+
+- One topic per file. Use a clear, lowercase filename (e.g. `ekf_pipeline.md`).
+- Begin each file with a one-line `# Title` and a short paragraph saying which source file(s)
+  the content was extracted from and why it lives here rather than there.
+- Cross-reference from code using: `# See docs/detailed_notes/<filename>.md`
+- British English, ASCII-only characters throughout.
+- Files are created on demand as checkpoints reach them; not every topic listed in the project
+  plan will necessarily exist.
+
+## Cross-reference index
+
+| File | Extracted from | Topic |
+|------|---------------|-------|
+| `evidential_nig_initialisation.md` | `networks/evidential_policy.py` `EvidentialLayer.__init__` | NIG hyperprior bias derivation and ortho_init interaction |
+| `observation_space.md` | `envs/_parking_core.py` | 12-dim obs layout, LiDAR sector boundaries, covariance features |
+| `ros2_architecture.md` | `envs/covariance_subscriber.py`, `ros2/` | DDS-bypass via shared JSON, atomicity, sequence-number guard |
+| `layout.md` | `scripts/layouts/floor_plans/`, `envs/sim/_npc_controller.py`, `envs/sim/_lot_spawner.py` | Lot geometry derivations, patrol path controller, bay sampling, cone placement |
+| `real_world_deployment.md` | `envs/real/deployment_utils.py`, `envs/real/inference_loop.py` | Sensor data flow, EKF frame calibration, surveyed datum, actuation calibration, GNSS/IMU driver notes |
+| `hyperparameter_search.md` | `training/tune_hyperparams.py` | Optuna search space design, sampler/pruner rationale, literature references |
+| `sensor_noise_models.md` | `envs/sim/helpers/_sensor_manager.py`, `ros2/uncertainty_rl_ros2/imu_noise_relay.py` | SICK TiM571 LiDAR noise derivation (systematic/statistical/angular) and VN-100 IMU noise derivation (covariance stamping, Gaussian injection, ZUPT) |

@@ -198,5 +198,5 @@ All four baselines share identical PPO hyperparameters from `train_config.yaml`.
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [networks/README.md](../networks/README.md) - EvidentialPPO and EvidentialActorCriticPolicy
 - [evaluation/README.md](../evaluation/README.md) - evaluation after training completes
-- [documentation/detailed_notes/hyperparameter_search.md](../../documentation/detailed_notes/hyperparameter_search.md) - search space design rationale
-- [documentation/detailed_notes/evidential_nig_initialisation.md](../../documentation/detailed_notes/evidential_nig_initialisation.md) - NIG init and regularisation derivation
+- [docs/detailed_notes/hyperparameter_search.md](../../docs/detailed_notes/hyperparameter_search.md) - search space design rationale
+- [docs/detailed_notes/evidential_nig_initialisation.md](../../docs/detailed_notes/evidential_nig_initialisation.md) - NIG init and regularisation derivation

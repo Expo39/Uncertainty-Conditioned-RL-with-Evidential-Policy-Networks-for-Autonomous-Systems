@@ -6,7 +6,7 @@ inference scaffolding needed to run a trained policy on a physical instrumented 
 
 **Status:** Stubs complete. LiDAR hardware callback (`_get_lidar_scan`) requires
 hardware-specific implementation before closed-loop testing. See
-`documentation/detailed_notes/real_world_deployment.md` for the pre-deployment checklist.
+`docs/detailed_notes/real_world_deployment.md` for the pre-deployment checklist.
 
 ---
 
@@ -104,7 +104,7 @@ frame and the surveyed lot frame, using the datum coordinates from `real_world_d
 The transform is applied at every step so that `dx/dy/dyaw` (obs indices 4-6) point to
 the correct target bay.
 
-See `documentation/detailed_notes/real_world_deployment.md` for the full calibration
+See `docs/detailed_notes/real_world_deployment.md` for the full calibration
 derivation and the EKF convergence loop parameters.
 
 ---
@@ -123,5 +123,5 @@ obstacle avoidance relies on the human safety operator during initial testing.
 - `uncertainty_rl/envs/sim/` - CARLA training environment (shared `_parking_core.py`)
 - `uncertainty_rl/envs/safety_wrapper.py` - `SafetyWrapper.apply()` static method
 - `uncertainty_rl/utils/actuation_calibration.py` - `ActuationCalibration` class
-- `documentation/detailed_notes/real_world_deployment.md` - full deployment guide
+- `docs/detailed_notes/real_world_deployment.md` - full deployment guide
 - `documentation/extras/design/sim_to_real_transfer.md` - sim-to-real gap analysis
