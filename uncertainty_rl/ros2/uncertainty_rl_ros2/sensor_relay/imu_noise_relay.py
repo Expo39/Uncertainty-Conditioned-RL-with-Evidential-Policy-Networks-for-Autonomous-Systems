@@ -159,7 +159,6 @@ class ImuNoiseRelayNode(Node):
             f"accel_zupt={self._accel_zupt_threshold:.3f} m/s^2"
         )
 
-    def _imu_callback(self, msg: Imu) -> None:
     def _check_episode_config(self) -> None:
         """
         @brief Resample per-episode IMU bias when episode_config.json seq increments.

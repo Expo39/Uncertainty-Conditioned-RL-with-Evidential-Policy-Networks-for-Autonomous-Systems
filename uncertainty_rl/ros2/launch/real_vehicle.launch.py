@@ -3,13 +3,23 @@
 @brief Launch file for the real-vehicle sensor-to-covariance pipeline.
 """
 
+import importlib.util
 import math
+import os
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch_ros.actions import Node
 
-from launch._common import build_sensor_tf_nodes, load_yaml, static_tf
+# Load shared launch helpers by file path so the import is not shadowed by
+# the installed ROS 2 'launch' package of the same name.
+_common_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "_common.py")
+_spec = importlib.util.spec_from_file_location("launch_common", _common_path)
+_common_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_common_mod)  # type: ignore[union-attr]
+build_sensor_tf_nodes = _common_mod.build_sensor_tf_nodes
+load_yaml = _common_mod.load_yaml
+static_tf = _common_mod.static_tf
 
 
 def generate_launch_description() -> LaunchDescription:

@@ -81,8 +81,8 @@ gnss_noise_relay:
   input_topic: "/carla/ego_vehicle/gnss"
   output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
   odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
-  enable_gnss_noise: false  # false = pure flat-earth projector, no added noise.
-  enable_markov_transitions: false  # false = constant tier per episode.
+  enable_gnss_noise: true  # true = inject per-episode tier noise. false = pure flat-earth projector (no covariance variation).
+  enable_markov_transitions: true  # false = constant tier per episode.
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_speed_ms: 0.3  # Min speed (m/s) to update COG heading. IMU handles near-standstill.
