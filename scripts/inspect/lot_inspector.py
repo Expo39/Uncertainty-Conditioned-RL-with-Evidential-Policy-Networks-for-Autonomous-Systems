@@ -251,27 +251,23 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
-        # Use parking_scenarios directly from config - identical to training.
-        scenarios = dict(train_cfg.get("parking_scenarios", {}))
-        sensors_cfg = dict(train_cfg.get("carla_sensors", {}))
+        # Single source of truth: build the env via train_ppo.make_env() so
+        # dryrun is, by construction, identical to a training rollout (same
+        # constructor kwargs, same defaults). Two intentional divergences:
+        #   - CARLA host/port point at the windowed inspect server.
+        #   - no_rendering_mode is forced off so the human inspector can see
+        #     the scene; training keeps it on for the ~3-4x speedup.
+        from uncertainty_rl.training.train_ppo import make_env
 
-        env = CARLAParkingEnv(
-            carla_host=args.host,
-            carla_port=args.port,
-            town=train_cfg.get("town", "FlatPlane"),
-            parking_scenarios_config=scenarios,
-            carla_sensors_config=sensors_cfg,
-            ros2_config=train_cfg.get("ros2", {}),
-            include_covariance=train_cfg.get("include_covariance", True),
-            include_obstacle_obs=train_cfg.get("include_obstacle_obs", True),
-            max_steps=train_cfg.get("max_steps", 1000),
-            max_ego_speed_ms=train_cfg.get("max_ego_speed_ms", 6.0),
-            carla_timestep=train_cfg.get("carla_timestep", 0.05),
-            action_repeat=train_cfg.get("action_repeat", 1),
-            no_rendering_mode=False,
-            use_extra_spawns=train_cfg.get("use_extra_spawns", False),
-            gnss_noise_profiles_path=train_cfg.get("gnss_noise_profiles", None),
-        )
+        dryrun_cfg = dict(train_cfg)
+        dryrun_cfg["no_rendering_mode"] = False
+
+        env = make_env(
+            dryrun_cfg,
+            rank=0,
+            host_override=args.host,
+            port_override=args.port,
+        )()
         env.reset()
         if env.world is None or env.vehicle is None:
             print("ERROR: Could not connect to CARLA or spawn vehicle.")

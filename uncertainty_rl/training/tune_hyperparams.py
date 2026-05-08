@@ -4,7 +4,9 @@
 
 Uses TPESampler (multivariate) and MedianPruner to search PPO + evidential
 hyperparameters. Each trial runs a short training session and evaluates
-env/mean_progress_reward. Best params are written back to train_config.yaml.
+env/success_rate (primary), with env/mean_progress_reward as a tiebreaker
+before any success has been observed. Best params are written back to
+train_config.yaml.
 
 @see documentation/detailed_notes/hyperparameter_search.md for search space
      design rationale and literature references.
@@ -53,7 +55,7 @@ logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
 
 # ------------------------------------------------------------------
-# sample_hyperparams: Tuning search space (8 active parameters)
+# sample_hyperparams: Tuning search space (10 active parameters)
 # ------------------------------------------------------------------
 
 
@@ -70,7 +72,9 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     # Cache each range once to avoid duplicate .get() calls and list allocations.
     lr_range = space.get("learning_rate", [1e-5, 1e-3])
     gamma_range = space.get("gamma", [0.98, 0.999])
-    ent_range = space.get("ent_coef", [1e-6, 0.01])
+    gae_range = space.get("gae_lambda", [0.90, 0.98])
+    clip_range_bounds = space.get("clip_range", [0.1, 0.3])
+    ent_range = space.get("ent_coef", [1e-6, 0.05])
     lreg_range = space.get("lambda_reg", [1e-5, 0.01])
     warmup_range = space.get("lambda_reg_warmup_steps", [10000, 100000])
 
@@ -109,6 +113,18 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
     )
     gamma = 1.0 - one_minus_gamma
 
+    gae_lambda = trial.suggest_float(
+        "gae_lambda",
+        float(gae_range[0]),
+        float(gae_range[1]),
+    )
+
+    clip_range = trial.suggest_float(
+        "clip_range",
+        float(clip_range_bounds[0]),
+        float(clip_range_bounds[1]),
+    )
+
     ent_coef = trial.suggest_float(
         "ent_coef",
         float(ent_range[0]),
@@ -138,6 +154,8 @@ def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> 
         "batch_size": batch_size,
         "n_epochs": n_epochs,
         "gamma": gamma,
+        "gae_lambda": gae_lambda,
+        "clip_range": clip_range,
         "ent_coef": ent_coef,
         "evidential": {
             "lambda_reg": lambda_reg,
@@ -181,17 +199,23 @@ class TrialEvalCallback(BaseCallback):
         """
         @brief Called at the end of each rollout (policy update).
 
-        Reads the objective metric (env/mean_progress_reward) from the logger
-        and reports it to Optuna for pruning decisions.
+        Reports a composite objective to Optuna for pruning decisions:
+        env/success_rate as the dominant signal, with mean_progress_reward
+        scaled into a small positive range as a tiebreaker before any
+        success has been observed.
         """
-        # Try to get the primary objective metric
-        metric = self.logger.name_to_value.get("env/mean_progress_reward")
+        success_rate = self.logger.name_to_value.get("env/success_rate")
+        progress = self.logger.name_to_value.get("env/mean_progress_reward")
 
-        # Fallback to rollout reward if primary metric is not available
-        if metric is None:
-            metric = self.logger.name_to_value.get("rollout/ep_rew_mean", 0.0)
+        # success_rate in [0, 1]. Until any success is logged, fall back to a
+        # small fraction of mean_progress_reward so early trials can still be
+        # ranked. Scale by 1e-3 so any non-zero success_rate dominates.
+        if success_rate is None or success_rate == 0.0:
+            tiebreak = 0.0 if progress is None else 1e-3 * float(progress)
+            metric = tiebreak
+        else:
+            metric = float(success_rate)
 
-        # Report to trial and check for pruning
         self.trial.report(metric, step=self.num_timesteps)
         if self.trial.should_prune():
             raise optuna.TrialPruned()
@@ -316,18 +340,25 @@ def objective(
         # Run training
         result = train(trial_config, extra_callbacks=[trial_callback])
 
-        # Extract primary metric from final metrics
-        primary_metric = result.final_metrics.get("env/mean_progress_reward", 0.0)
+        # Primary metric: env/success_rate. Tiebreaker (when no success yet
+        # observed): a scaled mean_progress_reward so early non-successful
+        # trials are still rankable without dominating any successful trial.
+        success_rate = float(result.final_metrics.get("env/success_rate", 0.0))
+        progress = float(result.final_metrics.get("env/mean_progress_reward", 0.0))
+        if success_rate == 0.0:
+            primary_metric = 1e-3 * progress
+        else:
+            primary_metric = success_rate
 
-        # Also log secondary metric as trial user attribute
-        secondary_metric = result.final_metrics.get("env/success_rate", 0.0)
-        trial.set_user_attr("env/success_rate", secondary_metric)
+        trial.set_user_attr("env/success_rate", success_rate)
+        trial.set_user_attr("env/mean_progress_reward", progress)
 
         logger.info(
-            "Trial %d: primary=%.4f, secondary=%.4f",
+            "Trial %d: success_rate=%.4f, progress=%.4f, objective=%.4f",
             trial.number,
+            success_rate,
+            progress,
             primary_metric,
-            secondary_metric,
         )
 
         return primary_metric
@@ -396,13 +427,13 @@ def run_study(
         storage=storage,
         sampler=sampler,
         pruner=pruner,
-        direction="maximize",  # Maximise env/mean_progress_reward
+        direction="maximize",  # Maximise env/success_rate (primary objective).
         load_if_exists=True,  # Resume from previous run
     )
 
     # Run optimisation
-    n_trials = tuning_config.get("n_trials", 35)
-    logger.info("Starting Optuna study: %d trials, %dk steps/trial, 8 params",
+    n_trials = tuning_config.get("n_trials", 40)
+    logger.info("Starting Optuna study: %d trials, %dk steps/trial, 10 params",
                 n_trials, tuning_config.get("timesteps_per_trial", 100000) // 1000)
 
     study.optimize(
@@ -430,9 +461,11 @@ def run_study(
         return
 
     logger.info("  Number: %d", best_trial.number)
-    logger.info("  Value (primary): %.4f", best_trial.value)
-    logger.info("  Secondary (success_rate): %.4f",
+    logger.info("  Objective: %.4f", best_trial.value)
+    logger.info("  env/success_rate: %.4f",
                 best_trial.user_attrs.get("env/success_rate", 0.0))
+    logger.info("  env/mean_progress_reward: %.4f",
+                best_trial.user_attrs.get("env/mean_progress_reward", 0.0))
     logger.info("  Params:")
     for key, value in best_trial.params.items():
         logger.info("    %s: %s", key, value)

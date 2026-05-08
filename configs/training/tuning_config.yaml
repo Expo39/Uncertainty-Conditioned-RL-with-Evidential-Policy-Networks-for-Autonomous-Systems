@@ -4,20 +4,22 @@
 
 study_name: "uncertainty_rl_tuning"
 storage_path: "logs/tuning/optuna_study.db"  # SQLite for trial persistence and resume.
-n_trials: 35  # Budget for 8-parameter space. See detailed_notes/hyperparameter_search.md.
+n_trials: 40  # Budget for 10-parameter space. See detailed_notes/hyperparameter_search.md.
 timesteps_per_trial: 100000  # ~49 PPO updates; enough to rank configs without full convergence.
 seed: 42
 
 sampler:
   multivariate: true  # Captures parameter interactions (e.g. learning_rate vs batch_size).
-  n_startup_trials: 10  # Random exploration before TPE builds its density model.
+  n_startup_trials: 12  # Random exploration before TPE builds its density model.
 
 pruner:
   n_startup_trials: 8  # First 8 trials run to completion.
   n_warmup_steps: 5  # ~10k steps before pruning begins.
   n_min_trials: 5  # Require 5 completed trials before pruning any.
 
-eval_metric: "env/mean_progress_reward"  # Non-zero even when agent rarely succeeds.
+# Primary objective: env/success_rate (parked correctly within thresholds).
+# Tiebreaker: env/mean_progress_reward (logged as user attr, used when success_rate is 0).
+eval_metric: "env/success_rate"
 
 search_space:
   learning_rate: [1e-5, 1e-3]  # Log scale.
@@ -25,6 +27,8 @@ search_space:
   batch_size: [64, 128, 256]  # Categorical; constrained <= n_steps in code.
   n_epochs: [3, 5, 10]  # Categorical.
   gamma: [0.98, 0.999]  # Sampled via 1-(1-gamma) log scale.
-  ent_coef: [1e-6, 0.01]  # Log scale.
+  gae_lambda: [0.90, 0.98]  # GAE bias-variance trade-off.
+  clip_range: [0.1, 0.3]  # PPO trust region width.
+  ent_coef: [1e-6, 0.05]  # Log scale. Upper widened to address cold-start exploration.
   lambda_reg: [1e-5, 0.01]  # Log scale.
   lambda_reg_warmup_steps: [10000, 100000]  # Log scale.

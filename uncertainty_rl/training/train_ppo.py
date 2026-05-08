@@ -109,18 +109,33 @@ def make_env(
     config: Dict[str, Any],
     rank: int = 0,
     carla_sensors_override: Optional[Dict[str, Any]] = None,
+    host_override: Optional[str] = None,
+    port_override: Optional[int] = None,
 ) -> Callable[[], gym.Env]:
     """
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
+    @param host_override: Override the per-worker CARLA host (e.g. for the
+           dryrun inspector which connects to carla-server-demo). When None,
+           the per-rank training host is used.
+    @param port_override: Override the per-worker CARLA port. When None, the
+           per-rank training port is used.
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
     # Compute per-worker connection params.
-    worker_port = config.get("carla_port", 2000) + rank * 1000
-    worker_host = f"uncertainty-rl-carla-{rank}"
+    worker_port = (
+        port_override
+        if port_override is not None
+        else config.get("carla_port", 2000) + rank * 1000
+    )
+    worker_host = (
+        host_override
+        if host_override is not None
+        else f"uncertainty-rl-carla-{rank}"
+    )
 
     ros2_config = config.get("ros2", {}).copy()
     if rank > 0:
