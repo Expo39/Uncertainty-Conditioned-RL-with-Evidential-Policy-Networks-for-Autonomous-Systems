@@ -156,9 +156,6 @@ def make_env(
             use_extra_spawns=config.get("use_extra_spawns", False),
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             vis_output_path=vis_path,
-            real_world_deployment=config.get("real_world_deployment", False),
-            real_world_datum_path=config.get("real_world_datum", None),
-            actuation_calibration_path=config.get("actuation_calibration", None),
             uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
         )
         return env

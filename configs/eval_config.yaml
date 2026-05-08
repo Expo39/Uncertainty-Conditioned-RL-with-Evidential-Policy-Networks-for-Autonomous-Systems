@@ -8,7 +8,7 @@ model_path: "checkpoints/final_model"
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name.
 carla_port: 2000
 town: "FlatPlane"
-max_steps: 500
+max_steps: 1500  # Must match env_config.yaml max_steps.
 map_load_sleep: 5.0
 
 ros2:

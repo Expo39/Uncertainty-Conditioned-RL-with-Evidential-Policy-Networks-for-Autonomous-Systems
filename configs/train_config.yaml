@@ -41,7 +41,6 @@ uncertainty_std_max: 2.0  # EKF std (metres) at which progress reward reaches ze
 checkpoint_freq: 50000  # Save checkpoint every N steps.
 log_interval: 10  # Log every N episodes.
 verbose: 1  # SB3 verbosity: 0=silent, 1=info, 2=debug.
-enable_visualiser: true  # Write vis_state.json for the 2D bird's-eye visualiser.
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
