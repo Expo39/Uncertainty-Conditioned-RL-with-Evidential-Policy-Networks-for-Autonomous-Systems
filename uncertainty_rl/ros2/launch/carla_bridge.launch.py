@@ -8,6 +8,7 @@ simulation. The bridge auto-discovers sensors spawned by the training container
 (register_all_sensors=True) and publishes their data as ROS 2 topics.
 """
 
+import importlib.util
 import os
 
 from launch import LaunchDescription
@@ -16,7 +17,14 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-from launch._common import load_yaml, static_tf
+# Load shared launch helpers by file path so the import is not shadowed by
+# the installed ROS 2 'launch' package of the same name.
+_common_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "_common.py")
+_spec = importlib.util.spec_from_file_location("launch_common", _common_path)
+_common_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_common_mod)  # type: ignore[union-attr]
+load_yaml = _common_mod.load_yaml
+static_tf = _common_mod.static_tf
 
 
 def generate_launch_description() -> LaunchDescription:
