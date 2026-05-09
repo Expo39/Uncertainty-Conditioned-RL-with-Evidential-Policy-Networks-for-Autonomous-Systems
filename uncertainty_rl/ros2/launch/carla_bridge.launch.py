@@ -166,6 +166,10 @@ def generate_launch_description() -> LaunchDescription:
                 "enable_cog_reverse_detection": gnss_relay_cfg.get(
                     "enable_cog_reverse_detection", True
                 ),
+                "noise_profiles_path": gnss_relay_cfg.get(
+                    "noise_profiles_path",
+                    "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml",
+                ),
                 "imu_input_topic": imu_relay_cfg.get(
                     "imu_input_topic", "/carla/ego_vehicle/imu"
                 ),

@@ -314,6 +314,16 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make ge
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
 
 # ----------------------------------------------------------------------
+# Markov Chain Analysis
+# ----------------------------------------------------------------------
+
+analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml. Usage: make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]
+	$(call ensure-venv)
+	$(PYTHON) scripts/inspect/markov_analyser.py \
+		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
+		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
+
+# ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
 # Two use cases:
 #   make visualise          - training already running, just open the viewer

@@ -43,7 +43,7 @@ flowchart TB
     subgraph env["CARLAParkingEnv"]
         COV["_CovarianceSubscriber\nekf_state.json"]
         OBS["build_observation()\n12-dim obs"]
-        REW["_compute_reward()\nprogress * (1 - uncertainty_scale) - 0.01"]
+        REW["_compute_reward()\n(progress - 0.01) * (1 - uncertainty_scale)"]
     end
 
     EXT -->|ekf_state.json| COV

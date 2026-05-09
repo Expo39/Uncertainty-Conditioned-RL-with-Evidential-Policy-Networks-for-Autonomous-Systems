@@ -10,7 +10,7 @@ inspect:
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
-max_steps: 1500  # Episode length (steps). 1500 * 0.05s = 75s sim time.
+max_steps: 1750  # Episode length (steps). 1750 * 0.05s = 87.5s sim time.
 success_dwell_steps: 5  # Consecutive steps all success criteria must hold before episode ends as success.
 action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz. See detailed_notes/ekf_pipeline.md.
 use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs.
