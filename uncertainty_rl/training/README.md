@@ -9,7 +9,7 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 - `VecNormalize` wraps the environment for observation normalisation only (`norm_reward=False`)
 - $\lambda_{\text{reg}}$ is linearly annealed from $0$ to $0.001$ over the first $50\,000$ steps
 - Learning rate decays linearly: $\alpha(t) = \alpha_0 \cdot (1 - t / T)$
-- Optuna TPE + MedianPruner study over 8 parameters; 35 trials x $100\,000$ steps each
+- Optuna TPE + MedianPruner study over 10 parameters; 40 trials x $100\,000$ steps each, optimising `env/success_rate` with `env/mean_progress_reward` as a tiebreaker
 - No evaluation environment during training - two CARLA clients on a synchronous server deadlock
 
 ## Modules
@@ -61,7 +61,7 @@ From `configs/train_config.yaml`:
 | `gamma` | $0.99$ | High $\gamma$: success bonus at ~step 300 must propagate back |
 | `gae_lambda` | $0.95$ | GAE trace decay |
 | `clip_range` | $0.2$ | PPO surrogate clip threshold $\epsilon$ |
-| `ent_coef` | $0.005$ | Entropy bonus to maintain exploration in continuous actions |
+| `ent_coef` | $0.02$ | Entropy bonus to break cold-start exploration (Tuner may revise) |
 | `vf_coef` | $0.5$ | Value function loss weight |
 | `max_grad_norm` | $0.5$ | Gradient clipping |
 | `target_kl` | $0.02$ | Early-stop epochs when KL exceeds threshold |
@@ -142,8 +142,9 @@ TPE sampler + MedianPruner study. Settings from `configs/training/tuning_config.
 | Setting | Value |
 |---------|-------|
 | `study_name` | `"uncertainty_rl_tuning"` |
-| `n_trials` | $35$ |
+| `n_trials` | $40$ |
 | `timesteps_per_trial` | $100\,000$ |
+| `eval_metric` | `"env/success_rate"` (with `env/mean_progress_reward` tiebreaker) |
 | `seed` | $42$ |
 
 ### Search space
@@ -152,16 +153,18 @@ All bounds are defined in `configs/training/tuning_config.yaml`:
 
 | Parameter | Range | Scale |
 |-----------|-------|-------|
-| `learning_rate` | $[10^{-5},\, 2 \times 10^{-3}]$ | log |
+| `learning_rate` | $[10^{-5},\, 10^{-3}]$ | log |
 | `n_steps` | $\{1024, 2048, 4096\}$ | categorical |
 | `batch_size` | $\{64, 128, 256\}$ (constrained $\le$ `n_steps`) | categorical |
 | `n_epochs` | $\{3, 5, 10\}$ | categorical |
-| `gamma` | $[0.97,\, 0.999]$ | log (via $1-(1-\gamma)$) |
-| `ent_coef` | $[10^{-6},\, 10^{-2}]$ | log |
+| `gamma` | $[0.98,\, 0.999]$ | log (via $1-(1-\gamma)$) |
+| `gae_lambda` | $[0.90,\, 0.98]$ | linear |
+| `clip_range` | $[0.1,\, 0.3]$ | linear |
+| `ent_coef` | $[10^{-6},\, 5 \times 10^{-2}]$ | log |
 | `evidential.lambda_reg` | $[10^{-5},\, 10^{-2}]$ | log |
 | `evidential.lambda_reg_warmup_steps` | $[10\,000,\, 100\,000]$ | log |
 
-The objective metric is `env/mean_progress_reward` from `EnvDiagnosticsCallback`. After the study completes, `apply_best_params()` writes the winning values back to `configs/train_config.yaml` and creates a timestamped backup in `logs/tuning/backups/`.
+The primary objective is `env/success_rate` from `EnvDiagnosticsCallback`. Until any episode succeeds, trials are ranked by a scaled `env/mean_progress_reward` tiebreaker so early non-successful trials remain comparable. After the study completes, `apply_best_params()` writes the winning values back to `configs/train_config.yaml` and creates a timestamped backup in `logs/tuning/backups/`.
 
 ```bash
 # Resume a paused study - just re-run; SQLite persists trial history
