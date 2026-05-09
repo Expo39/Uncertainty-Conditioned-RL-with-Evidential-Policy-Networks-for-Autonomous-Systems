@@ -1,0 +1,56 @@
+# RTK-GNSS noise profiles for per-episode fix-state sampling.
+# Consumed by GnssNoiseRelayNode. Tier is sampled each reset(); noise injected
+# into NavSatFix.position_covariance so the EKF receives correctly scaled
+# measurement noise.
+#
+# See documentation/detailed_notes/sensor_noise_models.md for full derivation.
+
+tiers:
+  rtk_fixed:
+    # RTK fixed-integer solution: cm-level accuracy.
+    # Parking is easy; policy learns nominal manoeuvring.
+    lat_stddev_deg: 0.0000002
+    lon_stddev_deg: 0.0000002
+    alt_stddev_m: 0.05
+    metric_stddev_m: 0.020
+    weight: 0.3
+    description: "RTK fixed (~2 cm). Nominal parking conditions."
+
+  rtk_float:
+    # RTK float solution: decimetre-level accuracy.
+    # Parking is tight; uncertainty penalty starts biting.
+    lat_stddev_deg: 0.0000032  # 0.360 m 1-sigma
+    lon_stddev_deg: 0.0000032
+    alt_stddev_m: 0.5
+    metric_stddev_m: 0.360
+    weight: 0.3
+    description: "RTK float (~36 cm). Marginal accuracy for 2.5 m bays."
+
+  standalone:
+    # Standalone GNSS (RTK lost): metre-level accuracy.
+    # Progress reward nearly zero; policy learns to wait.
+    lat_stddev_deg: 0.0000162  # 1.802 m 1-sigma
+    lon_stddev_deg: 0.0000162
+    alt_stddev_m: 5.0
+    metric_stddev_m: 1.802
+    weight: 0.25
+    description: "Standalone GNSS (~1.8 m). RTK lost; parking unsafe."
+
+  degraded:
+    # Progress reward saturates to zero; policy learns hard abort.
+    lat_stddev_deg: 0.0000449  # 5.0 m 1-sigma
+    lon_stddev_deg: 0.0000449
+    alt_stddev_m: 10.0
+    metric_stddev_m: 5.0
+    weight: 0.15
+    description: "Degraded GNSS (~5 m). Policy must abort/handoff."
+
+# Per-step transition matrix at GNSS callback rate (20 Hz).
+# Rows = from-tier, columns = to-tier in the order of the named keys.
+#
+# See documentation/detailed_notes/sensor_noise_models.md for derivation.
+transition_matrix:
+  rtk_fixed:  [0.9958, 0.0042, 0.0000, 0.0000]   # mean dwell 11.9 s
+  rtk_float:  [0.0042, 0.9928, 0.0030, 0.0000]   # mean dwell  6.9 s
+  standalone: [0.0000, 0.0036, 0.9928, 0.0036]   # mean dwell  6.9 s
+  degraded:   [0.0000, 0.0000, 0.0060, 0.9940]   # mean dwell  8.3 s

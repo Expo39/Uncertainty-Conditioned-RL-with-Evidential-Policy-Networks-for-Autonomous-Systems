@@ -14,6 +14,7 @@ from uncertainty_rl.utils import (
     get_covariance_dimension,
     validate_covariance_matrix,
 )
+from uncertainty_rl.utils.covariance_utils import make_diagonal_covariance
 
 # ---------------------------------------------------------------------------
 # extract_2d_covariance_features
@@ -28,38 +29,30 @@ class TestExtract2DCovarianceFeatures:
 
     def test_output_shape_3x3(self) -> None:
         """
-        @brief 3x3 input should produce 9-element feature vector.
+        @brief 3x3 input should produce 3-element feature vector [std_x, std_y, std_yaw].
         """
         cov = np.eye(3) * 0.1
         features = extract_2d_covariance_features(cov)
-        assert features.shape == (9,)
+        assert features.shape == (3,)
 
     def test_output_shape_6x6(self) -> None:
         """
-        @brief 6x6 input should produce 9-element feature vector.
+        @brief 6x6 input should produce 3-element feature vector [std_x, std_y, std_yaw].
         """
         cov = np.eye(6) * 0.1
         features = extract_2d_covariance_features(cov)
-        assert features.shape == (9,)
+        assert features.shape == (3,)
 
     def test_identity_3x3_values(self) -> None:
         """
-        @brief Identity matrix should give std=1 and zero off-diagonals.
+        @brief Identity matrix should give std_x=std_y=std_yaw=1.
         """
         cov = np.eye(3)
         features = extract_2d_covariance_features(cov)
 
-        # [std_x, std_y, std_yaw, cov_xx, cov_yy, cov_yawyaw,
-        #  cov_xy, cov_xyaw, cov_yyaw]
         np.testing.assert_approx_equal(features[0], 1.0)  # std_x
         np.testing.assert_approx_equal(features[1], 1.0)  # std_y
         np.testing.assert_approx_equal(features[2], 1.0)  # std_yaw
-        np.testing.assert_approx_equal(features[3], 1.0)  # cov_xx
-        np.testing.assert_approx_equal(features[4], 1.0)  # cov_yy
-        np.testing.assert_approx_equal(features[5], 1.0)  # cov_yawyaw
-        np.testing.assert_approx_equal(features[6], 0.0)  # cov_xy
-        np.testing.assert_approx_equal(features[7], 0.0)  # cov_xyaw
-        np.testing.assert_approx_equal(features[8], 0.0)  # cov_yyaw
 
     def test_scaled_diagonal_3x3(self) -> None:
         """
@@ -74,38 +67,32 @@ class TestExtract2DCovarianceFeatures:
 
     def test_6x6_extracts_correct_indices(self) -> None:
         """
-        @brief 6x6 input should extract x(0), y(1), yaw(5) sub-matrix.
+        @brief 6x6 input should extract diagonal variances for x(0), y(1), yaw(5).
         """
         cov = np.zeros((6, 6))
-        # Set x, y, yaw variances at indices 0, 1, 5
         cov[0, 0] = 0.25
         cov[1, 1] = 0.36
         cov[5, 5] = 0.01
-        # Set a cross-correlation between x and yaw
-        cov[0, 5] = 0.05
-        cov[5, 0] = 0.05
 
         features = extract_2d_covariance_features(cov)
 
         np.testing.assert_approx_equal(features[0], 0.5)  # std_x = sqrt(0.25)
         np.testing.assert_approx_equal(features[1], 0.6)  # std_y = sqrt(0.36)
         np.testing.assert_approx_equal(features[2], 0.1)  # std_yaw = sqrt(0.01)
-        np.testing.assert_approx_equal(features[7], 0.05)  # cov_xyaw
 
-    def test_off_diagonal_preserved(self) -> None:
+    def test_off_diagonal_ignored(self) -> None:
         """
-        @brief Off-diagonal covariance terms should appear in features.
+        @brief Off-diagonal terms do not affect the 3-element output.
         """
-        cov = np.eye(3) * 0.1
-        cov[0, 1] = 0.02
-        cov[1, 0] = 0.02  # Keep symmetric
-        cov[0, 2] = 0.03
-        cov[2, 0] = 0.03
+        cov_diag = np.diag([0.04, 0.09, 0.16])
+        cov_with_off = cov_diag.copy()
+        cov_with_off[0, 1] = 0.02
+        cov_with_off[1, 0] = 0.02
 
-        features = extract_2d_covariance_features(cov)
-
-        np.testing.assert_approx_equal(features[6], 0.02)  # cov_xy
-        np.testing.assert_approx_equal(features[7], 0.03)  # cov_xyaw
+        np.testing.assert_array_equal(
+            extract_2d_covariance_features(cov_diag),
+            extract_2d_covariance_features(cov_with_off),
+        )
 
     def test_rejects_wrong_shape(self) -> None:
         """
@@ -161,7 +148,7 @@ class TestValidateCovarianceMatrix:
         """
         cov = np.eye(3)
         cov[0, 1] = 0.5
-        # cov[1, 0] left as 0 -- not symmetric
+        # cov[1, 0] left as 0 - not symmetric
         assert validate_covariance_matrix(cov) is False
 
     def test_negative_eigenvalue_is_invalid(self) -> None:
@@ -210,11 +197,11 @@ class TestGetCovarianceDimension:
     @brief Tests for the covariance dimension helper.
     """
 
-    def test_returns_nine(self) -> None:
+    def test_returns_three(self) -> None:
         """
-        @brief Must return 9 (matching COVARIANCE_FEATURES_DIM).
+        @brief Must return 3 (matching COVARIANCE_FEATURES_DIM).
         """
-        assert get_covariance_dimension() == 9
+        assert get_covariance_dimension() == 3
 
     def test_matches_feature_vector_length(self) -> None:
         """
@@ -222,3 +209,50 @@ class TestGetCovarianceDimension:
         """
         features = extract_2d_covariance_features(np.eye(3))
         assert len(features) == get_covariance_dimension()
+
+
+# ---------------------------------------------------------------------------
+# make_diagonal_covariance
+# ---------------------------------------------------------------------------
+
+
+class TestMakeDiagonalCovariance:
+    """
+    @class TestMakeDiagonalCovariance
+    @brief Tests for building a flat 36-element ROS covariance from a diagonal.
+    """
+
+    def test_output_length_is_36(self) -> None:
+        """
+        @brief Output must always be a flat list of 36 elements.
+        """
+        result = make_diagonal_covariance([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+        assert len(result) == 36
+
+    def test_diagonal_values_placed_correctly(self) -> None:
+        """
+        @brief Diagonal values must appear at indices 0, 7, 14, 21, 28, 35.
+        """
+        diag = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        result = make_diagonal_covariance(diag)
+        for i, v in enumerate(diag):
+            assert result[i * 7] == pytest.approx(v), f"Index {i*7} should be {v}"
+
+    def test_off_diagonal_elements_are_zero(self) -> None:
+        """
+        @brief All off-diagonal elements must be zero.
+        """
+        diag = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        result = make_diagonal_covariance(diag)
+        for i in range(36):
+            if i % 7 != 0:
+                assert result[i] == pytest.approx(
+                    0.0
+                ), f"Off-diagonal index {i} should be 0"
+
+    def test_all_zeros_diagonal(self) -> None:
+        """
+        @brief Zero diagonal must produce an all-zero 36-element list.
+        """
+        result = make_diagonal_covariance([0.0] * 6)
+        assert all(v == 0.0 for v in result)

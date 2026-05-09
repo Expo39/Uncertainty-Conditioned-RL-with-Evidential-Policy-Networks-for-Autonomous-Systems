@@ -56,11 +56,11 @@ def obs_space() -> spaces.Box:
 @pytest.fixture
 def act_space() -> spaces.Box:
     """
-    @brief 3-dim continuous action space matching parking env.
+    @brief 2-dim continuous action space matching parking env [steering, longitudinal].
     """
     return spaces.Box(
-        low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
-        high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+        low=np.array([-1.0, -1.0], dtype=np.float32),
+        high=np.array([1.0, 1.0], dtype=np.float32),
         dtype=np.float32,
     )
 
@@ -554,6 +554,34 @@ class TestEvidentialPPO:
         effective_lambda = model.lambda_reg * ramp
         assert effective_lambda == model.lambda_reg
 
+    def test_evidential_reg_loss_bounded(self, dummy_env: gym.Env) -> None:
+        """
+        @brief Prior-anchoring evidential reg loss stays bounded even with large NIG params.
+
+        Tests that the new log-penalty regulariser (replacing Amini et al. supervised term)
+        produces bounded values and stays finite across training steps.
+        """
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=dummy_env,
+            lambda_reg=0.01,
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+
+        # Check that evidential_reg_loss is finite and not explosively large
+        reg_loss = model.logger.name_to_value.get("train/evidential_reg_loss")
+        assert reg_loss is not None, "evidential_reg_loss not logged"
+        assert torch.isfinite(
+            torch.tensor(reg_loss)
+        ).item(), f"evidential_reg_loss is not finite: {reg_loss}"
+        # Prior-anchoring should produce values typically < 50 even with clamped params
+        assert (
+            reg_loss < 50.0
+        ), f"evidential_reg_loss unexpectedly large: {reg_loss} (expected < 50)"
+
 
 # ===========================================================================
 # TestNIGInit
@@ -658,7 +686,7 @@ class TestUncertaintyConditionedActorWiring:
     @pytest.fixture
     def obs_space(self) -> spaces.Box:
         """
-        @brief 21-dim observation space (full obs with covariance + obstacle dims).
+        @brief 12-dim observation space (full obs with covariance + obstacle dims).
         """
         return spaces.Box(
             low=-np.inf,
@@ -670,11 +698,11 @@ class TestUncertaintyConditionedActorWiring:
     @pytest.fixture
     def act_space(self) -> spaces.Box:
         """
-        @brief 3-dim action space.
+        @brief 2-dim action space [steering, longitudinal].
         """
         return spaces.Box(
-            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
-            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            low=np.array([-1.0, -1.0], dtype=np.float32),
+            high=np.array([1.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
 

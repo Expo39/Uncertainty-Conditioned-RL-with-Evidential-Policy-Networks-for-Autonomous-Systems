@@ -7,8 +7,6 @@
 # - CARLA ROS bridge
 # - robot_localisation package for EKF covariance output
 # - Python dependencies for covariance extraction
-#
-# @author Antonio Galdes
 
 ARG ROS_DISTRO=jazzy
 FROM ros:${ROS_DISTRO}-ros-base-noble
@@ -19,7 +17,9 @@ ENV ROS_DISTRO=${ROS_DISTRO}
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Install system dependencies
+# Install system dependencies and ROS 2 packages in a single layer.
+# - robot-localization: EKF node + navsat_transform_node (fuses GNSS+IMU, outputs /odometry/filtered)
+# - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-colcon-common-extensions \
@@ -27,19 +27,11 @@ RUN apt-get update && apt-get install -y \
     git \
     wget \
     curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Install ROS 2 packages:
-# - robot-localization: EKF node (fuses IMU + odometry, outputs /odometry/filtered)
-# - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
-# - cartographer-ros: 2D SLAM / scan-matching on raw PointCloud2; publishes TF for EKF
-RUN apt-get update && apt-get install -y \
     ros-${ROS_DISTRO}-robot-localization \
     ros-${ROS_DISTRO}-tf2-ros \
     ros-${ROS_DISTRO}-tf2-geometry-msgs \
     ros-${ROS_DISTRO}-cv-bridge \
     ros-${ROS_DISTRO}-derived-object-msgs \
-    ros-${ROS_DISTRO}-cartographer-ros \
     ros-${ROS_DISTRO}-rmw-cyclonedds-cpp \
     && rm -rf /var/lib/apt/lists/*
 
@@ -51,14 +43,6 @@ WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
 # Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
-# Three patches applied to the cloned ros-bridge source:
-#   1. CARLA_VERSION: bridge hardcodes 0.9.13 but is wire-compatible with 0.9.16.
-#   2. generate_opendrive_world: add OpendriveGenerationParameters to disable nav
-#      mesh (crashes on headless GPU) and match our FlatPlane world setup.
-#   3. on_tick_id guard: AttributeError when shutdown() is called before on_tick_id
-#      is assigned during rapid restart. getattr fallback makes it a no-op.
-#   4. patch_bridge.py: catches RuntimeError on destroy() of already-gone actors
-#      (sensor.py + actor_factory.py) to prevent hang in world.tick() sync mode.
 COPY uncertainty_rl/ros2/patch_bridge.py /tmp/patch_bridge.py
 RUN cd /workspace/src && \
     git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
@@ -84,17 +68,12 @@ RUN rosdep update && \
     ackermann_msgs" || true
 
 # Build only the CARLA bridge packages needed at runtime.
-# carla_manual_control is included because carla_ros_bridge depends on it at
-# build time (looks for carla_manual_control/package.sh during colcon build).
-# It is never launched at runtime. rviz2/rqt packages are excluded (GUI only).
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     cd /workspace && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
     --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
 
-# Install the uncertainty_rl Python package (base deps only -- no torch/SB3).
-# tf_to_odom imports uncertainty_rl.utils.covariance_utils at node startup.
-# Placed outside /workspace/src so colcon does not find it as a duplicate package.
+# Install the uncertainty_rl Python package (base deps only - no torch/SB3).
 COPY pyproject.toml /opt/uncertainty_rl_pkg/pyproject.toml
 COPY uncertainty_rl/__init__.py /opt/uncertainty_rl_pkg/uncertainty_rl/__init__.py
 COPY uncertainty_rl/utils/ /opt/uncertainty_rl_pkg/uncertainty_rl/utils/
@@ -111,11 +90,8 @@ COPY uncertainty_rl/ros2/setup.cfg /workspace/src/uncertainty_rl_ros2/setup.cfg
 COPY uncertainty_rl/ros2/resource /workspace/src/uncertainty_rl_ros2/resource
 COPY uncertainty_rl/ros2/launch /workspace/src/uncertainty_rl_ros2/launch
 
-# Create the maps directory as an anchor for the configs/maps:rw bind-mount.
-# .pbstream files are generated at runtime via make docker-map; never baked in.
-# All configs (ros2_config.yaml, train_config.yaml, cartographer/) are provided
-# at runtime via the ./configs:/workspace/configs:ro bind-mount.
-RUN mkdir -p /workspace/configs/maps
+# All configs (ros2_config.yaml, env_config.yaml, gnss_noise_profiles.yaml) are
+# provided at runtime via the ./configs:/workspace/configs:ro bind-mount.
 
 # Build custom messages and nodes
 RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \

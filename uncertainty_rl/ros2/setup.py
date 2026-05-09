@@ -17,7 +17,7 @@ package_name = "uncertainty_rl_ros2"
 setup(
     name=package_name,
     version="0.1.0",
-    packages=[package_name],
+    packages=[package_name, f"{package_name}.sensor_relay"],
     data_files=[
         (
             "share/ament_index/resource_index/packages",
@@ -37,10 +37,9 @@ setup(
     license="MIT",
     entry_points={
         "console_scripts": [
-            "covariance_extractor =" " uncertainty_rl_ros2.covariance_extractor:main",
-            "covariance_monitor ="
-            " uncertainty_rl_ros2.covariance_extractor:main_monitor",
-            "tf_to_odom = uncertainty_rl_ros2.tf_to_odom:main",
+            "covariance_extractor = uncertainty_rl_ros2.covariance_extractor:main",
+            "covariance_monitor = uncertainty_rl_ros2.covariance_extractor:main_monitor",
+            "sensor_relay = uncertainty_rl_ros2.sensor_relay.sensor_relay:main",
         ],
     },
 )

@@ -1,0 +1,35 @@
+# Sensor configuration shared between simulation and real-vehicle deployment.
+#
+# This file contains physical sensor specifications and mount positions that
+# are identical in CARLA and on the real vehicle. It is the single source of
+# truth for anything describing the physical sensor suite.
+#
+# @warning All mount values are UNMEASURED placeholders for the real vehicle.
+
+sensors:
+  imu:
+    # MEMS IMU (e.g. VectorNav VN-100 or equivalent).
+    # Planned location: rear passenger seat floor.
+    mount:
+      x: 0.0  
+      y: 0.0  
+      z: 0.3 
+
+  gnss:
+    # Single RTK-GNSS antenna. Localisation source for /odometry/gps.
+    mount:
+      x: 0.0 
+      y: 0.0 
+      z: 1.6 
+
+  lidar:
+    # 2D LiDAR: Obstacle detection only (NOT localisation).
+    # See documentation/detailed_notes/sensor_noise_models.md for full derivation.
+    range: 25.0  # Max range (metres)
+    channels: 1  # Single horizontal scan plane
+    fov_deg: 270.0  # Physical FOV (rear 90 deg blocked by car body)
+    frequency_hz: 15.0  # Native scan rate (Hz)
+    mount:
+      x: 2.4
+      y: 0.0
+      z: 0.5

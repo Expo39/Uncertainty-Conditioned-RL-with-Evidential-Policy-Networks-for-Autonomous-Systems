@@ -5,22 +5,6 @@
 Tails outputs/vis_history.jsonl and renders each frame as it arrives using
 Pygame. Creates outputs/.vis_active so the environment starts writing frames;
 removing it (on window close) stops the env writing.
-
-Layers drawn (back to front):
-  1. Lot boundary polygon (light grey fill)
-  2. Bay outlines by type: perpendicular=blue, angled=yellow, parallel=violet
-  3. Target bay (bright green, thick outline + heading arrows)
-  4. Static parked vehicles (orange rectangles)
-  5. Patrol NPC vehicles (red rectangles)
-  6. Pedestrians (teal circles)
-  7. Ego trajectory trail (faded cyan)
-  8. Ego vehicle (cyan rectangle + heading arrow)
-  9. HUD overlay (episode info)
- 10. Debug HUD (errors, reward, covariance) -- only when present in frame
-
-Usage:
-    python scripts/visualise/visualiser.py
-    make visualise
 """
 
 import json
@@ -66,6 +50,17 @@ _C_HUD_TEXT = (212, 212, 212)
 _C_CONE = hex_to_rgb(HEX_CONE)
 
 # ---------------------------------------------------------------------------
+# Bay colour/linewidth lookup
+# ---------------------------------------------------------------------------
+
+_BAY_STYLE: Dict[str, Tuple[Any, int]] = {
+    "angled": (_C_ANGLED_BAY, 1),
+    "parallel": (_C_PARALLEL_BAY, 1),
+    "perpendicular": (_C_PERP_BAY, 1),
+}
+_BAY_STYLE_DEFAULT: Tuple[Any, int] = (_C_PERP_BAY, 1)
+
+# ---------------------------------------------------------------------------
 # Layout constants
 # ---------------------------------------------------------------------------
 
@@ -86,6 +81,11 @@ _POLL_SLEEP = 0.02
 
 _DEFAULT_HISTORY_FILE = Path("outputs/vis_history.jsonl")
 _SIGNAL_FILE = Path("outputs/.vis_active")
+
+# Legend fonts are initialised lazily on first _draw_legend call (requires
+# pygame.font.init() to have run first).
+_legend_font: Optional[pygame.font.Font] = None
+_legend_title_font: Optional[pygame.font.Font] = None
 
 
 # ---------------------------------------------------------------------------
@@ -131,15 +131,19 @@ def _world_to_screen(
     @param scale: Pixels per metre.
     @return List of (px, py) integer tuples.
     """
+    # Layout coordinates are in CARLA's left-handed frame (Y increases
+    # rightward). Screen Y increases downward, which matches CARLA Y
+    # direction in a bird's-eye view, so no Y-flip is needed.
     shifted = pts - origin
     px = (shifted[:, 0] * scale + _MARGIN_PX).astype(int)
-    py = (_WINDOW_H - _MARGIN_PX - shifted[:, 1] * scale).astype(int)
-    return list(zip(px.tolist(), py.tolist()))
+    py = (shifted[:, 1] * scale + _MARGIN_PX).astype(int)
+    return list(zip(px, py))
 
 
 def _w2s(x: float, y: float, origin: np.ndarray, scale: float) -> Tuple[int, int]:
     """@brief Convert a single world point to a screen pixel."""
-    return _world_to_screen(np.array([[x, y]]), origin, scale)[0]
+    ox, oy = origin
+    return (int((x - ox) * scale + _MARGIN_PX), int((y - oy) * scale + _MARGIN_PX))
 
 
 # ---------------------------------------------------------------------------
@@ -179,38 +183,34 @@ def _build_static_surface(
     for bay in state.get("bays", []):
         bay_id = bay.get("id", bay.get("bay_id", ""))
         is_target = bay_id == target_id
-        bay_type = bay.get("bay_type", "perpendicular")
 
         if is_target:
-            colour, lw = _C_TARGET_BAY, 3
-        elif bay_type == "angled":
-            colour, lw = _C_ANGLED_BAY, 1
-        elif bay_type == "parallel":
-            colour, lw = _C_PARALLEL_BAY, 1
+            colour: Any = _C_TARGET_BAY
+            lw = 3
         else:
-            colour, lw = _C_PERP_BAY, 1
+            colour, lw = _BAY_STYLE.get(
+                bay.get("bay_type", "perpendicular"), _BAY_STYLE_DEFAULT
+            )
 
         half_d = float(bay.get("depth", 5.0)) / 2.0
         half_w = float(bay.get("width", 2.5)) / 2.0
         yaw_deg = float(bay.get("yaw_deg", bay.get("yaw", 0.0)))
-        corners = _rot_corners(  # noqa: E501
-            float(bay["x"]), float(bay["y"]), half_d, half_w, yaw_deg
+        bx, by = float(bay["x"]), float(bay["y"])
+        spts = _world_to_screen(
+            _rot_corners(bx, by, half_d, half_w, yaw_deg), origin, scale
         )
-        spts = _world_to_screen(corners, origin, scale)
-        if len(spts) >= 3:
-            pygame.draw.polygon(surf, colour, spts, lw)
+        pygame.draw.polygon(surf, colour, spts, lw)
 
         # Heading arrows for target bay (nose-in and nose-out)
         if is_target:
-            bx, by = float(bay["x"]), float(bay["y"])
             arrow_len = half_d * 0.8
-            for yaw_r in (math.radians(yaw_deg), math.radians(yaw_deg + 180.0)):
-                tip = (
-                    bx + arrow_len * math.cos(yaw_r),
-                    by + arrow_len * math.sin(yaw_r),
+            yaw_r = math.radians(yaw_deg)
+            cos_y, sin_y = math.cos(yaw_r), math.sin(yaw_r)
+            s0 = _w2s(bx, by, origin, scale)
+            for cx_dir, cy_dir in ((cos_y, sin_y), (-cos_y, -sin_y)):
+                s1 = _w2s(
+                    bx + arrow_len * cx_dir, by + arrow_len * cy_dir, origin, scale
                 )
-                s0 = _w2s(bx, by, origin, scale)
-                s1 = _w2s(tip[0], tip[1], origin, scale)
                 pygame.draw.line(surf, _C_TARGET_BAY, s0, s1, 2)
                 dx, dy = s1[0] - s0[0], s1[1] - s0[1]
                 length = math.hypot(dx, dy) or 1.0
@@ -222,16 +222,18 @@ def _build_static_surface(
     # Static parked vehicles
     for actor in state.get("actors", []):
         if actor.get("type", "static") != "npc":
-            corners = _rot_corners(
-                actor["x"],
-                actor["y"],
-                _NPC_HALF_L,
-                _NPC_HALF_W,
-                actor.get("yaw", 0.0),
+            spts = _world_to_screen(
+                _rot_corners(
+                    actor["x"],
+                    actor["y"],
+                    _NPC_HALF_L,
+                    _NPC_HALF_W,
+                    actor.get("yaw", 0.0),
+                ),
+                origin,
+                scale,
             )
-            spts = _world_to_screen(corners, origin, scale)
-            if len(spts) >= 3:
-                pygame.draw.polygon(surf, _C_STATIC_VEHICLE, spts)
+            pygame.draw.polygon(surf, _C_STATIC_VEHICLE, spts)
 
     return surf
 
@@ -241,8 +243,14 @@ def _draw_legend(screen: pygame.Surface) -> None:
     @brief Draw the colour legend in the right-hand panel.
     @param screen: Main Pygame surface.
     """
-    font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE)
-    title_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE, bold=True)
+    global _legend_font, _legend_title_font
+    if _legend_font is None:
+        _legend_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE)
+        _legend_title_font = pygame.font.SysFont(
+            "monospace", _LABEL_FONT_SIZE, bold=True
+        )
+    font = _legend_font
+    title_font = _legend_title_font
 
     pygame.draw.rect(
         screen,
@@ -286,8 +294,8 @@ class LiveVisualiser:
     The static scene (lot, bays, parked vehicles) is rebuilt once per episode.
 
     Controls:
-        F        -- toggle fullscreen
-        ESC / Q  -- exit
+        F        - toggle fullscreen
+        ESC / Q  - exit
     """
 
     def __init__(self, history_file: Optional[Path] = None) -> None:
@@ -314,10 +322,17 @@ class LiveVisualiser:
         self._origin = np.zeros(2)
         self._scale = 1.0
 
+        # Accumulated ego trail - grows every frame, cleared on episode reset.
+        self._vis_trail: List[Tuple[float, float]] = []
+        self._vis_trail_episode_id: Optional[int] = None
+
         self._file_offset: int = 0
         self._exit_requested: bool = False
         self._fullscreen: bool = False
         self._ever_received_frame: bool = False
+        self._trail_surf: pygame.Surface = pygame.Surface(
+            (_MAP_W, _WINDOW_H), pygame.SRCALPHA
+        )
 
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
         self._signal_file.touch()
@@ -369,7 +384,7 @@ class LiveVisualiser:
                 self._draw_waiting()
                 time.sleep(_POLL_SLEEP)
             else:
-                # Data stream temporarily dry -- hold last frame, don't flicker
+                # Data stream temporarily dry - hold last frame, don't flicker
                 time.sleep(_POLL_SLEEP)
 
             self._clock.tick(_FPS_CAP)
@@ -393,6 +408,7 @@ class LiveVisualiser:
                         (_WINDOW_W, _WINDOW_H), flags
                     )
                     self._static_episode_id = None  # Force static surface rebuild
+                    self._vis_trail_episode_id = None  # Force trail reset
 
     # ------------------------------------------------------------------
     # JSONL ingestion
@@ -417,15 +433,18 @@ class LiveVisualiser:
                 last_nl = chunk.rfind(b"\n")
                 if last_nl == -1:
                     return []
-                complete = chunk[: last_nl + 1]
                 self._file_offset += last_nl + 1
-                for raw in complete.split(b"\n"):
-                    raw = raw.strip()
-                    if not raw:
+                try:
+                    text = chunk[: last_nl + 1].decode("utf-8")
+                except UnicodeDecodeError:
+                    text = chunk[: last_nl + 1].decode("utf-8", errors="replace")
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line:
                         continue
                     try:
-                        frames.append(json.loads(raw.decode("utf-8")))
-                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        frames.append(json.loads(line))
+                    except json.JSONDecodeError:
                         continue
         except OSError:
             pass
@@ -490,56 +509,68 @@ class LiveVisualiser:
 
         origin, scale = self._origin, self._scale
 
-        # Trail
-        trail = state.get("trajectory", [])
-        if len(trail) > 1:
-            pts = np.array(trail[-_TRAIL_MAX_POINTS:])
-            spts = _world_to_screen(pts, origin, scale)
-            if len(spts) >= 2:
-                trail_surf = pygame.Surface((_MAP_W, _WINDOW_H), pygame.SRCALPHA)
-                pygame.draw.lines(trail_surf, _C_TRAIL, False, spts, 2)
-                self._screen.blit(trail_surf, (0, 0))
+        # Accumulated ego trail: clear on episode reset, then append current position.
+        if episode_id != self._vis_trail_episode_id:
+            self._vis_trail = []
+            self._vis_trail_episode_id = episode_id
+        ego = state.get("ego", {})
+        if ego:
+            self._vis_trail.append((float(ego["x"]), float(ego["y"])))
+        trail_len = len(self._vis_trail)
+        if trail_len > 1:
+            trail_pts = (
+                self._vis_trail[-_TRAIL_MAX_POINTS:]
+                if trail_len > _TRAIL_MAX_POINTS
+                else self._vis_trail
+            )
+            spts = _world_to_screen(np.array(trail_pts), origin, scale)
+            self._trail_surf.fill((0, 0, 0, 0))
+            pygame.draw.lines(self._trail_surf, _C_TRAIL, False, spts, 2)
+            self._screen.blit(self._trail_surf, (0, 0))
 
         # Patrol NPC vehicles
         for actor in state.get("actors", []):
             if actor.get("type", "static") == "npc":
-                spts = _world_to_screen(
-                    _rot_corners(
-                        actor["x"],
-                        actor["y"],
-                        _NPC_HALF_L,
-                        _NPC_HALF_W,
-                        actor.get("yaw", 0.0),
+                pygame.draw.polygon(
+                    self._screen,
+                    _C_PATROL_VEHICLE,
+                    _world_to_screen(
+                        _rot_corners(
+                            actor["x"],
+                            actor["y"],
+                            _NPC_HALF_L,
+                            _NPC_HALF_W,
+                            actor.get("yaw", 0.0),
+                        ),
+                        origin,
+                        scale,
                     ),
-                    origin,
-                    scale,
                 )
-                if len(spts) >= 3:
-                    pygame.draw.polygon(self._screen, _C_PATROL_VEHICLE, spts)
 
         # Pedestrians
+        ped_r = max(2, int(0.4 * scale))
         for ped in state.get("pedestrians", []):
-            sx, sy = _w2s(ped["x"], ped["y"], origin, scale)
             pygame.draw.circle(
                 self._screen,
                 _C_PEDESTRIAN,
-                (sx, sy),
-                max(2, int(0.4 * scale)),
+                _w2s(ped["x"], ped["y"], origin, scale),
+                ped_r,
             )
 
         # Ego vehicle
-        ego = state.get("ego", {})
         if ego:
             ex, ey, eyaw = float(ego["x"]), float(ego["y"]), float(ego["yaw"])
-            spts = _world_to_screen(
-                _rot_corners(ex, ey, _EGO_HALF_L, _EGO_HALF_W, eyaw), origin, scale
+            pygame.draw.polygon(
+                self._screen,
+                _C_EGO,
+                _world_to_screen(
+                    _rot_corners(ex, ey, _EGO_HALF_L, _EGO_HALF_W, eyaw), origin, scale
+                ),
             )
-            if len(spts) >= 3:
-                pygame.draw.polygon(self._screen, _C_EGO, spts)
-
             yaw_r = math.radians(eyaw)
-            tip = (ex + 3.5 * math.cos(yaw_r), ey + 3.5 * math.sin(yaw_r))
-            s0, s1 = _w2s(ex, ey, origin, scale), _w2s(tip[0], tip[1], origin, scale)
+            cos_y, sin_y = math.cos(yaw_r), math.sin(yaw_r)
+            s0 = _w2s(ex, ey, origin, scale)
+            s1 = _w2s(ex + 3.5 * cos_y, ey + 3.5 * sin_y, origin, scale)
             pygame.draw.line(self._screen, _C_EGO, s0, s1, 2)
             dx, dy = s1[0] - s0[0], s1[1] - s0[1]
             length = math.hypot(dx, dy) or 1.0

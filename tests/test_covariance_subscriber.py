@@ -4,7 +4,7 @@
 
 Tests cover JSON file reading, seq-based staleness guard, cache invalidation,
 get_latest_uncertainty(), get_latest_pose(), get_latest_state(), and has_data
--- all without requiring ROS 2 or rclpy.  The _CovarianceSubscriber is
+- all without requiring ROS 2 or rclpy.  The _CovarianceSubscriber is
 constructed with _ROS2_AVAILABLE forced to False so no Node superclass
 initialisation occurs.
 """
@@ -26,8 +26,6 @@ def _write_ekf_json(
     x: float,
     y: float,
     yaw: float,
-    vx: float,
-    vy: float,
     vyaw: float,
     cov_flat: list,
     seq: int = 1,
@@ -38,8 +36,6 @@ def _write_ekf_json(
     @param x: EKF x position.
     @param y: EKF y position.
     @param yaw: EKF yaw in radians.
-    @param vx: Forward velocity.
-    @param vy: Lateral velocity.
     @param vyaw: Yaw rate.
     @param cov_flat: Flat 9-element 3x3 covariance list.
     @param seq: Monotonic write sequence counter (default 1).
@@ -49,8 +45,6 @@ def _write_ekf_json(
         "x": x,
         "y": y,
         "yaw": yaw,
-        "vx": vx,
-        "vy": vy,
         "vyaw": vyaw,
         "covariance": cov_flat,
     }
@@ -80,14 +74,17 @@ def _make_subscriber(ekf_path: Path):
         sub._latest_pose = None
         sub._valid_after_seq = 0
         sub._last_read_seq = 0
+        # _read_file() now uses self._ekf_state_path (set in __init__).
+        # Bypass __init__ sets it directly so tests remain self-contained.
+        sub._ekf_state_path = ekf_path
     return sub, mod
 
 
 def _patch_read_file_path(sub: object, mod: object, ekf_path: Path) -> None:
     """
-    @brief Monkey-patch _EKF_STATE_PATH on the module so _read_file uses our path.
+    @brief Update the instance EKF path used by _read_file.
     """
-    mod._EKF_STATE_PATH = ekf_path  # type: ignore[attr-defined]
+    sub._ekf_state_path = ekf_path  # type: ignore[attr-defined]
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +107,7 @@ class TestReadFileValid:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01, 0.0, 0.0, 0.0, 0.01, 0.0, 0.0, 0.0, 0.005]
-            _write_ekf_json(path, 1.0, 2.0, 0.5, 0.3, 0.1, 0.05, cov, seq=1)
+            _write_ekf_json(path, 1.0, 2.0, 0.5, 0.05, cov, seq=1)
 
             with (
                 patch.object(mod, "_ROS2_AVAILABLE", False),
@@ -124,14 +121,14 @@ class TestReadFileValid:
 
     def test_populates_uncertainty_array(self) -> None:
         """
-        @brief _read_file() populates _latest_uncertainty with shape (9,).
+        @brief _read_file() populates _latest_uncertainty with shape (3,).
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.04, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.01]
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -141,18 +138,18 @@ class TestReadFileValid:
                 _patch_read_file_path(sub, mod, path)
                 sub._read_file()
                 assert sub._latest_uncertainty is not None
-                assert sub._latest_uncertainty.shape == (9,)
+                assert sub._latest_uncertainty.shape == (3,)
 
     def test_populates_pose_array(self) -> None:
         """
-        @brief _read_file() populates _latest_pose with shape (6,).
+        @brief _read_file() populates _latest_pose with shape (4,).
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01] * 9
-            _write_ekf_json(path, 3.0, -1.5, 1.2, 2.0, 0.1, 0.3, cov, seq=1)
+            _write_ekf_json(path, 3.0, -1.5, 1.2, 0.3, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -162,7 +159,7 @@ class TestReadFileValid:
                 _patch_read_file_path(sub, mod, path)
                 sub._read_file()
                 assert sub._latest_pose is not None
-                assert sub._latest_pose.shape == (6,)
+                assert sub._latest_pose.shape == (4,)
 
     def test_pose_values_match_file(self) -> None:
         """
@@ -173,7 +170,7 @@ class TestReadFileValid:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01] * 9
-            _write_ekf_json(path, 5.0, -3.0, 0.78, 1.5, -0.2, 0.4, cov, seq=1)
+            _write_ekf_json(path, 5.0, -3.0, 0.78, 0.4, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -184,9 +181,7 @@ class TestReadFileValid:
                 sub._read_file()
                 pose = sub._latest_pose
                 assert pose is not None
-                np.testing.assert_allclose(
-                    pose, [5.0, -3.0, 0.78, 1.5, -0.2, 0.4], rtol=1e-5
-                )
+                np.testing.assert_allclose(pose, [5.0, -3.0, 0.78, 0.4], rtol=1e-5)
 
     def test_updates_last_read_seq(self) -> None:
         """
@@ -196,7 +191,7 @@ class TestReadFileValid:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=42)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=42)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -273,8 +268,6 @@ class TestReadFileMissing:
                         "x": 1.0,
                         "y": 2.0,
                         "yaw": 0.0,
-                        "vx": 0.0,
-                        "vy": 0.0,
                         "vyaw": 0.0,
                     }
                 )
@@ -321,7 +314,7 @@ class TestStalenessGuard:
 
     The guard rejects a file whose `seq` field is <= _valid_after_seq,
     preventing stale pre-reset data from leaking across episode boundaries.
-    This is clock-skew-proof -- no file mtime comparison is performed.
+    This is clock-skew-proof - no file mtime comparison is performed.
     """
 
     def test_rejects_file_with_seq_equal_to_valid_after_seq(self) -> None:
@@ -397,13 +390,11 @@ class TestStalenessGuard:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            # No seq field -- old extractor format
+            # No seq field - old extractor format
             data = {
                 "x": 1.0,
                 "y": 2.0,
                 "yaw": 0.3,
-                "vx": 0.0,
-                "vy": 0.0,
                 "vyaw": 0.0,
                 "covariance": [0.01] * 9,
             }
@@ -415,7 +406,7 @@ class TestStalenessGuard:
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
-                sub._valid_after_seq = 0  # default -- seq=0 file not accepted
+                sub._valid_after_seq = 0  # default - seq=0 file not accepted
                 result = sub._read_file()
 
         # seq=0 (default) is NOT > barrier 0, so it is rejected
@@ -533,7 +524,7 @@ class TestGetLatest:
 
     def test_get_latest_uncertainty_returns_copy(self) -> None:
         """
-        @brief get_latest_uncertainty() returns a copy -- mutating it does not
+        @brief get_latest_uncertainty() returns a copy - mutating it does not
                affect the cached value.
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
@@ -541,7 +532,7 @@ class TestGetLatest:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.04, 0.0, 0.0, 0.0, 0.04, 0.0, 0.0, 0.0, 0.01]
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -576,14 +567,14 @@ class TestGetLatest:
 
     def test_get_latest_pose_shape(self) -> None:
         """
-        @brief get_latest_pose() returns an array of shape (6,).
+        @brief get_latest_pose() returns an array of shape (4,).
         """
         import uncertainty_rl.envs.covariance_subscriber as mod
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.01] * 9
-            _write_ekf_json(path, 1.0, 2.0, 0.5, 1.0, 0.0, 0.1, cov, seq=1)
+            _write_ekf_json(path, 1.0, 2.0, 0.5, 1.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
@@ -594,7 +585,7 @@ class TestGetLatest:
                 pose = sub.get_latest_pose()
 
         assert pose is not None
-        assert pose.shape == (6,)
+        assert pose.shape == (4,)
 
     def test_get_latest_pose_none_when_no_file(self) -> None:
         """
@@ -634,7 +625,7 @@ class TestHasData:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.02] * 9
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=1)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),

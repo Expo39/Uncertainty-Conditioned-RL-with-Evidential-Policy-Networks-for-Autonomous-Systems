@@ -1,22 +1,11 @@
 """
 @file demo_drive.py
 @brief Load a trained checkpoint and drive in CARLA for visual inspection.
-
-No metrics, no condition sweep, no plots. Just loads the model and runs
-deterministic episodes in a loop so you can watch the agent park. Works
-with both the 2D bird's-eye visualiser (make visualise) and the 3D CARLA
-spectator view (--render flag).
-
-Usage:
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model \
-        --render
-    python scripts/visualise/demo_drive.py --checkpoint checkpoints/final_model \
-        --episodes 5
 """
 
 import argparse
 import os
+from pathlib import Path
 from typing import Any, Dict, List, cast
 
 import numpy as np
@@ -46,7 +35,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--env-config",
         type=str,
-        default="configs/carla/env_config.yaml",
+        default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config (CARLA, sensors, parking scenarios).",
     )
     parser.add_argument(
@@ -94,7 +83,7 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
             parking_scenarios_config=env_config.get("parking_scenarios", {}),
             include_covariance=bool(env_config.get("include_covariance", True)),
             include_obstacle_obs=bool(env_config.get("include_obstacle_obs", True)),
-            sensor_suite=str(env_config.get("sensor_suite", "suite_a")),
+            gnss_noise_profiles_path=env_config.get("gnss_noise_profiles", None),
         )
 
     return DummyVecEnv([_init])
@@ -106,9 +95,11 @@ def main() -> None:
     """
     args = _parse_args()
 
-    # Load configs
-    with open(args.env_config, "r") as f:
-        env_config: Dict[str, Any] = yaml.safe_load(f)
+    # Load configs. load_env_config merges sensor_config.yaml (shared keys)
+    # with env_config.yaml (CARLA-specific keys) into one unified dict.
+    from uncertainty_rl.training.train_ppo import load_env_config
+
+    env_config: Dict[str, Any] = load_env_config(args.env_config)
     with open(args.train_config, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
 
@@ -125,18 +116,19 @@ def main() -> None:
     env = base_env
 
     # Apply normalisation statistics if available
-    vec_normalize_path = os.path.join(
-        os.path.dirname(args.checkpoint), "vec_normalize.pkl"
-    )
-    if os.path.exists(vec_normalize_path):
-        env = VecNormalize.load(vec_normalize_path, base_env)
+    vec_normalize_path = Path(args.checkpoint).parent / "vec_normalize.pkl"
+    if vec_normalize_path.exists():
+        env = VecNormalize.load(str(vec_normalize_path), base_env)
         env.training = False
         env.norm_reward = False
-        print(f"Loaded normalisation stats from {vec_normalize_path}")
+        print(f"Loaded normalisation stats from {vec_normalize_path!s}")
 
     is_evidential = isinstance(model, EvidentialPPO) and hasattr(
         model.policy, "get_action_with_uncertainty"
     )
+
+    # Hoist evidential policy handles outside the step loop.
+    _get_action = model.policy.get_action_with_uncertainty if is_evidential else None
 
     episode = 0
     print("Driving. Close the visualiser or Ctrl+C to stop.")
@@ -149,11 +141,10 @@ def main() -> None:
             episode += 1
 
             while not done_arr[0]:
-                if is_evidential:
-                    obs_tensor = th.as_tensor(obs)
-                    policy = model.policy
-                    get_action = policy.get_action_with_uncertainty
-                    action_tensor, _ = get_action(obs_tensor, deterministic=True)
+                if is_evidential and _get_action is not None:
+                    action_tensor, _ = _get_action(
+                        th.as_tensor(obs), deterministic=True
+                    )
                     action = action_tensor.cpu().numpy()
                 else:
                     action, _ = model.predict(obs, deterministic=True)
@@ -161,18 +152,16 @@ def main() -> None:
                 step_result = env.step(action)
                 obs = cast(np.ndarray, step_result[0])
                 done_arr = cast(np.ndarray, step_result[2])
-                # DummyVecEnv.step() returns (obs, rewards, dones, infos) -- 4 elements.
+                # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
                 infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
                 if args.render:
                     env.render()
 
-                if done_arr[0]:
-                    success = infos[0].get("success", False)
-                    result = "SUCCESS" if success else "FAIL"
-                    print(f"  Episode {episode}: {result} ({steps} steps)")
-                    break
+            success = infos[0].get("success", False)
+            result = "SUCCESS" if success else "FAIL"
+            print(f"  Episode {episode}: {result} ({steps} steps)")
 
     except KeyboardInterrupt:
         print(f"\nStopped after {episode} episodes.")

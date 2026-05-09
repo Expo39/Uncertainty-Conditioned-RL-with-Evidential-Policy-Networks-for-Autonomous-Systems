@@ -19,23 +19,11 @@ class DebugLogger:
     """
     @class DebugLogger
     @brief Per-step debug diagnostics for CARLAParkingEnv.
-
-    When debug=True, emits structured lines at DEBUG level every step covering
-    reward breakdown, EKF covariance stats, obstacle proximity, action, and pose
-    error. Also produces a compact dict via step_debug_dict() that is embedded in
-    vis_history.jsonl frames so the visualiser can display a second HUD line.
-
-    When debug=False every method is a no-op so there is zero overhead during
-    normal training runs.
-
-    Usage in the environment::
-
-        self._debug_logger = DebugLogger(debug=config.get("debug", False))
-        # inside step():
-        self._debug_logger.log_step(reward, obs, uncertainty, action, pos_error)
-        # inside _write_vis_state():
-        state["debug"] = self._debug_logger.step_debug_dict()
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(self, debug: bool = False) -> None:
         """
@@ -79,7 +67,7 @@ class DebugLogger:
         @param obstacle_dist: Distance to nearest obstacle from LiDAR (metres).
         @param ekf_drift: Distance between EKF filtered position and CARLA
                           ground truth (metres). Non-zero indicates localisation
-                          error -- key signal for sim-to-real debugging.
+                          error - key signal for sim-to-real debugging.
         @param lidar_points: Number of points in the latest LiDAR scan. Zero
                              indicates the sensor has not ticked yet or returned
                              no returns (e.g. open area, sensor failure).
@@ -90,7 +78,7 @@ class DebugLogger:
         cov_mag = 0.0
         if uncertainty is not None and len(uncertainty) >= 3:
             # Summarise as RMS of the three diagonal std elements (indices 0-2)
-            cov_mag = float(np.sqrt(np.mean(np.square(uncertainty[:3]))))
+            cov_mag = float(np.sqrt(np.mean(uncertainty[:3] ** 2)))
 
         steer = float(action[0]) if len(action) > 0 else 0.0
         throttle = float(action[1]) if len(action) > 1 else 0.0

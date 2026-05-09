@@ -6,60 +6,48 @@ Reads the latest EKF state from a shared JSON file written by the
 CovarianceExtractorNode in the ros2-bridge container. This avoids DDS
 cross-distro serialisation issues between ROS 2 Humble (training container)
 and Jazzy (ros2-bridge container).
-
-The file is written atomically (via rename) by the extractor node at the
-EKF publish rate (~20 Hz) to /workspace/outputs/ekf_state.json, which is
-on a Docker shared volume visible to both containers.
-
-Also publishes /initialpose via rclpy for Cartographer pure localisation
-convergence at episode reset.
 """
 
 import json
+import logging
 import math
+import os
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Optional, Tuple, cast
 
 import numpy as np
 
-try:
-    from geometry_msgs.msg import PoseWithCovarianceStamped
-    from rclpy.node import Node
-
-    _ROS2_AVAILABLE = True
-except ImportError:
-    _ROS2_AVAILABLE = False
-
 from uncertainty_rl.utils.covariance_utils import extract_2d_covariance_features
 
-# Shared file path (Docker volume mount: outputs/ is rw in both containers)
+# Cached mtime sentinel meaning "never read"
+_MTIME_UNSET: int = -1
+
+# Default shared file path
 _EKF_STATE_PATH = Path("/workspace/outputs/ekf_state.json")
 
-if TYPE_CHECKING:
-    # For static analysis: always treat the base class as rclpy.Node so mypy
-    # can resolve all Node attributes (get_logger, create_publisher, etc.).
-    from rclpy.node import Node as _NodeBase
-else:
-    # At runtime: inherit from Node when available, plain object otherwise.
-    # plain object is only used in CI / unit tests where rclpy is absent;
-    # the Node-specific methods (create_publisher, get_clock) are never
-    # called in that context.
-    _NodeBase = Node if _ROS2_AVAILABLE else object
+# File-based /set_pose signal
+_INITIAL_POSE_PATH = Path("/workspace/outputs/initial_pose.json")
+
+# File-based GNSS noise config signal
+_EPISODE_CONFIG_PATH = Path("/workspace/outputs/episode_config.json")
+
+logger = logging.getLogger(__name__)
 
 
-class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
+class _CovarianceSubscriber:
     """
     @class _CovarianceSubscriber
-    @brief Reads EKF state from a shared JSON file + publishes /initialpose.
+    @brief Reads EKF state from a shared JSON file + signals /set_pose.
 
     The CovarianceExtractorNode (ros2-bridge, Jazzy) writes the latest EKF
     pose, velocity, and 3x3 covariance to a shared file. This class reads
-    that file on demand -- no DDS subscription needed.
-
-    Inherits from rclpy.Node only for the /initialpose publisher (needed
-    for Cartographer pure localisation convergence at episode reset).
+    that file on demand - no DDS subscription needed.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -69,9 +57,9 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
     ) -> None:
         """
         @brief Initialise the covariance reader.
-        @param covariance_topic: Unused -- EKF state is read from the shared
+        @param covariance_topic: Unused - EKF state is read from the shared
                JSON file, not via DDS. Accepted for call-site compatibility.
-        @param node_name: Unique node name for the rclpy publisher node.
+        @param node_name: Unused - no rclpy Node. Accepted for compatibility.
         @param ros2_config: Optional ROS 2 config dict from train_config.yaml.
         """
         self._lock = threading.Lock()
@@ -80,25 +68,70 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         # Sequence number of the last-seen write from the extractor node.
         # invalidate() records the current seq; _read_file() only accepts a
         # file whose `seq` field is strictly greater than _valid_after_seq.
-        # This is clock-skew-proof -- mtime comparisons across Docker container
-        # clocks are unreliable on some host configurations.
         self._valid_after_seq: int = 0
         self._last_read_seq: int = 0
+        # Monotonically increasing counter for initial_pose.json writes.
+        self._initial_pose_seq: int = 0
+        # Last observed mtime (nanoseconds) of the EKF state file.
+        # Unchanged mtime means the file content has not changed - skip parse.
+        self._last_mtime_ns: int = _MTIME_UNSET
 
-        # Initialise rclpy Node for /initialpose publisher only
-        if _ROS2_AVAILABLE:
-            super().__init__(node_name)
-            config = ros2_config or {}
-            initial_pose_topic = config.get("initial_pose_topic", "/initialpose")
-            self._initial_pose_pub = self.create_publisher(
-                PoseWithCovarianceStamped,
-                initial_pose_topic,
-                10,
+        # Per-worker EKF state file path
+        config = ros2_config or {}
+        ekf_state_file: str = config.get(
+            "ekf_state_file",
+            os.environ.get("EKF_STATE_FILE", str(_EKF_STATE_PATH)),
+        )
+        self._ekf_state_path: Path = Path(ekf_state_file)
+
+        # Initial pose file path
+        self._initial_pose_path: Path = Path(
+            config.get(
+                "initial_pose_file",
+                os.environ.get("INITIAL_POSE_FILE", str(_INITIAL_POSE_PATH)),
             )
-            self.get_logger().info(
-                f"Covariance reader: file={_EKF_STATE_PATH}, "
-                f"initialpose={initial_pose_topic}"
+        )
+        self._initial_pose_tmp: Path = self._initial_pose_path.with_suffix(".json.tmp")
+
+        self._episode_config_path: Path = Path(
+            config.get(
+                "episode_config_file",
+                os.environ.get("EPISODE_CONFIG_FILE", str(_EPISODE_CONFIG_PATH)),
             )
+        )
+        self._episode_config_tmp: Path = self._episode_config_path.with_suffix(
+            ".json.tmp"
+        )
+        # Monotonically increasing counter for episode_config.json writes.
+        self._episode_config_seq: int = 0
+
+        # Ensure output directory exists once at construction time.
+        output_dir = self._ekf_state_path.parent
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # Remove stale JSON files from previous sessions so the ros2-bridge
+        # nodes do not pick up old state on startup.
+        for stale in [
+            self._ekf_state_path,
+            self._initial_pose_path,
+            self._initial_pose_tmp,
+            self._episode_config_path,
+            self._episode_config_tmp,
+        ]:
+            try:
+                stale.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        logger.info(
+            "Covariance reader: ekf_file=%s, initial_pose_file=%s",
+            self._ekf_state_path,
+            self._initial_pose_path,
+        )
+
+    # ------------------------------------------------------------------
+    # EKF state read interface
+    # ------------------------------------------------------------------
 
     def invalidate(self) -> None:
         """
@@ -118,6 +151,9 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
             self._valid_after_seq = self._last_read_seq
             self._latest_uncertainty = None
             self._latest_pose = None
+            # Reset mtime cache so next _read_file() always re-parses the file
+            # rather than seeing a match against pre-reset content.
+            self._last_mtime_ns = _MTIME_UNSET
 
     def _read_file(self) -> bool:
         """
@@ -136,36 +172,61 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         @return True if fresh (post-invalidation) data was read successfully.
         """
         try:
-            if not _EKF_STATE_PATH.exists():
-                return False
-            data = json.loads(_EKF_STATE_PATH.read_text())
-            # seq field added in extractor v2; fall back to mtime guard for
-            # old extractor images that predate the seq field.
+            stat = self._ekf_state_path.stat()
+        except FileNotFoundError:
+            return False
+
+        mtime_ns: int = stat.st_mtime_ns
+
+        with self._lock:
+            valid_after_seq = self._valid_after_seq
+            last_mtime = self._last_mtime_ns
+            cached_pose = self._latest_pose
+            cached_seq = self._last_read_seq
+
+        # If file has not changed and post-invalidation data is available, skip parse.
+        if (
+            mtime_ns == last_mtime
+            and cached_pose is not None
+            and cached_seq > valid_after_seq
+        ):
+            return True
+
+        try:
+            data = json.loads(self._ekf_state_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError):
+            return False
+
+        try:
             seq: int = int(data.get("seq", 0))
-            with self._lock:
-                valid_after_seq = self._valid_after_seq
             if seq <= valid_after_seq:
                 return False
-            cov_3x3 = np.array(data["covariance"]).reshape(3, 3)
+            cov_3x3 = np.asarray(data["covariance"], dtype=np.float64).reshape(3, 3)
             features = extract_2d_covariance_features(cov_3x3)
             pose = np.array(
-                [
-                    data["x"],
-                    data["y"],
-                    data["yaw"],
-                    data["vx"],
-                    data["vy"],
-                    data["vyaw"],
-                ],
+                [data["x"], data["y"], data["yaw"], data["vyaw"]],
                 dtype=np.float64,
             )
-            with self._lock:
-                self._latest_pose = pose
-                self._latest_uncertainty = features
-                self._last_read_seq = seq
-            return True
-        except (json.JSONDecodeError, KeyError, ValueError):
+        except (KeyError, ValueError):
             return False
+
+        # Reject NaN/Inf writes. Treating these as "no data" causes the
+        # env to fall back to the CARLA ground-truth pose rather than feeding
+        # NaN observations directly into the policy.
+        if not np.all(np.isfinite(pose)) or not np.all(np.isfinite(features)):
+            logger.warning(
+                "Rejecting EKF state write (seq=%d): contains NaN/Inf "
+                "(EKF may still be initialising).",
+                seq,
+            )
+            return False
+
+        with self._lock:
+            self._latest_pose = pose
+            self._latest_uncertainty = features
+            self._last_read_seq = seq
+            self._last_mtime_ns = mtime_ns
+        return True
 
     def get_latest_state(
         self,
@@ -177,8 +238,8 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         redundant stat + JSON parse when both values are needed (e.g. _get_state).
 
         @return Tuple of (pose, uncertainty) where:
-                pose: shape (6,) = [x, y, yaw, vx, vy, vyaw], or None.
-                uncertainty: shape (9,) uncertainty feature vector, or None.
+                pose: shape (4,) = [x, y, yaw, vyaw], or None.
+                uncertainty: shape (COVARIANCE_FEATURES_DIM,) feature vector, or None.
         """
         self._read_file()
         with self._lock:
@@ -196,11 +257,11 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
 
     def get_latest_uncertainty(self) -> Optional[np.ndarray]:
         """
-        @brief Get the most recent 9-element uncertainty feature vector.
+        @brief Get the most recent uncertainty feature vector.
 
         @note Use get_latest_state() when pose is also needed to avoid a
               second file read.
-        @return Array of shape (9,) or None if no data available.
+        @return Array of shape (COVARIANCE_FEATURES_DIM,) or None if no data available.
         """
         self._read_file()
         with self._lock:
@@ -214,7 +275,7 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
 
         @note Use get_latest_state() when uncertainty is also needed to avoid
               a second file read.
-        @return Array of shape (6,) = [x, y, yaw, vx, vy, vyaw] or None.
+        @return Array of shape (4,) = [x, y, yaw, vyaw] or None.
         """
         self._read_file()
         with self._lock:
@@ -222,37 +283,97 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
                 return cast(np.ndarray, self._latest_pose.copy())
             return None
 
+    # ------------------------------------------------------------------
+    # Episode signal writers
+    # ------------------------------------------------------------------
+
     def publish_initial_pose(self, x: float, y: float, yaw: float) -> None:
         """
-        @brief Publish the vehicle spawn pose to /initialpose for Cartographer
-               pure localisation mode.
+        @brief Signal the spawn pose to the ros2-bridge via a shared file.
 
-        Converts from CARLA world frame (left-handed, y increases rightward)
-        to ROS/Cartographer map frame (right-handed, y increases leftward) by
-        negating y and yaw before publishing.
+        Writes initial_pose.json with the spawn position in CARLA world frame.
+        The CovarianceExtractorNode in the ros2-bridge container watches this
+        file and publishes /set_pose locally (same DDS domain as the EKF).
+
+        The CARLA-to-ROS frame conversion (negate y and yaw) is applied by the
+        extractor node at publish time, keeping this file in CARLA convention.
 
         @param x: Spawn X in CARLA world frame (metres).
         @param y: Spawn Y in CARLA world frame (metres).
         @param yaw: Spawn heading in radians (CARLA convention).
         """
-        if not _ROS2_AVAILABLE:
-            return
+        self._initial_pose_seq += 1
+        data = {
+            "seq": self._initial_pose_seq,
+            "x": float(x),
+            "y": float(y),
+            "yaw": float(yaw),
+        }
+        try:
+            with open(self._initial_pose_tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(self._initial_pose_tmp, self._initial_pose_path)
+            logger.info(
+                "Initial pose written: x=%.2f y=%.2f yaw=%.1fdeg (seq=%d)",
+                x,
+                y,
+                math.degrees(yaw),
+                self._initial_pose_seq,
+            )
+        except OSError as exc:
+            logger.warning("Failed to write initial_pose.json: %s", exc)
 
-        # CARLA -> ROS frame: negate y and yaw (left-hand to right-hand mirror)
-        ros_y = -y
-        ros_yaw = -yaw
+    def publish_episode_config(
+        self,
+        tier_name: str,
+        datum_lat: Optional[float] = None,
+        datum_lon: Optional[float] = None,
+        spawn_yaw: Optional[float] = None,
+    ) -> None:
+        """
+        @brief Signal the GNSS noise tier, spawn datum, and initial yaw to the ros2-bridge.
 
-        msg = PoseWithCovarianceStamped()
-        msg.header.frame_id = "map"
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.pose.pose.position.x = x
-        msg.pose.pose.position.y = ros_y
-        msg.pose.pose.orientation.z = math.sin(ros_yaw / 2.0)
-        msg.pose.pose.orientation.w = math.cos(ros_yaw / 2.0)
-        msg.pose.covariance[0] = 0.1  # xx
-        msg.pose.covariance[7] = 0.1  # yy
-        msg.pose.covariance[35] = 0.05  # yaw-yaw
-        self._initial_pose_pub.publish(msg)
+        Writes episode_config.json with the episode's RTK fix-state tier
+        name, the geolocation of the vehicle spawn point, and the spawn yaw.
+
+        Re-latching the datum each episode ensures that GNSS Odometry (0, 0)
+        and /set_pose (0, 0) agree at episode reset, eliminating the systematic
+        EKF drift that occurs when /set_pose and GNSS use different origins.
+
+        @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed').
+        @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
+               When provided, the relay re-latches the GNSS flat-earth datum.
+               When None, the relay falls back to auto-latching on the next
+               GNSS callback (real-vehicle mode without CARLA API).
+        @param datum_lon: Longitude (degrees) of vehicle spawn.
+        @param spawn_yaw: Vehicle heading at spawn in radians, CARLA convention
+               (same as used by publish_initial_pose and the EKF /set_pose).
+               Seeds the COG heading so the EKF receives a correct initial yaw
+               before the first valid COG reading. When None, the relay waits
+               for the first valid COG reading before publishing any heading.
+        """
+        self._episode_config_seq += 1
+        data: Dict[str, Any] = {
+            "seq": self._episode_config_seq,
+            "tier_name": tier_name,
+        }
+        if datum_lat is not None:
+            data["datum_lat"] = datum_lat
+        if datum_lon is not None:
+            data["datum_lon"] = datum_lon
+        if spawn_yaw is not None:
+            data["spawn_yaw"] = spawn_yaw
+        try:
+            with open(self._episode_config_tmp, "w") as f:
+                json.dump(data, f)
+            os.replace(self._episode_config_tmp, self._episode_config_path)
+            logger.info(
+                "GNSS noise config written: tier=%s (seq=%d)",
+                tier_name,
+                self._episode_config_seq,
+            )
+        except OSError as exc:
+            logger.warning("Failed to write episode_config.json: %s", exc)
 
     @property
     def has_data(self) -> bool:
@@ -267,7 +388,7 @@ class _CovarianceSubscriber(_NodeBase):  # type: ignore[misc]
         with self._lock:
             if self._latest_uncertainty is not None:
                 return True
-        # Nothing cached -- attempt a read.
+        # Nothing cached - attempt a read.
         self._read_file()
         with self._lock:
             return self._latest_uncertainty is not None

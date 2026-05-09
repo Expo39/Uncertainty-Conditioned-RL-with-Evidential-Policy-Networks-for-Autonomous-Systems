@@ -1,49 +1,106 @@
 # tests/
 
-pytest test suite mirroring the `uncertainty_rl/` package structure. Two tiers: CPU-only unit tests (no CARLA, no ROS 2, no GPU) and integration tests that run inside the Docker container.
+pytest suite for `uncertainty_rl`. Two tiers: CPU-only unit tests (no CARLA, no ROS 2, no GPU) and Docker integration tests that run against the full simulation stack.
 
-## Files
+## At a glance
 
-| File | Tests |
-|------|-------|
-| `conftest.py` | Shared fixtures: 21-dim state tensors, 12-dim state tensors, config dicts, uncertainty states |
-| `test_evidential_policy.py` | EvidentialLayer, EvidentialPolicyNetwork, UncertaintyConditionedActor, NIG constraints, loss computation |
-| `test_carla_parking.py` | Env API (reset/step), geometry helpers, bay sampling, VisStateWriter, obs space shapes, `zone_bbox`, `_compute_reward` (40 tests) |
-| `test_covariance_utils.py` | Covariance feature extraction, matrix validation, dimension helper (18 tests) |
-| `test_sb3_integration.py` | SB3 + evidential policy integration: policy build, forward pass, action sampling (23 tests) |
-| `test_baseline_configs.py` | All 4 baseline YAMLs load correctly and override only permitted keys (10 tests) |
-| `test_run_experiment.py` | run_experiment.py orchestration: dry-run, config merging, seed enumeration (15 tests) |
-| `test_evaluation.py` | EvaluationMetrics container and aggregation, `_scale_sensor_noise` (13 tests) |
-| `test_logging.py` | MetricsLogger and UncertaintyTracker (11 tests) |
-| `test_visualisation.py` | Plot generation (uncertainty evolution, trajectory, training curves) (7 tests) |
-| `test_covariance_subscriber.py` | `_CovarianceSubscriber`: file reading, mtime staleness guard, `invalidate()`, `get_latest_uncertainty()`, `get_latest_pose()`, `has_data` (16 tests) |
-| `test_tf_to_odom.py` | `_yaw_from_quaternion`, `_make_diagonal_covariance`, `TfToOdomNode._compute_covariance_scale` (18 tests) |
-| `test_train_ppo.py` | `linear_schedule`: callable return, progress=1.0/0.0/0.5, linear interpolation, independence (6 tests) |
-| `test_ros2_integration.py` | EKF covariance arrival, dimension check, non-zero uncertainty (3 tests, `@pytest.mark.integration`) |
+- Unit tests run on any machine - the env falls back to `carla = None` and `_ROS2_AVAILABLE = False`, returning zero uncertainty features
+- Integration tests require the full three-tier Docker stack (CARLA + ROS 2 + training container)
+- All tests use the shared fixtures in `conftest.py`
+
+## Test tiers
+
+```mermaid
+flowchart TB
+    subgraph local["Local / CI (no GPU)"]
+        UNIT["make test-unit\n(unit tests, -m 'not integration')"]
+        VERIFY["make verify\n(unit + lint + typecheck + sanity)"]
+    end
+
+    subgraph docker["Docker (GPU machine)"]
+        DU["make docker-test-unit\n(unit tests in container)"]
+        DI["make docker-test-integration\n(integration tests in container)"]
+        DF["make docker-test\n(full suite in container)"]
+        DV["make docker-verify\n(all checks in container)"]
+    end
+
+    UNIT --> DU
+    VERIFY --> DV
+```
 
 ## Running
 
 ```bash
-# CPU-only (no Docker needed) -same checks run in CI
-make test-unit         # Unit tests only (no CARLA/ROS 2/GPU)
+# CPU-only (no Docker needed - same checks run in CI)
+make test-unit         # Unit tests only
 make verify            # Unit tests + lint + typecheck + import sanity
 
+# Inside Docker (no GPU required for unit tests)
+make docker-test-unit          # Unit tests in container
+make docker-verify             # All checks in container
+
 # Full stack (Docker + GPU machine)
-make docker-test-unit          # Unit tests inside container
 make docker-test-integration   # Integration tests (needs CARLA + ROS 2)
 make docker-test               # Full suite (unit + integration)
 ```
 
-## Test Tiers
+## Test file inventory
 
-**Unit tests** (`make test-unit`): Run on any machine without CARLA, ROS 2, or GPU. The env falls back to `carla = None` mode and rclpy is guarded with `_ROS2_AVAILABLE = False`. Returns zero uncertainty features -acceptable for unit tests, not for training.
+### Unit tests (CPU-only)
 
-**Integration tests** (`@pytest.mark.integration`): Run inside the training container via `make docker-test-integration`. Test that covariance arrives from EKF, vehicle spawns in CARLA, actions move the vehicle, etc.
+| File | What it covers |
+|------|---------------|
+| `conftest.py` | Shared fixtures: state tensors, config dicts, uncertainty states |
+| `test_evidential_policy.py` | `EvidentialLayer`, `EvidentialPolicyNetwork`, `UncertaintyConditionedActor`: output shapes, NIG constraints, uncertainty positivity |
+| `test_carla_parking.py` | `CARLAParkingEnv` obs/action shapes, geometry helpers (`point_in_polygon`, `yaw_from_quaternion`, `wrap_angle_symmetric`), `build_observation`, `extract_obstacle_features`, `load_floor_plan`, `wait_for_ekf`, bay sampling, reward, `VisStateWriter` |
+| `test_covariance_utils.py` | `extract_2d_covariance_features`, `validate_covariance_matrix`, `get_covariance_dimension`, `make_diagonal_covariance` |
+| `test_sb3_integration.py` | SB3 + evidential policy: policy construction, forward pass, action sampling, dual-encoder wiring |
+| `test_baseline_configs.py` | All 4 baseline YAMLs load correctly and override only permitted keys |
+| `test_evaluation.py` | `EvaluationMetrics` container and aggregation, `_scale_sensor_noise` (no CARLA connection) |
+| `test_covariance_subscriber.py` | `_CovarianceSubscriber`: JSON file reading, mtime staleness guard, `invalidate()`, `get_latest_uncertainty()`, `get_latest_pose()`, `has_data` |
+| `test_train_ppo.py` | `linear_schedule`, `EnvDiagnosticsCallback`, `make_env` helpers (no CARLA required) |
+| `test_tune_hyperparams.py` | Optuna sampling, `apply_best_params`, `TrialEvalCallback` (no CARLA or GPU required) |
+| `test_safety_wrapper.py` | `SafetyWrapper.apply()`, `step()`, `reset()`, `get_episode_safety_stats()` |
+| `test_debug_logger.py` | `DebugLogger`: no-op contract when disabled, dict population when enabled |
+| `test_actuation_calibration.py` | `ActuatorMap` (gain, deadband, bias, clamp), `ActuationCalibration` (identity, `from_config`) |
+| `test_lidar_noise.py` | SICK TiM571 LiDAR noise model in `SensorManager`: Gaussian range noise, per-point bias, dropout rate |
 
-## Key Fixture Constants
+### Integration tests (Docker + GPU - `@pytest.mark.integration`)
 
-- `STATE_DIM_FULL = 20` (pose 6 + covariance 9 + target 3 + obstacle 2)
-- `STATE_DIM_NO_COV = 11` (pose 6 + target 3 + obstacle 2, when `include_covariance=False`)
-- `ACTION_DIM = 3`
-- `BATCH_SIZE = 8`
-- `HIDDEN_DIMS = [64, 64]`
+| File | What it covers |
+|------|---------------|
+| `test_ros2_integration.py` | EKF covariance arrival within timeout, dimension check (3-element vector), non-zero uncertainty in `_get_state()`, EKF pose vs CARLA ground truth (4 tests) |
+
+## Key fixture constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `TOTAL_OBS_DIM` | 12 | vyaw + std_x/y/yaw + dx/dy/dyaw + 5 LiDAR obstacle features |
+| `ACTION_DIM` | 3 | Steering, drive, brake |
+| `BATCH_SIZE` | 8 | Default batch size for tensor fixtures |
+| `HIDDEN_DIMS` | [64, 64] | Default network architecture for test policies |
+
+## Coverage map
+
+| Source module | Test file |
+|---------------|-----------|
+| `networks/evidential_policy.py` | `test_evidential_policy.py` |
+| `networks/sb3_integration.py` | `test_sb3_integration.py` |
+| `envs/sim/carla_parking.py` | `test_carla_parking.py` |
+| `envs/sim/helpers/_sensor_manager.py` | `test_lidar_noise.py` |
+| `envs/_covariance_subscriber.py` | `test_covariance_subscriber.py` |
+| `envs/_safety_wrapper.py` | `test_safety_wrapper.py` |
+| `training/train_ppo.py` | `test_train_ppo.py` |
+| `training/tune_hyperparams.py` | `test_tune_hyperparams.py` |
+| `evaluation/evaluate.py` | `test_evaluation.py` |
+| `utils/covariance_utils.py` | `test_covariance_utils.py` |
+| `utils/logging.py` | `test_debug_logger.py` |
+| `utils/actuation_calibration.py` | `test_actuation_calibration.py` |
+| `configs/baselines/*.yaml` | `test_baseline_configs.py` |
+| ROS 2 EKF pipeline | `test_ros2_integration.py` |
+
+## See also
+
+- [uncertainty_rl/README.md](../uncertainty_rl/README.md) - package overview
+- [uncertainty_rl/envs/README.md](../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` and `_CovarianceSubscriber`
+- [uncertainty_rl/networks/README.md](../uncertainty_rl/networks/README.md) - evidential policy tested by `test_evidential_policy.py` and `test_sb3_integration.py`

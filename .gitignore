@@ -69,13 +69,6 @@ htmlcov/
 # TODO files
 TODO.md
 
-# Documentation (local dissertation notes, meeting agendas, references)
-# documentation/
-meeting_agendas/
-references/
-claude_plans/
-ENVIRONMENT_DESIGN.md
-documentation/tmux_guide.txt
 
 # Project config archive (local portability)
 project_configs.tar.gz
@@ -84,5 +77,15 @@ project_configs.tar.gz
 configs/layouts/*.yaml
 configs/maps/**/*.pbstream
 
+# Real-world deployment datum (site-specific coordinates, not committed)
+configs/deployment/real/real_world_datum.yaml
+
+# Optuna tuning backups and results
+logs/tuning/backups/
+logs/tuning/results/
+
 # Generated layout artefacts and visualiser state
 outputs/
+
+# Documentation 
+documentation/
