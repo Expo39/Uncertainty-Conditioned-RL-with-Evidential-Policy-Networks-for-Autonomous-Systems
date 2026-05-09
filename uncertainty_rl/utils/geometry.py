@@ -12,6 +12,8 @@ geometry logic lives in one place.
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
+
 
 def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
     """
@@ -19,14 +21,14 @@ def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
 
     Handles two YAML formats produced by scripts/generate_layouts.py:
 
-    Format A -- explicit extents::
+    Format A - explicit extents:
 
         x_min: <float>
         x_max: <float>
         y_min: <float>
         y_max: <float>
 
-    Format B -- centre + half-extents::
+    Format B - centre + half-extents:
 
         centre_x: <float>
         centre_y: <float>
@@ -83,6 +85,9 @@ def _interpolate_cone_positions(
     if extra_entrance_points:
         all_entrances.extend(extra_entrance_points)
 
+    # Compare squared distances to avoid sqrt per candidate.
+    gap_sq = entrance_half_width * entrance_half_width
+
     positions: List[Tuple[float, float, float]] = []
     n = len(corners)
 
@@ -105,8 +110,7 @@ def _interpolate_cone_positions(
             cx = x0 + k * dx
             cy = y0 + k * dy
             in_gap = any(
-                math.sqrt((cx - ex) ** 2 + (cy - ey) ** 2) < entrance_half_width
-                for ex, ey in all_entrances
+                (cx - ex) ** 2 + (cy - ey) ** 2 < gap_sq for ex, ey in all_entrances
             )
             if not in_gap:
                 positions.append((cx, cy, edge_yaw_deg))
@@ -127,22 +131,15 @@ def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> 
     @param y: Query point y coordinate.
     @param corners: Ordered polygon vertices as (x, y) pairs (closed automatically).
     @return True if the point is inside the polygon.
-
-    @note 1e-12 division guard prevents zero-division when the query point lies
-          exactly on a horizontal edge (yj == yi).
     """
-    n = len(corners)
-    inside = False
-    j = n - 1
-    for i in range(n):
-        xi, yi = corners[i]
-        xj, yj = corners[j]
-        if ((yi > y) != (yj > y)) and (
-            x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
-        ):
-            inside = not inside
-        j = i
-    return inside
+    arr = np.asarray(corners, dtype=np.float64)
+    xi = arr[:, 0]
+    yi = arr[:, 1]
+    xj = np.roll(xi, 1)
+    yj = np.roll(yi, 1)
+    cond1 = (yi > y) != (yj > y)
+    cond2 = x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi
+    return bool(np.count_nonzero(cond1 & cond2) % 2)
 
 
 def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float:
@@ -150,7 +147,7 @@ def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float
     @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
 
     Uses the standard ZYX Euler decomposition. Only valid for 2D operation
-    (z-axis rotation only -- roll and pitch are assumed zero).
+    (z-axis rotation only - roll and pitch are assumed zero).
 
     @param q_x: Quaternion x component.
     @param q_y: Quaternion y component.
@@ -167,19 +164,15 @@ def wrap_angle_symmetric(angle: float) -> float:
     """
     @brief Wrap an angle to (-pi, pi] with 180-degree parking symmetry.
 
-    Both nose-in and nose-out are valid parking orientations. This function
-    returns whichever of ``angle`` or ``angle + pi`` has the smaller absolute
-    value, wrapped to (-pi, pi].
-
-    Used wherever a heading error should be invariant to the vehicle entering
-    a bay forwards or in reverse (e.g. reward computation, target pose).
-
     @param angle: Raw heading error in radians.
     @return Heading error in (-pi, pi] with 180-deg symmetry applied.
     """
     wrapped = math.atan2(math.sin(angle), math.cos(angle))
-    wrapped_flip = math.atan2(math.sin(angle + math.pi), math.cos(angle + math.pi))
-    return wrapped_flip if abs(wrapped_flip) < abs(wrapped) else wrapped
+    if wrapped > math.pi / 2:
+        return wrapped - math.pi
+    if wrapped < -math.pi / 2:
+        return wrapped + math.pi
+    return wrapped
 
 
 def _compute_relative_target_pose(

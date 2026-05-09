@@ -5,35 +5,6 @@
 Generates pre-computed world-frame lot geometry (corners, bay positions, spawn
 transform, patrol waypoints, pedestrian zones) and writes layout YAML files
 consumed by CARLAParkingEnv. Optionally produces bird's-eye PNG plots.
-
-Three floor plan shapes are supported:
-
-  rectangle   -- Standard axis-aligned rectangle (60x45 m). Training layout.
-  trapezoid   -- Wider at entrance, narrower at rear (front=48, rear=30, depth=44 m).
-                 Training layout.
-  irregular_a -- Nine-sided polygon with diagonal top wall and bottom notch
-                 (OOD, held out from training).
-
-Each shape is defined in its own module under scripts/layouts/:
-  scripts/layouts/rectangle.py
-  scripts/layouts/trapezoid.py
-  scripts/layouts/irregular_a.py
-
-Usage::
-
-  # Generate all three layouts:
-  make generate-layouts
-
-  # Generate one layout only:
-  make generate-layouts LAYOUT=trapezoid
-
-  # Override output directories:
-  python scripts/layouts/generate_layouts.py \
-      --output-dir configs/layouts --plot-dir outputs/layouts
-
-  # Generate one layout with custom origin:
-  python scripts/layouts/generate_layouts.py \
-      --layout rectangle --origin -200 0 0.3 --heading 0
 """
 
 import argparse
@@ -45,12 +16,12 @@ from typing import Optional
 # __file__ is generate_layouts.py -> .parent.parent.parent = project root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.layouts import irregular_a, rectangle, trapezoid  # noqa: E402
 from scripts.layouts.common import (  # noqa: E402
     plot_layout,
     to_world_frame,
     write_layout_yaml,
 )
+from scripts.layouts.floor_plans import irregular_a, rectangle, trapezoid  # noqa: E402
 
 _LAYOUTS = {
     "rectangle": rectangle,
@@ -162,23 +133,21 @@ def main() -> None:
 
     if args.layout is not None:
         # Single layout mode.
-        module = _LAYOUTS[args.layout]
+        name = args.layout
+        module = _LAYOUTS[name]
         ox = args.origin[0] if args.origin else module.ORIGIN_X
         oy = args.origin[1] if args.origin else module.ORIGIN_Y
         oz = args.origin[2] if args.origin else module.ORIGIN_Z
         hdg = args.heading if args.heading is not None else module.HEADING_DEG
-        print(
-            f"Generating {args.layout} layout "
-            f"(origin={ox},{oy},{oz}, heading={hdg} deg)"
-        )
+        print(f"Generating {name} layout (origin={ox},{oy},{oz}, heading={hdg} deg)")
         _generate_one(
-            name=args.layout,
+            name=name,
             origin_x=ox,
             origin_y=oy,
             origin_z=oz,
             heading_deg=hdg,
-            output_path=out_dir / f"{args.layout}.yaml",
-            plot_path=None if args.no_plot else plot_dir / f"{args.layout}.png",
+            output_path=out_dir / f"{name}.yaml",
+            plot_path=None if args.no_plot else plot_dir / f"{name}.png",
             ood=module.OOD,
         )
     else:

@@ -27,6 +27,10 @@ class EvidentialLayer(nn.Module):
     distribution for epistemic and aleatoric uncertainty quantification.
     """
 
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
+
     def __init__(self, input_dim: int, output_dim: int) -> None:
         """
         @brief Constructor for EvidentialLayer.
@@ -40,14 +44,9 @@ class EvidentialLayer(nn.Module):
         # Output 4 parameters per action: gamma, nu, alpha, beta
         self.linear = nn.Linear(input_dim, output_dim * 4)
 
-        # NIG hyperprior initialisation: start near a stable prior rather than
-        # random Kaiming init, which can give near-zero nu (undefined precision)
-        # or alpha near 1 (infinite variance) at step 0.
-        # Bias layout (contiguous blocks of output_dim): [gamma | nu | alpha | beta]
-        # softplus(0.9) + 1e-6 ~ 0.97  => nu ~ 0.97 (reasonable initial precision)
-        # softplus(0.9) + 1.0  ~ 1.97  => alpha ~ 1.97 (well-defined finite variance)
-        # softplus(0.0) + 1e-6 ~ 0.69  => beta ~ 0.69 (moderate scale)
-        # Weights scaled by 0.01 so outputs are dominated by biases at init.
+        # Bias layout [gamma | nu | alpha | beta] keeps NIG parameters in a stable
+        # prior region at step 0. Weights scaled by 0.01 so biases dominate init.
+        # See documentation/detailed_notes/evidential_nig_initialisation.md for derivation.
         with torch.no_grad():
             self.linear.weight.mul_(0.01)
             n = self.output_dim
@@ -69,14 +68,14 @@ class EvidentialLayer(nn.Module):
                 - beta: Rate parameter (batch_size, output_dim)
         """
         out = self.linear(x)
-        # Reshape to (batch_size, output_dim, 4)
-        out = out.view(-1, self.output_dim, 4)
+        n = self.output_dim
 
-        # Split into 4 parameters
-        gamma = out[..., 0]  # Mean (no constraint)
-        nu = F.softplus(out[..., 1]) + 1e-6  # Precision (positive)
-        alpha = F.softplus(out[..., 2]) + 1.0  # Shape (> 1 for finite variance)
-        beta = F.softplus(out[..., 3]) + 1e-6  # Rate (positive)
+        # Split along the flat output dimension to match bias layout [gamma | nu | alpha | beta].
+        gamma = out[:, :n]
+        pos = F.softplus(out[:, n:]).clamp_(max=100.0)  # one kernel for nu/alpha/beta
+        nu = pos[:, :n] + 1e-6
+        alpha = pos[:, n : 2 * n] + 1.0
+        beta = pos[:, 2 * n :] + 1e-6
 
         return gamma, nu, alpha, beta
 
@@ -86,14 +85,12 @@ class EvidentialPolicyNetwork(nn.Module):
     @class EvidentialPolicyNetwork
     @brief Standalone evidential policy network for testing and experiments.
 
-    Full MLP backbone + EvidentialLayer in a single self-contained module.
-    Used in unit tests and standalone experiments. NOT used in the RL training
-    pipeline -- the SB3 integration (EvidentialActorCriticPolicy) wires
-    EvidentialLayer and UncertaintyConditionedActor directly into SB3's
-    ActorCriticPolicy to keep the PPO surrogate objective intact.
-
     @see EvidentialActorCriticPolicy in sb3_integration.py for the RL path.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
@@ -176,22 +173,17 @@ class EvidentialPolicyNetwork(nn.Module):
         """
         gamma, nu, alpha, beta = self.forward(state)
 
-        # Compute uncertainties
-        epistemic_uncertainty = beta / (alpha - 1)  # Epistemic (model) uncertainty
-        aleatoric_uncertainty = beta / (
-            nu * (alpha - 1)
-        )  # Aleatoric (data) uncertainty
+        alpha_m1 = alpha - 1
+        aleatoric_uncertainty = beta / alpha_m1
+        epistemic_uncertainty = beta / (nu * alpha_m1)
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
 
         # For deterministic action, use mean
         if deterministic:
             action = gamma
         else:
-            # Gaussian approximation of the NIG Student-t predictive distribution.
-            # Predictive std = sqrt(beta / (nu * (alpha - 1))) = sqrt(aleatoric).
-            # Using total_uncertainty would double-count: epistemic uncertainty is
-            # already captured by the spread of gamma across the posterior, not by
-            # inflating the per-sample action noise.
+            # Epistemic uncertainty (Var[mu]) is not added to action noise -
+            # it quantifies model uncertainty over gamma, not per-sample noise.
             std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
             dist = Normal(gamma, std)
             action = dist.sample()
@@ -228,25 +220,20 @@ class EvidentialPolicyNetwork(nn.Module):
         @return Dictionary containing loss components.
 
         @note This is a standalone supervised regression loss used in unit tests
-              and standalone experiments. It is NOT used during RL training.
-              In the RL pipeline (EvidentialPPO), the NLL is handled by
-              EvidentialDistribution.log_prob() and the regularisation term is
-              computed inline in EvidentialPPO.train() -- keeping them separate
-              so PPO's clipped surrogate objective controls the NLL contribution.
+              and standalone experiments.
         """
-        # NIG-NLL (Amini et al. 2020, eq. 9).
-        # Omega = 2*beta*(1 + nu) is the scale term that appears in both log terms.
+        diff = target - gamma
         omega = 2 * beta * (1 + nu)
         nll = (
             0.5 * torch.log(torch.pi / nu)
             - alpha * torch.log(omega)
-            + (alpha + 0.5) * torch.log(nu * (target - gamma) ** 2 + omega)
+            + (alpha + 0.5) * torch.log(nu * diff**2 + omega)
             + torch.lgamma(alpha)
             - torch.lgamma(alpha + 0.5)
         )
 
         # Regularisation term to penalise high evidence on wrong predictions
-        error = torch.abs(target - gamma)
+        error = diff.abs()
         reg = error * (2 * nu + alpha)
 
         loss = nll.mean() + lambda_reg * reg.mean()
@@ -266,6 +253,10 @@ class UncertaintyConditionedActor(nn.Module):
     This network explicitly uses uncertainty information in the state to make
     more cautious decisions under high uncertainty.
     """
+
+    # ------------------------------------------------------------------
+    # Construction
+    # ------------------------------------------------------------------
 
     def __init__(
         self,
