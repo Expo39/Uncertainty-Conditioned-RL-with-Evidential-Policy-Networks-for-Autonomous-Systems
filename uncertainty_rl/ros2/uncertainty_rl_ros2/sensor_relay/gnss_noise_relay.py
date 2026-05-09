@@ -18,6 +18,7 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import rclpy
+import yaml
 from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -51,7 +52,8 @@ _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
                    "alt_stddev_m": 10.0,  "metric_stddev_m": 5.0},
 }
 
-# Default per-step transition matrix (rows = from, cols = to).
+# Fallback per-step transition matrix used only if
+# configs cannot be loaded at startup.
 _DEFAULT_TRANSITION_MATRIX: List[List[float]] = [
     # to:  fixed   float   standalone  degraded
     [0.9950, 0.0050, 0.0000, 0.0000],  # from: rtk_fixed
@@ -70,6 +72,9 @@ class GnssNoiseRelayNode(Node):
     """
 
     _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/episode_config.json"
+    _DEFAULT_NOISE_PROFILES_PATH: str = (
+        "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"
+    )
 
     # Standstill noise floor on the per-step displacement gate. Successive
     # noisy GNSS positions differ by ~sigma * sqrt(2) per step from pure
@@ -102,6 +107,12 @@ class GnssNoiseRelayNode(Node):
         # current yaw (from /odometry/filtered) and flipping by pi when the
         # difference exceeds 90 deg.
         self.declare_parameter("enable_cog_reverse_detection", True)
+        self.declare_parameter(
+            "noise_profiles_path",
+            os.environ.get(
+                "GNSS_NOISE_PROFILES_PATH", self._DEFAULT_NOISE_PROFILES_PATH
+            ),
+        )
 
         input_topic = str(
             self.get_parameter("input_topic").get_parameter_value().string_value
@@ -149,8 +160,13 @@ class GnssNoiseRelayNode(Node):
         )
 
         self._tier_params: Dict[str, Dict[str, float]] = dict(_TIER_DEFAULTS)
-        self._transition_matrix: np.ndarray = np.array(
-            _DEFAULT_TRANSITION_MATRIX, dtype=np.float64
+        noise_profiles_path = str(
+            self.get_parameter("noise_profiles_path")
+            .get_parameter_value()
+            .string_value
+        )
+        self._transition_matrix: np.ndarray = self._load_transition_matrix(
+            noise_profiles_path
         )
         self._active_tier_idx: int = 0
 
@@ -239,6 +255,57 @@ class GnssNoiseRelayNode(Node):
     # ------------------------------------------------------------------
     # Config and tier helpers
     # ------------------------------------------------------------------
+
+    def _load_transition_matrix(self, profiles_path: str) -> np.ndarray:
+        """
+        @brief Load the per-step transition matrix from gnss_noise_profiles.yaml.
+
+        @param profiles_path: Absolute path to gnss_noise_profiles.yaml.
+        @return 4x4 ndarray indexed in _TIER_ORDER (rows = from, cols = to).
+        """
+        fallback = np.array(_DEFAULT_TRANSITION_MATRIX, dtype=np.float64)
+        try:
+            with open(profiles_path, "r") as f:
+                data = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as exc:
+            self.get_logger().warning(
+                f"Could not load transition matrix from {profiles_path} "
+                f"({exc}); using hardcoded defaults."
+            )
+            return fallback
+
+        section = data.get("transition_matrix") if isinstance(data, dict) else None
+        if not isinstance(section, dict):
+            self.get_logger().warning(
+                f"{profiles_path} missing 'transition_matrix' section; "
+                "using hardcoded defaults."
+            )
+            return fallback
+
+        rows: List[List[float]] = []
+        for name in _TIER_ORDER:
+            row = section.get(name)
+            if not isinstance(row, list) or len(row) != len(_TIER_ORDER):
+                self.get_logger().warning(
+                    f"transition_matrix.{name} malformed in {profiles_path}; "
+                    "using hardcoded defaults."
+                )
+                return fallback
+            rows.append([float(x) for x in row])
+
+        P = np.array(rows, dtype=np.float64)
+        row_sums = P.sum(axis=1)
+        if not np.allclose(row_sums, 1.0, atol=1e-6):
+            self.get_logger().warning(
+                f"transition_matrix rows do not sum to 1 ({row_sums.tolist()}); "
+                "using hardcoded defaults."
+            )
+            return fallback
+
+        self.get_logger().info(
+            f"Loaded transition matrix from {profiles_path}."
+        )
+        return P
 
     def _apply_tier(self, tier_name: str) -> None:
         """
