@@ -17,11 +17,9 @@ except ImportError:
     # be available; tests that need them should be skipped via pytest.importorskip.
     torch = None  # type: ignore[assignment]
 
-from uncertainty_rl.utils.constants import ACTION_DIM
-
 # ---------------------------------------------------------------------------
 # Constants for network tests. Network tests use a small arbitrary state dim
-# (not the full 20-dim env obs) for fast unit test execution. Env obs space
+# (not the full 12-dim env obs) for fast unit test execution. Env obs space
 # tests in test_carla_parking.py use _compute_obs_dim() directly.
 # ---------------------------------------------------------------------------
 STATE_DIM = 15
@@ -50,40 +48,6 @@ def single_state():
     """
     pytest.importorskip("torch")
     return torch.randn(1, STATE_DIM)
-
-
-@pytest.fixture
-def action_batch():
-    """
-    @brief Random action batch shaped (BATCH_SIZE, ACTION_DIM).
-    """
-    pytest.importorskip("torch")
-    return torch.randn(BATCH_SIZE, ACTION_DIM)
-
-
-@pytest.fixture
-def low_uncertainty_state():
-    """
-    @brief State with very low EKF localisation uncertainty (indices 6-8 near zero).
-    """
-    pytest.importorskip("torch")
-    state = torch.randn(1, STATE_DIM)
-    state[0, 6:9] = 0.01
-    state[0, 9:15] = 0.0001
-    return state
-
-
-@pytest.fixture
-def high_uncertainty_state():
-    """
-    @brief State with high EKF localisation uncertainty (indices 6-8 large).
-    """
-    pytest.importorskip("torch")
-    state = torch.randn(1, STATE_DIM)
-    state[0, 6:9] = 1.0
-    state[0, 9:12] = 1.0
-    state[0, 12:15] = 0.5
-    return state
 
 
 # ---------------------------------------------------------------------------
@@ -133,9 +97,6 @@ def train_config() -> Dict[str, Any]:
                 "sensor_tick": 0.05,
             },
         },
-        "carla_conditions": {
-            "weather_presets": ["ClearNoon", "HardRainNoon"],
-        },
         "parking_scenarios": {
             "bay_occupancy_min": 0.3,
             "bay_occupancy_max": 0.8,
@@ -162,19 +123,19 @@ def eval_config() -> Dict[str, Any]:
         },
         "eval_conditions": [
             {
-                "name": "clear_low_noise",
-                "description": "Clear weather, low IMU noise, no traffic",
-                "weather_preset": "ClearNoon",
-                "imu_noise_multiplier": 0.5,
+                "name": "nominal_empty",
+                "description": "RTK fixed, empty lot",
+                "gnss_noise_multiplier": 1.0,
+                "imu_noise_multiplier": 1.0,
                 "num_patrol_vehicles": 0,
                 "pedestrian_spawn_probability": 0.0,
                 "bay_occupancy_rate": 0.6,
             },
             {
-                "name": "rain_degraded",
-                "description": "Heavy rain, 2x IMU noise, 1 patrol, all zones",
-                "weather_preset": "HardRainNoon",
-                "imu_noise_multiplier": 2.0,
+                "name": "rtk_float",
+                "description": "RTK float, moderate traffic",
+                "gnss_noise_multiplier": 15.0,
+                "imu_noise_multiplier": 1.5,
                 "num_patrol_vehicles": 1,
                 "pedestrian_spawn_probability": 1.0,
                 "bay_occupancy_rate": 0.6,

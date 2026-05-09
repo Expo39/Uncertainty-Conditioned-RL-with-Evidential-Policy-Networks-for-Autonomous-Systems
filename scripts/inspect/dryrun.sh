@@ -1,25 +1,60 @@
 #!/usr/bin/env bash
 # @file dryrun.sh
-# @brief Stream logs from the dryrun inspect container and tear down on exit.
+# @brief Start the dryrun inspect stack and stream output.
 #
-# Called by `make docker-inspect-dryrun` after the inspect containers are
-# started in detached mode. Follows the training-inspect-dryrun container log
-# and cleans up all inspect containers on Ctrl+C or normal exit.
-#
-# Usage:
-#   scripts/inspect/dryrun.sh
+# Starts carla-server-demo and ros2-bridge-inspect detached, waits for them
+# to be healthy, then runs the training container.
 
 set -euo pipefail
 
-DOCKER_COMPOSE_INSPECT="docker compose -f docker-compose.yml -f docker-compose.inspect.yml"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+DOCKER_COMPOSE_INSPECT="docker compose \
+    -f ${REPO_ROOT}/docker-compose.yml \
+    -f ${REPO_ROOT}/docker-compose.inspect.yml"
+CONTAINER="uncertainty-rl-training-inspect-dryrun"
 
 cleanup() {
     echo ""
     echo "Stopping inspect containers..."
-    ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun down 2>/dev/null || true
+    ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun down --timeout 3 2>/dev/null || true
     xhost -local:docker 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
 
-echo "Containers started. Streaming training output (Ctrl+C to abort)..."
-docker logs -f uncertainty-rl-training-inspect-dryrun 2>&1
+# Start CARLA + ROS 2 bridge detached and wait for health checks
+echo "Starting carla-server-demo and ros2-bridge-inspect..."
+DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
+    INSPECT_VIEW="${INSPECT_VIEW:-third_person}" \
+    INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
+    INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
+    EPISODES="${EPISODES:-}" \
+    ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
+    --force-recreate --detach --wait \
+    carla-server-demo ros2-bridge-inspect
+
+if [ "${INSPECT_MANUAL:-false}" = "true" ]; then
+    echo "Starting training container in foreground (keyboard control active)..."
+    echo "  Arrow keys: Up=throttle  Down=brake  Left/Right=steer  Ctrl+C=stop"
+    # Run the training container interactively so its stdin is this terminal.
+    # --no-deps: carla + ros2 already up. --rm: clean up on exit.
+    DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
+        INSPECT_VIEW="${INSPECT_VIEW:-third_person}" \
+        INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
+        INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
+        EPISODES="${EPISODES:-}" \
+        ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun \
+        run --rm -it --name "${CONTAINER}" \
+        training-inspect-dryrun
+else
+    echo "Starting training container..."
+    DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
+        INSPECT_VIEW="${INSPECT_VIEW:-third_person}" \
+        INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
+        INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
+        EPISODES="${EPISODES:-}" \
+        ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
+        --force-recreate --detach \
+        training-inspect-dryrun
+    echo "Streaming training output (Ctrl+C to abort)..."
+    docker logs -f "${CONTAINER}" 2>&1
+fi

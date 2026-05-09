@@ -1,214 +1,58 @@
 """
 @file carla_bridge.launch.py
-@brief Launch file for CARLA bridge, Cartographer, robot_localisation EKF,
-       and covariance extraction.
+@brief Launch file for CARLA bridge, RTK-GNSS+IMU EKF, and covariance extraction.
 
 The bridge runs in **passive mode** (passive=True): it does NOT call world.tick().
 Only the training container (CARLAParkingEnv.step -> world.tick) advances the
 simulation. The bridge auto-discovers sensors spawned by the training container
 (register_all_sensors=True) and publishes their data as ROS 2 topics.
-
-Orchestrates the full sensor-to-covariance pipeline:
-1. CARLA ROS bridge (passive; publishes sensor data from CARLA to ROS 2 topics)
-2. Static TF publishers (sensor frames to vehicle body)
-3. Cartographer (scan-matching; publishes TF odom -> tracking_frame)
-4. TfToOdomNode (converts Cartographer TF to Odometry)
-5. robot_localisation EKF (fuses IMU + scan-matched odometry -> /odometry/filtered)
-6. CovarianceExtractorNode (extracts 3x3 [x, y, yaw] covariance + velocity ->
-   /ekf_uncertainty/covariance for the training container)
-
-@note The CARLA ROS bridge in passive mode publishes sensor TF frames directly
-      under "map" (e.g. map -> ego_vehicle/lidar) without an intermediate
-      "ego_vehicle" body frame. Static TF publishers create the body frame:
-      ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu (+ lidar_3d for Suite B/C).
-
-Cartographer config selected by SENSOR_SUITE and CARTOGRAPHER_MODE (4 configs):
-  slam + suite_a   -> cartographer_config.lua
-  slam + suite_b/c -> cartographer_config_3d.lua
-  loc  + suite_a   -> cartographer_config_loc.lua
-  loc  + suite_b/c -> cartographer_config_3d_loc.lua
-
-Environment variables:
-  CARTOGRAPHER_MODE  slam (default) or loc (pure localisation)
-  CARTOGRAPHER_MAP   path to .pbstream (required when CARTOGRAPHER_MODE=loc)
-  SENSOR_SUITE       suite_a (default), suite_b, or suite_c
-
-@author Antonio Galdes
 """
 
+import importlib.util
 import os
-from pathlib import Path
-from typing import Dict, List
 
-import yaml
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-
-def _load_yaml(path_str: str, env_override: str = "") -> dict:
-    """
-    @brief Load a YAML config, optionally overridden by an env var.
-    @param path_str: Default file path inside the container.
-    @param env_override: Env var name that overrides the path (optional).
-    @return Parsed dictionary, or empty dict if not found.
-    """
-    resolved = os.environ.get(env_override, path_str) if env_override else path_str
-    path = Path(resolved)
-
-    if not path.exists():
-        # Fallback: resolve relative to the project root for local development.
-        # Preserve any subdirectory structure from the original path by taking
-        # the portion after "configs/" rather than just path.name.
-        try:
-            rel = path.relative_to("configs")
-        except ValueError:
-            rel = Path(path.name)
-        path = Path(__file__).resolve().parents[3] / "configs" / rel
-
-    if path.exists():
-        with open(path) as f:
-            return yaml.safe_load(f) or {}
-    return {}
-
-
-def _static_tf(
-    name: str,
-    parent: str,
-    child: str,
-    x: float,
-    y: float,
-    z: float,
-) -> Node:
-    """
-    @brief Create a static_transform_publisher node with zero rotation.
-    @param name: Node name.
-    @param parent: Parent TF frame ID.
-    @param child: Child TF frame ID.
-    @param x: Translation X (metres).
-    @param y: Translation Y (metres).
-    @param z: Translation Z (metres).
-    @return Node for the static transform publisher.
-    """
-    return Node(
-        package="tf2_ros",
-        executable="static_transform_publisher",
-        name=name,
-        parameters=[{"use_sim_time": True}],
-        arguments=[
-            "--x",
-            str(x),
-            "--y",
-            str(y),
-            "--z",
-            str(z),
-            "--roll",
-            "0",
-            "--pitch",
-            "0",
-            "--yaw",
-            "0",
-            "--frame-id",
-            parent,
-            "--child-frame-id",
-            child,
-        ],
-    )
-
-
-def _build_sensor_tf_nodes(sensors_config: Dict, is_3d: bool) -> List[Node]:
-    """
-    @brief Build static TF nodes connecting sensor frames to the ego_vehicle body frame.
-
-    The CARLA bridge publishes each sensor as a separate TF tree under "map".
-    These static TFs create a unified tree:
-      ego_vehicle/lidar -> ego_vehicle -> ego_vehicle/imu
-                                       -> ego_vehicle/lidar_3d (Suite B/C)
-
-    Mount positions are read from env_config.yaml (carla_sensors section).
-    On the real car, update mount values to match physical sensor positions.
-
-    @param sensors_config: carla_sensors dict from env_config.yaml.
-    @param is_3d: True if using Suite B/C (3D LiDAR).
-    @return List of static TF publisher nodes.
-    """
-    lidar_mount = sensors_config.get("lidar", {}).get("mount", {})
-    imu_mount = sensors_config.get("imu", {}).get("mount", {})
-
-    nodes = [
-        # ego_vehicle/lidar -> ego_vehicle (inverse of LiDAR mount offset)
-        _static_tf(
-            "lidar_to_body_tf",
-            "ego_vehicle/lidar",
-            "ego_vehicle",
-            -float(lidar_mount.get("x", 2.4)),
-            -float(lidar_mount.get("y", 0.0)),
-            -float(lidar_mount.get("z", 0.5)),
-        ),
-        # ego_vehicle -> ego_vehicle/imu
-        _static_tf(
-            "body_to_imu_tf",
-            "ego_vehicle",
-            "ego_vehicle/imu",
-            float(imu_mount.get("x", 0.0)),
-            float(imu_mount.get("y", 0.0)),
-            float(imu_mount.get("z", 0.3)),
-        ),
-    ]
-
-    if is_3d:
-        lidar3d_mount = sensors_config.get("lidar_3d", {}).get("mount", {})
-        nodes.append(
-            _static_tf(
-                "body_to_lidar3d_tf",
-                "ego_vehicle",
-                "ego_vehicle/lidar_3d",
-                float(lidar3d_mount.get("x", -0.5)),
-                float(lidar3d_mount.get("y", 0.0)),
-                float(lidar3d_mount.get("z", 1.9)),
-            )
-        )
-
-    return nodes
-
-
-def _select_cartographer_config(mode: str, is_3d: bool) -> str:
-    """
-    @brief Select the Cartographer Lua config basename.
-    @param mode: "slam" or "loc".
-    @param is_3d: True if using Suite B/C (3D LiDAR).
-    @return Lua config file basename.
-    """
-    configs = {
-        ("slam", False): "cartographer_config.lua",
-        ("slam", True): "cartographer_config_3d.lua",
-        ("loc", False): "cartographer_config_loc.lua",
-        ("loc", True): "cartographer_config_3d_loc.lua",
-    }
-    key = (mode, is_3d)
-    if key not in configs:
-        raise ValueError(
-            f"Unknown CARTOGRAPHER_MODE '{mode}'. " "Expected 'slam' or 'loc'."
-        )
-    return configs[key]
+# Load shared launch helpers by file path so the import is not shadowed by
+# the installed ROS 2 'launch' package of the same name.
+_common_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "_common.py")
+_spec = importlib.util.spec_from_file_location("launch_common", _common_path)
+assert _spec is not None, "Failed to load _common.py spec"
+_common_mod = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_common_mod)  # type: ignore[union-attr]
+load_yaml = _common_mod.load_yaml
+static_tf = _common_mod.static_tf
 
 
 def generate_launch_description() -> LaunchDescription:
     """
-    @brief Generate launch description for the full CARLA + EKF + covariance stack.
+    @brief Generate launch description for the CARLA + GNSS + EKF + covariance stack.
     @return LaunchDescription with all nodes and launch arguments.
     """
-    ros2_config = _load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")
-    env_config = _load_yaml("/workspace/configs/carla/env_config.yaml")
+    ros2_config = load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")
+    sensor_config = load_yaml(
+        "/workspace/configs/deployment/sensor_config.yaml", "SENSOR_CONFIG_PATH"
+    )
+    agent_config = load_yaml(
+        "/workspace/configs/deployment/agent_config.yaml", "AGENT_CONFIG_PATH"
+    )
+    # Merge: sensor_config < agent_config < env_config (env wins on conflict).
+    # Matches the three-layer merge in load_env_config() in train_ppo.py.
+    env_config = {
+        **sensor_config,
+        **agent_config,
+        **load_yaml("/workspace/configs/deployment/sim/env_config.yaml"),
+    }
 
-    # -- Environment variables ---------------------------------------------
-
-    sensor_suite = os.environ.get("SENSOR_SUITE", "suite_a")
-    cartographer_mode = os.environ.get("CARTOGRAPHER_MODE", "slam")
-    cartographer_map = os.environ.get("CARTOGRAPHER_MAP", "")
-    is_3d = sensor_suite in ("suite_b", "suite_c")
+    use_sim_time: bool = ros2_config.get("use_sim_time", True)
 
     # synchronous_mode has NO effect when passive=true: the bridge skips
     # apply_settings entirely and never registers as a synchronous CARLA client.
@@ -259,9 +103,11 @@ def generate_launch_description() -> LaunchDescription:
                 # vehicle and overriding the training container's apply_control().
                 # The bridge matches control targets by role_name; "hero" does not
                 # match our "ego_vehicle" actor, so no controls are injected.
-                # Sensor publishing is unaffected: register_all_sensors=True
-                # discovers all sensors regardless of actor role_name.
                 "ego_vehicle_role_name": "hero",
+                # Publish CARLA sim time on /clock so all ROS nodes using
+                # use_sim_time=true have a consistent time source. Without this
+                # the EKF waits forever for /clock and never starts.
+                "publish_clock": "true",
             }.items(),
         )
     except Exception:
@@ -270,7 +116,7 @@ def generate_launch_description() -> LaunchDescription:
     # -- EKF node ----------------------------------------------------------
 
     # Spread into a new dict to avoid mutating the live ros2_config object.
-    ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": True}
+    ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": use_sim_time}
 
     ekf_node = Node(
         package="robot_localization",
@@ -281,103 +127,71 @@ def generate_launch_description() -> LaunchDescription:
 
     # -- Static TF: sensor mount tree --------------------------------------
 
-    sensors_config = env_config.get("carla_sensors", {})
-    static_tf_nodes = _build_sensor_tf_nodes(sensors_config, is_3d)
-
-    # All suites feed raw PointCloud2 directly to Cartographer (num_point_clouds=1).
-    # CARLA's ray_cast does not collide with the parent actor, so 360 deg is used
-    # for both mapping and localisation, ensuring consistency. On the real robot,
-    # rebuild the pbstream with the physical sensor's native FOV.
-
-    # -- Cartographer node -------------------------------------------------
-
-    cartographer_basename = _select_cartographer_config(cartographer_mode, is_3d)
-
-    carto_args = [
-        "-configuration_directory",
-        "/workspace/configs/cartographer",
-        "-configuration_basename",
-        cartographer_basename,
-    ]
-    if cartographer_mode == "loc":
-        if not cartographer_map:
-            raise RuntimeError(
-                "CARTOGRAPHER_MODE=loc requires CARTOGRAPHER_MAP env var "
-                "pointing to a .pbstream file. Run `make docker-map` first."
-            )
-        if not os.path.isfile(cartographer_map):
-            raise RuntimeError(
-                f"CARTOGRAPHER_MAP pbstream not found: '{cartographer_map}'. "
-                f"Run `make docker-map LAYOUT=<layout>` to generate it first."
-            )
-        carto_args += [
-            "-load_state_filename",
-            cartographer_map,
-            "-load_frozen_state",
-            "true",
-        ]
-
-    # All suites feed raw PointCloud2 to Cartographer on the "points2" topic.
-    # Suite A: single-channel 2D LiDAR at /carla/ego_vehicle/lidar (360 deg).
-    # Suite B/C: 16-channel 3D LiDAR at /carla/ego_vehicle/lidar_3d (360 deg).
-    lidar_topic = "/carla/ego_vehicle/lidar_3d" if is_3d else "/carla/ego_vehicle/lidar"
-    # No odom input remapping: Cartographer uses LiDAR + IMU only.
-    # The "odom" remapping would only be needed if feeding an external odometry
-    # source into Cartographer, which we do not do.
-    carto_remappings = [
-        ("points2", lidar_topic),
-        ("imu", "/carla/ego_vehicle/imu"),
+    static_tf_nodes = [
+        # Anchors ego_vehicle at the map origin. The EKF will override this by
+        # publishing odom -> ego_vehicle as it fuses IMU and GNSS data.
+        static_tf("map_to_ego_vehicle_tf", "map", "ego_vehicle", 0.0, 0.0, 0.0),
+        # Identity map -> odom for consumers that need the full map->odom->body chain.
+        static_tf("map_to_odom_tf", "map", "odom", 0.0, 0.0, 0.0),
     ]
 
-    cartographer_node = Node(
-        package="cartographer_ros",
-        executable="cartographer_node",
-        name="cartographer_node",
-        parameters=[{"use_sim_time": True}],
-        arguments=carto_args,
-        remappings=carto_remappings,
-    )
+    # -- Sensor relay node -------------------------------------------------
 
-    # -- TF-to-Odometry bridge (Cartographer -> EKF) -------------------------
-    #
-    # Cartographer publishes its pose estimate via TF (odom -> tracking_frame)
-    # but not as an Odometry topic. The EKF needs nav_msgs/Odometry on odom0.
-    # This node bridges the gap and publishes dynamic covariance: inflated when
-    # Cartographer loses scan-match lock (stale TF) or relocalises (TF jump).
-    # This varying covariance propagates through the EKF and becomes the
-    # localisation uncertainty signal in the RL policy observation.
+    gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
+    imu_relay_cfg = ros2_config.get("imu_noise_relay", {})
 
-    # tracking_frame depends on sensor suite: Suite A uses the 2D LiDAR frame,
-    # Suite B/C use the 3D LiDAR frame (both are Cartographer's published_frame).
-    tf_tracking_frame = "ego_vehicle/lidar_3d" if is_3d else "ego_vehicle/lidar"
+    datum_lat: float = float(env_config.get("gnss_datum_lat", 0.0))
+    datum_lon: float = float(env_config.get("gnss_datum_lon", 0.0))
 
-    # Dynamic covariance parameters read from ros2_config.yaml (tf_to_odom section).
-    # This allows real-robot tuning without touching Python source.
-    tf_cfg = ros2_config.get("tf_to_odom", {})
-    tf_to_odom_node = Node(
+    sensor_relay_node = Node(
         package="uncertainty_rl_ros2",
-        executable="tf_to_odom",
-        name="tf_to_odom",
+        executable="sensor_relay",
+        name="sensor_relay",
         parameters=[
             {
-                "use_sim_time": True,
-                "odom_frame": ros2_config.get("ekf", {}).get("odom_frame", "odom"),
-                "tracking_frame": tf_tracking_frame,
-                # Must match ekf.base_link_frame so robot_localisation correctly
-                # interprets the velocity as expressed in the body frame.
-                "body_frame": ros2_config.get("ekf", {}).get(
-                    "base_link_frame", "ego_vehicle"
+                "use_sim_time": use_sim_time,
+                "input_topic": gnss_relay_cfg.get(
+                    "input_topic", "/carla/ego_vehicle/gnss"
                 ),
-                "publish_topic": "/scan_matched_odometry",
-                "publish_rate": ros2_config.get("ekf", {}).get("frequency", 20.0),
-                "base_xy_variance": tf_cfg.get("base_xy_variance", 0.05),
-                "base_yaw_variance": tf_cfg.get("base_yaw_variance", 0.05),
-                "stale_threshold_sec": tf_cfg.get("stale_threshold_sec", 0.15),
-                "staleness_scale": tf_cfg.get("staleness_scale", 100.0),
-                "stale_max_sec": tf_cfg.get("stale_max_sec", 2.0),
-                "jump_threshold_m": tf_cfg.get("jump_threshold_m", 1.0),
-                "jump_scale": tf_cfg.get("jump_scale", 50.0),
-                "jump_decay_steps": int(tf_cfg.get("jump_decay_steps", 10)),
+                "output_topic": gnss_relay_cfg.get("output_topic", "/gnss/noisy"),
+                "base_metric_stddev_m": gnss_relay_cfg.get(
+                    "base_metric_stddev_m", 0.02
+                ),
+                "enable_gnss_noise": gnss_relay_cfg.get("enable_gnss_noise", True),
+                "enable_markov_transitions": gnss_relay_cfg.get(
+                    "enable_markov_transitions", True
+                ),
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
+                "odom_output_topic": gnss_relay_cfg.get(
+                    "odom_output_topic", "/odometry/gps"
+                ),
+                "heading_output_topic": gnss_relay_cfg.get(
+                    "heading_output_topic", "/gnss/heading"
+                ),
+                "cog_min_displacement_m": gnss_relay_cfg.get(
+                    "cog_min_displacement_m", 0.05
+                ),
+                "enable_cog_reverse_detection": gnss_relay_cfg.get(
+                    "enable_cog_reverse_detection", True
+                ),
+                "noise_profiles_path": gnss_relay_cfg.get(
+                    "noise_profiles_path",
+                    "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml",
+                ),
+                "imu_input_topic": imu_relay_cfg.get(
+                    "imu_input_topic", "/carla/ego_vehicle/imu"
+                ),
+                "imu_output_topic": imu_relay_cfg.get(
+                    "imu_output_topic", "/carla/ego_vehicle/imu/stamped"
+                ),
+                "enable_imu_noise": imu_relay_cfg.get("enable_imu_noise", True),
+                "imu_gyro_variance": imu_relay_cfg.get("imu_gyro_variance", 1.0e-7),
+                "imu_accel_variance": imu_relay_cfg.get("imu_accel_variance", 3.76e-5),
+                "zupt_threshold_rad_s": imu_relay_cfg.get("zupt_threshold_rad_s", 0.03),
+                "accel_zupt_threshold_ms2": imu_relay_cfg.get(
+                    "accel_zupt_threshold_ms2", 0.2
+                ),
             }
         ],
     )
@@ -390,51 +204,85 @@ def generate_launch_description() -> LaunchDescription:
         name="covariance_extractor",
         parameters=[
             {
-                "use_sim_time": True,
+                "use_sim_time": use_sim_time,
                 "odom_topic": ros2_config.get("odom_topic", "/odometry/filtered"),
                 "covariance_topic": ros2_config.get(
                     "covariance_topic", "/ekf_uncertainty/covariance"
                 ),
                 "publish_rate": ros2_config.get("publish_rate", 10.0),
-                # When world_frame=odom, robot_localisation publishes twist in
-                # the odom (world-aligned) frame. The extractor rotates it into
-                # the vehicle body frame before writing to ekf_state.json.
-                "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", True),
+                # robot_localisation publishes twist in the child frame (body
+                # frame) per nav_msgs/Odometry convention. No rotation needed.
+                "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", False),
             }
         ],
     )
 
+    # -- Pipeline diagnostic: log topic status after 20 s ------------------
+    # Prints which key topics are publishing so stalls can be diagnosed from
+    # the ros2-bridge container logs. Safe to leave in permanently.
+    pipeline_diag = ExecuteProcess(
+        cmd=[
+            "bash",
+            "-c",
+            "sleep 20 && source /opt/ros/jazzy/setup.bash && "
+            "echo '=== EKF pipeline diagnostic (t+20s) ===' && "
+            "echo '-- /clock hz:' && "
+            "timeout 2 ros2 topic hz /clock --window 10 2>&1 | head -3 || "
+            "echo 'SILENT'; "
+            "echo '-- /carla/ego_vehicle/imu hz:' && "
+            "timeout 2 ros2 topic hz /carla/ego_vehicle/imu --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /carla/ego_vehicle/imu/stamped hz:' && "
+            "timeout 2 ros2 topic hz /carla/ego_vehicle/imu/stamped --window 10 2>&1 "
+            "| head -3 || echo 'SILENT'; "
+            "echo '-- /carla/ego_vehicle/imu frame_id:' && "
+            "timeout 3 ros2 topic echo /carla/ego_vehicle/imu --once 2>&1 | "
+            "grep frame_id | head -1 || echo 'no message'; "
+            "echo '-- /gnss/noisy hz:' && "
+            "timeout 2 ros2 topic hz /gnss/noisy --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /odometry/filtered hz:' && "
+            "timeout 2 ros2 topic hz /odometry/filtered --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /odometry/gps hz:' && "
+            "timeout 2 ros2 topic hz /odometry/gps --window 10 2>&1 | head -3 "
+            "|| echo 'SILENT'; "
+            "echo '-- /tf publishers (bridge dynamic TF frames):' && "
+            "timeout 3 ros2 topic echo /tf --once 2>&1 | grep -E 'frame_id|child_frame' "
+            "| head -20 || echo 'no /tf'; "
+            "echo '-- /tf_static publishers:' && "
+            "timeout 3 ros2 topic echo /tf_static --once 2>&1 | "
+            "grep -E 'frame_id|child_frame' | head -20 || echo 'no /tf_static'; "
+            "echo '-- EKF node log (last 10 lines):' && "
+            "ros2 node info /ekf_filter_node 2>&1 | head -20 || echo 'EKF node not found'; "
+            "echo '-- TF ego_vehicle -> ego_vehicle/imu:' && "
+            "timeout 3 ros2 run tf2_ros tf2_echo ego_vehicle ego_vehicle/imu 2>&1 "
+            "| head -5 || echo 'TF lookup failed'; "
+            "echo '=== end diagnostic ==='",
+        ],
+        output="screen",
+    )
+
     # -- Assemble launch description ---------------------------------------
-    # Startup order matters: bridge must be up before Cartographer tries to
-    # subscribe to sensor topics; static TFs must exist before the EKF starts.
+    # Startup order: bridge first (so sensor topics exist and /clock publishes),
+    # then static TFs (so the EKF can resolve sensor frames), then the rest.
 
     actions = [*launch_args]
 
-    # CARLA ROS bridge first so sensor topics exist when Cartographer starts.
+    # CARLA ROS bridge first so sensor topics exist.
     if carla_bridge is not None:
         actions.append(carla_bridge)
 
-    # Static TFs before the EKF and Cartographer so the frame tree is complete.
+    # Static TFs before the EKF so the frame tree is complete.
     actions.extend(static_tf_nodes)
 
     actions.extend(
         [
-            cartographer_node,
-            tf_to_odom_node,
+            sensor_relay_node,
             ekf_node,
             covariance_extractor,
+            pipeline_diag,
         ]
     )
-
-    # Occupancy grid node only needed during SLAM mapping, not training.
-    if cartographer_mode == "slam":
-        actions.append(
-            Node(
-                package="cartographer_ros",
-                executable="cartographer_occupancy_grid_node",
-                name="cartographer_occupancy_grid_node",
-                parameters=[{"use_sim_time": True, "resolution": 0.05}],
-            )
-        )
 
     return LaunchDescription(actions)

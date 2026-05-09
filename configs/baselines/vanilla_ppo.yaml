@@ -1,16 +1,8 @@
 # Baseline: Vanilla PPO
-# 12-dim obs: EKF pose (6) + relative target (3) + obstacle features (3).
+# 9-dim obs: EKF yaw rate (1) + relative target pose (3) + obstacle clearance (5).
 # No EKF covariance, no evidential actor. Pure PPO baseline.
-#
-# Ablation dimensions:
-#   include_covariance: false  (no covariance dims)
-#   include_obstacle_obs: true (obstacle dims present -- not the experimental variable)
-#   policy_type: standard      (SB3 MlpPolicy + PPO)
-#
-# All other parameters inherited from configs/train_config.yaml.
 
 baseline_name: "vanilla_ppo"
-baseline_description: "Vanilla PPO with 12-dim obs (pose + target + obstacles), standard actor"
 
 include_covariance: false
 include_obstacle_obs: true

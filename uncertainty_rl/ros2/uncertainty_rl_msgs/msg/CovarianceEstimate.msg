@@ -1,6 +1,6 @@
 # 2D localisation covariance estimate from the robot_localisation EKF.
 #
-# Replaces std_msgs/Float64MultiArray per Henki ROS 2 best practices:
+# Replaces std_msgs/Float64MultiArray:
 # custom messages with semantic meaning instead of primitive arrays.
 #
 # Published by CovarianceExtractorNode, consumed by the training container's
@@ -13,9 +13,7 @@ float64 x        # Position X (metres, CARLA world frame)
 float64 y        # Position Y (metres, CARLA world frame)
 float64 yaw      # Heading (rad, wrapped to [-pi, pi])
 
-# EKF-filtered 2D velocity estimate (from msg.twist.twist)
-float64 vx       # Longitudinal velocity (m/s)
-float64 vy       # Lateral velocity (m/s)
+# EKF yaw rate (from msg.twist.twist.angular.z)
 float64 vyaw     # Yaw rate (rad/s), body frame
 
 # 3x3 covariance submatrix for [x, y, yaw], row-major order.

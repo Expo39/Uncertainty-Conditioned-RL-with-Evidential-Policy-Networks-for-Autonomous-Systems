@@ -34,7 +34,7 @@ _SENSOR_PATCH = (
 )
 assert _SENSOR_TARGET in original, (
     f"patch_bridge.py: patch target not found in {p}. "
-    "ros-bridge may have been updated -- review and update the patch."
+    "ros-bridge may have been updated - review and update the patch."
 )
 p.write_text(original.replace(_SENSOR_TARGET, _SENSOR_PATCH))
 
@@ -45,10 +45,7 @@ _FACTORY_TARGET = (
     "        actor.destroy()\n"
     "        if carla_actor and delete_actor:\n"
     "            carla_actor.destroy()\n"
-    '        msg = "Removed {}(id={})".format('
-    "            actor.__class__.__name__, actor.uid"
-    "        )\n"
-    "        self.node.loginfo(msg)"
+    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))'
 )
 _FACTORY_PATCH = (
     "        try:\n"
@@ -60,13 +57,10 @@ _FACTORY_PATCH = (
     "                carla_actor.destroy()\n"
     "            except Exception:\n"
     "                pass\n"
-    '        msg = "Removed {}(id={})".format('
-    "            actor.__class__.__name__, actor.uid"
-    "        )\n"
-    "        self.node.loginfo(msg)"
+    '        self.node.loginfo("Removed {}(id={})".format(actor.__class__.__name__, actor.uid))'
 )
 assert _FACTORY_TARGET in original, (
     f"patch_bridge.py: patch target not found in {p}. "
-    "ros-bridge may have been updated -- review and update the patch."
+    "ros-bridge may have been updated - review and update the patch."
 )
 p.write_text(original.replace(_FACTORY_TARGET, _FACTORY_PATCH))

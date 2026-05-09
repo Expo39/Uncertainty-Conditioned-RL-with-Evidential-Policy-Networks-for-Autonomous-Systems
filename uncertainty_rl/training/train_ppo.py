@@ -7,13 +7,20 @@ with evidential actor networks for autonomous parking.
 """
 
 import argparse
+import dataclasses
 import logging
 import os
 import warnings
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 import numpy as np
+
+try:
+    from yaml import CSafeLoader as _YamlLoader
+except ImportError:
+    from yaml import SafeLoader as _YamlLoader  # type: ignore[assignment]
 import yaml
 
 try:
@@ -27,7 +34,6 @@ except ImportError:
     torch = None  # type: ignore[assignment,misc]
 
 try:
-    # Reserved: re-enable when multi-instance CARLA eval is supported.
     from stable_baselines3.common.callbacks import EvalCallback  # noqa: F401
     from stable_baselines3.common.callbacks import (
         BaseCallback,
@@ -66,6 +72,26 @@ warnings.filterwarnings(
 )
 
 
+@dataclasses.dataclass
+class TrainResult:
+    """
+    @class TrainResult
+    @brief Encapsulates the results of a training run.
+
+    Returned by train() to allow programmatic access to final metrics and paths
+    for integration with external optimisation frameworks (e.g. Optuna).
+    """
+
+    final_metrics: Dict[str, float]
+    """Final metrics from model.logger.name_to_value (e.g. env/success_rate)."""
+
+    model_path: str
+    """Absolute path to the saved final model."""
+
+    log_dir: str
+    """Absolute path to the TensorBoard logs directory."""
+
+
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
     """
     @brief Linear learning rate schedule decaying to zero.
@@ -83,22 +109,49 @@ def make_env(
     config: Dict[str, Any],
     rank: int = 0,
     carla_sensors_override: Optional[Dict[str, Any]] = None,
+    host_override: Optional[str] = None,
+    port_override: Optional[int] = None,
 ) -> Callable[[], gym.Env]:
     """
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
+    @param host_override: Override the per-worker CARLA host (e.g. for the
+           dryrun inspector which connects to carla-server-demo). When None,
+           the per-rank training host is used.
+    @param port_override: Override the per-worker CARLA port. When None, the
+           per-rank training port is used.
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
+    # Compute per-worker connection params.
+    worker_port = (
+        port_override
+        if port_override is not None
+        else config.get("carla_port", 2000) + rank * 1000
+    )
+    worker_host = (
+        host_override if host_override is not None else f"uncertainty-rl-carla-{rank}"
+    )
+
+    ros2_config = config.get("ros2", {}).copy()
+    if rank > 0:
+        base_ekf = ros2_config.get(
+            "ekf_state_file", "/workspace/outputs/ekf_state.json"
+        )
+        p = Path(base_ekf)
+        ros2_config["ekf_state_file"] = str(p.parent / f"{p.stem}_{rank}{p.suffix}")
+
+    vis_path: Optional[str] = None if rank == 0 else f"outputs/vis_history_{rank}.jsonl"
+
     def _init() -> gym.Env:
         env = CARLAParkingEnv(
-            carla_host=config.get("carla_host", "localhost"),
-            carla_port=config.get("carla_port", 2000) + rank,
+            carla_host=worker_host,
+            carla_port=worker_port,
             town=config.get("town", "FlatPlane"),
             max_steps=config.get("max_steps", 500),
-            ros2_config=config.get("ros2", {}),
+            ros2_config=ros2_config,
             carla_sensors_config=(
                 carla_sensors_override
                 if carla_sensors_override is not None
@@ -107,10 +160,17 @@ def make_env(
             parking_scenarios_config=config.get("parking_scenarios", {}),
             include_covariance=config.get("include_covariance", True),
             include_obstacle_obs=config.get("include_obstacle_obs", True),
-            sensor_suite=config.get("sensor_suite", "suite_a"),
             carla_timestep=config.get("carla_timestep", 0.05),
             debug=config.get("debug", False),
             map_load_sleep=config.get("map_load_sleep", 5.0),
+            action_repeat=config.get("action_repeat", 1),
+            no_rendering_mode=config.get("no_rendering_mode", False),
+            max_ego_speed_ms=config.get("max_ego_speed_ms", 6.0),
+            use_extra_spawns=config.get("use_extra_spawns", False),
+            gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
+            vis_output_path=vis_path,
+            uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
+            success_dwell_steps=config.get("success_dwell_steps", 5),
         )
         return env
 
@@ -124,7 +184,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     @return Configuration dictionary.
     """
     with open(config_path, "r") as f:
-        config: Dict[str, Any] = yaml.safe_load(f)
+        config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader)
     return config
 
 
@@ -134,10 +194,6 @@ def merge_configs(
     """
     @brief Merge training and environment configs into a single dict.
 
-    env_config keys take precedence for environment settings. train_config
-    keys take precedence for training hyperparameters. In practice they have
-    no overlapping keys so this is a simple union.
-
     @param train_config: Training hyperparameters from train_config.yaml.
     @param env_config: Environment settings from env_config.yaml.
     @return Merged configuration dictionary.
@@ -146,108 +202,124 @@ def merge_configs(
     return merged
 
 
+def load_env_config(env_config_path: str) -> Dict[str, Any]:
+    """
+    @brief Load and merge the environment config with shared deployment configs.
+
+
+    @param env_config_path: Path to the CARLA environment config YAML.
+    @return Fully merged environment configuration dictionary.
+    """
+    with open(env_config_path) as f:
+        env_config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+
+    deployment_dir = Path(env_config_path).parent.parent
+
+    sensor_cfg: Dict[str, Any] = {}
+    sensor_cfg_path = deployment_dir / "sensor_config.yaml"
+    if sensor_cfg_path.exists():
+        with open(sensor_cfg_path) as f:
+            sensor_cfg = yaml.load(f, Loader=_YamlLoader) or {}
+
+    agent_cfg: Dict[str, Any] = {}
+    agent_cfg_path = deployment_dir / "agent_config.yaml"
+    if agent_cfg_path.exists():
+        with open(agent_cfg_path) as f:
+            agent_cfg = yaml.load(f, Loader=_YamlLoader) or {}
+
+    # Merge: sensor_config < agent_config < env_config (env wins on conflict).
+    merged: Dict[str, Any] = {**sensor_cfg, **agent_cfg, **env_config}
+
+    # Inject sensor mounts into carla_sensors so the CARLA spawner gets them.
+    for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
+        if "mount" in sensor_data and sensor_name in merged.get("carla_sensors", {}):
+            merged["carla_sensors"][sensor_name]["mount"] = sensor_data["mount"]
+
+    return merged
+
+
 class EnvDiagnosticsCallback(BaseCallback):
     """
     @class EnvDiagnosticsCallback
     @brief SB3 callback that logs per-episode environment diagnostics to TensorBoard.
-
-    Reads from the `info` dict returned by `CARLAParkingEnv.step()` and records
-    rolling means of reward components (position error, orientation error, speed,
-    progress reward) plus episode outcome rates (success, collision, timeout).
-    These appear under the `env/` namespace in TensorBoard alongside SB3's
-    built-in `rollout/` and `train/` metrics.
-
-    Logged at every rollout collection step (i.e. every `n_steps` environment
-    steps), matching the cadence of SB3's own metric dumps.
     """
 
     def __init__(self) -> None:
         """@brief Initialise accumulators."""
         super().__init__(verbose=0)
-        self._ep_pos_errors: List[float] = []
-        self._ep_orientation_errors: List[float] = []
-        self._ep_speeds: List[float] = []
-        self._ep_progress_rewards: List[float] = []
-        self._ep_successes: List[float] = []
-        self._ep_collisions: List[float] = []
-        self._ep_timeouts: List[float] = []
+        self._pos_sum = 0.0
+        self._ori_sum = 0.0
+        self._spd_sum = 0.0
+        self._prog_sum = 0.0
+        self._step_count = 0
+        self._success_sum = 0.0
+        self._collision_sum = 0.0
+        self._timeout_sum = 0.0
+        self._terminal_count = 0
 
     def _on_step(self) -> bool:
         """
         @brief Accumulate diagnostics from the latest env step.
         @return Always True (training continues).
         """
-        # self.locals["infos"] is a list of info dicts, one per parallel env.
         for info in self.locals.get("infos", []):
-            self._ep_pos_errors.append(float(info.get("pos_error", 0.0)))
-            self._ep_orientation_errors.append(
-                float(info.get("orientation_error", 0.0))
-            )
-            self._ep_speeds.append(float(info.get("speed", 0.0)))
-            self._ep_progress_rewards.append(float(info.get("progress_reward", 0.0)))
-            # Episode-terminal flags -- count when episode ended.
-            is_terminal = (
-                info.get("success", False)
-                or info.get("collision", False)
-                or info.get("timeout", False)
-            )
-            if is_terminal:
-                self._ep_successes.append(1.0 if info.get("success", False) else 0.0)
-                self._ep_collisions.append(1.0 if info.get("collision", False) else 0.0)
-                self._ep_timeouts.append(1.0 if info.get("timeout", False) else 0.0)
+            self._pos_sum += info.get("pos_error", 0.0)
+            self._ori_sum += info.get("orientation_error", 0.0)
+            self._spd_sum += info.get("speed", 0.0)
+            self._prog_sum += info.get("progress_reward", 0.0)
+            self._step_count += 1
+            # Read each flag once and reuse for both is_terminal and individual recording.
+            success = info.get("success", False)
+            collision = info.get("collision", False)
+            timeout = info.get("timeout", False)
+            if success or collision or timeout:
+                self._success_sum += success
+                self._collision_sum += collision
+                self._timeout_sum += timeout
+                self._terminal_count += 1
         return True
 
     def _on_rollout_end(self) -> None:
         """
-        @brief Flush accumulated diagnostics to TensorBoard at rollout end."""
-        if self._ep_pos_errors:
-            self.logger.record(
-                "env/mean_pos_error_m",
-                float(np.mean(self._ep_pos_errors)),
-            )
-            self.logger.record(
-                "env/mean_orientation_error_rad",
-                float(np.mean(self._ep_orientation_errors)),
-            )
-            self.logger.record(
-                "env/mean_speed_ms",
-                float(np.mean(self._ep_speeds)),
-            )
-            self.logger.record(
-                "env/mean_progress_reward",
-                float(np.mean(self._ep_progress_rewards)),
-            )
+        @brief Flush accumulated diagnostics to TensorBoard at rollout end.
+        """
+        if self._step_count:
+            inv = 1.0 / self._step_count
+            self.logger.record("env/mean_pos_error_m", self._pos_sum * inv)
+            self.logger.record("env/mean_orientation_error_rad", self._ori_sum * inv)
+            self.logger.record("env/mean_speed_ms", self._spd_sum * inv)
+            self.logger.record("env/mean_progress_reward", self._prog_sum * inv)
 
-        if self._ep_successes:
-            self.logger.record(
-                "env/success_rate",
-                float(np.mean(self._ep_successes)),
-            )
-            self.logger.record(
-                "env/collision_rate",
-                float(np.mean(self._ep_collisions)),
-            )
-            self.logger.record(
-                "env/timeout_rate",
-                float(np.mean(self._ep_timeouts)),
-            )
+        if self._terminal_count:
+            inv_t = 1.0 / self._terminal_count
+            self.logger.record("env/success_rate", self._success_sum * inv_t)
+            self.logger.record("env/collision_rate", self._collision_sum * inv_t)
+            self.logger.record("env/timeout_rate", self._timeout_sum * inv_t)
 
         # Reset accumulators for the next rollout window.
-        self._ep_pos_errors.clear()
-        self._ep_orientation_errors.clear()
-        self._ep_speeds.clear()
-        self._ep_progress_rewards.clear()
-        self._ep_successes.clear()
-        self._ep_collisions.clear()
-        self._ep_timeouts.clear()
+        self._pos_sum = 0.0
+        self._ori_sum = 0.0
+        self._spd_sum = 0.0
+        self._prog_sum = 0.0
+        self._step_count = 0
+        self._success_sum = 0.0
+        self._collision_sum = 0.0
+        self._timeout_sum = 0.0
+        self._terminal_count = 0
 
 
-def train(config: Dict[str, Any]) -> None:
+def train(
+    config: Dict[str, Any],
+    extra_callbacks: Optional[List[BaseCallback]] = None,
+) -> TrainResult:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
     @param config: Fully-resolved configuration dictionary. All operational
            settings (seed, log_dir, etc.) and hyperparameters are read from
            this dict. CLI arguments override YAML values before this is called.
+    @param extra_callbacks: Optional list of additional callbacks to append to
+           the training callback list (e.g. for Optuna trial evaluation).
+    @return TrainResult containing final metrics, model path, and log directory.
     """
     # Resolve operational settings from config
     seed = config.get("seed", 42)
@@ -287,12 +359,14 @@ def train(config: Dict[str, Any]) -> None:
     os.makedirs(log_dir, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # Create training environment
-    logger.info("Creating training environment...")
-    train_vec_env = DummyVecEnv([make_env(config)])
+    # Create training environment - one worker per CARLA instance.
+    # parallel_workers > 1 requires docker-compose.parallel.yml (see make docker-train-parallel).
+    n_workers: int = config.get("parallel_workers", 1)
+    logger.info(f"Creating training environment ({n_workers} worker(s))...")
+    train_vec_env = DummyVecEnv([make_env(config, rank=i) for i in range(n_workers)])
 
     # Normalise observations but not rewards - reward components will be
-    # manually scaled via potential-based shaping (see reward TODO in config)
+    # manually scaled via potential-based shaping
     env = VecNormalize(
         train_vec_env,
         norm_obs=True,
@@ -348,8 +422,7 @@ def train(config: Dict[str, Any]) -> None:
         seed=seed,
     )
 
-    # Create agent based on policy_type config
-    policy_type = config.get("policy_type", "evidential")
+    # Create agent based on policy_type config (read once at run-name build above)
     logger.info("Initialising %s PPO agent...", policy_type)
 
     model: PPO
@@ -410,28 +483,43 @@ def train(config: Dict[str, Any]) -> None:
         )
         callbacks.append(eval_callback)
 
+    # Append extra callbacks (e.g. for Optuna trial evaluation)
+    if extra_callbacks is not None:
+        callbacks.extend(extra_callbacks)
+
     callback_list = CallbackList(callbacks)
 
-    # Train the agent
-    logger.info("Starting training for %d timesteps...", total_timesteps)
-    model.learn(
-        total_timesteps=total_timesteps,
-        callback=callback_list,
-        log_interval=config.get("log_interval", 10),
-        progress_bar=True,
+    # Train the agent (wrapped in try/finally for CARLA crash safety)
+    try:
+        logger.info("Starting training for %d timesteps...", total_timesteps)
+        model.learn(
+            total_timesteps=total_timesteps,
+            callback=callback_list,
+            log_interval=config.get("log_interval", 10),
+            progress_bar=True,
+        )
+
+        # Save final model
+        final_model_path = os.path.join(checkpoint_dir, "final_model")
+        model.save(final_model_path)
+        env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
+
+        logger.info("Training complete. Model saved to %s", final_model_path)
+
+    finally:
+        # Clean up (always runs, even if CARLA crashes during training)
+        env.close()
+        if eval_env is not None:
+            eval_env.close()
+
+    # Collect final metrics from logger
+    final_metrics = dict(model.logger.name_to_value)
+
+    return TrainResult(
+        final_metrics=final_metrics,
+        model_path=final_model_path,
+        log_dir=log_dir,
     )
-
-    # Save final model
-    final_model_path = os.path.join(checkpoint_dir, "final_model")
-    model.save(final_model_path)
-    env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
-
-    logger.info("Training complete. Model saved to %s", final_model_path)
-
-    # Clean up
-    env.close()
-    if eval_env is not None:
-        eval_env.close()
 
 
 def main() -> None:
@@ -457,7 +545,7 @@ def main() -> None:
     parser.add_argument(
         "--env-config",
         type=str,
-        default="configs/carla/env_config.yaml",
+        default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config (CARLA, sensors, parking scenarios)",
     )
     parser.add_argument(
@@ -499,8 +587,12 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Load and merge configs, then apply CLI overrides
-    config = merge_configs(load_config(args.train_config), load_config(args.env_config))
+    # Load and merge configs, then apply CLI overrides.
+    # load_env_config() merges sensor_config.yaml (shared keys) with env_config.yaml
+    # (CARLA-specific keys) so all consumers see a single unified dict.
+    config = merge_configs(
+        load_config(args.train_config), load_env_config(args.env_config)
+    )
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:

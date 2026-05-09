@@ -1,0 +1,42 @@
+# Real-world deployment datum configuration.
+#
+# Used by calibrate_ekf_frame_offset() when
+# real_world_deployment: true in env_config.yaml.
+#
+# Procedure (once per deployment site):
+#   1. Choose a clearly marked reference point in the parking lot
+#      (e.g. a painted corner marker, drain cover centre, or survey peg).
+#   2. Drive the vehicle so the GNSS antenna is directly above this point.
+#   3. Record the RTK-fixed UTM easting/northing coordinates (u-blox u-center
+#      or 'ros2 topic echo /gnss/fix' when RTK fixed).
+#   4. Measure the vehicle heading at this point (compass or IMU yaw after
+#      the EKF has converged) and record as heading_deg (0 = East in UTM,
+#      90 = North - i.e. standard ENU convention).
+#   5. Fill in datum.utm_easting, datum.utm_northing, datum.heading_deg below.
+#   6. Also fill in datum.lot_origin_x, datum.lot_origin_y: the position of
+#      this same reference point in the lot layout coordinate frame (from the
+#      layout YAML - same frame as the PNG bird's-eye view).
+#
+# UTM zone: fill in the zone for your deployment site.
+
+datum:
+  # WGS84 coordinates of the reference point (RTK-fixed measurement).
+  # Used directly by navsat_transform_node as the local metric frame origin.
+  datum_lat: 0.0      # degrees latitude  (e.g. 51.501364)
+  datum_lon: 0.0      # degrees longitude (e.g. -0.141890)
+
+  # UTM coordinates of the same reference point (for cross-checking only).
+  # navsat_transform_node uses datum_lat/datum_lon above, not UTM directly.
+  utm_easting: 0.0    # metres east in UTM zone (e.g. 456789.12)
+  utm_northing: 0.0   # metres north in UTM zone (e.g. 5678901.23)
+  utm_zone: ""        # e.g. "30U"
+
+  # Vehicle heading when parked at datum point.
+  # Convention: degrees, ENU frame (0 = East, 90 = North, -90 = South).
+  heading_deg: 0.0
+
+  # Position of the datum reference point in the lot layout coordinate frame.
+  # This is the same (x, y) frame used in configs/layouts/*.yaml and the
+  # bird's-eye PNG. Measured from the lot origin as defined in the layout YAML.
+  lot_x: 0.0    # metres in lot layout frame
+  lot_y: 0.0    # metres in lot layout frame

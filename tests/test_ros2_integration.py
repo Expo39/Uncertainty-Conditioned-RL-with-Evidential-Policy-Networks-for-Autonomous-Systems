@@ -59,7 +59,7 @@ class TestROS2CovariancePipeline:
         """
         @brief Verify covariance subscriber returns correct elements.
         """
-        from uncertainty_rl.envs.carla_parking import _CovarianceSubscriber
+        from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 
         if not rclpy.ok():
             rclpy.init()

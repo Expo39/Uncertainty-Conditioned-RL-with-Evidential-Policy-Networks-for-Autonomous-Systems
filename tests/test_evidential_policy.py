@@ -87,6 +87,31 @@ class TestEvidentialLayer:
         gamma, nu, alpha, beta = self.layer(x)
         assert gamma.shape == (1, ACTION_DIM)
 
+    def test_nig_clamp_nu_upper_bound(self) -> None:
+        """
+        @brief Nu (precision) must be clamped to max 100.0 even with extreme inputs.
+        """
+        # Create a large input that would produce unbounded nu without clamping
+        x = torch.full((BATCH_SIZE, 64), 100.0)
+        _, nu, _, _ = self.layer(x)
+        assert (nu <= 100.0).all(), f"Nu exceeded upper bound: max={nu.max()}"
+
+    def test_nig_clamp_alpha_upper_bound(self) -> None:
+        """
+        @brief Alpha (shape) must be clamped to max 100.0 even with extreme inputs.
+        """
+        x = torch.full((BATCH_SIZE, 64), 100.0)
+        _, _, alpha, _ = self.layer(x)
+        assert (alpha <= 100.0).all(), f"Alpha exceeded upper bound: max={alpha.max()}"
+
+    def test_nig_clamp_beta_upper_bound(self) -> None:
+        """
+        @brief Beta (rate) must be clamped to max 100.0 even with extreme inputs.
+        """
+        x = torch.full((BATCH_SIZE, 64), 100.0)
+        _, _, _, beta = self.layer(x)
+        assert (beta <= 100.0).all(), f"Beta exceeded upper bound: max={beta.max()}"
+
 
 # ---------------------------------------------------------------------------
 # EvidentialPolicyNetwork
@@ -159,21 +184,21 @@ class TestEvidentialPolicyNetwork:
         expected_total = unc["epistemic"] + unc["aleatoric"]
         torch.testing.assert_close(unc["total"], expected_total)
 
-    def test_epistemic_formula(self, state_batch: torch.Tensor) -> None:
+    def test_aleatoric_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Epistemic uncertainty must be beta / (alpha - 1).
+        @brief Aleatoric uncertainty must be beta / (alpha - 1) (Amini et al. 2020).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["alpha"] - 1)
-        torch.testing.assert_close(unc["epistemic"], expected)
+        torch.testing.assert_close(unc["aleatoric"], expected)
 
-    def test_aleatoric_formula(self, state_batch: torch.Tensor) -> None:
+    def test_epistemic_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Aleatoric uncertainty must be beta / (nu * (alpha - 1)).
+        @brief Epistemic uncertainty must be beta / (nu * (alpha - 1)) (Amini et al. 2020).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["nu"] * (unc["alpha"] - 1))
-        torch.testing.assert_close(unc["aleatoric"], expected)
+        torch.testing.assert_close(unc["epistemic"], expected)
 
     def test_uncertainties_are_positive(self, state_batch: torch.Tensor) -> None:
         """

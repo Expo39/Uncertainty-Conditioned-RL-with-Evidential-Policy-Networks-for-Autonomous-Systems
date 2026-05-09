@@ -57,7 +57,7 @@ jobs:
           commit_message: Apply auto-formatting fixes
 
       - name: Run flake8
-        run: flake8 uncertainty_rl tests scripts --max-line-length 88 --extend-ignore E203,W503
+        run: flake8 uncertainty_rl tests scripts
 
   typecheck:
     name: Type Check

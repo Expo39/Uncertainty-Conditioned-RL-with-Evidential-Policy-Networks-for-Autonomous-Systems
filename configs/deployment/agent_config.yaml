@@ -1,0 +1,41 @@
+# Agent configuration shared between simulation and real-vehicle deployment.
+#
+# This file contains all non-sensor parameters that are identical in CARLA
+# simulation and on the real vehicle. It is the single source of truth for
+# agent behaviour, observation flags, ROS 2 pipeline settings, safety policy
+# parameters, and deployment flags.
+
+# ---------------------------------------------------------------------------
+# Policy safety parameters
+# ---------------------------------------------------------------------------
+max_ego_speed_ms: 5.0  # Speed limit (m/s).
+
+# SafetyWrapper parameters.
+# aleatoric_scaling: higher = more aggressive longitudinal cap under outcome noise.
+# handoff_threshold: epistemic uncertainty above this triggers full stop + handoff.
+safety_aleatoric_scaling: 0.5
+safety_handoff_threshold: 5.0
+
+# ---------------------------------------------------------------------------
+# Observation space flags (must match the trained policy)
+# ---------------------------------------------------------------------------
+include_covariance: true  # Include EKF covariance features
+include_obstacle_obs: true  # Include 5 hemispheric LiDAR clearance dims
+
+# ---------------------------------------------------------------------------
+# ROS 2 / EKF pipeline settings
+# ---------------------------------------------------------------------------
+ros2:
+  covariance_topic: "/odometry/filtered"  # Topic where EKF publishes covariance. 
+  covariance_timeout: 120.0  # Seconds to wait for covariance messages.
+  ekf_convergence_timeout: 15.0  # Seconds to wait for EKF convergence.
+  publish_initial_pose: true  # Publishes /set_pose at each episode reset.
+  initial_pose_topic: "/set_pose"
+
+# ---------------------------------------------------------------------------
+# Real-world deployment flags
+# ---------------------------------------------------------------------------
+real_world_deployment: false  # Set true to activate datum-based EKF calibration
+                              # and actuation calibration on the real vehicle.
+real_world_datum: configs/deployment/real/real_world_datum.yaml
+actuation_calibration: configs/deployment/real/actuation_calibration.yaml

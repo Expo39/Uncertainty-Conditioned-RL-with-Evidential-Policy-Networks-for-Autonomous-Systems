@@ -2,11 +2,6 @@
 @file __init__.py
 @brief Centralised colour palette for all parking lot and sensor visualisations.
 
-Single source of truth for all visualisation colours, used by:
-  - scripts/layouts/common.py          (generate_layouts PNG output)
-  - scripts/inspect/lot_inspector.py   (CARLA lot + sensor debug overlay)
-  - scripts/visualise/visualiser.py    (live training bird's-eye view)
-
 Bay and lot colours are defined as hex strings (#RRGGBB). CARLA consumers convert
 to carla.Color via hex_to_carla_color(). Matplotlib consumers use hex strings directly.
 
@@ -49,6 +44,7 @@ BAY_HEX: Dict[str, str] = {
 # ---------------------------------------------------------------------------
 
 HEX_SENSOR_IMU = "#FFDC00"  # Yellow
+HEX_SENSOR_GNSS = "#FF00FF"  # Magenta (RTK antenna)
 HEX_SENSOR_LIDAR_2D = "#00B4FF"  # Cyan (sensor mount dot)
 HEX_SENSOR_LIDAR_3D = "#00FF50"  # Green (sensor mount dot)
 HEX_SENSOR_CAMERA = "#FF0080"  # Hot pink/orange (g=0 avoids CARLA yellow shift)
