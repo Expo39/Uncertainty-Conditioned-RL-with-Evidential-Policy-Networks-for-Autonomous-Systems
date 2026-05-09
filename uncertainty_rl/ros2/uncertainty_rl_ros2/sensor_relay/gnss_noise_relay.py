@@ -417,11 +417,9 @@ class GnssNoiseRelayNode(Node):
                     f"{math.degrees(self._last_heading_rad):.1f} deg"
                 )
             else:
-                self._datum_latched = False
                 self.get_logger().warn(
-                    "No datum_lat/datum_lon in GNSS noise config - "
-                    "auto-latching datum on next GNSS callback. "
-                    "EKF may drift briefly at episode start."
+                    "No spawn_yaw in GNSS noise config - "
+                    "COG heading not seeded; will initialise from first valid COG reading."
                 )
 
             self.get_logger().info(
@@ -528,7 +526,12 @@ class GnssNoiseRelayNode(Node):
 
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
-        # -- Auto-datum latch --------------------------------------------------
+        # -- Datum latch -------------------------------------------------------
+        # Preferred path: the training container writes datum_lat/datum_lon to
+        # episode_config.json before any GNSS callback fires for the new
+        # episode, and _apply_episode_config() latches that value. Falling
+        # through to auto-latch only happens when the config has not yet
+        # arrived (process startup race, or env-side publish failure).
         if not self._datum_latched:
             self._datum_lat = msg.latitude
             self._datum_lon = msg.longitude
