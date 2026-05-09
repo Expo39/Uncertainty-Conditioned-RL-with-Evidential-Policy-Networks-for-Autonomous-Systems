@@ -82,7 +82,7 @@ gnss_noise_relay:
   output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
   odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
   enable_gnss_noise: true  # true = inject per-episode tier noise. false = pure flat-earth projector (no covariance variation).
-  enable_markov_transitions: false  # true = tier switching in each episode.false = constant tier per episode.
+  enable_markov_transitions: false  # true = per-episode random starting tier with mid-episode Markov transitions. false = pinned to rtk_fixed always.
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.

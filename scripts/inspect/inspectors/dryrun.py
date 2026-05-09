@@ -20,6 +20,7 @@ except ImportError:
 from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from scripts.inspect._drawing import _draw_layout_overlays
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+from uncertainty_rl.utils.geometry import wrap_angle_symmetric
 
 # ---------------------------------------------------------------------------
 # ANSI colour constants
@@ -503,19 +504,9 @@ class DryRunInspector(_Inspector):
                             )
                             _gt_yaw = math.radians(_gt.rotation.yaw)
                             # Parking allows facing either direction (forward
-                            # or reverse), so a 180-deg flip is a valid pose.
-                            # Fold into (-pi/2, pi/2] to match the symmetry
-                            # used by wrap_angle_symmetric (target dyaw obs).
-                            _raw = math.atan2(
-                                math.sin(_ekf_wyaw - _gt_yaw),
-                                math.cos(_ekf_wyaw - _gt_yaw),
-                            )
-                            if _raw > math.pi / 2:
-                                _yaw_err = _raw - math.pi
-                            elif _raw < -math.pi / 2:
-                                _yaw_err = _raw + math.pi
-                            else:
-                                _yaw_err = _raw
+                            # or reverse), so a 180-deg flip is a valid pose;
+                            # match the dyaw obs symmetry.
+                            _yaw_err = wrap_angle_symmetric(_ekf_wyaw - _gt_yaw)
                             _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
