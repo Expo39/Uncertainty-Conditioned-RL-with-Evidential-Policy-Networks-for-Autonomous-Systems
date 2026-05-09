@@ -1,0 +1,17 @@
+[flake8]
+max-line-length = 88
+extend-ignore = E203, W503, E501
+exclude =
+    .git,
+    __pycache__,
+    .venv,
+    .pytest_cache,
+    .mypy_cache,
+    build,
+    dist,
+    *.egg-info,
+    .github
+
+# E501 is suppressed globally because many lines in docstrings, comments, and
+# test assertions are legitimately difficult to split without harming readability.
+# Black cannot fix these automatically.

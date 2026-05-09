@@ -15,11 +15,11 @@ except ImportError:
     sys.exit(1)
 
 from scripts.inspect.inspectors import (
-    _Inspector,
     DryRunInspector,
     LayoutInspector,
     LiveInspector,
     SensorInspector,
+    _Inspector,
 )
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -191,7 +191,9 @@ def main() -> None:
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
     if args.mode == "dryrun":
-        print(f"Mode: {args.mode}  |  Layout: sampled per episode (training distribution)")
+        print(
+            f"Mode: {args.mode}  |  Layout: sampled per episode (training distribution)"
+        )
     else:
         print(f"Mode: {args.mode}  |  Layout: {args.layout}", end="")
         if args.mode == "sensors":
@@ -240,7 +242,11 @@ def main() -> None:
             sys.exit(1)
 
         inspector = SensorInspector(
-            env, args.duration, train_cfg, args.view, args.zoom,
+            env,
+            args.duration,
+            train_cfg,
+            args.view,
+            args.zoom,
         )
         inspector.place_spectator()  # type: ignore[attr-defined]
         print("Layout overlays:")
@@ -309,9 +315,7 @@ def main() -> None:
             env.close()
             sys.exit(1)
 
-        inspector = LiveInspector(
-            env, args.duration, train_cfg
-        )
+        inspector = LiveInspector(env, args.duration, train_cfg)
         inspector.place_spectator()  # type: ignore[attr-defined]
         print("Live sensor mode:")
         print("  LiDAR hit points -> red debug dots in CARLA world.")

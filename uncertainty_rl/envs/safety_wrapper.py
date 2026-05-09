@@ -171,7 +171,8 @@ class SafetyWrapper(gym.Wrapper):
         self._step_count = 0
         self._current_epistemic = 0.0
         self._current_aleatoric = 0.0
-        return self.env.reset(**kwargs)
+        obs, info = self.env.reset(**kwargs)
+        return (np.asarray(obs), info)
 
     def get_episode_safety_stats(self) -> Dict[str, float]:
         """

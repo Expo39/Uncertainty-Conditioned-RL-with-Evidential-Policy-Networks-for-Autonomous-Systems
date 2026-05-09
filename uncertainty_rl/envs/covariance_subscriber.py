@@ -84,27 +84,23 @@ class _CovarianceSubscriber:
         )
         self._ekf_state_path: Path = Path(ekf_state_file)
 
-        # Initial pose file path 
+        # Initial pose file path
         self._initial_pose_path: Path = Path(
             config.get(
                 "initial_pose_file",
                 os.environ.get("INITIAL_POSE_FILE", str(_INITIAL_POSE_PATH)),
             )
         )
-        self._initial_pose_tmp: Path = self._initial_pose_path.with_suffix(
-            ".json.tmp"
-        )
+        self._initial_pose_tmp: Path = self._initial_pose_path.with_suffix(".json.tmp")
 
         self._episode_config_path: Path = Path(
             config.get(
                 "episode_config_file",
-                os.environ.get(
-                    "EPISODE_CONFIG_FILE", str(_EPISODE_CONFIG_PATH)
-                ),
+                os.environ.get("EPISODE_CONFIG_FILE", str(_EPISODE_CONFIG_PATH)),
             )
         )
-        self._episode_config_tmp: Path = (
-            self._episode_config_path.with_suffix(".json.tmp")
+        self._episode_config_tmp: Path = self._episode_config_path.with_suffix(
+            ".json.tmp"
         )
         # Monotonically increasing counter for episode_config.json writes.
         self._episode_config_seq: int = 0
@@ -189,7 +185,11 @@ class _CovarianceSubscriber:
             cached_seq = self._last_read_seq
 
         # If file has not changed and post-invalidation data is available, skip parse.
-        if mtime_ns == last_mtime and cached_pose is not None and cached_seq > valid_after_seq:
+        if (
+            mtime_ns == last_mtime
+            and cached_pose is not None
+            and cached_seq > valid_after_seq
+        ):
             return True
 
         try:
@@ -335,7 +335,7 @@ class _CovarianceSubscriber:
 
         Writes episode_config.json with the episode's RTK fix-state tier
         name, the geolocation of the vehicle spawn point, and the spawn yaw.
-        
+
         Re-latching the datum each episode ensures that GNSS Odometry (0, 0)
         and /set_pose (0, 0) agree at episode reset, eliminating the systematic
         EKF drift that occurs when /set_pose and GNSS use different origins.

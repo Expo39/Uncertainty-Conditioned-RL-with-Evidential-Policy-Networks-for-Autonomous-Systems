@@ -50,7 +50,7 @@ _C_HUD_TEXT = (212, 212, 212)
 _C_CONE = hex_to_rgb(HEX_CONE)
 
 # ---------------------------------------------------------------------------
-# Bay colour/linewidth lookup 
+# Bay colour/linewidth lookup
 # ---------------------------------------------------------------------------
 
 _BAY_STYLE: Dict[str, Tuple[Any, int]] = {
@@ -188,13 +188,17 @@ def _build_static_surface(
             colour: Any = _C_TARGET_BAY
             lw = 3
         else:
-            colour, lw = _BAY_STYLE.get(bay.get("bay_type", "perpendicular"), _BAY_STYLE_DEFAULT)
+            colour, lw = _BAY_STYLE.get(
+                bay.get("bay_type", "perpendicular"), _BAY_STYLE_DEFAULT
+            )
 
         half_d = float(bay.get("depth", 5.0)) / 2.0
         half_w = float(bay.get("width", 2.5)) / 2.0
         yaw_deg = float(bay.get("yaw_deg", bay.get("yaw", 0.0)))
         bx, by = float(bay["x"]), float(bay["y"])
-        spts = _world_to_screen(_rot_corners(bx, by, half_d, half_w, yaw_deg), origin, scale)
+        spts = _world_to_screen(
+            _rot_corners(bx, by, half_d, half_w, yaw_deg), origin, scale
+        )
         pygame.draw.polygon(surf, colour, spts, lw)
 
         # Heading arrows for target bay (nose-in and nose-out)
@@ -204,7 +208,9 @@ def _build_static_surface(
             cos_y, sin_y = math.cos(yaw_r), math.sin(yaw_r)
             s0 = _w2s(bx, by, origin, scale)
             for cx_dir, cy_dir in ((cos_y, sin_y), (-cos_y, -sin_y)):
-                s1 = _w2s(bx + arrow_len * cx_dir, by + arrow_len * cy_dir, origin, scale)
+                s1 = _w2s(
+                    bx + arrow_len * cx_dir, by + arrow_len * cy_dir, origin, scale
+                )
                 pygame.draw.line(surf, _C_TARGET_BAY, s0, s1, 2)
                 dx, dy = s1[0] - s0[0], s1[1] - s0[1]
                 length = math.hypot(dx, dy) or 1.0
@@ -217,7 +223,13 @@ def _build_static_surface(
     for actor in state.get("actors", []):
         if actor.get("type", "static") != "npc":
             spts = _world_to_screen(
-                _rot_corners(actor["x"], actor["y"], _NPC_HALF_L, _NPC_HALF_W, actor.get("yaw", 0.0)),
+                _rot_corners(
+                    actor["x"],
+                    actor["y"],
+                    _NPC_HALF_L,
+                    _NPC_HALF_W,
+                    actor.get("yaw", 0.0),
+                ),
                 origin,
                 scale,
             )
@@ -234,7 +246,9 @@ def _draw_legend(screen: pygame.Surface) -> None:
     global _legend_font, _legend_title_font
     if _legend_font is None:
         _legend_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE)
-        _legend_title_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE, bold=True)
+        _legend_title_font = pygame.font.SysFont(
+            "monospace", _LABEL_FONT_SIZE, bold=True
+        )
     font = _legend_font
     title_font = _legend_title_font
 
@@ -393,7 +407,7 @@ class LiveVisualiser:
                     self._screen = pygame.display.set_mode(
                         (_WINDOW_W, _WINDOW_H), flags
                     )
-                    self._static_episode_id = None   # Force static surface rebuild
+                    self._static_episode_id = None  # Force static surface rebuild
                     self._vis_trail_episode_id = None  # Force trail reset
 
     # ------------------------------------------------------------------
@@ -505,7 +519,8 @@ class LiveVisualiser:
         trail_len = len(self._vis_trail)
         if trail_len > 1:
             trail_pts = (
-                self._vis_trail[-_TRAIL_MAX_POINTS:] if trail_len > _TRAIL_MAX_POINTS
+                self._vis_trail[-_TRAIL_MAX_POINTS:]
+                if trail_len > _TRAIL_MAX_POINTS
                 else self._vis_trail
             )
             spts = _world_to_screen(np.array(trail_pts), origin, scale)
@@ -520,7 +535,13 @@ class LiveVisualiser:
                     self._screen,
                     _C_PATROL_VEHICLE,
                     _world_to_screen(
-                        _rot_corners(actor["x"], actor["y"], _NPC_HALF_L, _NPC_HALF_W, actor.get("yaw", 0.0)),
+                        _rot_corners(
+                            actor["x"],
+                            actor["y"],
+                            _NPC_HALF_L,
+                            _NPC_HALF_W,
+                            actor.get("yaw", 0.0),
+                        ),
                         origin,
                         scale,
                     ),
@@ -529,7 +550,12 @@ class LiveVisualiser:
         # Pedestrians
         ped_r = max(2, int(0.4 * scale))
         for ped in state.get("pedestrians", []):
-            pygame.draw.circle(self._screen, _C_PEDESTRIAN, _w2s(ped["x"], ped["y"], origin, scale), ped_r)
+            pygame.draw.circle(
+                self._screen,
+                _C_PEDESTRIAN,
+                _w2s(ped["x"], ped["y"], origin, scale),
+                ped_r,
+            )
 
         # Ego vehicle
         if ego:
@@ -537,7 +563,9 @@ class LiveVisualiser:
             pygame.draw.polygon(
                 self._screen,
                 _C_EGO,
-                _world_to_screen(_rot_corners(ex, ey, _EGO_HALF_L, _EGO_HALF_W, eyaw), origin, scale),
+                _world_to_screen(
+                    _rot_corners(ex, ey, _EGO_HALF_L, _EGO_HALF_W, eyaw), origin, scale
+                ),
             )
             yaw_r = math.radians(eyaw)
             cos_y, sin_y = math.cos(yaw_r), math.sin(yaw_r)

@@ -16,7 +16,6 @@ from uncertainty_rl.utils.actuation_calibration import (
     ActuatorMap,
 )
 
-
 # ---------------------------------------------------------------------------
 # TestActuatorMap
 # ---------------------------------------------------------------------------
@@ -146,13 +145,16 @@ class TestActuationCalibrationFromConfig:
         """
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "cal.yaml"
-            self._write_config(p, {
-                "calibration": {
-                    "steering": {"gain": 0.5},
-                    "drive": {},
-                    "brake": {},
-                }
-            })
+            self._write_config(
+                p,
+                {
+                    "calibration": {
+                        "steering": {"gain": 0.5},
+                        "drive": {},
+                        "brake": {},
+                    }
+                },
+            )
             cal = ActuationCalibration.from_config(str(p))
             s, _, _b = cal.apply(1.0, 0.0, 0.0)
             assert s == pytest.approx(0.5)
@@ -163,13 +165,16 @@ class TestActuationCalibrationFromConfig:
         """
         with tempfile.TemporaryDirectory() as d:
             p = Path(d) / "cal.yaml"
-            self._write_config(p, {
-                "calibration": {
-                    "steering": {},
-                    "drive": {"deadband": 0.15},
-                    "brake": {},
-                }
-            })
+            self._write_config(
+                p,
+                {
+                    "calibration": {
+                        "steering": {},
+                        "drive": {"deadband": 0.15},
+                        "brake": {},
+                    }
+                },
+            )
             cal = ActuationCalibration.from_config(str(p))
             _, drv, _b = cal.apply(0.0, 0.05, 0.0)
             assert drv == pytest.approx(0.0)

@@ -13,6 +13,7 @@ try:
     import carla
 except ImportError:
     import sys
+
     print("ERROR: carla Python package not found.  Run inside the training container.")
     sys.exit(1)
 

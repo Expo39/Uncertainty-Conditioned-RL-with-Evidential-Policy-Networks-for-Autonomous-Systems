@@ -3,6 +3,7 @@
 @brief Shared logging, metrics, visualisation, constants, and covariance tools.
 """
 
+from uncertainty_rl.utils.actuation_calibration import ActuationCalibration
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     CLEARANCE_THRESHOLD,
@@ -29,7 +30,6 @@ from uncertainty_rl.utils.geometry import (
     wrap_angle_symmetric,
     zone_bbox,
 )
-from uncertainty_rl.utils.actuation_calibration import ActuationCalibration
 from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.visualisation import VisStateWriter
 

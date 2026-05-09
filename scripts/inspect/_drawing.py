@@ -59,7 +59,9 @@ _COL_WHITE = carla.Color(r=255, g=255, b=255)
 _COL_GREY = carla.Color(r=120, g=120, b=120)
 
 # Bay-type colours
-_BAY_TYPE_COLOURS: Dict[str, Any] = {k: hex_to_carla_color(v) for k, v in BAY_HEX.items()}
+_BAY_TYPE_COLOURS: Dict[str, Any] = {
+    k: hex_to_carla_color(v) for k, v in BAY_HEX.items()
+}
 
 # GNSS sensor keys -> display labels (extend if a second antenna is added).
 _GNSS_LABELS: Dict[str, str] = {
@@ -137,9 +139,7 @@ def _draw_layout_overlays(
         bay_type = bay.get("bay_type", "perpendicular")
         is_target = bay.get("id", bay.get("bay_id", "")) == target_bay_id
         colour = (
-            _COL_TARGET
-            if is_target
-            else _BAY_TYPE_COLOURS.get(bay_type, _COL_GREY)
+            _COL_TARGET if is_target else _BAY_TYPE_COLOURS.get(bay_type, _COL_GREY)
         )
         bx = float(bay["x"])
         by = float(bay["y"])

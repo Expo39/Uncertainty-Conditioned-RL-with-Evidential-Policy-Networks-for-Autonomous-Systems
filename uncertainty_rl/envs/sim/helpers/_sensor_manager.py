@@ -95,7 +95,9 @@ class SensorManager:
         self._ego_vehicle: Optional[Any] = None
 
         # LiDAR noise model parameters parsed once from sensors_config.
-        _lidar_noise_cfg: Dict[str, Any] = sensors_config.get("lidar", {}).get("noise", {})
+        _lidar_noise_cfg: Dict[str, Any] = sensors_config.get("lidar", {}).get(
+            "noise", {}
+        )
         self._lidar_noise_enabled: bool = bool(_lidar_noise_cfg.get("enabled", False))
         self._lidar_range_random_stddev: float = float(
             _lidar_noise_cfg.get("range_random_stddev_m", 0.0)
@@ -103,7 +105,9 @@ class SensorManager:
         self._lidar_range_bias_limit: float = float(
             _lidar_noise_cfg.get("range_bias_limit_m", 0.0)
         )
-        self._lidar_dropout_rate: float = float(_lidar_noise_cfg.get("dropout_rate", 0.0))
+        self._lidar_dropout_rate: float = float(
+            _lidar_noise_cfg.get("dropout_rate", 0.0)
+        )
         self._lidar_min_range: float = float(_lidar_noise_cfg.get("min_range_m", 0.05))
         # Per-episode systematic range bias (metres). Resampled each episode via
         # sample_lidar_noise_bias() called from CARLAParkingEnv.reset().
@@ -146,7 +150,11 @@ class SensorManager:
         @return Integer point count.
         """
         with self._lidar_scan_lock:
-            return len(self._latest_lidar_scan) if self._latest_lidar_scan is not None else 0
+            return (
+                len(self._latest_lidar_scan)
+                if self._latest_lidar_scan is not None
+                else 0
+            )
 
     def spawn(
         self,
@@ -335,7 +343,9 @@ class SensorManager:
         )
         gnss_sensor.listen(lambda _: None)
         self._spawned_sensors.append(gnss_sensor)
-        logger.debug("Spawned front GNSS sensor (CARLA noise zeroed; relay owns noise).")
+        logger.debug(
+            "Spawned front GNSS sensor (CARLA noise zeroed; relay owns noise)."
+        )
 
     def _spawn_collision_sensor(self, world: Any, vehicle: Any) -> None:
         """

@@ -17,9 +17,9 @@ OOD = False
 WIDTH = 45.0
 DEPTH = 60.0
 LEFT_X = -5.0
-CENTRE_BACK_GAP = 6.0       # Aisle between the two centre rows' back faces.
-CENTRE_X_OFFSET = -7.25     # Cluster x-shift from lot midline.
-CENTRE_ROW_B_EXTRA = 1.0    # Extra cy bump on the angled centre row.
+CENTRE_BACK_GAP = 6.0  # Aisle between the two centre rows' back faces.
+CENTRE_X_OFFSET = -7.25  # Cluster x-shift from lot midline.
+CENTRE_ROW_B_EXTRA = 1.0  # Extra cy bump on the angled centre row.
 
 # Walls (CCW polygon order: bottom -> right -> top -> left).
 WALL_BOTTOM = 0
@@ -51,15 +51,27 @@ def generate() -> Dict[str, Any]:
     centre_perp, centre_ang = _centre_rows(lot, dims_perp, dims_ang)
     bottom_perp = lot.row_along_perimeter("perpendicular", n=12, wall=WALL_BOTTOM)
     bottom_ang = lot.row_along_perimeter(
-        "angled", n=7, wall=WALL_BOTTOM, bay_angle_deg=45.0, pack_from="end",
+        "angled",
+        n=7,
+        wall=WALL_BOTTOM,
+        bay_angle_deg=45.0,
+        pack_from="end",
     )
     par_top = lot.row_along_perimeter(
-        "parallel", n=6, wall=WALL_TOP, bay_angle_deg=90.0,
-        start_along=DEPTH - PAR_TOP_LEFT_X - 6 * dims_par["depth"]
+        "parallel",
+        n=6,
+        wall=WALL_TOP,
+        bay_angle_deg=90.0,
+        start_along=DEPTH
+        - PAR_TOP_LEFT_X
+        - 6 * dims_par["depth"]
         + dims_par["depth"] / 2.0,
     )
     par_right = lot.row_along_perimeter(
-        "parallel", n=3, wall=WALL_RIGHT, bay_angle_deg=90.0,
+        "parallel",
+        n=3,
+        wall=WALL_RIGHT,
+        bay_angle_deg=90.0,
         start_along=PAR_RIGHT_Y_START + dims_par["depth"] / 2.0,
     )
     par_col2 = _inner_column(lot, par_right, dims_par)
@@ -102,15 +114,24 @@ def _centre_rows(lot: LotBuilder, dims_perp, dims_ang):
     centre_x = DEPTH / 2.0 + CENTRE_X_OFFSET
     centre_y = WIDTH / 2.0
     row_a = lot.row_centred(
-        bay_type="perpendicular", n=12,
+        bay_type="perpendicular",
+        n=12,
         centre=(centre_x, centre_y - CENTRE_BACK_GAP / 2.0 - dims_perp["depth"] / 2.0),
-        direction="east", yaw_deg=90.0,
+        direction="east",
+        yaw_deg=90.0,
     )
     row_b = lot.row_centred(
-        bay_type="angled", n=8,
-        centre=(centre_x, centre_y + CENTRE_BACK_GAP / 2.0
-                + dims_ang["depth"] / 2.0 + CENTRE_ROW_B_EXTRA),
-        direction="east", yaw_deg=225.0,
+        bay_type="angled",
+        n=8,
+        centre=(
+            centre_x,
+            centre_y
+            + CENTRE_BACK_GAP / 2.0
+            + dims_ang["depth"] / 2.0
+            + CENTRE_ROW_B_EXTRA,
+        ),
+        direction="east",
+        yaw_deg=225.0,
         spacing=dims_ang["width"] / 0.7071067811865475,
     )
     return row_a, row_b
@@ -120,9 +141,15 @@ def _inner_column(lot: LotBuilder, par_right, dims_par):
     """@brief Place the inner parallel column 9 m aisle-to-aisle inward."""
     first = par_right.bays[0]
     return lot.row(
-        bay_type="parallel", n=3,
-        anchor=(first["local_x"] - INNER_PAR_AISLE - dims_par["width"], first["local_y"]),
-        direction="north", yaw_deg=270.0, spacing=dims_par["depth"],
+        bay_type="parallel",
+        n=3,
+        anchor=(
+            first["local_x"] - INNER_PAR_AISLE - dims_par["width"],
+            first["local_y"],
+        ),
+        direction="north",
+        yaw_deg=270.0,
+        spacing=dims_par["depth"],
     )
 
 
@@ -132,7 +159,11 @@ def _motorcycle_corner_bays(lot: LotBuilder):
     cy_top = WIDTH - 1.5 / 2.0 - lot.wall_gap
     for cy, occupant in ((cy_top, "Kawasaki Ninja"), (cy_top - 1.5, "Yamaha YZF-R")):
         lot.place_bay(
-            bay_type="motorcycle", x=cx, y=cy, yaw_deg=0.0,
-            width=1.5, depth=3.0,
+            bay_type="motorcycle",
+            x=cx,
+            y=cy,
+            yaw_deg=0.0,
+            width=1.5,
+            depth=3.0,
             bay_extras={"always_empty": True, "occupant": occupant},
         )

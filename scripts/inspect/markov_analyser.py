@@ -21,7 +21,6 @@ from typing import List, Sequence, Tuple
 import numpy as np
 import yaml
 
-
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 
 
@@ -146,9 +145,7 @@ def _run_analysis(
     print(f"Good = {{{good_str}}}   Bad = {{{bad_str}}}")
 
     rollouts = _simulate_episodes(P, init_weights, n_episodes, n_steps, rng)
-    occupation = np.array(
-        [(rollouts == i).mean() for i in range(len(_TIER_ORDER))]
-    )
+    occupation = np.array([(rollouts == i).mean() for i in range(len(_TIER_ORDER))])
 
     print(
         f"\n{'tier':<12}{'init':>8}{'stationary':>12}{'occupation':>12}"
@@ -176,9 +173,7 @@ def _run_analysis(
         first_win = _first_good_window(rollouts[bad_init_mask], good_mask, win_steps)
         reached = first_win[first_win >= 0]
         pct = len(reached) / n_bad * 100
-        med = _format_seconds(
-            float(np.median(reached)) if len(reached) else -1.0, dt
-        )
+        med = _format_seconds(float(np.median(reached)) if len(reached) else -1.0, dt)
         p90 = _format_seconds(
             float(np.percentile(reached, 90)) if len(reached) else -1.0, dt
         )

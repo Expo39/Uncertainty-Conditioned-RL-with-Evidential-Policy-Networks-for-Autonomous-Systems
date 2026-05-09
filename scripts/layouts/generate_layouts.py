@@ -16,12 +16,12 @@ from typing import Optional
 # __file__ is generate_layouts.py -> .parent.parent.parent = project root.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from scripts.layouts.floor_plans import irregular_a, rectangle, trapezoid  # noqa: E402
 from scripts.layouts.common import (  # noqa: E402
     plot_layout,
     to_world_frame,
     write_layout_yaml,
 )
+from scripts.layouts.floor_plans import irregular_a, rectangle, trapezoid  # noqa: E402
 
 _LAYOUTS = {
     "rectangle": rectangle,

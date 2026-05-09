@@ -408,7 +408,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 _, latent_vf = self.mlp_extractor(features)
             else:
                 vf_features = self.extract_features(obs, self.vf_features_extractor)
-                latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
+                latent_vf = self.mlp_extractor.forward_critic(
+                    cast(th.Tensor, vf_features)
+                )
             gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
             distribution = cast(
                 EvidentialDistribution,
@@ -421,7 +423,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 pi_features = cast(th.Tensor, features)
                 vf_features = self.extract_features(obs, self.vf_features_extractor)
                 latent_pi = self.mlp_extractor.forward_actor(pi_features)
-                latent_vf = self.mlp_extractor.forward_critic(cast(th.Tensor, vf_features))
+                latent_vf = self.mlp_extractor.forward_critic(
+                    cast(th.Tensor, vf_features)
+                )
             distribution = self._get_action_dist_from_latent(latent_pi)
 
         values = self.value_net(latent_vf)
@@ -648,7 +652,7 @@ class EvidentialPPO(PPO):
         @brief PPO training step with evidential regularisation.
 
         Reproduces the standard PPO training loop but adds the evidential
-        regularisation term to the combined loss. Also logs epistemic and 
+        regularisation term to the combined loss. Also logs epistemic and
         aleatoric uncertainty.
         """
         self.policy.set_training_mode(True)
@@ -658,7 +662,9 @@ class EvidentialPPO(PPO):
         # lambda_reg_warmup_steps environment steps. This lets the NLL loss
         # establish good predictions before the evidential regularisation fires.
         if self.lambda_reg_warmup_steps > 0:
-            ramp = min(1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps))
+            ramp = min(
+                1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps)
+            )
         else:
             ramp = 1.0
         current_lambda_reg = self.lambda_reg * ramp
@@ -798,7 +804,7 @@ class EvidentialPPO(PPO):
                 break
 
         def _mean(tensors: List[th.Tensor]) -> float:
-            return th.stack(tensors).mean().item()
+            return float(th.stack(tensors).mean().item())
 
         explained_var = explained_variance(
             self.rollout_buffer.values.flatten(),

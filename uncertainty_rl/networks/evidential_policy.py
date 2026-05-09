@@ -220,14 +220,14 @@ class EvidentialPolicyNetwork(nn.Module):
         @return Dictionary containing loss components.
 
         @note This is a standalone supervised regression loss used in unit tests
-              and standalone experiments. 
+              and standalone experiments.
         """
         diff = target - gamma
         omega = 2 * beta * (1 + nu)
         nll = (
             0.5 * torch.log(torch.pi / nu)
             - alpha * torch.log(omega)
-            + (alpha + 0.5) * torch.log(nu * diff ** 2 + omega)
+            + (alpha + 0.5) * torch.log(nu * diff**2 + omega)
             + torch.lgamma(alpha)
             - torch.lgamma(alpha + 0.5)
         )

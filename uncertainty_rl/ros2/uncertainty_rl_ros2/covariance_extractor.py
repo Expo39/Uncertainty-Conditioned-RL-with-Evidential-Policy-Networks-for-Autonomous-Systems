@@ -128,9 +128,7 @@ class CovarianceExtractorNode(Node):
             PoseWithCovarianceStamped, "/set_pose", 10
         )
         # Poll at 10 Hz - fast enough to catch the file within 0.1 s of write.
-        self._initial_pose_timer = self.create_timer(
-            0.1, self._check_initial_pose_file
-        )
+        self._initial_pose_timer = self.create_timer(0.1, self._check_initial_pose_file)
 
         self.get_logger().info(
             f"CovarianceExtractor: {odom_topic} -> {covariance_topic} "

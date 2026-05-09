@@ -14,7 +14,6 @@ from typing import Any, Dict, Tuple
 
 import yaml
 
-
 # ---------------------------------------------------------------------------
 # World-frame transformation
 # ---------------------------------------------------------------------------
@@ -117,13 +116,9 @@ def to_world_frame(
         _xform_spawn(esp) for esp in local_layout.get("extra_spawns", [])
     ]
 
-    world_ped_zones = [
-        _xform_box(zone) for zone in local_layout["pedestrian_zones"]
-    ]
+    world_ped_zones = [_xform_box(zone) for zone in local_layout["pedestrian_zones"]]
 
-    world_obstacles = [
-        _xform_box(obs) for obs in local_layout.get("obstacles", [])
-    ]
+    world_obstacles = [_xform_box(obs) for obs in local_layout.get("obstacles", [])]
 
     return {
         "corners": world_corners,
@@ -261,7 +256,9 @@ def plot_layout(
 
     for bay in world_layout["bays"]:
         bay_type = bay["bay_type"]
-        colour = "#888888" if bay_type == "motorcycle" else BAY_HEX.get(bay_type, "grey")
+        colour = (
+            "#888888" if bay_type == "motorcycle" else BAY_HEX.get(bay_type, "grey")
+        )
         bx, by = bay["x"], bay["y"]
         yaw_rad = math.radians(bay["yaw_deg"])
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
@@ -271,45 +268,58 @@ def plot_layout(
             (bx + cos_y * lx - sin_y * ly, by + sin_y * lx + cos_y * ly)
             for lx, ly in local_corners
         ]
-        ax.add_patch(MPoly(
-            world_rect,
-            closed=True,
-            facecolor=colour,
-            edgecolor="white",
-            linewidth=1.5,
-            alpha=0.6,
-            zorder=3,
-        ))
+        ax.add_patch(
+            MPoly(
+                world_rect,
+                closed=True,
+                facecolor=colour,
+                edgecolor="white",
+                linewidth=1.5,
+                alpha=0.6,
+                zorder=3,
+            )
+        )
 
     for zone in world_layout.get("pedestrian_zones", []):
-        ax.add_patch(mpatches.FancyBboxPatch(
-            (zone["centre_x"] - zone["half_width"], zone["centre_y"] - zone["half_height"]),
-            zone["half_width"] * 2.0,
-            zone["half_height"] * 2.0,
-            boxstyle="round,pad=0.4",
-            facecolor=HEX_PEDESTRIAN_ZONE,
-            edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
-            alpha=0.40,
-            linewidth=1.5,
-            linestyle="--",
-            zorder=4,
-        ))
+        ax.add_patch(
+            mpatches.FancyBboxPatch(
+                (
+                    zone["centre_x"] - zone["half_width"],
+                    zone["centre_y"] - zone["half_height"],
+                ),
+                zone["half_width"] * 2.0,
+                zone["half_height"] * 2.0,
+                boxstyle="round,pad=0.4",
+                facecolor=HEX_PEDESTRIAN_ZONE,
+                edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
+                alpha=0.40,
+                linewidth=1.5,
+                linestyle="--",
+                zorder=4,
+            )
+        )
 
     for obs in world_layout.get("obstacles", []):
-        ax.add_patch(mpatches.Rectangle(
-            (obs["centre_x"] - obs["half_width"], obs["centre_y"] - obs["half_height"]),
-            obs["half_width"] * 2.0,
-            obs["half_height"] * 2.0,
-            linewidth=2.5,
-            edgecolor="black",
-            facecolor="white",
-            zorder=5,
-        ))
+        ax.add_patch(
+            mpatches.Rectangle(
+                (
+                    obs["centre_x"] - obs["half_width"],
+                    obs["centre_y"] - obs["half_height"],
+                ),
+                obs["half_width"] * 2.0,
+                obs["half_height"] * 2.0,
+                linewidth=2.5,
+                edgecolor="black",
+                facecolor="white",
+                zorder=5,
+            )
+        )
 
     stroke_effect = [withStroke(linewidth=2, foreground="black")]
     tri_local = [(1.2, 0.0), (-0.72, 0.72), (-0.72, -0.72)]
     for idx, sp in enumerate(
-        [world_layout["spawn_transform"]] + world_layout.get("extra_spawn_transforms", [])
+        [world_layout["spawn_transform"]]
+        + world_layout.get("extra_spawn_transforms", [])
     ):
         yaw_rad = math.radians(sp["yaw_deg"])
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
@@ -317,14 +327,16 @@ def plot_layout(
             (sp["x"] + cos_y * lx - sin_y * ly, sp["y"] + sin_y * lx + cos_y * ly)
             for lx, ly in tri_local
         ]
-        ax.add_patch(MPoly(
-            tri_world,
-            closed=True,
-            facecolor="cyan",
-            edgecolor="white",
-            linewidth=1,
-            zorder=6,
-        ))
+        ax.add_patch(
+            MPoly(
+                tri_world,
+                closed=True,
+                facecolor="cyan",
+                edgecolor="white",
+                linewidth=1,
+                zorder=6,
+            )
+        )
         label_offset_perp = 1.5 if idx > 0 else 1.9
         label_y_nudge = 2.0 if idx > 0 else -0.5
         ax.text(
@@ -342,16 +354,33 @@ def plot_layout(
     if patrol:
         px = [wp["x"] for wp in patrol] + [patrol[0]["x"]]
         py = [wp["y"] for wp in patrol] + [patrol[0]["y"]]
-        ax.plot(px, py, "--", color=HEX_PATROL_PATH, linewidth=1.5, alpha=0.9, label="Patrol path")
+        ax.plot(
+            px,
+            py,
+            "--",
+            color=HEX_PATROL_PATH,
+            linewidth=1.5,
+            alpha=0.9,
+            label="Patrol path",
+        )
 
     handles = [
         mpatches.Patch(color=BAY_HEX["perpendicular"], label="Perpendicular bays"),
         mpatches.Patch(color=BAY_HEX["angled"], label="Angled (45 deg) bays"),
         mpatches.Patch(color=BAY_HEX["parallel"], label="Parallel bays"),
         mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
-        Line2D([0], [0], color=HEX_PATROL_PATH, linestyle="--", linewidth=1.5, label="Patrol path"),
+        Line2D(
+            [0],
+            [0],
+            color=HEX_PATROL_PATH,
+            linestyle="--",
+            linewidth=1.5,
+            label="Patrol path",
+        ),
         mpatches.FancyBboxPatch(
-            (0, 0), 1, 1,
+            (0, 0),
+            1,
+            1,
             boxstyle="round,pad=0.2",
             facecolor=HEX_PEDESTRIAN_ZONE,
             edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,

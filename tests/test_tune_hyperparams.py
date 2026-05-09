@@ -22,7 +22,6 @@ from uncertainty_rl.training.tune_hyperparams import (  # noqa: E402
     sample_hyperparams,
 )
 
-
 # ===========================================================================
 # Fixtures
 # ===========================================================================
@@ -103,9 +102,9 @@ class TestSampleHyperparams:
             "ent_coef",
             "evidential",
         }
-        assert expected_keys.issubset(params.keys()), (
-            f"Missing keys: {expected_keys - params.keys()}"
-        )
+        assert expected_keys.issubset(
+            params.keys()
+        ), f"Missing keys: {expected_keys - params.keys()}"
 
     def test_sample_hyperparams_batch_size_le_n_steps(
         self, tuning_config: Dict[str, Any]
@@ -124,9 +123,9 @@ class TestSampleHyperparams:
 
             params = sample_hyperparams(trial, tuning_config)
 
-            assert params["batch_size"] <= params["n_steps"], (
-                f"batch_size ({params['batch_size']}) > n_steps ({params['n_steps']})"
-            )
+            assert (
+                params["batch_size"] <= params["n_steps"]
+            ), f"batch_size ({params['batch_size']}) > n_steps ({params['n_steps']})"
 
     def test_sample_hyperparams_gamma_in_range(
         self, tuning_config: Dict[str, Any]
@@ -143,9 +142,9 @@ class TestSampleHyperparams:
         trial = study.ask()
         params = sample_hyperparams(trial, tuning_config)
 
-        assert 0.98 <= params["gamma"] <= 0.999, (
-            f"Gamma {params['gamma']} outside [0.98, 0.999]"
-        )
+        assert (
+            0.98 <= params["gamma"] <= 0.999
+        ), f"Gamma {params['gamma']} outside [0.98, 0.999]"
 
     def test_sample_hyperparams_lambda_reg_always_positive(
         self, tuning_config: Dict[str, Any]
@@ -164,9 +163,9 @@ class TestSampleHyperparams:
 
             params = sample_hyperparams(trial, tuning_config)
 
-            assert params["evidential"]["lambda_reg"] > 0.0, (
-                f"lambda_reg should always be positive, got {params['evidential']['lambda_reg']}"
-            )
+            assert (
+                params["evidential"]["lambda_reg"] > 0.0
+            ), f"lambda_reg should always be positive, got {params['evidential']['lambda_reg']}"
 
 
 # ===========================================================================
@@ -191,7 +190,8 @@ class TestApplyBestParams:
 
             # Write template
             import yaml
-            with open(config_path, 'w') as f:
+
+            with open(config_path, "w") as f:
                 yaml.dump(train_config_template, f)
 
             # Apply update
@@ -218,7 +218,8 @@ class TestApplyBestParams:
 
             # Write template
             import yaml
-            with open(config_path, 'w') as f:
+
+            with open(config_path, "w") as f:
                 yaml.dump(train_config_template, f)
 
             # Apply nested update
@@ -245,11 +246,13 @@ class TestApplyBestParams:
 
             # Write template
             import yaml
-            with open(config_path, 'w') as f:
+
+            with open(config_path, "w") as f:
                 yaml.dump(train_config_template, f)
 
             # Patch the apply_best_params to use our temp backup dir
             import os
+
             original_cwd = os.getcwd()
             try:
                 os.chdir(tmpdir)

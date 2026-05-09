@@ -17,7 +17,7 @@ import math
 import random
 import time
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple, cast
+from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, cast
 
 import gymnasium as gym
 import numpy as np
@@ -30,16 +30,16 @@ try:
 except ImportError:
     carla = None  # Running without CARLA (CI or tests)
 
-from uncertainty_rl.envs.sim.helpers import LotSpawner, NPCController, SensorManager
-from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
+from uncertainty_rl.envs._parking_core import _layout_cache as _shared_layout_cache
 from uncertainty_rl.envs._parking_core import (
-    _layout_cache as _shared_layout_cache,
     build_observation,
     compute_obs_dim,
     extract_obstacle_features,
     load_floor_plan,
     wait_for_ekf,
 )
+from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
+from uncertainty_rl.envs.sim.helpers import LotSpawner, NPCController, SensorManager
 from uncertainty_rl.utils.constants import (
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
@@ -406,15 +406,25 @@ class CARLAParkingEnv(gym.Env):
 
         # _read_ekf_state() -> (raw_pose, uncertainty) or (None, None)
         if self._include_covariance and self._cov_subscriber is not None:
-            self._read_ekf_state = self._cov_subscriber.get_latest_state
+            _read_ekf_state: Callable[
+                [], Tuple[Optional[np.ndarray], Optional[np.ndarray]]
+            ] = self._cov_subscriber.get_latest_state
         else:
-            self._read_ekf_state = lambda: (None, None)
+
+            def _read_ekf_state() -> Tuple[None, None]:
+                return (None, None)
+
+        self._read_ekf_state = _read_ekf_state
 
         # _get_lidar_scan() -> scan array or None
         if self._include_obstacle_obs:
             self._get_lidar_scan = self._sensor_manager.get_latest_lidar_scan
         else:
-            self._get_lidar_scan = lambda: None
+
+            def _get_lidar_scan() -> None:
+                return None
+
+            self._get_lidar_scan = _get_lidar_scan
 
         # _uncertainty_scale_fn() -> float in [0, 1]
         if self._include_covariance:
@@ -422,12 +432,13 @@ class CARLAParkingEnv(gym.Env):
             _buf = self._obs_buffer
 
             def _unc_scale_fn() -> float:
-                return min(
-                    max(max(float(_buf[1]), float(_buf[2])) * _inv, 0.0), 1.0
-                )
+                return min(max(max(float(_buf[1]), float(_buf[2])) * _inv, 0.0), 1.0)
+
         else:
+
             def _unc_scale_fn() -> float:  # type: ignore[misc]
                 return 0.0
+
         self._uncertainty_scale_fn = _unc_scale_fn
 
     # ------------------------------------------------------------------
@@ -585,15 +596,12 @@ class CARLAParkingEnv(gym.Env):
 
         primary = layout.get("spawn_transform", {})
         extras: List[Any] = (
-            layout.get("extra_spawn_transforms", [])
-            if self._use_extra_spawns
-            else []
+            layout.get("extra_spawn_transforms", []) if self._use_extra_spawns else []
         )
         self._spawn_pool = [primary] + list(extras)
 
         eligible = [
-            b for b in layout.get("bays", [])
-            if not b.get("always_empty", False)
+            b for b in layout.get("bays", []) if not b.get("always_empty", False)
         ]
         bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
         for bay in eligible:
@@ -751,13 +759,18 @@ class CARLAParkingEnv(gym.Env):
         @return Tuple of (reward, terminated, success, diagnostics).
         """
         if self.vehicle is None:
-            return 0.0, False, False, {
-                "pos_error": 0.0,
-                "orientation_error": 0.0,
-                "speed": 0.0,
-                "collision": 0.0,
-                "progress_reward": 0.0,
-            }
+            return (
+                0.0,
+                False,
+                False,
+                {
+                    "pos_error": 0.0,
+                    "orientation_error": 0.0,
+                    "speed": 0.0,
+                    "collision": 0.0,
+                    "progress_reward": 0.0,
+                },
+            )
 
         if transform is None:
             transform = self.vehicle.get_transform()
@@ -1171,7 +1184,11 @@ class CARLAParkingEnv(gym.Env):
         if self._cov_subscriber is None:
             return
 
-        tick_fn = (lambda: self.world.tick(10.0)) if self.world is not None else None
+        def _tick_fn() -> None:
+            assert self.world is not None
+            self.world.tick(10.0)
+
+        tick_fn = _tick_fn if self.world is not None else None
         wait_for_ekf(
             has_lidar=lambda: self._sensor_manager.get_latest_lidar_scan() is not None,
             has_ekf=lambda: self._cov_subscriber.has_data,  # type: ignore[union-attr]
@@ -1514,8 +1531,7 @@ class CARLAParkingEnv(gym.Env):
             control.reverse = drive < 0.0
             # Cut throttle when speed limit is exceeded.
             control.throttle = (
-                0.0 if current_speed >= self._max_ego_speed_ms
-                else abs(drive)
+                0.0 if current_speed >= self._max_ego_speed_ms else abs(drive)
             )
 
             self.vehicle.apply_control(control)

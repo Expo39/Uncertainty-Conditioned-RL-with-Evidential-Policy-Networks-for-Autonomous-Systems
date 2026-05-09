@@ -12,7 +12,11 @@ import importlib.util
 import os
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -21,6 +25,7 @@ from launch_ros.actions import Node
 # the installed ROS 2 'launch' package of the same name.
 _common_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "_common.py")
 _spec = importlib.util.spec_from_file_location("launch_common", _common_path)
+assert _spec is not None, "Failed to load _common.py spec"
 _common_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_common_mod)  # type: ignore[union-attr]
 load_yaml = _common_mod.load_yaml
@@ -149,7 +154,9 @@ def generate_launch_description() -> LaunchDescription:
                     "input_topic", "/carla/ego_vehicle/gnss"
                 ),
                 "output_topic": gnss_relay_cfg.get("output_topic", "/gnss/noisy"),
-                "base_metric_stddev_m": gnss_relay_cfg.get("base_metric_stddev_m", 0.02),
+                "base_metric_stddev_m": gnss_relay_cfg.get(
+                    "base_metric_stddev_m", 0.02
+                ),
                 "enable_gnss_noise": gnss_relay_cfg.get("enable_gnss_noise", True),
                 "enable_markov_transitions": gnss_relay_cfg.get(
                     "enable_markov_transitions", True
@@ -162,7 +169,9 @@ def generate_launch_description() -> LaunchDescription:
                 "heading_output_topic": gnss_relay_cfg.get(
                     "heading_output_topic", "/gnss/heading"
                 ),
-                "cog_min_displacement_m": gnss_relay_cfg.get("cog_min_displacement_m", 0.05),
+                "cog_min_displacement_m": gnss_relay_cfg.get(
+                    "cog_min_displacement_m", 0.05
+                ),
                 "enable_cog_reverse_detection": gnss_relay_cfg.get(
                     "enable_cog_reverse_detection", True
                 ),

@@ -68,6 +68,7 @@ class EvaluationMetrics:
         @brief Convert metrics to dictionary.
         @return Dictionary of metrics.
         """
+
         def _mean_std(lst: List[float]) -> Tuple[float, float]:
             if not lst:
                 return 0.0, 0.0
@@ -104,8 +105,7 @@ def _scale_sensor_noise(
     """
     base_imu: Dict[str, Any] = base_sensors.get("imu", {})
     scaled_imu = {
-        k: (v * imu_multiplier if "stddev" in k else v)
-        for k, v in base_imu.items()
+        k: (v * imu_multiplier if "stddev" in k else v) for k, v in base_imu.items()
     }
     return {**base_sensors, "imu": scaled_imu}
 
@@ -267,7 +267,9 @@ def evaluate_agent(
             _set_uncertainty("set_uncertainty", epistemic, aleatoric)
             next_obs, reward, done, infos = env.step(action)
             return next_obs, float(reward[0]), done, infos
+
     else:
+
         def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
             action, _states = model.predict(obs, deterministic=deterministic)
             next_obs, reward, done, infos = env.step(action)
@@ -442,12 +444,27 @@ def plot_evaluation_results(
 
     # Plots 1-3: single-series bar charts, data-driven
     bar_specs = [
-        (axes[0, 0], "success_rate",   "steelblue",
-         "Success Rate (%)",  "Success Rate vs Condition"),
-        (axes[0, 1], "average_reward", "forestgreen",
-         "Average Reward",    "Average Reward vs Condition"),
-        (axes[1, 0], "average_steps",  "firebrick",
-         "Average Steps",     "Average Steps to Termination vs Condition"),
+        (
+            axes[0, 0],
+            "success_rate",
+            "steelblue",
+            "Success Rate (%)",
+            "Success Rate vs Condition",
+        ),
+        (
+            axes[0, 1],
+            "average_reward",
+            "forestgreen",
+            "Average Reward",
+            "Average Reward vs Condition",
+        ),
+        (
+            axes[1, 0],
+            "average_steps",
+            "firebrick",
+            "Average Steps",
+            "Average Steps to Termination vs Condition",
+        ),
     ]
     for ax, col, colour, ylabel, title in bar_specs:
         ax.bar(x_list, df[col], color=colour, alpha=0.8)
@@ -461,12 +478,18 @@ def plot_evaluation_results(
     if "mean_epistemic_uncertainty" in df.columns:
         bar_width = 0.35
         axes[1, 1].bar(
-            x_arr - bar_width / 2, df["mean_epistemic_uncertainty"],
-            bar_width, label="Epistemic", alpha=0.8,
+            x_arr - bar_width / 2,
+            df["mean_epistemic_uncertainty"],
+            bar_width,
+            label="Epistemic",
+            alpha=0.8,
         )
         axes[1, 1].bar(
-            x_arr + bar_width / 2, df["mean_aleatoric_uncertainty"],
-            bar_width, label="Aleatoric", alpha=0.8,
+            x_arr + bar_width / 2,
+            df["mean_aleatoric_uncertainty"],
+            bar_width,
+            label="Aleatoric",
+            alpha=0.8,
         )
         axes[1, 1].set_xticks(x_list)
         axes[1, 1].set_xticklabels(conditions, rotation=45, ha="right")

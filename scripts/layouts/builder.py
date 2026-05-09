@@ -58,8 +58,7 @@ def _bay_corners(
     hd = depth / 2.0
     local = [(-hd, -hw), (hd, -hw), (hd, hw), (-hd, hw)]
     return [
-        (cx + cos_y * lx - sin_y * ly, cy + sin_y * lx + cos_y * ly)
-        for lx, ly in local
+        (cx + cos_y * lx - sin_y * ly, cy + sin_y * lx + cos_y * ly) for lx, ly in local
     ]
 
 
@@ -136,8 +135,12 @@ def warn_narrow_corridors(
             same_yaw = yaw_diff < 1.0 or abs(yaw_diff - 360.0) < 1.0
             if same_type and same_yaw:
                 continue
-            gap_x = abs(a["local_x"] - b["local_x"]) - a["depth"] / 2.0 - b["depth"] / 2.0
-            gap_y = abs(a["local_y"] - b["local_y"]) - a["width"] / 2.0 - b["width"] / 2.0
+            gap_x = (
+                abs(a["local_x"] - b["local_x"]) - a["depth"] / 2.0 - b["depth"] / 2.0
+            )
+            gap_y = (
+                abs(a["local_y"] - b["local_y"]) - a["width"] / 2.0 - b["width"] / 2.0
+            )
             gap = max(gap_x, gap_y, 0.0)
             if gap < min_width:
                 print(
@@ -450,9 +453,7 @@ class PedestrianZone:
                 wall_y + margin if sign > 0 else wall_y - strip,
                 wall_y + strip if sign > 0 else wall_y - margin,
             )
-        raise ValueError(
-            "PedestrianZone.beside_wall only supports axis-aligned walls."
-        )
+        raise ValueError("PedestrianZone.beside_wall only supports axis-aligned walls.")
 
 
 def _row_side_to_cardinal(group: BayGroup, side: str) -> str:
@@ -663,11 +664,9 @@ def angled_corner_clearance(lot: "LotBuilder", angle_deg: float = 45.0) -> float
     @return Clearance distance in metres.
     """
     dims_ang = lot.dims["angled"]
-    return (
-        (dims_ang["depth"] / 2.0 + dims_ang["width"] / 2.0)
-        * math.cos(math.radians(angle_deg))
-        + lot.wall_gap
-    )
+    return (dims_ang["depth"] / 2.0 + dims_ang["width"] / 2.0) * math.cos(
+        math.radians(angle_deg)
+    ) + lot.wall_gap
 
 
 class LotBuilder:
@@ -720,9 +719,7 @@ class LotBuilder:
         p0 = self.corners[wall]
         p1 = self.corners[(wall + 1) % len(self.corners)]
         if abs(p0["y"] - p1["y"]) > 1e-6:
-            raise ValueError(
-                f"wall_y({wall}) is undefined for a non-horizontal wall."
-            )
+            raise ValueError(f"wall_y({wall}) is undefined for a non-horizontal wall.")
         return p0["y"]
 
     def wall_x(self, wall: int) -> float:
@@ -734,9 +731,7 @@ class LotBuilder:
         p0 = self.corners[wall]
         p1 = self.corners[(wall + 1) % len(self.corners)]
         if abs(p0["x"] - p1["x"]) > 1e-6:
-            raise ValueError(
-                f"wall_x({wall}) is undefined for a non-vertical wall."
-            )
+            raise ValueError(f"wall_x({wall}) is undefined for a non-vertical wall.")
         return p0["x"]
 
     # ------------------------------------------------------------------
@@ -975,10 +970,9 @@ class LotBuilder:
                 math.radians(normalised_angle)
             )
             inward = half_diag + self.wall_gap
-            default_start_along = (
-                (bay_d / 2.0 + bay_w / 2.0) * math.cos(math.radians(normalised_angle))
-                + self.wall_gap
-            )
+            default_start_along = (bay_d / 2.0 + bay_w / 2.0) * math.cos(
+                math.radians(normalised_angle)
+            ) + self.wall_gap
 
         if centred:
             cluster_span = (n - 1) * spacing
@@ -1057,8 +1051,7 @@ class LotBuilder:
         """
         if not 0 <= wall < len(self.corners):
             raise ValueError(
-                f"wall index {wall} out of range "
-                f"[0, {len(self.corners) - 1}]."
+                f"wall index {wall} out of range " f"[0, {len(self.corners) - 1}]."
             )
         p0_dict = self.corners[wall]
         p1_dict = self.corners[(wall + 1) % len(self.corners)]

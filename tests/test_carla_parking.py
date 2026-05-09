@@ -16,6 +16,13 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from uncertainty_rl.envs._parking_core import (
+    build_observation,
+    compute_obs_dim,
+    extract_obstacle_features,
+    load_floor_plan,
+    wait_for_ekf,
+)
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     COVARIANCE_FEATURES_DIM,
@@ -31,13 +38,6 @@ from uncertainty_rl.utils.geometry import (
     wrap_angle_symmetric,
     yaw_from_quaternion,
     zone_bbox,
-)
-from uncertainty_rl.envs._parking_core import (
-    build_observation,
-    compute_obs_dim,
-    extract_obstacle_features,
-    load_floor_plan,
-    wait_for_ekf,
 )
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
@@ -768,7 +768,7 @@ class TestComputeReward:
 
     def test_collision_ego_fault_returns_minus_ten_and_terminates(self) -> None:
         """
-        @brief Ego-fault collision -> reward = -10.0, terminated = True, success = False.
+        @brief Ego-fault collision -> reward = -10, terminated = True, success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -1174,7 +1174,9 @@ class TestYawFromQuaternion:
         # q = (0, 0, sin(pi/4), cos(pi/4))
         s = math.sin(math.pi / 4)
         c = math.cos(math.pi / 4)
-        assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(math.pi / 2, abs=1e-6)
+        assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(
+            math.pi / 2, abs=1e-6
+        )
 
     def test_minus_90_deg_yaw(self) -> None:
         """
@@ -1182,7 +1184,9 @@ class TestYawFromQuaternion:
         """
         s = math.sin(-math.pi / 4)
         c = math.cos(-math.pi / 4)
-        assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(-math.pi / 2, abs=1e-6)
+        assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(
+            -math.pi / 2, abs=1e-6
+        )
 
     def test_output_in_minus_pi_to_pi(self) -> None:
         """
@@ -1290,7 +1294,7 @@ class TestExtractObstacleFeatures:
         scan = np.array([[2.0, 2.0]], dtype=np.float32)  # bearing ~45 deg
         out = self._empty_out()
         result = extract_obstacle_features(scan, out)
-        expected_dist = math.sqrt(2.0 ** 2 + 2.0 ** 2)
+        expected_dist = math.sqrt(2.0**2 + 2.0**2)
         assert result[0] == pytest.approx(expected_dist, rel=1e-3)
 
     def test_right_point_populates_right_dist(self) -> None:
@@ -1300,7 +1304,7 @@ class TestExtractObstacleFeatures:
         scan = np.array([[2.0, -2.0]], dtype=np.float32)  # bearing ~-45 deg
         out = self._empty_out()
         result = extract_obstacle_features(scan, out)
-        expected_dist = math.sqrt(2.0 ** 2 + 2.0 ** 2)
+        expected_dist = math.sqrt(2.0**2 + 2.0**2)
         assert result[2] == pytest.approx(expected_dist, rel=1e-3)
 
     def test_self_return_filtered_out(self) -> None:
@@ -1325,10 +1329,13 @@ class TestExtractObstacleFeatures:
         """
         @brief When multiple points are in the same sector, the nearest is chosen.
         """
-        scan = np.array([
-            [5.0, 0.0],  # forward, dist=5
-            [2.0, 0.0],  # forward, dist=2 (nearer)
-        ], dtype=np.float32)
+        scan = np.array(
+            [
+                [5.0, 0.0],  # forward, dist=5
+                [2.0, 0.0],  # forward, dist=2 (nearer)
+            ],
+            dtype=np.float32,
+        )
         out = self._empty_out()
         result = extract_obstacle_features(scan, out)
         assert result[4] == pytest.approx(2.0, abs=1e-3)
@@ -1421,7 +1428,7 @@ class TestBuildObservation:
             include_obstacle_obs=False,
             obs_buffer=buf,
         )
-        np.testing.assert_allclose(obs[1:1 + COVARIANCE_FEATURES_DIM], unc)
+        np.testing.assert_allclose(obs[1 : 1 + COVARIANCE_FEATURES_DIM], unc)
 
     def test_returns_copy_not_buffer(self) -> None:
         """
@@ -1456,6 +1463,7 @@ class TestLoadFloorPlan:
 
     def _write_layout(self, path: Path) -> None:
         import yaml
+
         layout = {"bays": [{"id": "bay_01", "x": 0.0, "y": 0.0, "yaw": 0.0}]}
         with open(path, "w") as f:
             yaml.dump(layout, f)
