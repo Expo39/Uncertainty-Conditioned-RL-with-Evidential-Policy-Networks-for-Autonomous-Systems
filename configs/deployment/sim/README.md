@@ -46,7 +46,8 @@ merged env config passed to CARLAParkingEnv
 | Key | Default | Notes |
 |-----|---------|-------|
 | `carla_timestep` | `0.05` | 20 Hz. Policy runs at 1/carla_timestep. |
-| `max_steps` | `1500` | Episode length. 1500 x 0.05 s = 75 s sim time. |
+| `max_steps` | `1750` | Episode length. 1750 x 0.05 s = 87.5 s sim time. |
+| `success_dwell_steps` | `5` | Consecutive steps all success criteria must hold before the episode ends as success (prevents drive-throughs counting as parks). |
 | `action_repeat` | `1` | Steps per policy call. |
 | `no_rendering_mode` | `true` | Disables Unreal rendering (~3-4x speed-up). Cameras are empty; physics is active. |
 
@@ -76,13 +77,18 @@ covariance variation - the primary uncertainty source in training.
 
 | Tier | Approx. stddev | Sampling weight | Interpretation |
 |------|---------------|-----------------|----------------|
-| `rtk_fixed` | ~2 cm | 0.4 (40%) | Nominal RTK fix - parking is straightforward |
-| `rtk_float` | ~36 cm | 0.3 (30%) | Marginal RTK - elevated covariance |
-| `standalone` | ~1.8 m | 0.2 (20%) | RTK lost - high covariance, policy must adapt |
-| `degraded` | ~5 m | 0.1 (10%) | Severe degradation - policy should be cautious |
+| `rtk_fixed` | ~2 cm | 0.30 (30%) | Nominal RTK fix - parking is straightforward |
+| `rtk_float` | ~36 cm | 0.30 (30%) | Marginal RTK - elevated covariance |
+| `standalone` | ~1.8 m | 0.25 (25%) | RTK lost - high covariance, policy must adapt |
+| `degraded` | ~5 m | 0.15 (15%) | Severe degradation - policy should be cautious |
 
 At eval time, `gnss_noise_multiplier` in `configs/eval_config.yaml` overrides the per-episode
 sampling to fix a specific noise level for each evaluation condition.
+
+The file also defines a `transition_matrix` block: a per-step (20 Hz) Markov chain over
+the four tiers used by `GnssNoiseRelayNode` when `enable_markov_transitions: true` in
+`configs/ros2_config.yaml`. Diagnose the chain (stationary distribution, mean dwell, time
+to first contiguous good window) with `make analyse-markov`.
 
 ---
 

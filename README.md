@@ -326,10 +326,10 @@ All hyperparameters live in `configs/` YAML files - never hardcoded in source.
 |------|---------|---------------|
 | `train_config.yaml` | PPO + evidential training | `learning_rate` (3e-4), `n_steps` (2048), `batch_size` (256), `net_arch` ([256,256]), `evidential.lambda_reg` (0.001), `total_timesteps` (1,000,000) |
 | `eval_config.yaml` | 9-condition sweep | `eval_conditions`, `n_episodes` (100), `success_criteria` |
-| `deployment/sim/env_config.yaml` | CARLA env settings | `max_steps` (1500), `carla_sensors.*`, `gnss_noise_profiles` path |
+| `deployment/sim/env_config.yaml` | CARLA env settings | `max_steps` (1750), `success_dwell_steps` (5), `carla_sensors.*`, `gnss_noise_profiles` path |
 | `deployment/agent_config.yaml` | Agent behaviour | `include_covariance`, `include_obstacle_obs`, safety thresholds |
-| `deployment/sim/gnss_noise_profiles.yaml` | RTK fix-state tiers | `rtk_fixed` (2 cm, 40%), `rtk_float` (36 cm, 30%), `standalone` (1.8 m, 20%), `degraded` (5 m, 10%) |
-| `training/tuning_config.yaml` | Optuna search | `n_trials` (35), `timesteps_per_trial` (100,000) |
+| `deployment/sim/gnss_noise_profiles.yaml` | RTK fix-state tiers + Markov transition matrix | `rtk_fixed` (2 cm, 30%), `rtk_float` (36 cm, 30%), `standalone` (1.8 m, 25%), `degraded` (5 m, 15%) |
+| `training/tuning_config.yaml` | Optuna search | `n_trials` (40), `timesteps_per_trial` (100,000), `eval_metric` (`env/success_rate`) |
 | `baselines/*.yaml` | Ablation overrides | 4 configs for the 2x2 ablation study |
 
 > **Further reading:** [configs/deployment/sim/README.md](configs/deployment/sim/README.md) - full breakdown of the sim config files and what consumes each key.
