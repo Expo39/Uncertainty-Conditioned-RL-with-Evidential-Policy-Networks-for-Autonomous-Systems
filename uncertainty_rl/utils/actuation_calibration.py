@@ -39,7 +39,11 @@ class ActuatorMap:
         @return Physical actuator command, clamped to [min_output, max_output].
         """
         shifted = value - self.deadband_offset
-        mapped = self.bias if abs(shifted) < self.deadband else self.gain * shifted + self.bias
+        mapped = (
+            self.bias
+            if abs(shifted) < self.deadband
+            else self.gain * shifted + self.bias
+        )
         if mapped < self.min_output:
             return self.min_output
         if mapped > self.max_output:
@@ -93,6 +97,7 @@ class ActuationCalibration:
         """
         try:
             import yaml
+
             with open(config_path, "r") as f:
                 doc = yaml.safe_load(f) or {}
             cal = doc.get("calibration", {})
@@ -103,7 +108,9 @@ class ActuationCalibration:
         except (OSError, KeyError):
             return cls.identity()
 
-    def apply(self, steering: float, drive: float, brake: float) -> Tuple[float, float, float]:
+    def apply(
+        self, steering: float, drive: float, brake: float
+    ) -> Tuple[float, float, float]:
         """
         @brief Apply calibration to policy action outputs.
         @param steering: Policy steering output in [-1, 1].
@@ -111,4 +118,8 @@ class ActuationCalibration:
         @param brake: Policy brake output in [0, 1].
         @return Tuple (steering_cmd, drive_cmd, brake_cmd) mapped to physical range.
         """
-        return self._steering.apply(steering), self._drive.apply(drive), self._brake.apply(brake)
+        return (
+            self._steering.apply(steering),
+            self._drive.apply(drive),
+            self._brake.apply(brake),
+        )

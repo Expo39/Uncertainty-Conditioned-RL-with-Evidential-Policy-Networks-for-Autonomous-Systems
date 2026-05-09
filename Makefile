@@ -371,7 +371,7 @@ test-unit: ## Run unit tests only (no GPU, no CARLA, no ROS 2)
 
 lint: ## Run all linters (flake8 + isort + black)
 	$(call ensure-venv)
-	$(VENV)/bin/flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503
+	$(VENV)/bin/flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 	$(VENV)/bin/isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 	$(VENV)/bin/black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR)
 

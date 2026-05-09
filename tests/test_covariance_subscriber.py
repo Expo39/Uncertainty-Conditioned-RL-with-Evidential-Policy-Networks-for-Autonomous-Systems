@@ -181,9 +181,7 @@ class TestReadFileValid:
                 sub._read_file()
                 pose = sub._latest_pose
                 assert pose is not None
-                np.testing.assert_allclose(
-                    pose, [5.0, -3.0, 0.78, 0.4], rtol=1e-5
-                )
+                np.testing.assert_allclose(pose, [5.0, -3.0, 0.78, 0.4], rtol=1e-5)
 
     def test_updates_last_read_seq(self) -> None:
         """

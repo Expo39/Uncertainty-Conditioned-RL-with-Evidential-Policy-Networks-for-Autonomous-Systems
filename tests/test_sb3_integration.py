@@ -574,9 +574,9 @@ class TestEvidentialPPO:
         # Check that evidential_reg_loss is finite and not explosively large
         reg_loss = model.logger.name_to_value.get("train/evidential_reg_loss")
         assert reg_loss is not None, "evidential_reg_loss not logged"
-        assert (
-            torch.isfinite(torch.tensor(reg_loss)).item()
-        ), f"evidential_reg_loss is not finite: {reg_loss}"
+        assert torch.isfinite(
+            torch.tensor(reg_loss)
+        ).item(), f"evidential_reg_loss is not finite: {reg_loss}"
         # Prior-anchoring should produce values typically < 50 even with clamped params
         assert (
             reg_loss < 50.0

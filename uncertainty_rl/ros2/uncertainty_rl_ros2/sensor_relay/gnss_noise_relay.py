@@ -34,22 +34,38 @@ _TIER_INDEX: Dict[str, int] = {name: i for i, name in enumerate(_TIER_ORDER)}
 # See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
     # RTK fixed:
-    # Conservative 0.020 m used to cover antenna phase-centre offset 
+    # Conservative 0.020 m used to cover antenna phase-centre offset
     # 0.020 / 111320 = 1.797e-7 deg.
-    "rtk_fixed":  {"lat_stddev_deg": 0.0000002, "lon_stddev_deg": 0.0000002,
-                   "alt_stddev_m": 0.05,  "metric_stddev_m": 0.020},
-    # RTK float: 
+    "rtk_fixed": {
+        "lat_stddev_deg": 0.0000002,
+        "lon_stddev_deg": 0.0000002,
+        "alt_stddev_m": 0.05,
+        "metric_stddev_m": 0.020,
+    },
+    # RTK float:
     # 0.360 / 111320 = 3.233e-6 deg.
-    "rtk_float":  {"lat_stddev_deg": 0.0000032, "lon_stddev_deg": 0.0000032,
-                   "alt_stddev_m": 0.5,   "metric_stddev_m": 0.360},
+    "rtk_float": {
+        "lat_stddev_deg": 0.0000032,
+        "lon_stddev_deg": 0.0000032,
+        "alt_stddev_m": 0.5,
+        "metric_stddev_m": 0.360,
+    },
     # Standalone PVT:
     # 1.802 / 111320 = 1.619e-5 deg.
-    "standalone": {"lat_stddev_deg": 0.0000162, "lon_stddev_deg": 0.0000162,
-                   "alt_stddev_m": 5.0,   "metric_stddev_m": 1.802},
-    # Degraded: 
+    "standalone": {
+        "lat_stddev_deg": 0.0000162,
+        "lon_stddev_deg": 0.0000162,
+        "alt_stddev_m": 5.0,
+        "metric_stddev_m": 1.802,
+    },
+    # Degraded:
     # 5.0 / 111320 = 4.492e-5 deg.
-    "degraded":   {"lat_stddev_deg": 0.0000449, "lon_stddev_deg": 0.0000449,
-                   "alt_stddev_m": 10.0,  "metric_stddev_m": 5.0},
+    "degraded": {
+        "lat_stddev_deg": 0.0000449,
+        "lon_stddev_deg": 0.0000449,
+        "alt_stddev_m": 10.0,
+        "metric_stddev_m": 5.0,
+    },
 }
 
 # Fallback per-step transition matrix used only if
@@ -124,10 +140,14 @@ class GnssNoiseRelayNode(Node):
             self.get_parameter("config_file").get_parameter_value().string_value
         )
         self._base_metric_stddev: float = float(
-            self.get_parameter("base_metric_stddev_m").get_parameter_value().double_value
+            self.get_parameter("base_metric_stddev_m")
+            .get_parameter_value()
+            .double_value
         )
         self._markov_enabled: bool = bool(
-            self.get_parameter("enable_markov_transitions").get_parameter_value().bool_value
+            self.get_parameter("enable_markov_transitions")
+            .get_parameter_value()
+            .bool_value
         )
         self._gnss_noise_enabled: bool = bool(
             self.get_parameter("enable_gnss_noise").get_parameter_value().bool_value
@@ -142,10 +162,14 @@ class GnssNoiseRelayNode(Node):
             self.get_parameter("odom_output_topic").get_parameter_value().string_value
         )
         heading_output_topic = str(
-            self.get_parameter("heading_output_topic").get_parameter_value().string_value
+            self.get_parameter("heading_output_topic")
+            .get_parameter_value()
+            .string_value
         )
         self._cog_min_displacement_m: float = float(
-            self.get_parameter("cog_min_displacement_m").get_parameter_value().double_value
+            self.get_parameter("cog_min_displacement_m")
+            .get_parameter_value()
+            .double_value
         )
         self._enable_cog_reverse_detection: bool = bool(
             self.get_parameter("enable_cog_reverse_detection")
@@ -155,15 +179,13 @@ class GnssNoiseRelayNode(Node):
 
         # Precompute flat-earth scale factors for the datum latitude.
         self._metres_per_deg_lat: float = 111320.0
-        self._metres_per_deg_lon: float = (
-            111320.0 * math.cos(math.radians(self._datum_lat))
+        self._metres_per_deg_lon: float = 111320.0 * math.cos(
+            math.radians(self._datum_lat)
         )
 
         self._tier_params: Dict[str, Dict[str, float]] = dict(_TIER_DEFAULTS)
         noise_profiles_path = str(
-            self.get_parameter("noise_profiles_path")
-            .get_parameter_value()
-            .string_value
+            self.get_parameter("noise_profiles_path").get_parameter_value().string_value
         )
         self._transition_matrix: np.ndarray = self._load_transition_matrix(
             noise_profiles_path
@@ -177,9 +199,7 @@ class GnssNoiseRelayNode(Node):
         self._config_mtime_ns: int = 0
         self._callback_count: int = 0
 
-        self._auto_datum: bool = (
-            self._datum_lat == 0.0 and self._datum_lon == 0.0
-        )
+        self._auto_datum: bool = self._datum_lat == 0.0 and self._datum_lon == 0.0
         self._datum_latched: bool = not self._auto_datum
 
         self._rng = np.random.default_rng()
@@ -199,7 +219,7 @@ class GnssNoiseRelayNode(Node):
         self._odom_cov_template[35] = 1.0e6
 
         # Cached RTK-fixed baseline variance (used as floor in odom and COG).
-        self._rtk_fixed_var: float = 0.02 ** 2
+        self._rtk_fixed_var: float = 0.02**2
 
         # Previous noisy fix in local XY (metres) and its timestamp (seconds).
         # Used to compute COG heading via displacement / dt.
@@ -210,7 +230,7 @@ class GnssNoiseRelayNode(Node):
         # COG heading state.
         self._cog_initialised: bool = False
         self._last_heading_rad: float = 0.0
-        self._last_heading_var: float = (math.pi ** 2) / 3.0
+        self._last_heading_var: float = (math.pi**2) / 3.0
         self._last_speed_ms: float = 0.0
         # True only when the last callback met both COG gates (speed + displacement).
         # Used to suppress tight-variance publish when gates reject a callback.
@@ -231,7 +251,9 @@ class GnssNoiseRelayNode(Node):
             depth=10,
         )
 
-        self._sub = self.create_subscription(NavSatFix, input_topic, self._gnss_callback, qos)
+        self._sub = self.create_subscription(
+            NavSatFix, input_topic, self._gnss_callback, qos
+        )
         self._pub = self.create_publisher(NavSatFix, output_topic, qos)
         self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos_be)
         self._heading_pub = self.create_publisher(
@@ -302,9 +324,7 @@ class GnssNoiseRelayNode(Node):
             )
             return fallback
 
-        self.get_logger().info(
-            f"Loaded transition matrix from {profiles_path}."
-        )
+        self.get_logger().info(f"Loaded transition matrix from {profiles_path}.")
         return P
 
     def _apply_tier(self, tier_name: str) -> None:
@@ -368,8 +388,8 @@ class GnssNoiseRelayNode(Node):
             if datum_lat is not None and datum_lon is not None:
                 self._datum_lat = float(datum_lat)
                 self._datum_lon = float(datum_lon)
-                self._metres_per_deg_lon = (
-                    111320.0 * math.cos(math.radians(self._datum_lat))
+                self._metres_per_deg_lon = 111320.0 * math.cos(
+                    math.radians(self._datum_lat)
                 )
                 self._datum_latched = True
                 # Invalidate previous fix so stale positions from the old datum
@@ -486,7 +506,7 @@ class GnssNoiseRelayNode(Node):
         # displacement_m is guaranteed >= cog_min_displacement_m by the gate
         # in _gnss_callback, so division is safe.
         disp_sq = displacement_m * displacement_m
-        raw_var = 2.0 * (sigma ** 2) / disp_sq
+        raw_var = 2.0 * (sigma**2) / disp_sq
         min_var = 2.0 * self._rtk_fixed_var / disp_sq
         return max(raw_var, min_var)
 
@@ -512,8 +532,8 @@ class GnssNoiseRelayNode(Node):
         if not self._datum_latched:
             self._datum_lat = msg.latitude
             self._datum_lon = msg.longitude
-            self._metres_per_deg_lon = (
-                111320.0 * math.cos(math.radians(self._datum_lat))
+            self._metres_per_deg_lon = 111320.0 * math.cos(
+                math.radians(self._datum_lat)
             )
             self._datum_latched = True
             self._prev_x = None
@@ -542,19 +562,27 @@ class GnssNoiseRelayNode(Node):
                 n_xy2 * sigma / self._metres_per_deg_lat if sigma > 0.0 else 0.0
             )
             out.altitude = msg.altitude + (
-                n_alt * self._extra_alt_stddev_m if self._extra_alt_stddev_m > 0.0 else 0.0
+                n_alt * self._extra_alt_stddev_m
+                if self._extra_alt_stddev_m > 0.0
+                else 0.0
             )
         else:
             out.longitude = msg.longitude
             out.latitude = msg.latitude
             out.altitude = msg.altitude
 
-        metric_var = self._metric_stddev_m ** 2
+        metric_var = self._metric_stddev_m**2
         alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
         out.position_covariance = [
-            metric_var, 0.0, 0.0,
-            0.0, metric_var, 0.0,
-            0.0, 0.0, alt_var,
+            metric_var,
+            0.0,
+            0.0,
+            0.0,
+            metric_var,
+            0.0,
+            0.0,
+            0.0,
+            alt_var,
         ]
         out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
         self._pub.publish(out)
@@ -591,9 +619,7 @@ class GnssNoiseRelayNode(Node):
                 speed_ms = self._last_speed_ms
 
                 # Gate on displacement
-                sigma_now = (
-                    self._metric_stddev_m if self._gnss_noise_enabled else 0.02
-                )
+                sigma_now = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
                 gate = max(
                     self._cog_min_displacement_m,
                     self._NOISE_FLOOR_K * sigma_now,

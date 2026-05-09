@@ -10,14 +10,13 @@ import math
 from typing import Any, Dict
 
 import numpy as np
-import pytest
 
 from uncertainty_rl.envs.sim.helpers._sensor_manager import SensorManager
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_manager(noise_cfg: Dict[str, Any]) -> SensorManager:
     """Build a SensorManager with a minimal sensors_config dict."""
@@ -53,6 +52,7 @@ def _points(n: int, x: float = 5.0) -> np.ndarray:
 # TestLidarNoiseDisabled
 # ---------------------------------------------------------------------------
 
+
 class TestLidarNoiseDisabled:
     """Noise is disabled - input must pass through unchanged."""
 
@@ -72,6 +72,7 @@ class TestLidarNoiseDisabled:
 # ---------------------------------------------------------------------------
 # TestLidarNoiseBiasSampling
 # ---------------------------------------------------------------------------
+
 
 class TestLidarNoiseBiasSampling:
     """Per-run systematic bias sampling behaviour."""
@@ -115,6 +116,7 @@ class TestLidarNoiseBiasSampling:
 # TestLidarNoiseRangeEffect
 # ---------------------------------------------------------------------------
 
+
 class TestLidarNoiseRangeEffect:
     """Bias and random noise alter range in the expected direction."""
 
@@ -156,6 +158,7 @@ class TestLidarNoiseRangeEffect:
 # TestLidarNoiseMinRangeClipping
 # ---------------------------------------------------------------------------
 
+
 class TestLidarNoiseMinRangeClipping:
     """Returns below min_range_m are discarded after noise."""
 
@@ -177,6 +180,7 @@ class TestLidarNoiseMinRangeClipping:
 # ---------------------------------------------------------------------------
 # TestLidarNoiseDropout
 # ---------------------------------------------------------------------------
+
 
 class TestLidarNoiseDropout:
     """Point dropout removes the expected fraction of returns."""
@@ -205,6 +209,7 @@ class TestLidarNoiseDropout:
 # ---------------------------------------------------------------------------
 # TestLidarNoiseShapePreservation
 # ---------------------------------------------------------------------------
+
 
 class TestLidarNoiseShapePreservation:
     """Output array dtype, shape, and z-column are correct."""
@@ -241,6 +246,7 @@ class TestLidarNoiseShapePreservation:
 # TestLidarNoiseIntegrationWithExtractFeatures
 # ---------------------------------------------------------------------------
 
+
 class TestLidarNoiseIntegrationWithExtractFeatures:
     """Noisy scans must remain compatible with extract_obstacle_features."""
 
@@ -252,11 +258,14 @@ class TestLidarNoiseIntegrationWithExtractFeatures:
         mgr._lidar_range_bias_m = 0.010
 
         # Points in all three sectors (left, forward, right), beyond self-return threshold.
-        pts = np.array([
-            [3.0,  2.0, 0.0],  # left sector  (bearing > +15 deg)
-            [3.0,  0.0, 0.0],  # forward sector
-            [3.0, -2.0, 0.0],  # right sector  (bearing < -15 deg)
-        ], dtype=np.float32)
+        pts = np.array(
+            [
+                [3.0, 2.0, 0.0],  # left sector  (bearing > +15 deg)
+                [3.0, 0.0, 0.0],  # forward sector
+                [3.0, -2.0, 0.0],  # right sector  (bearing < -15 deg)
+            ],
+            dtype=np.float32,
+        )
 
         noisy = mgr._apply_lidar_noise(pts)
         out = np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
@@ -281,10 +290,12 @@ class TestLidarNoiseIntegrationWithExtractFeatures:
 
         hits_left = 0
         for _ in range(100):
-            mgr = _make_manager(_enabled_cfg(
-                range_random_stddev_m=0.020,
-                range_bias_limit_m=0.060,
-            ))
+            mgr = _make_manager(
+                _enabled_cfg(
+                    range_random_stddev_m=0.020,
+                    range_bias_limit_m=0.060,
+                )
+            )
             mgr._lidar_range_bias_m = 0.060  # worst-case positive bias
             noisy = mgr._apply_lidar_noise(pts.copy())
             if len(noisy) == 0:
