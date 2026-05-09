@@ -806,11 +806,12 @@ class CARLAParkingEnv(gym.Env):
         progress = (self._prev_distance - position_error) * self._inv_oob_threshold
         self._prev_distance = position_error
 
-        # Scale progress reward by localisation quality (std_x/std_y at obs
-        # indices 1-2).  Branch on _include_covariance is lifted into the
-        # stored callable set at construction.
+        # Scale both progress reward and step penalty by localisation quality
+        # (std_x/std_y at obs indices 1-2). Step penalty is gated by the same
+        # uncertainty_scale so the policy is not punished for waiting under
+        # high EKF covariance.
         uncertainty_scale = self._uncertainty_scale_fn()
-        reward = progress * (1.0 - uncertainty_scale) - 0.01
+        reward = (progress - 0.01) * (1.0 - uncertainty_scale)
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
