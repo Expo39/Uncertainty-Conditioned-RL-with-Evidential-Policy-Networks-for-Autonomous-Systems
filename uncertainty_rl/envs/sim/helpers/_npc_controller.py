@@ -44,8 +44,8 @@ class NPCController:
     _CLUSTER_RADIUS: float = 12.0
 
     # Precomputed squared avoidance thresholds.
-    _EGO_AVOID_RADIUS_SQ: float = _EGO_AVOID_RADIUS ** 2
-    _PATROL_AVOID_RADIUS_SQ: float = _PATROL_AVOID_RADIUS ** 2
+    _EGO_AVOID_RADIUS_SQ: float = _EGO_AVOID_RADIUS**2
+    _PATROL_AVOID_RADIUS_SQ: float = _PATROL_AVOID_RADIUS**2
 
     # ------------------------------------------------------------------
     # Construction
@@ -89,8 +89,8 @@ class NPCController:
         self._pedestrian_max_lifetime = pedestrian_max_lifetime
 
         # Precomputed squared distance thresholds for update_patrol hot path.
-        self._obs_dist_sq: float = patrol_obstacle_distance ** 2
-        self._ped_dist_sq: float = patrol_pedestrian_distance ** 2
+        self._obs_dist_sq: float = patrol_obstacle_distance**2
+        self._ped_dist_sq: float = patrol_pedestrian_distance**2
 
         # Blueprint lists - refreshed each reset via refresh_blueprints()
         self._car_blueprints: List[Any] = []
@@ -179,7 +179,8 @@ class NPCController:
         if ego_loc is not None:
             ex, ey = ego_loc.x, ego_loc.y
             safe_indices = [
-                idx for idx in safe_indices
+                idx
+                for idx in safe_indices
                 if (waypoints[idx][0] - ex) ** 2 + (waypoints[idx][1] - ey) ** 2
                 >= min_spawn_dist_sq
             ]
@@ -254,13 +255,18 @@ class NPCController:
             return x
 
         if n_zones > 1:
-            centres = np.array([
-                [(z_["x_min"] + z_["x_max"]) * 0.5, (z_["y_min"] + z_["y_max"]) * 0.5]
-                for z_ in zones
-            ])
+            centres = np.array(
+                [
+                    [
+                        (z_["x_min"] + z_["x_max"]) * 0.5,
+                        (z_["y_min"] + z_["y_max"]) * 0.5,
+                    ]
+                    for z_ in zones
+                ]
+            )
             diff = centres[:, None, :] - centres[None, :, :]
             sq_dist = (diff * diff).sum(axis=2)
-            cluster_radius_sq = self._CLUSTER_RADIUS ** 2
+            cluster_radius_sq = self._CLUSTER_RADIUS**2
             for i in range(n_zones):
                 for j in range(i + 1, n_zones):
                     if sq_dist[i, j] <= cluster_radius_sq:
@@ -380,7 +386,10 @@ class NPCController:
                 ego_dist_sq = ex * ex + ey * ey
                 if ego_dist_sq < obs_dist_sq:
                     ego_fwd_proj = ex * fwd_x + ey * fwd_y
-                    if ego_fwd_proj > 0.0 and ego_fwd_proj * ego_fwd_proj > 0.25 * ego_dist_sq:
+                    if (
+                        ego_fwd_proj > 0.0
+                        and ego_fwd_proj * ego_fwd_proj > 0.25 * ego_dist_sq
+                    ):
                         blocked = True
 
             # Vehicles and pedestrians combined in one loop with one break path.
@@ -521,19 +530,27 @@ class NPCController:
                     if c_mag_sq > 1e-12:
                         inv_c = 1.0 / math.sqrt(c_mag_sq)
                         blend = 0.3
-                        nx_ = (1.0 - blend) * repulse_x * inv_mag + blend * to_cx_n * inv_c
-                        ny_ = (1.0 - blend) * repulse_y * inv_mag + blend * to_cy_n * inv_c
+                        nx_ = (
+                            1.0 - blend
+                        ) * repulse_x * inv_mag + blend * to_cx_n * inv_c
+                        ny_ = (
+                            1.0 - blend
+                        ) * repulse_y * inv_mag + blend * to_cy_n * inv_c
                         n_mag = math.hypot(nx_, ny_)
                         if n_mag > 1e-6:
                             nx_, ny_ = nx_ / n_mag, ny_ / n_mag
                         self._pedestrian_headings[i] = (nx_, ny_, 0.0)
                     else:
                         self._pedestrian_headings[i] = (
-                            repulse_x * inv_mag, repulse_y * inv_mag, 0.0
+                            repulse_x * inv_mag,
+                            repulse_y * inv_mag,
+                            0.0,
                         )
                 else:
                     self._pedestrian_headings[i] = (
-                        repulse_x * inv_mag, repulse_y * inv_mag, 0.0
+                        repulse_x * inv_mag,
+                        repulse_y * inv_mag,
+                        0.0,
                     )
                 self._pedestrian_heading_steps[i] = 0
             elif near_boundary:
@@ -598,7 +615,7 @@ class NPCController:
     def _respawn_pedestrian(self, idx: int, vehicle: Any) -> None:
         """
         @brief Destroy and respawn pedestrian at index idx within its zone.
-        
+
         @param idx: Index into pedestrian_actors / _pedestrian_zones.
         @param vehicle: Ego vehicle actor (used for sector selection).
         """
@@ -646,13 +663,13 @@ class NPCController:
         if ego_loc is not None:
             ex, ey = ego_loc.x, ego_loc.y
             sectors.sort(
-                key=lambda s: ((s[0] + s[1]) * 0.5 - ex) ** 2 + ((s[2] + s[3]) * 0.5 - ey) ** 2,
+                key=lambda s: ((s[0] + s[1]) * 0.5 - ex) ** 2
+                + ((s[2] + s[3]) * 0.5 - ey) ** 2,
                 reverse=True,
             )
-            nearest_sq = (
-                ((sectors[-1][0] + sectors[-1][1]) * 0.5 - ex) ** 2
-                + ((sectors[-1][2] + sectors[-1][3]) * 0.5 - ey) ** 2
-            )
+            nearest_sq = ((sectors[-1][0] + sectors[-1][1]) * 0.5 - ex) ** 2 + (
+                (sectors[-1][2] + sectors[-1][3]) * 0.5 - ey
+            ) ** 2
             nearest_dist = math.sqrt(nearest_sq)
             excluded = int(
                 (n - 1) * max(0.0, 1.0 - nearest_dist / self._RESPAWN_SECTOR_THRESHOLD)

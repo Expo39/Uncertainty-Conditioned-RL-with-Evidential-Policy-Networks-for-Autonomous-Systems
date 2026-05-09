@@ -28,7 +28,8 @@ from uncertainty_rl.utils.geometry import _compute_relative_target_pose
 logger = logging.getLogger(__name__)
 
 # Sector boundary for hemispheric LiDAR feature extraction (radians).
-# Left: bearing > _SECTOR_BOUNDARY; forward: |bearing| <= _SECTOR_BOUNDARY; right: < -_SECTOR_BOUNDARY.
+# Left: bearing > _SECTOR_BOUNDARY; forward: |bearing| <= _SECTOR_BOUNDARY;
+# right: < -_SECTOR_BOUNDARY.
 _SECTOR_BOUNDARY: float = math.radians(15.0)
 
 # Shared layout cache: keyed by resolved absolute path string so multiple env
@@ -96,10 +97,16 @@ def build_observation(
         yaw = float(ekf_pose[2])
         # Python min/max avoids a numpy scalar allocation
         raw_vyaw = float(ekf_pose[3])
-        vyaw = raw_vyaw if -math.pi <= raw_vyaw <= math.pi else max(-math.pi, min(math.pi, raw_vyaw))
+        vyaw = (
+            raw_vyaw
+            if -math.pi <= raw_vyaw <= math.pi
+            else max(-math.pi, min(math.pi, raw_vyaw))
+        )
 
         dx, dy, dyaw = _compute_relative_target_pose(
-            x, y, yaw,
+            x,
+            y,
+            yaw,
             float(target_bay["x"]),
             float(target_bay["y"]),
             float(target_bay["yaw"]),
@@ -114,10 +121,10 @@ def build_observation(
         obs_buffer[2] = dy
         obs_buffer[3] = dyaw
         if include_obstacle_obs:
-            obs_buffer[4:4 + OBSTACLE_FEATURES_DIM] = obstacle_features
+            obs_buffer[4 : 4 + OBSTACLE_FEATURES_DIM] = obstacle_features
         else:
-            obs_buffer[4:4 + OBSTACLE_FEATURES_DIM] = 0.0
-        return obs_buffer.copy()
+            obs_buffer[4 : 4 + OBSTACLE_FEATURES_DIM] = 0.0
+        return np.asarray(obs_buffer.copy())
 
     # With covariance: [vyaw(1), cov(3), target(3), obstacle(5)]
     obs_buffer[0] = vyaw
@@ -127,10 +134,10 @@ def build_observation(
         unc = np.asarray(uncertainty, dtype=np.float32)
         if not np.any(unc):
             logger.debug("[obs] EKF covariance all-zeros - policy sees no uncertainty")
-        obs_buffer[1:1 + COVARIANCE_FEATURES_DIM] = unc
+        obs_buffer[1 : 1 + COVARIANCE_FEATURES_DIM] = unc
     else:
         # Covariance dims remain zero (EKF not yet publishing)
-        obs_buffer[1:1 + COVARIANCE_FEATURES_DIM] = 0.0
+        obs_buffer[1 : 1 + COVARIANCE_FEATURES_DIM] = 0.0
 
     cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 4
     obs_buffer[cov_end] = dx
@@ -139,12 +146,12 @@ def build_observation(
 
     if include_obstacle_obs:
         tgt_end = cov_end + TARGET_POSE_DIM  # index 7
-        obs_buffer[tgt_end:tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
+        obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
     else:
         tgt_end = cov_end + TARGET_POSE_DIM
-        obs_buffer[tgt_end:tgt_end + OBSTACLE_FEATURES_DIM] = 0.0
+        obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = 0.0
 
-    return obs_buffer.copy()
+    return np.asarray(obs_buffer.copy())
 
 
 def extract_obstacle_features(
@@ -306,7 +313,7 @@ def calibrate_ekf_frame_offset(
         if ekf_pose is None:
             if elapsed > timeout:
                 logger.warning(
-                    "EKF pose unavailable after %.0fs - odom transform will be identity.",
+                    "EKF pose unavailable after %.0fs - odom will be identity.",
                     timeout,
                 )
                 return (0.0, 0.0, 1.0, 0.0, 0.0)
@@ -331,18 +338,24 @@ def calibrate_ekf_frame_offset(
         ty = world_y - (sin_r * ekf_x + cos_r * ekf_y)
         last_offset = (tx, ty, cos_r, sin_r, r)
 
-        if prev_tx is not None:
+        if prev_tx is not None and prev_ty is not None and prev_r is not None:
             dtx = abs(tx - prev_tx)
-            dty = abs(ty - prev_ty)  # type: ignore[operator]
-            dr = abs(math.atan2(
-                math.sin(r - prev_r),  # type: ignore[arg-type]
-                math.cos(r - prev_r),  # type: ignore[arg-type]
-            ))
-            stable_count = stable_count + 1 if (
-                dtx < pos_stable_threshold
-                and dty < pos_stable_threshold
-                and dr < yaw_stable_threshold
-            ) else 0
+            dty = abs(ty - prev_ty)
+            dr = abs(
+                math.atan2(
+                    math.sin(r - prev_r),
+                    math.cos(r - prev_r),
+                )
+            )
+            stable_count = (
+                stable_count + 1
+                if (
+                    dtx < pos_stable_threshold
+                    and dty < pos_stable_threshold
+                    and dr < yaw_stable_threshold
+                )
+                else 0
+            )
 
         prev_tx, prev_ty, prev_r = tx, ty, r
 
@@ -350,7 +363,14 @@ def calibrate_ekf_frame_offset(
             logger.info(
                 "EKF converged after %.2fs: rotation=%.1fdeg tx=%.3fm ty=%.3fm"
                 " (ref=(%.2f,%.2f) EKF odom=(%.2f,%.2f))",
-                elapsed, math.degrees(r), tx, ty, world_x, world_y, ekf_x, ekf_y,
+                elapsed,
+                math.degrees(r),
+                tx,
+                ty,
+                world_x,
+                world_y,
+                ekf_x,
+                ekf_y,
             )
             return last_offset
 
@@ -358,13 +378,16 @@ def calibrate_ekf_frame_offset(
             logger.warning(
                 "EKF convergence timeout (%.0fs) - transform still unstable"
                 " after %d stable readings. Using best available transform.",
-                timeout, stable_count,
+                timeout,
+                stable_count,
             )
             return last_offset  # type: ignore[return-value]
 
         logger.debug(
             "Waiting for EKF convergence: stable=%d/%d elapsed=%.1fs",
-            stable_count, min_stable_readings, elapsed,
+            stable_count,
+            min_stable_readings,
+            elapsed,
         )
         if tick_fn is not None:
             tick_fn()

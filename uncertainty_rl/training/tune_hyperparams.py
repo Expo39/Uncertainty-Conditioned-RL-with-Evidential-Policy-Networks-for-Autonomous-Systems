@@ -78,10 +78,12 @@ def _composite_objective(
 # ------------------------------------------------------------------
 
 
-def sample_hyperparams(trial: "optuna.Trial", tuning_config: Dict[str, Any]) -> Dict[str, Any]:
+def sample_hyperparams(
+    trial: "optuna.Trial", tuning_config: Dict[str, Any]
+) -> Dict[str, Any]:
     """
     @brief Sample hyperparameters from the search space.
-    
+
     @param trial: Optuna trial object.
     @param tuning_config: Tuning configuration with search space bounds.
     @return Dictionary of sampled hyperparameters.
@@ -283,7 +285,7 @@ def apply_best_params(
 
     # Write back to train_config.yaml
     try:
-        with open(config_path, 'w') as f:
+        with open(config_path, "w") as f:
             yaml.dump(original_config, f, default_flow_style=False, sort_keys=False)
         logger.info("Updated train_config.yaml with best params")
 
@@ -336,7 +338,9 @@ def objective(
         trial_config.update(sampled_params)
 
         # Set trial-specific training budget and directories
-        trial_config["total_timesteps"] = tuning_config.get("timesteps_per_trial", 100000)
+        trial_config["total_timesteps"] = tuning_config.get(
+            "timesteps_per_trial", 100000
+        )
         trial_config["log_dir"] = os.path.join(
             "logs/tuning",
             f"trial_{trial.number}",
@@ -407,7 +411,9 @@ def run_study(
     results_dir.mkdir(parents=True, exist_ok=True)
 
     # SQLite storage path
-    storage_path = Path(tuning_config.get("storage_path", "logs/tuning/optuna_study.db"))
+    storage_path = Path(
+        tuning_config.get("storage_path", "logs/tuning/optuna_study.db")
+    )
     storage_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Sampler and pruner settings from tuning_config.yaml
@@ -439,8 +445,11 @@ def run_study(
 
     # Run optimisation
     n_trials = tuning_config.get("n_trials", 40)
-    logger.info("Starting Optuna study: %d trials, %dk steps/trial, 10 params",
-                n_trials, tuning_config.get("timesteps_per_trial", 100000) // 1000)
+    logger.info(
+        "Starting Optuna study: %d trials, %dk steps/trial, 10 params",
+        n_trials,
+        tuning_config.get("timesteps_per_trial", 100000) // 1000,
+    )
 
     study.optimize(
         lambda trial: objective(
@@ -461,17 +470,23 @@ def run_study(
         # All trials pruned or no completed trials
         logger.error("No completed trials in study. Check trial logs for errors.")
         from optuna.trial import TrialState
-        logger.error("Study trials: %d completed, %d pruned",
-                     len([t for t in study.trials if t.state == TrialState.COMPLETE]),
-                     len([t for t in study.trials if t.state == TrialState.PRUNED]))
+
+        logger.error(
+            "Study trials: %d completed, %d pruned",
+            len([t for t in study.trials if t.state == TrialState.COMPLETE]),
+            len([t for t in study.trials if t.state == TrialState.PRUNED]),
+        )
         return
 
     logger.info("  Number: %d", best_trial.number)
     logger.info("  Objective: %.4f", best_trial.value)
-    logger.info("  env/success_rate: %.4f",
-                best_trial.user_attrs.get("env/success_rate", 0.0))
-    logger.info("  env/mean_progress_reward: %.4f",
-                best_trial.user_attrs.get("env/mean_progress_reward", 0.0))
+    logger.info(
+        "  env/success_rate: %.4f", best_trial.user_attrs.get("env/success_rate", 0.0)
+    )
+    logger.info(
+        "  env/mean_progress_reward: %.4f",
+        best_trial.user_attrs.get("env/mean_progress_reward", 0.0),
+    )
     logger.info("  Params:")
     for key, value in best_trial.params.items():
         logger.info("    %s: %s", key, value)
@@ -482,7 +497,7 @@ def run_study(
 
     # Also save standalone copy to logs/tuning/results/best_params.yaml
     best_params_path = results_dir / "best_params.yaml"
-    with open(best_params_path, 'w') as f:
+    with open(best_params_path, "w") as f:
         yaml.dump(best_params, f, default_flow_style=False)
     logger.info("Saved best params to %s", best_params_path)
     logger.info("Tuning results saved to %s", results_dir)

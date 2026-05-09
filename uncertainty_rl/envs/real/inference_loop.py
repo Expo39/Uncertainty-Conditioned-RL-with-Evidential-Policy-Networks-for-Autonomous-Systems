@@ -89,7 +89,9 @@ class RealWorldInferenceLoop:
         # Pre-allocate obs buffers (same pattern as CARLAParkingEnv).
         obs_dim = compute_obs_dim(include_covariance, include_obstacle_obs)
         self._obs_buffer = np.zeros(obs_dim, dtype=np.float32)
-        self._obstacle_features_buffer = np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32)
+        self._obstacle_features_buffer = np.zeros(
+            OBSTACLE_FEATURES_DIM, dtype=np.float32
+        )
 
         # Pre-allocated world pose buffer [wx, wy, wyaw, vyaw]
         self._world_pose_buffer = np.zeros(4, dtype=np.float32)
@@ -98,7 +100,11 @@ class RealWorldInferenceLoop:
 
         # EKF odom-to-world offset; computed once in prepare().
         self._ekf_odom_offset: Tuple[float, float, float, float, float] = (
-            0.0, 0.0, 1.0, 0.0, 0.0
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            0.0,
         )
 
         # Cached static target bay values
@@ -114,9 +120,7 @@ class RealWorldInferenceLoop:
         self._ros2_node: Optional[Any] = None
         self._twist_msg: Optional[Any] = None
         self._twist_stop_msg: Optional[Any] = None
-        self._actuation_topic: str = str(
-            ros2_cfg.get("actuation_topic", "/cmd_vel")
-        )
+        self._actuation_topic: str = str(ros2_cfg.get("actuation_topic", "/cmd_vel"))
 
         # Thread-safe operator stop flag - set by external signal or geofence.
         self._operator_stop: threading.Event = threading.Event()
@@ -315,14 +319,15 @@ class RealWorldInferenceLoop:
             )
 
         # Scalar clamping is faster than np.clip for individual floats.
-        self._twist_msg.linear.x = drive if -1.0 <= drive <= 1.0 else (
-            -1.0 if drive < -1.0 else 1.0
+        assert self._twist_msg is not None
+        self._twist_msg.linear.x = (
+            drive if -1.0 <= drive <= 1.0 else (-1.0 if drive < -1.0 else 1.0)
         )
-        self._twist_msg.linear.y = brake if 0.0 <= brake <= 1.0 else (
-            0.0 if brake < 0.0 else 1.0
+        self._twist_msg.linear.y = (
+            brake if 0.0 <= brake <= 1.0 else (0.0 if brake < 0.0 else 1.0)
         )
-        self._twist_msg.angular.z = steering if -1.0 <= steering <= 1.0 else (
-            -1.0 if steering < -1.0 else 1.0
+        self._twist_msg.angular.z = (
+            steering if -1.0 <= steering <= 1.0 else (-1.0 if steering < -1.0 else 1.0)
         )
         self._twist_publisher.publish(self._twist_msg)
 
@@ -422,9 +427,7 @@ class RealWorldInferenceLoop:
         # Pre-allocate messages to avoid per-step allocation.
         self._twist_msg = Twist()
         self._twist_stop_msg = Twist()
-        logger.info(
-            "ROS 2 Twist publisher ready on topic '%s'.", self._actuation_topic
-        )
+        logger.info("ROS 2 Twist publisher ready on topic '%s'.", self._actuation_topic)
 
     def _shutdown_ros2(self) -> None:
         """
@@ -439,7 +442,9 @@ class RealWorldInferenceLoop:
                 self._twist_publisher.publish(self._twist_stop_msg)
                 logger.info("Zero-velocity stop command published.")
             except Exception:
-                logger.warning("Failed to publish stop command during shutdown.", exc_info=True)
+                logger.warning(
+                    "Failed to publish stop command during shutdown.", exc_info=True
+                )
 
         if self._ros2_node is not None:
             try:
@@ -552,9 +557,7 @@ class RealWorldInferenceLoop:
                         break
 
             if steps >= self._max_steps and not (terminated or truncated):
-                logger.warning(
-                    "Mission timed out after %d steps.", self._max_steps
-                )
+                logger.warning("Mission timed out after %d steps.", self._max_steps)
                 truncated = True
 
         finally:

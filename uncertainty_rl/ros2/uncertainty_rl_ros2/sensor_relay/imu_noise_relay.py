@@ -29,7 +29,7 @@ class ImuNoiseRelayNode(Node):
     @brief Stamps realistic covariance onto CARLA IMU messages.
 
     Subscribes to the raw CARLA IMU topic (zero covariance) and republishes
-    with diagonal angular_velocity_covariance and linear_acceleration_covariance. 
+    with diagonal angular_velocity_covariance and linear_acceleration_covariance.
     The orientation_covariance
     sentinel (-1) is set so robot_localization does not attempt Mahalanobis
     gating on the identity quaternion that CARLA always publishes.
@@ -46,11 +46,11 @@ class ImuNoiseRelayNode(Node):
         self.declare_parameter("imu_output_topic", "/carla/ego_vehicle/imu/stamped")
         # Defaults computed from datasheet figures - see sensor_noise_models.md.
         _gyro_noise_density_rad = 0.0035 * math.pi / 180.0
-        _gyro_variance_default: float = _gyro_noise_density_rad ** 2 * 20.0
+        _gyro_variance_default: float = _gyro_noise_density_rad**2 * 20.0
         self.declare_parameter("imu_gyro_variance", _gyro_variance_default)
 
         _accel_noise_density_ms2 = 0.14e-3 * 9.81
-        _accel_variance_default: float = _accel_noise_density_ms2 ** 2 * 20.0
+        _accel_variance_default: float = _accel_noise_density_ms2**2 * 20.0
         self.declare_parameter("imu_accel_variance", _accel_variance_default)
 
         self.declare_parameter("enable_imu_noise", True)
@@ -79,16 +79,24 @@ class ImuNoiseRelayNode(Node):
             self.get_parameter("imu_accel_variance").get_parameter_value().double_value
         )
         self._zupt_threshold: float = float(
-            self.get_parameter("zupt_threshold_rad_s").get_parameter_value().double_value
+            self.get_parameter("zupt_threshold_rad_s")
+            .get_parameter_value()
+            .double_value
         )
         self._accel_zupt_threshold: float = float(
-            self.get_parameter("accel_zupt_threshold_ms2").get_parameter_value().double_value
+            self.get_parameter("accel_zupt_threshold_ms2")
+            .get_parameter_value()
+            .double_value
         )
         gyro_bias_limit: float = float(
-            self.get_parameter("imu_gyro_bias_limit_rad_s").get_parameter_value().double_value
+            self.get_parameter("imu_gyro_bias_limit_rad_s")
+            .get_parameter_value()
+            .double_value
         )
         accel_bias_limit: float = float(
-            self.get_parameter("imu_accel_bias_limit_ms2").get_parameter_value().double_value
+            self.get_parameter("imu_accel_bias_limit_ms2")
+            .get_parameter_value()
+            .double_value
         )
         # Pre-compute per-sample noise stddevs (sqrt taken once at init).
         self._gyro_noise_stddev: float = math.sqrt(self._imu_gyro_variance)
@@ -129,15 +137,27 @@ class ImuNoiseRelayNode(Node):
         self._orientation_cov: List[float] = [-1.0] + [0.0] * 8
         v_gyro = self._imu_gyro_variance
         self._angular_velocity_cov: List[float] = [
-            v_gyro, 0.0,    0.0,
-            0.0,    v_gyro, 0.0,
-            0.0,    0.0,    v_gyro,
+            v_gyro,
+            0.0,
+            0.0,
+            0.0,
+            v_gyro,
+            0.0,
+            0.0,
+            0.0,
+            v_gyro,
         ]
         v_accel = self._imu_accel_variance
         self._linear_acceleration_cov: List[float] = [
-            v_accel, 0.0,     0.0,
-            0.0,     v_accel, 0.0,
-            0.0,     0.0,     v_accel,
+            v_accel,
+            0.0,
+            0.0,
+            0.0,
+            v_accel,
+            0.0,
+            0.0,
+            0.0,
+            v_accel,
         ]
 
         self.get_logger().info(
@@ -176,9 +196,15 @@ class ImuNoiseRelayNode(Node):
             if seq <= self._episode_config_seq:
                 return
             self._episode_config_seq = seq
-            self._gyro_bias = random.uniform(-self._gyro_bias_limit, self._gyro_bias_limit)
-            self._accel_bias_x = random.uniform(-self._accel_bias_limit, self._accel_bias_limit)
-            self._accel_bias_y = random.uniform(-self._accel_bias_limit, self._accel_bias_limit)
+            self._gyro_bias = random.uniform(
+                -self._gyro_bias_limit, self._gyro_bias_limit
+            )
+            self._accel_bias_x = random.uniform(
+                -self._accel_bias_limit, self._accel_bias_limit
+            )
+            self._accel_bias_y = random.uniform(
+                -self._accel_bias_limit, self._accel_bias_limit
+            )
             self.get_logger().debug(
                 f"IMU bias resampled (seq={seq}): "
                 f"gyro={self._gyro_bias*1e6:.2f} urad/s "

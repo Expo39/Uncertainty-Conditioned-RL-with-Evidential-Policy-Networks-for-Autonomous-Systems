@@ -14,7 +14,6 @@ import pytest
 
 from uncertainty_rl.utils.logging import DebugLogger
 
-
 # ---------------------------------------------------------------------------
 # TestDebugLoggerDisabled
 # ---------------------------------------------------------------------------
@@ -56,8 +55,12 @@ class TestDebugLoggerDisabled:
         """
         logger = DebugLogger(debug=False)
         logger.log_step(
-            step=1, reward=0.5, pos_error=1.0, yaw_error=0.1,
-            speed=0.2, action=np.array([0.0, 0.5, 0.0]),
+            step=1,
+            reward=0.5,
+            pos_error=1.0,
+            yaw_error=0.1,
+            speed=0.2,
+            action=np.array([0.0, 0.5, 0.0]),
             uncertainty=np.array([0.1, 0.1, 0.05]),
             obstacle_dist=3.0,
         )
@@ -105,9 +108,14 @@ class TestDebugLoggerEnabled:
         if action is None:
             action = np.array([0.1, 0.6, 0.0])
         logger.log_step(
-            step=step, reward=reward, pos_error=pos_error,
-            yaw_error=yaw_error, speed=speed, action=action,
-            uncertainty=uncertainty, obstacle_dist=obstacle_dist,
+            step=step,
+            reward=reward,
+            pos_error=pos_error,
+            yaw_error=yaw_error,
+            speed=speed,
+            action=action,
+            uncertainty=uncertainty,
+            obstacle_dist=obstacle_dist,
         )
         return logger.step_debug_dict()
 
@@ -125,9 +133,17 @@ class TestDebugLoggerEnabled:
         logger = DebugLogger(debug=True)
         d = self._call_log_step(logger)
         expected_keys = {
-            "pos_err", "yaw_err_deg", "speed", "reward",
-            "cov_rms", "obs_dist", "ekf_drift", "lidar_pts",
-            "steer", "throttle", "brake",
+            "pos_err",
+            "yaw_err_deg",
+            "speed",
+            "reward",
+            "cov_rms",
+            "obs_dist",
+            "ekf_drift",
+            "lidar_pts",
+            "steer",
+            "throttle",
+            "brake",
         }
         assert expected_keys.issubset(d.keys())
 

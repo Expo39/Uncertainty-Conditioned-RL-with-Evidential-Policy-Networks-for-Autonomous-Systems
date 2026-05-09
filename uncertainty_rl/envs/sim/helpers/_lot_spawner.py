@@ -238,10 +238,12 @@ class LotSpawner:
                     cone.destroy()
             self.spawned_cones.clear()
 
-            cone_pending = list(itertools.chain(
-                self._spawn_perimeter_cones(world, current_layout, floor_contact_z),
-                self._spawn_obstacle_cones(world, current_layout, floor_contact_z),
-            ))
+            cone_pending = list(
+                itertools.chain(
+                    self._spawn_perimeter_cones(world, current_layout, floor_contact_z),
+                    self._spawn_obstacle_cones(world, current_layout, floor_contact_z),
+                )
+            )
             self._settle_pending(world, cone_pending)
             self._freeze_pending(cone_pending, self.spawned_cones)
             self._cached_cones_layout = layout_name
@@ -327,7 +329,7 @@ class LotSpawner:
     ) -> None:
         """
         @brief Tick the world until all pending actors have settled under gravity.
-        
+
         @param world: Live carla.World handle.
         @param pending: List of (actor, x, y, yaw) tuples awaiting settlement.
         """
@@ -412,18 +414,28 @@ class LotSpawner:
             n_h = len(h_steps)
             n_v = len(v_steps)
 
-            xs = np.concatenate([
-                cx + h_steps, cx + h_steps,
-                np.full(n_v, cx - hw), np.full(n_v, cx + hw),
-            ])
-            ys = np.concatenate([
-                np.full(n_h, cy - hh), np.full(n_h, cy + hh),
-                cy + v_steps, cy + v_steps,
-            ])
-            yaws = np.concatenate([
-                np.zeros(2 * n_h),
-                np.full(2 * n_v, 90.0),
-            ])
+            xs = np.concatenate(
+                [
+                    cx + h_steps,
+                    cx + h_steps,
+                    np.full(n_v, cx - hw),
+                    np.full(n_v, cx + hw),
+                ]
+            )
+            ys = np.concatenate(
+                [
+                    np.full(n_h, cy - hh),
+                    np.full(n_h, cy + hh),
+                    cy + v_steps,
+                    cy + v_steps,
+                ]
+            )
+            yaws = np.concatenate(
+                [
+                    np.zeros(2 * n_h),
+                    np.full(2 * n_v, 90.0),
+                ]
+            )
 
             for px, py, yaw_deg in zip(xs, ys, yaws):
                 cone = world.try_spawn_actor(
@@ -512,4 +524,3 @@ class LotSpawner:
 
         logger.debug("Spawned %d static vehicles (settling).", len(pending))
         return pending
-

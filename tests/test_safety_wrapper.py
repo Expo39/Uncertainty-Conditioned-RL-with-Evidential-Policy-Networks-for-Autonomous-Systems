@@ -6,12 +6,12 @@ CPU-only, no CARLA or ROS 2 required. The underlying env is mocked so
 all tests run without a live simulation.
 """
 
-import numpy as np
-import pytest
 from unittest.mock import MagicMock
 
-from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
+import numpy as np
+import pytest
 
+from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,7 +29,9 @@ def _make_mock_env(obs_shape: int = 12) -> MagicMock:
     return env
 
 
-def _make_action(steer: float = 0.0, lon: float = 0.5, brake: float = 0.0) -> np.ndarray:
+def _make_action(
+    steer: float = 0.0, lon: float = 0.5, brake: float = 0.0
+) -> np.ndarray:
     return np.array([steer, lon, brake], dtype=np.float32)
 
 
@@ -50,8 +52,11 @@ class TestSafetyWrapperApply:
         """
         action = _make_action(steer=0.3, lon=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
-            action, epistemic=0.0, aleatoric=0.0,
-            aleatoric_scaling=0.5, handoff_threshold=5.0,
+            action,
+            epistemic=0.0,
+            aleatoric=0.0,
+            aleatoric_scaling=0.5,
+            handoff_threshold=5.0,
         )
         assert not handoff
         assert modulated[0] == pytest.approx(0.3)
@@ -63,8 +68,11 @@ class TestSafetyWrapperApply:
         """
         action = _make_action(lon=1.0)
         modulated, handoff, _ = SafetyWrapper.apply(
-            action, epistemic=0.0, aleatoric=4.0,
-            aleatoric_scaling=0.5, handoff_threshold=5.0,
+            action,
+            epistemic=0.0,
+            aleatoric=4.0,
+            aleatoric_scaling=0.5,
+            handoff_threshold=5.0,
         )
         # aleatoric_scale = 1 / (1 + 0.5*4) = 1/3 ~= 0.333
         assert not handoff
@@ -77,8 +85,11 @@ class TestSafetyWrapperApply:
         """
         action = _make_action(steer=0.9, lon=0.5)
         modulated, _, _s = SafetyWrapper.apply(
-            action, epistemic=0.0, aleatoric=10.0,
-            aleatoric_scaling=1.0, handoff_threshold=5.0,
+            action,
+            epistemic=0.0,
+            aleatoric=10.0,
+            aleatoric_scaling=1.0,
+            handoff_threshold=5.0,
         )
         assert modulated[0] == pytest.approx(0.9)
 
@@ -88,8 +99,11 @@ class TestSafetyWrapperApply:
         """
         action = _make_action(steer=0.5, lon=0.9)
         modulated, handoff, _ = SafetyWrapper.apply(
-            action, epistemic=5.0, aleatoric=0.0,
-            aleatoric_scaling=0.5, handoff_threshold=5.0,
+            action,
+            epistemic=5.0,
+            aleatoric=0.0,
+            aleatoric_scaling=0.5,
+            handoff_threshold=5.0,
         )
         assert handoff
         np.testing.assert_array_equal(modulated, np.zeros(3))
@@ -100,8 +114,11 @@ class TestSafetyWrapperApply:
         """
         action = _make_action(lon=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
-            action, epistemic=4.99, aleatoric=0.0,
-            aleatoric_scaling=0.5, handoff_threshold=5.0,
+            action,
+            epistemic=4.99,
+            aleatoric=0.0,
+            aleatoric_scaling=0.5,
+            handoff_threshold=5.0,
         )
         assert not handoff
         assert modulated[1] == pytest.approx(0.8)
@@ -113,8 +130,11 @@ class TestSafetyWrapperApply:
         action = _make_action(steer=0.3, lon=0.7)
         original = action.copy()
         SafetyWrapper.apply(
-            action, epistemic=10.0, aleatoric=5.0,
-            aleatoric_scaling=0.5, handoff_threshold=5.0,
+            action,
+            epistemic=10.0,
+            aleatoric=5.0,
+            aleatoric_scaling=0.5,
+            handoff_threshold=5.0,
         )
         np.testing.assert_array_equal(action, original)
 
@@ -124,8 +144,11 @@ class TestSafetyWrapperApply:
         """
         action = np.array([0.0, -2.0, 0.0], dtype=np.float32)
         modulated, _, _s = SafetyWrapper.apply(
-            action, epistemic=0.0, aleatoric=0.0,
-            aleatoric_scaling=0.5, handoff_threshold=5.0,
+            action,
+            epistemic=0.0,
+            aleatoric=0.0,
+            aleatoric_scaling=0.5,
+            handoff_threshold=5.0,
         )
         assert modulated[1] >= -1.0
 

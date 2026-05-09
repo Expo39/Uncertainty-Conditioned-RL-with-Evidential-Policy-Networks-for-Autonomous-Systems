@@ -132,9 +132,7 @@ def make_env(
         else config.get("carla_port", 2000) + rank * 1000
     )
     worker_host = (
-        host_override
-        if host_override is not None
-        else f"uncertainty-rl-carla-{rank}"
+        host_override if host_override is not None else f"uncertainty-rl-carla-{rank}"
     )
 
     ros2_config = config.get("ros2", {}).copy()
@@ -592,7 +590,9 @@ def main() -> None:
     # Load and merge configs, then apply CLI overrides.
     # load_env_config() merges sensor_config.yaml (shared keys) with env_config.yaml
     # (CARLA-specific keys) so all consumers see a single unified dict.
-    config = merge_configs(load_config(args.train_config), load_env_config(args.env_config))
+    config = merge_configs(
+        load_config(args.train_config), load_env_config(args.env_config)
+    )
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:

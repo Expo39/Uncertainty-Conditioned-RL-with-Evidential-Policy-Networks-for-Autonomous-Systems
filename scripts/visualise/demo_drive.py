@@ -142,7 +142,9 @@ def main() -> None:
 
             while not done_arr[0]:
                 if is_evidential and _get_action is not None:
-                    action_tensor, _ = _get_action(th.as_tensor(obs), deterministic=True)
+                    action_tensor, _ = _get_action(
+                        th.as_tensor(obs), deterministic=True
+                    )
                     action = action_tensor.cpu().numpy()
                 else:
                     action, _ = model.predict(obs, deterministic=True)

@@ -14,11 +14,12 @@ try:
     import carla
 except ImportError:
     import sys
+
     print("ERROR: carla Python package not found.  Run inside the training container.")
     sys.exit(1)
 
-from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from scripts.inspect._drawing import _draw_layout_overlays
+from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.geometry import wrap_angle_symmetric
 
@@ -57,8 +58,8 @@ class KeyboardController:
 
     def __init__(self) -> None:
         """@brief Initialise controller with zeroed latched state."""
-        import tty  # noqa: F401
         import termios  # noqa: F401
+        import tty  # noqa: F401
 
         self._steer: float = 0.0
         self._drive: float = 0.0
@@ -130,11 +131,15 @@ class KeyboardController:
                         if seq == "\x1b[A":
                             # Up arrow: forward drive, clear reverse and brake
                             self._brake = 0.0
-                            self._drive = min(1.0, max(0.0, self._drive) + self._DRIVE_STEP)
+                            self._drive = min(
+                                1.0, max(0.0, self._drive) + self._DRIVE_STEP
+                            )
                         elif seq == "\x1b[B":
                             # Down arrow: reverse drive, clear forward and brake
                             self._brake = 0.0
-                            self._drive = max(-1.0, min(0.0, self._drive) - self._DRIVE_STEP)
+                            self._drive = max(
+                                -1.0, min(0.0, self._drive) - self._DRIVE_STEP
+                            )
                         elif seq == "\x1b[D":
                             self._steer = max(-1.0, self._steer - self._STEER_STEP)
                         elif seq == "\x1b[C":
@@ -325,8 +330,11 @@ class DryRunInspector(_Inspector):
         live_tier = _read_live_tier()
         lines.append(
             f"--- ep={episode}  step={step}  "
-            + C + f"tier={live_tier}" + X
-            + " " + "-" * 28
+            + C
+            + f"tier={live_tier}"
+            + X
+            + " "
+            + "-" * 28
         )
 
         lines.append(W + f"vel  vyaw={math.degrees(obs[0]):+.1f}deg/s" + X)
@@ -353,18 +361,14 @@ class DryRunInspector(_Inspector):
                 tx, ty, cos_r, sin_r, r = self._env._ekf_odom_offset
                 wx = cos_r * ekf_x - sin_r * ekf_y + tx
                 wy = sin_r * ekf_x + cos_r * ekf_y + ty
-                wyaw_rad = math.atan2(
-                    math.sin(ekf_yaw + r), math.cos(ekf_yaw + r)
-                )
+                wyaw_rad = math.atan2(math.sin(ekf_yaw + r), math.cos(ekf_yaw + r))
                 lines.append(
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
                     f"  yaw={math.degrees(wyaw_rad):+.1f}deg" + X
                 )
 
         if len(obs) >= 4:
-            lines.append(
-                W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})" + X
-            )
+            lines.append(W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})" + X)
 
         if len(obs) >= 7:
             lines.append(
@@ -484,7 +488,10 @@ class DryRunInspector(_Inspector):
                     step += 1
                     total_steps += 1
 
-                    if self._env._cov_subscriber is not None and self._env.vehicle is not None:
+                    if (
+                        self._env._cov_subscriber is not None
+                        and self._env.vehicle is not None
+                    ):
                         _ep = self._env._cov_subscriber.get_latest_pose()
                         if _ep is not None:
                             _ep0 = float(_ep[0])
@@ -510,9 +517,7 @@ class DryRunInspector(_Inspector):
                             _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
-                    time.sleep(
-                        self._env._action_repeat * self._env._carla_timestep
-                    )
+                    time.sleep(self._env._action_repeat * self._env._carla_timestep)
                     self._update_spectator()
 
                     if step % self._LOG_INTERVAL == 0:
@@ -540,8 +545,7 @@ class DryRunInspector(_Inspector):
                     _rmse_str = _ANSI_CYAN + "pos_rmse=n/a  yaw_rmse=n/a" + _ANSI_RESET
                 print(
                     f"  Episode {episode} ended: {reason}"
-                    f"  steps={step}  total_steps={total_steps}  "
-                    + _rmse_str
+                    f"  steps={step}  total_steps={total_steps}  " + _rmse_str
                 )
                 print("--- Final observation ---")
                 self._print_obs(obs, step, episode)

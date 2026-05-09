@@ -3,8 +3,8 @@
 @brief LayoutInspector: parking lot geometry overlays (bays, spawn, patrol, pedestrian zones).
 """
 
-from scripts.inspect.inspectors.base import _Inspector
 from scripts.inspect._drawing import _draw_layout_overlays
+from scripts.inspect.inspectors.base import _Inspector
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
 

@@ -110,8 +110,7 @@ def _interpolate_cone_positions(
             cx = x0 + k * dx
             cy = y0 + k * dy
             in_gap = any(
-                (cx - ex) ** 2 + (cy - ey) ** 2 < gap_sq
-                for ex, ey in all_entrances
+                (cx - ex) ** 2 + (cy - ey) ** 2 < gap_sq for ex, ey in all_entrances
             )
             if not in_gap:
                 positions.append((cx, cy, edge_yaw_deg))

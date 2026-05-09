@@ -246,7 +246,9 @@ class TestMakeDiagonalCovariance:
         result = make_diagonal_covariance(diag)
         for i in range(36):
             if i % 7 != 0:
-                assert result[i] == pytest.approx(0.0), f"Off-diagonal index {i} should be 0"
+                assert result[i] == pytest.approx(
+                    0.0
+                ), f"Off-diagonal index {i} should be 0"
 
     def test_all_zeros_diagonal(self) -> None:
         """

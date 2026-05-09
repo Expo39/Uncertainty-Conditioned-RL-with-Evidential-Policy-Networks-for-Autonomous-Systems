@@ -6,7 +6,7 @@ This module provides common functions for extracting uncertainty features
 from EKF covariance matrices for use in RL state representations.
 """
 
-from typing import List
+from typing import List, cast
 
 import numpy as np
 
@@ -27,9 +27,11 @@ def extract_2d_covariance_features(cov_matrix: np.ndarray) -> np.ndarray:
     """
     diag = cov_matrix.diagonal()
     if cov_matrix.shape == (6, 6):
-        return np.sqrt(diag[_COV6_INDICES])
+        result = np.sqrt(diag[_COV6_INDICES]).astype(np.float64)
+        return cast(np.ndarray, result)
     if cov_matrix.shape == (3, 3):
-        return np.sqrt(diag)
+        result = np.sqrt(diag).astype(np.float64)
+        return cast(np.ndarray, result)
     raise ValueError(
         f"Expected 3x3 or 6x6 covariance matrix, got shape {cov_matrix.shape}"
     )
@@ -79,4 +81,4 @@ def make_diagonal_covariance(diag: List[float]) -> List[float]:
     """
     cov_arr = np.zeros(36)
     cov_arr[::7] = diag
-    return cov_arr.tolist()
+    return [float(x) for x in cov_arr.tolist()]

@@ -24,9 +24,9 @@ WIDTH_FRONT = 60.0
 WIDTH_REAR = 40.0
 DEPTH = 44.0
 LEFT_X = -5.0
-Y_OFFSET = (WIDTH_FRONT - WIDTH_REAR) / 2.0   # = 10 (top/bottom wall taper).
-CENTRE_X_SHIFT = -1.5 - 3.63                  # Cluster left-shift from depth/2.
-PERP_AISLE = 6.0                              # Aisle between back-to-back perp rows.
+Y_OFFSET = (WIDTH_FRONT - WIDTH_REAR) / 2.0  # = 10 (top/bottom wall taper).
+CENTRE_X_SHIFT = -1.5 - 3.63  # Cluster left-shift from depth/2.
+PERP_AISLE = 6.0  # Aisle between back-to-back perp rows.
 
 # Walls (CCW polygon order: bottom -> right -> top -> left).
 WALL_BOTTOM = 0
@@ -39,10 +39,10 @@ def generate() -> Dict[str, Any]:
     """
     @brief Build the trapezoid layout using the LotBuilder DSL.
     """
-    p0 = (LEFT_X, 0.0)                        # bottom-left (front)
-    p1 = (DEPTH, Y_OFFSET)                    # bottom-right (rear)
-    p2 = (DEPTH, WIDTH_FRONT - Y_OFFSET)      # top-right (rear)
-    p3 = (LEFT_X, WIDTH_FRONT)                # top-left (front)
+    p0 = (LEFT_X, 0.0)  # bottom-left (front)
+    p1 = (DEPTH, Y_OFFSET)  # bottom-right (rear)
+    p2 = (DEPTH, WIDTH_FRONT - Y_OFFSET)  # top-right (rear)
+    p3 = (LEFT_X, WIDTH_FRONT)  # top-left (front)
 
     lot = LotBuilder(name="trapezoid", corners=[p0, p1, p2, p3])
     dims_par = lot.dims["parallel"]
@@ -56,25 +56,40 @@ def generate() -> Dict[str, Any]:
         gap=PERP_AISLE,
     )
     bottom_ang = lot.row_along_perimeter(
-        "angled", n=8, wall=WALL_BOTTOM, bay_angle_deg=45.0,
+        "angled",
+        n=8,
+        wall=WALL_BOTTOM,
+        bay_angle_deg=45.0,
         start_along=angled_corner_clearance(lot) + 8.0,
     )
     par_top = lot.row_along_perimeter(
-        "parallel", n=5, wall=WALL_TOP, bay_angle_deg=-90.0,
+        "parallel",
+        n=5,
+        wall=WALL_TOP,
+        bay_angle_deg=-90.0,
         centred=True,
     )
     par_right = lot.row_along_perimeter(
-        "parallel", n=4, wall=WALL_RIGHT, bay_angle_deg=-90.0,
+        "parallel",
+        n=4,
+        wall=WALL_RIGHT,
+        bay_angle_deg=-90.0,
         centred=True,
     )
     # Left wall: two groups of 2 either side of the entrance spawn (y=30).
     # Lower group centred at y=15, upper group centred at y=45.
-    par_left_low = lot.row_along_perimeter(
-        "parallel", n=2, wall=WALL_LEFT, bay_angle_deg=90.0,
+    lot.row_along_perimeter(
+        "parallel",
+        n=2,
+        wall=WALL_LEFT,
+        bay_angle_deg=90.0,
         start_along=15.0 - dims_par["depth"] / 2.0,
     )
-    par_left_high = lot.row_along_perimeter(
-        "parallel", n=2, wall=WALL_LEFT, bay_angle_deg=90.0,
+    lot.row_along_perimeter(
+        "parallel",
+        n=2,
+        wall=WALL_LEFT,
+        bay_angle_deg=90.0,
         start_along=45.0 - dims_par["depth"] / 2.0,
     )
 

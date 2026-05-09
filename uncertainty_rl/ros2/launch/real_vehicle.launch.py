@@ -15,6 +15,7 @@ from launch_ros.actions import Node
 # the installed ROS 2 'launch' package of the same name.
 _common_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "_common.py")
 _spec = importlib.util.spec_from_file_location("launch_common", _common_path)
+assert _spec is not None, "Failed to load _common.py spec"
 _common_mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_common_mod)  # type: ignore[union-attr]
 build_sensor_tf_nodes = _common_mod.build_sensor_tf_nodes
