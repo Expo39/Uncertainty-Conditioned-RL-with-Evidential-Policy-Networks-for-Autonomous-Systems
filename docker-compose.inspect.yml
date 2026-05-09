@@ -239,7 +239,12 @@ services:
       - inspect-dryrun
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - ROS_DOMAIN_ID=42
+      # Inspect stack uses a separate ROS_DOMAIN_ID so its EKF and topics are
+      # isolated from any worker ros2-bridge containers (default domain 42)
+      # that may still be running from a previous training session. Without
+      # this, two ekf_filter_node instances appear on the same DDS network and
+      # the CovarianceExtractorNode reads a corrupted mix of their outputs.
+      - ROS_DOMAIN_ID=${INSPECT_ROS_DOMAIN_ID:-43}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CARLA_HOST=carla-server-demo
       - CARLA_PORT=2100
@@ -289,7 +294,10 @@ services:
       - inspect-dryrun
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - ROS_DOMAIN_ID=42
+      # Must match ros2-bridge-inspect (default 43) so this container shares
+      # the inspect DDS domain and is isolated from any worker bridges still
+      # running on the default domain (42).
+      - ROS_DOMAIN_ID=${INSPECT_ROS_DOMAIN_ID:-43}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
       - PYTHONPATH=/workspace
