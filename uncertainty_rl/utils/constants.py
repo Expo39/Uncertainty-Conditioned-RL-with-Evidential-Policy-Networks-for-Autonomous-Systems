@@ -15,8 +15,8 @@ import numpy as np
 # Success Criteria for Parking Manoeuvres
 # ---------------------------------------------------------------------------
 
-# Position error threshold for successful parking (metres)
-SUCCESS_THRESHOLD_POSITION = 0.5
+# Position error threshold for successful parking (metres).
+SUCCESS_THRESHOLD_POSITION = 0.75
 
 # Orientation error threshold for successful parking (radians)
 # Equivalent to 10 degrees

@@ -31,9 +31,6 @@ _ANSI_RED = "\033[31m"
 _ANSI_CYAN = "\033[36m"
 _ANSI_RESET = "\033[0m"
 
-# Squared threshold for GT proximity.
-_GT_PROXIMITY_SQ: float = 0.25  
-
 # ---------------------------------------------------------------------------
 # Keyboard controller for manual dryrun mode
 # ---------------------------------------------------------------------------
@@ -505,10 +502,20 @@ class DryRunInspector(_Inspector):
                                 math.cos(_ep2 + _rr),
                             )
                             _gt_yaw = math.radians(_gt.rotation.yaw)
-                            _yaw_err = math.atan2(
+                            # Parking allows facing either direction (forward
+                            # or reverse), so a 180-deg flip is a valid pose.
+                            # Fold into (-pi/2, pi/2] to match the symmetry
+                            # used by wrap_angle_symmetric (target dyaw obs).
+                            _raw = math.atan2(
                                 math.sin(_ekf_wyaw - _gt_yaw),
                                 math.cos(_ekf_wyaw - _gt_yaw),
                             )
+                            if _raw > math.pi / 2:
+                                _yaw_err = _raw - math.pi
+                            elif _raw < -math.pi / 2:
+                                _yaw_err = _raw + math.pi
+                            else:
+                                _yaw_err = _raw
                             _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
@@ -517,35 +524,19 @@ class DryRunInspector(_Inspector):
                     )
                     self._update_spectator()
 
-                    _gt_done = False
-                    if self._env.vehicle is not None:
-                        _vt = self._env.vehicle.get_transform()
-                        _tgt = self._env._target_bay
-                        _ddx = _vt.location.x - _tgt["x"]
-                        _ddy = _vt.location.y - _tgt["y"]
-                        if _ddx * _ddx + _ddy * _ddy <= _GT_PROXIMITY_SQ:
-                            _gt_dist = math.sqrt(_ddx * _ddx + _ddy * _ddy)
-                            print(
-                                f"\n  [GT proximity] {_gt_dist:.2f}m from target "
-                                f"- ending episode early"
-                            )
-                            self._print_obs(obs, step, episode)
-                            _gt_done = True
-                            terminated = True
-
-                    if not _gt_done and step % self._LOG_INTERVAL == 0:
+                    if step % self._LOG_INTERVAL == 0:
                         self._draw_overlays(life_time=self._OVERLAY_LIFE)
                         self._print_obs(obs, step, episode)
                     _latest_obs = obs
 
-                reason = (
-                    "gt_proximity"
-                    if _gt_done
-                    else info.get(
-                        "termination_reason",
-                        "truncated" if truncated else "terminated",
-                    )
-                )
+                if info.get("success", False):
+                    reason = "SUCCESS"
+                elif info.get("collision", False):
+                    reason = "collision"
+                elif truncated:
+                    reason = "timeout"
+                else:
+                    reason = "terminated"
                 if _rmse_n > 0:
                     _pos_rmse = math.sqrt(_rmse_pos_sq / _rmse_n)
                     _yaw_rmse = math.degrees(math.sqrt(_rmse_yaw_sq / _rmse_n))
@@ -561,9 +552,8 @@ class DryRunInspector(_Inspector):
                     f"  steps={step}  total_steps={total_steps}  "
                     + _rmse_str
                 )
-                if not _gt_done:
-                    print("--- Final observation ---")
-                    self._print_obs(obs, step, episode)
+                print("--- Final observation ---")
+                self._print_obs(obs, step, episode)
 
                 if self._termination_pause > 0:
                     print(

@@ -201,6 +201,7 @@ def make_eval_env(
             gnss_noise_profiles_path=gnss_profiles_path,
             gnss_noise_multiplier_override=gnss_override,
             debug=debug,
+            success_dwell_steps=config.get("success_dwell_steps", 5),
         )
         return SafetyWrapper(
             base_env,

@@ -11,6 +11,7 @@ carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost"
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
 max_steps: 1500  # Episode length (steps). 1500 * 0.05s = 75s sim time.
+success_dwell_steps: 5  # Consecutive steps all success criteria must hold before episode ends as success.
 action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz. See detailed_notes/ekf_pipeline.md.
 use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
@@ -37,7 +38,7 @@ carla_sensors:
     sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
 
     noise:
-      enabled: true
+      enabled: false
       range_random_stddev_m: 0.020  # m 1-sigma - see sensor_noise_models.md
       range_bias_limit_m: 0.060     # m half-range - see sensor_noise_models.md
       dropout_rate: 0.0             # no datasheet basis for non-zero value

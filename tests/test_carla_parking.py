@@ -794,17 +794,20 @@ class TestComputeReward:
         assert terminated is True
         assert success is False
 
-    def test_success_returns_plus_ten_and_terminates(self) -> None:
+    def test_success_returns_plus_ten_after_dwell(self) -> None:
         """
-        @brief Reaching target within all thresholds: reward = +10.0, success = True.
+        @brief Success requires all thresholds to hold for success_dwell_steps
+               consecutive steps. Before the dwell is complete, the episode
+               does not terminate.
         """
         from uncertainty_rl.utils.constants import (
             SUCCESS_THRESHOLD_POSITION,
             SUCCESS_THRESHOLD_VELOCITY,
         )
 
+        dwell = 3
         env = _make_env_for_reward()
-        # Position just inside threshold
+        env._success_dwell_steps = dwell
         _set_vehicle(
             env,
             x=SUCCESS_THRESHOLD_POSITION * 0.5,
@@ -814,11 +817,51 @@ class TestComputeReward:
         )
         env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
-        reward, terminated, success, diag = env._compute_reward()
+        # Steps 1 and 2: in-bay but dwell not yet satisfied
+        for step in range(1, dwell):
+            reward, terminated, success, diag = env._compute_reward()
+            assert terminated is False, f"should not terminate on step {step}"
+            assert success is False
 
+        # Final dwell step: success fires
+        reward, terminated, success, diag = env._compute_reward()
         assert reward == pytest.approx(10.0)
         assert terminated is True
         assert success is True
+
+    def test_drive_through_does_not_count_as_success(self) -> None:
+        """
+        @brief A single step inside the bay thresholds (drive-through) must not
+               trigger success. The dwell counter resets when the vehicle leaves.
+        """
+        from uncertainty_rl.utils.constants import (
+            SUCCESS_THRESHOLD_POSITION,
+            SUCCESS_THRESHOLD_VELOCITY,
+        )
+
+        env = _make_env_for_reward()
+        env._success_dwell_steps = 5
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+
+        # One step inside thresholds (simulates fast drive-through)
+        _set_vehicle(
+            env,
+            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            y=0.0,
+            yaw_deg=0.0,
+            vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
+        )
+        reward, terminated, success, _ = env._compute_reward()
+        assert terminated is False
+        assert success is False
+        assert env._success_counter == 1
+
+        # Vehicle leaves the bay - counter resets
+        _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0, vx=2.0)
+        reward, terminated, success, _ = env._compute_reward()
+        assert terminated is False
+        assert success is False
+        assert env._success_counter == 0
 
     def test_progress_reward_positive_when_closing_in(self) -> None:
         """

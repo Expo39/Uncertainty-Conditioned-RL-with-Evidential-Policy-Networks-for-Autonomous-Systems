@@ -251,12 +251,9 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
-        # Single source of truth: build the env via train_ppo.make_env() so
+        # build the env via train_ppo.make_env() so
         # dryrun is, by construction, identical to a training rollout (same
-        # constructor kwargs, same defaults). Two intentional divergences:
-        #   - CARLA host/port point at the windowed inspect server.
-        #   - no_rendering_mode is forced off so the human inspector can see
-        #     the scene; training keeps it on for the ~3-4x speedup.
+        # constructor kwargs, same defaults).
         from uncertainty_rl.training.train_ppo import make_env
 
         dryrun_cfg = dict(train_cfg)

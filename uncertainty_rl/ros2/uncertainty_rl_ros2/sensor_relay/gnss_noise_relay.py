@@ -91,9 +91,12 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("datum_lon", 0.0)
         self.declare_parameter("odom_output_topic", "/odometry/gps")
         self.declare_parameter("heading_output_topic", "/gnss/heading")
-        # Minimum GNSS-derived speed (m/s) to update the COG estimate.
-        # Below this the last valid heading is re-published unchanged.
-        self.declare_parameter("cog_min_speed_ms", 0.3)
+        # Minimum per-step displacement (metres) to accept a COG update.
+        self.declare_parameter("cog_min_displacement_m", 0.05)
+        # When true, detect reverse motion by comparing raw COG to the EKF's
+        # current yaw (from /odometry/filtered) and flipping by pi when the
+        # difference exceeds 90 deg.
+        self.declare_parameter("enable_cog_reverse_detection", True)
 
         input_topic = str(
             self.get_parameter("input_topic").get_parameter_value().string_value
@@ -125,8 +128,13 @@ class GnssNoiseRelayNode(Node):
         heading_output_topic = str(
             self.get_parameter("heading_output_topic").get_parameter_value().string_value
         )
-        self._cog_min_speed_ms: float = float(
-            self.get_parameter("cog_min_speed_ms").get_parameter_value().double_value
+        self._cog_min_displacement_m: float = float(
+            self.get_parameter("cog_min_displacement_m").get_parameter_value().double_value
+        )
+        self._enable_cog_reverse_detection: bool = bool(
+            self.get_parameter("enable_cog_reverse_detection")
+            .get_parameter_value()
+            .bool_value
         )
 
         # Precompute flat-earth scale factors for the datum latitude.
@@ -182,6 +190,13 @@ class GnssNoiseRelayNode(Node):
         self._cog_initialised: bool = False
         self._last_heading_rad: float = 0.0
         self._last_heading_var: float = (math.pi ** 2) / 3.0
+        self._last_speed_ms: float = 0.0
+        # True only when the last callback met both COG gates (speed + displacement).
+        # Used to suppress tight-variance publish when gates reject a callback.
+        self._cog_active: bool = False
+        # Latest EKF yaw (ROS frame, radians) cached from /odometry/filtered.
+        # Used to disambiguate forward vs reverse motion.
+        self._ekf_yaw_rad: Optional[float] = None
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -201,12 +216,18 @@ class GnssNoiseRelayNode(Node):
         self._heading_pub = self.create_publisher(
             PoseWithCovarianceStamped, heading_output_topic, qos_be
         )
+        # Subscribe to EKF output for reverse-motion detection. RELIABLE matches
+        # robot_localization's default publisher QoS on /odometry/filtered.
+        if self._enable_cog_reverse_detection:
+            self._ekf_odom_sub = self.create_subscription(
+                Odometry, "/odometry/filtered", self._ekf_odom_callback, qos
+            )
 
         self.get_logger().info(
             f"GnssNoiseRelay: {input_topic} -> {output_topic} "
             f"-> {odom_output_topic} (flat-earth, "
             f"COG heading -> {heading_output_topic}, "
-            f"cog_min_speed={self._cog_min_speed_ms:.2f} m/s, "
+            f"cog_min_disp={self._cog_min_displacement_m:.3f} m, "
             f"markov_transitions={self._markov_enabled})"
         )
 
@@ -259,8 +280,11 @@ class GnssNoiseRelayNode(Node):
             self._config_seq = seq
 
             tier_name: Optional[str] = data.get("tier_name")
+            if not self._markov_enabled:
+                tier_name = "rtk_fixed"
             if tier_name and tier_name in _TIER_ORDER:
                 self._apply_tier(tier_name)
+                self._write_active_tier(tier_name)
             else:
                 self.get_logger().warn(
                     f"episode_config.json has unknown or missing tier_name"
@@ -282,6 +306,7 @@ class GnssNoiseRelayNode(Node):
                 self._prev_y = None
                 self._prev_stamp_sec = None
                 self._cog_initialised = False
+                self._cog_active = False
                 self.get_logger().info(
                     f"GNSS datum re-latched: lat={self._datum_lat:.7f} "
                     f"lon={self._datum_lon:.7f}"
@@ -317,11 +342,21 @@ class GnssNoiseRelayNode(Node):
     def _write_active_tier(self, tier_name: str) -> None:
         """
         @brief Write the current active tier back to episode_config.json.
+
+        Read-modify-write so that datum_lat, datum_lon, and spawn_yaw written
+        by the training container at episode reset are preserved.
+
         @param tier_name: Active RTK fix-state tier name.
         """
         tmp_path = self._config_path + ".markov.tmp"
         try:
-            data = {"seq": self._config_seq, "tier_name": tier_name}
+            try:
+                with open(self._config_path, "r") as f:
+                    data = json.load(f)
+            except (OSError, json.JSONDecodeError):
+                data = {}
+            data["seq"] = self._config_seq
+            data["tier_name"] = tier_name
             with open(tmp_path, "w") as f:
                 json.dump(data, f)
             os.replace(tmp_path, self._config_path)
@@ -346,18 +381,41 @@ class GnssNoiseRelayNode(Node):
     # COG heading helpers
     # ------------------------------------------------------------------
 
-    def _cog_heading_variance(self, speed_ms: float) -> float:
+    def _ekf_odom_callback(self, msg: Odometry) -> None:
         """
-        @brief Compute COG heading variance from GNSS position noise and speed.
+        @brief Cache latest EKF yaw for COG forward/reverse disambiguation.
 
-        @param speed_ms: GNSS-derived speed (displacement / dt) in m/s.
+        Extracts yaw from the EKF's /odometry/filtered quaternion and stores
+        it for use in _gnss_callback.
+
+        @param msg: EKF state estimate from robot_localization.
+        """
+        qx = msg.pose.pose.orientation.x
+        qy = msg.pose.pose.orientation.y
+        qz = msg.pose.pose.orientation.z
+        qw = msg.pose.pose.orientation.w
+        siny_cosp = 2.0 * (qw * qz + qx * qy)
+        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
+        self._ekf_yaw_rad = math.atan2(siny_cosp, cosy_cosp)
+
+    def _cog_heading_variance(self, displacement_m: float) -> float:
+        """
+        @brief Compute COG heading variance from GNSS position noise and displacement.
+
+        Linearised propagation of per-axis Gaussian position noise through
+        atan2(dy, dx): Var(heading) = 2*sigma^2 / displacement^2 (rad^2).
+        The factor 2 comes from the displacement vector being the difference
+        of two independent noisy fixes, summing their per-axis variances.
+
+        @param displacement_m: Per-step GNSS displacement in metres.
         @return Heading variance in rad^2.
         """
         sigma = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
-        # Floor speed at cog_min_speed_ms to avoid division by near-zero.
-        eff_speed_sq = max(speed_ms, self._cog_min_speed_ms) ** 2
-        raw_var = 2.0 * (sigma ** 2) / eff_speed_sq
-        min_var = 2.0 * self._rtk_fixed_var / eff_speed_sq
+        # displacement_m is guaranteed >= cog_min_displacement_m by the gate
+        # in _gnss_callback, so division is safe.
+        disp_sq = displacement_m * displacement_m
+        raw_var = 2.0 * (sigma ** 2) / disp_sq
+        min_var = 2.0 * self._rtk_fixed_var / disp_sq
         return max(raw_var, min_var)
 
     # ------------------------------------------------------------------
@@ -390,6 +448,7 @@ class GnssNoiseRelayNode(Node):
             self._prev_y = None
             self._prev_stamp_sec = None
             self._cog_initialised = False
+            self._cog_active = False
             self.get_logger().info(
                 f"GnssNoiseRelay: auto-latched datum "
                 f"lat={self._datum_lat:.6f} lon={self._datum_lon:.6f}"
@@ -455,14 +514,47 @@ class GnssNoiseRelayNode(Node):
             if dt > 0.0:
                 dx = local_x - self._prev_x
                 dy = local_y - self._prev_y
-                speed_ms = math.hypot(dx, dy) / dt  # GNSS-derived speed, no GT
+                displacement_m = math.hypot(dx, dy)
+                self._last_speed_ms = displacement_m / dt
+                speed_ms = self._last_speed_ms
 
-                if speed_ms >= self._cog_min_speed_ms:
-                    # CARLA +Y is south, so increasing latitude maps to decreasing
-                    # local_y in the vehicle frame. Negate dy so that heading
-                    # follows ROS convention (0=east, pi/2=north, anticlockwise).
-                    self._last_heading_rad = math.atan2(-dy, dx)
-                    self._last_heading_var = self._cog_heading_variance(speed_ms)
+                # Gate on displacement
+                sigma_now = (
+                    self._metric_stddev_m if self._gnss_noise_enabled else 0.02
+                )
+                noise_floor_3sigma = 3.0 * sigma_now * math.sqrt(2.0)
+                gate = max(self._cog_min_displacement_m, noise_floor_3sigma)
+                if displacement_m >= gate:
+                    self._cog_active = True
+                    # CARLA GnssSensor reports latitude increasing with CARLA +Y
+                    # (which is south), so local_y increases southward. Negate dy
+                    # so heading follows standard ROS convention (0=east,
+                    # pi/2=north, anticlockwise positive).
+                    raw_heading = math.atan2(-dy, dx)
+
+                    # Forward / reverse disambiguation. COG is the direction of
+                    # the velocity vector, which equals vehicle yaw when going
+                    # forward and yaw + pi when reversing.
+                    ref_yaw: Optional[float] = None
+                    if self._enable_cog_reverse_detection:
+                        if self._ekf_yaw_rad is not None:
+                            ref_yaw = self._ekf_yaw_rad
+                        elif self._cog_initialised:
+                            # spawn_yaw seed loaded by _check_config_file.
+                            ref_yaw = self._last_heading_rad
+                    if ref_yaw is not None:
+                        diff = math.atan2(
+                            math.sin(raw_heading - ref_yaw),
+                            math.cos(raw_heading - ref_yaw),
+                        )
+                        if abs(diff) > math.pi / 2.0:
+                            flipped = raw_heading + math.pi
+                            raw_heading = math.atan2(
+                                math.sin(flipped), math.cos(flipped)
+                            )
+
+                    self._last_heading_rad = raw_heading
+                    self._last_heading_var = self._cog_heading_variance(displacement_m)
 
                     if not self._cog_initialised:
                         self._cog_initialised = True
@@ -479,14 +571,16 @@ class GnssNoiseRelayNode(Node):
                             f"heading={math.degrees(self._last_heading_rad):.2f} deg "
                             f"var={self._last_heading_var:.4e} rad^2"
                         )
+                else:
+                    self._cog_active = False
 
         self._prev_x = local_x
         self._prev_y = local_y
         self._prev_stamp_sec = stamp_sec
 
-        # Only publish heading once the first valid COG reading has been obtained.
-        # Before that the EKF runs on IMU vyaw only.
-        if not self._cog_initialised:
+        # Only publish heading when the COG gate passed (real displacement
+        # detected).
+        if not self._cog_initialised or not self._cog_active:
             return
 
         half_h = self._last_heading_rad / 2.0

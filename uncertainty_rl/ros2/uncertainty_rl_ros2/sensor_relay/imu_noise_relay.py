@@ -56,7 +56,6 @@ class ImuNoiseRelayNode(Node):
         self.declare_parameter("enable_imu_noise", True)
         self.declare_parameter("zupt_threshold_rad_s", 0.01)
         self.declare_parameter("accel_zupt_threshold_ms2", 0.2)
-        self.declare_parameter("enable_imu_value_noise", True)
 
         _gyro_bias_limit_default: float = 5.0 * math.pi / 180.0 / 3600.0
         self.declare_parameter("imu_gyro_bias_limit_rad_s", _gyro_bias_limit_default)
@@ -70,7 +69,7 @@ class ImuNoiseRelayNode(Node):
         imu_output_topic: str = str(
             self.get_parameter("imu_output_topic").get_parameter_value().string_value
         )
-        enable_imu_noise: bool = bool(
+        self._enable_imu_noise: bool = bool(
             self.get_parameter("enable_imu_noise").get_parameter_value().bool_value
         )
         self._imu_gyro_variance: float = float(
@@ -84,9 +83,6 @@ class ImuNoiseRelayNode(Node):
         )
         self._accel_zupt_threshold: float = float(
             self.get_parameter("accel_zupt_threshold_ms2").get_parameter_value().double_value
-        )
-        self._enable_imu_value_noise: bool = bool(
-            self.get_parameter("enable_imu_value_noise").get_parameter_value().bool_value
         )
         gyro_bias_limit: float = float(
             self.get_parameter("imu_gyro_bias_limit_rad_s").get_parameter_value().double_value
@@ -146,8 +142,7 @@ class ImuNoiseRelayNode(Node):
 
         self.get_logger().info(
             f"ImuNoiseRelay: {imu_input_topic} -> {imu_output_topic} | "
-            f"cov_noise={'ON' if enable_imu_noise else 'DISABLED'} "
-            f"value_noise={'ON' if self._enable_imu_value_noise else 'DISABLED'} | "
+            f"noise={'ON' if self._enable_imu_noise else 'DISABLED'} | "
             f"gyro_var={self._imu_gyro_variance:.2e} (rad/s)^2 "
             f"(1-sigma={self._gyro_noise_stddev*1000:.3f} mrad/s) "
             f"gyro_bias={self._gyro_bias*1e6:.2f} urad/s | "
@@ -235,7 +230,13 @@ class ImuNoiseRelayNode(Node):
         # Inject Gaussian noise + per-episode bias into measurement values so that the EKF
         # prediction step is realistically noisier between GNSS fixes. Noise is applied
         # only to axes that are not already zeroed by ZUPT, preserving standstill clamping.
-        if self._enable_imu_value_noise:
+        # Always stamp covariance so robot_localization receives valid sensor
+        # noise characteristics regardless of whether value noise is enabled.
+        out.orientation_covariance = self._orientation_cov
+        out.angular_velocity_covariance = self._angular_velocity_cov
+        out.linear_acceleration_covariance = self._linear_acceleration_cov
+
+        if self._enable_imu_noise:
             if not gyro_zupt_active:
                 out.angular_velocity.z += (
                     random.gauss(0.0, self._gyro_noise_stddev) + self._gyro_bias
@@ -247,11 +248,6 @@ class ImuNoiseRelayNode(Node):
                 out.linear_acceleration.y += (
                     random.gauss(0.0, self._accel_noise_stddev) + self._accel_bias_y
                 )
-
-        # Assign pre-built constant covariance lists (rebuilt once at init).
-        out.orientation_covariance = self._orientation_cov
-        out.angular_velocity_covariance = self._angular_velocity_cov
-        out.linear_acceleration_covariance = self._linear_acceleration_cov
 
         self._pub.publish(out)
 

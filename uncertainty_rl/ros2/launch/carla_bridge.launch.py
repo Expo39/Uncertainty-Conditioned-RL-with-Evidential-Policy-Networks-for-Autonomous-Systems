@@ -17,8 +17,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# Load shared launch helpers by file path so the import is not shadowed by
-# the installed ROS 2 'launch' package of the same name.
+# _Load shared launch helpers by file path so the import is not shadowed by
+# _the installed ROS 2 'launch' package of the same name.
 _common_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "_common.py")
 _spec = importlib.util.spec_from_file_location("launch_common", _common_path)
 _common_mod = importlib.util.module_from_spec(_spec)
@@ -162,7 +162,7 @@ def generate_launch_description() -> LaunchDescription:
                 "heading_output_topic": gnss_relay_cfg.get(
                     "heading_output_topic", "/gnss/heading"
                 ),
-                "cog_min_speed_ms": gnss_relay_cfg.get("cog_min_speed_ms", 0.3),
+                "cog_min_displacement_m": gnss_relay_cfg.get("cog_min_displacement_m", 0.05),
                 "imu_input_topic": imu_relay_cfg.get(
                     "imu_input_topic", "/carla/ego_vehicle/imu"
                 ),
