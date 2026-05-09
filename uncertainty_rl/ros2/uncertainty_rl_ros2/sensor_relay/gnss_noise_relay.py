@@ -71,6 +71,11 @@ class GnssNoiseRelayNode(Node):
 
     _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/episode_config.json"
 
+    # Standstill noise floor on the per-step displacement gate. Successive
+    # noisy GNSS positions differ by ~sigma * sqrt(2) per step from pure
+    # noise alone; 3-sigma drops the false-trigger rate below 1%.
+    _NOISE_FLOOR_K: float = 3.0 * math.sqrt(2.0)
+
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
         """
         @brief Constructor for GnssNoiseRelayNode.
@@ -522,8 +527,10 @@ class GnssNoiseRelayNode(Node):
                 sigma_now = (
                     self._metric_stddev_m if self._gnss_noise_enabled else 0.02
                 )
-                noise_floor_3sigma = 3.0 * sigma_now * math.sqrt(2.0)
-                gate = max(self._cog_min_displacement_m, noise_floor_3sigma)
+                gate = max(
+                    self._cog_min_displacement_m,
+                    self._NOISE_FLOOR_K * sigma_now,
+                )
                 if displacement_m >= gate:
                     self._cog_active = True
                     # CARLA GnssSensor reports latitude increasing with CARLA +Y
@@ -548,10 +555,9 @@ class GnssNoiseRelayNode(Node):
                             math.cos(raw_heading - ref_yaw),
                         )
                         if abs(diff) > math.pi / 2.0:
-                            flipped = raw_heading + math.pi
-                            raw_heading = math.atan2(
-                                math.sin(flipped), math.cos(flipped)
-                            )
+                            # raw_heading is in (-pi, pi]; flipping by pi and
+                            # rewrapping reduces to a sign-conditional offset.
+                            raw_heading += -math.pi if raw_heading > 0.0 else math.pi
 
                     self._last_heading_rad = raw_heading
                     self._last_heading_var = self._cog_heading_variance(displacement_m)
