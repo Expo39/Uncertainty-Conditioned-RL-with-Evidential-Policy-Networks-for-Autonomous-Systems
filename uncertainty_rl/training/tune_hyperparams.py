@@ -19,7 +19,7 @@ import os
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 try:
     from yaml import CSafeLoader as _YamlLoader
@@ -52,6 +52,25 @@ from uncertainty_rl.training.train_ppo import (
 )
 
 logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
+
+
+# Tiebreaker scale: any non-zero success_rate dominates a progress-based fallback.
+_TIEBREAK_SCALE: float = 1e-3
+
+
+def _composite_objective(
+    success_rate: Optional[float],
+    progress: Optional[float],
+) -> float:
+    """
+    @brief Compute the Optuna trial objective from training metrics.
+    @param success_rate: env/success_rate in [0, 1], or None if unavailable.
+    @param progress: env/mean_progress_reward, or None if unavailable.
+    @return success_rate when > 0, else _TIEBREAK_SCALE * progress (or 0.0).
+    """
+    if success_rate is None or success_rate == 0.0:
+        return 0.0 if progress is None else _TIEBREAK_SCALE * float(progress)
+    return float(success_rate)
 
 
 # ------------------------------------------------------------------
@@ -175,9 +194,9 @@ class TrialEvalCallback(BaseCallback):
     @brief Callback that reports training metrics to Optuna for trial pruning.
 
     Reads training metrics from self.logger.name_to_value (populated by
-    EnvDiagnosticsCallback) and reports the primary objective metric
-    (env/mean_progress_reward) to the trial. Also checks for early stopping
-    via Optuna's pruning mechanism.
+    EnvDiagnosticsCallback) and reports the composite objective
+    (env/success_rate primary, env/mean_progress_reward tiebreaker) to the
+    trial. Also checks for early stopping via Optuna's pruning mechanism.
     """
 
     def __init__(self, trial: "optuna.Trial") -> None:
@@ -204,18 +223,10 @@ class TrialEvalCallback(BaseCallback):
         scaled into a small positive range as a tiebreaker before any
         success has been observed.
         """
-        success_rate = self.logger.name_to_value.get("env/success_rate")
-        progress = self.logger.name_to_value.get("env/mean_progress_reward")
-
-        # success_rate in [0, 1]. Until any success is logged, fall back to a
-        # small fraction of mean_progress_reward so early trials can still be
-        # ranked. Scale by 1e-3 so any non-zero success_rate dominates.
-        if success_rate is None or success_rate == 0.0:
-            tiebreak = 0.0 if progress is None else 1e-3 * float(progress)
-            metric = tiebreak
-        else:
-            metric = float(success_rate)
-
+        metric = _composite_objective(
+            self.logger.name_to_value.get("env/success_rate"),
+            self.logger.name_to_value.get("env/mean_progress_reward"),
+        )
         self.trial.report(metric, step=self.num_timesteps)
         if self.trial.should_prune():
             raise optuna.TrialPruned()
@@ -306,14 +317,15 @@ def objective(
     @brief Optuna objective function for a single trial.
 
     Samples hyperparameters, runs a short training session, and returns the
-    primary metric (env/mean_progress_reward) for optimisation.
+    composite objective (env/success_rate primary, env/mean_progress_reward
+    tiebreaker) for optimisation.
 
     @param trial: Optuna trial object.
     @param base_config: Base training config (merged train + env configs).
     @param tuning_config: Tuning configuration with study settings.
     @param train_config_path: Path to train_config.yaml.
     @param env_config_path: Path to env_config.yaml.
-    @return Primary metric value for this trial.
+    @return Composite objective value for this trial.
     """
     try:
         # Sample hyperparameters
@@ -340,15 +352,9 @@ def objective(
         # Run training
         result = train(trial_config, extra_callbacks=[trial_callback])
 
-        # Primary metric: env/success_rate. Tiebreaker (when no success yet
-        # observed): a scaled mean_progress_reward so early non-successful
-        # trials are still rankable without dominating any successful trial.
         success_rate = float(result.final_metrics.get("env/success_rate", 0.0))
         progress = float(result.final_metrics.get("env/mean_progress_reward", 0.0))
-        if success_rate == 0.0:
-            primary_metric = 1e-3 * progress
-        else:
-            primary_metric = success_rate
+        primary_metric = _composite_objective(success_rate, progress)
 
         trial.set_user_attr("env/success_rate", success_rate)
         trial.set_user_attr("env/mean_progress_reward", progress)
