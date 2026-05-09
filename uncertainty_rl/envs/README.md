@@ -127,7 +127,7 @@ where $D_\text{max} = 20.0$ m (`OUT_OF_BOUNDS_THRESHOLD`) and $\sigma_\text{max}
 | Collision (non-ego fault) | $0.0$ | True |
 | Timeout (`max_steps`) | none | False (`truncated=True`) |
 
-**Success criteria:** position error $< 0.5$ m, orientation error $< 10$ deg, speed $< 0.1$ m/s.
+**Success criteria:** position error $< 0.75$ m, orientation error $< 10$ deg, speed $< 0.1$ m/s. All three thresholds must hold for `success_dwell_steps` consecutive steps (default 5 = 0.25 s at 20 Hz) before the episode terminates as a success - this prevents a fast drive-through that momentarily satisfies the bounds from being counted as a park.
 
 ## Floor plans
 
@@ -182,7 +182,7 @@ obs, reward, terminated, truncated, info = env.step(action)
 
 | Config file | Keys |
 |-------------|------|
-| `configs/deployment/sim/env_config.yaml` | `carla_host`, `carla_port`, `max_steps`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
+| `configs/deployment/sim/env_config.yaml` | `carla_host`, `carla_port`, `max_steps`, `success_dwell_steps`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
 | `configs/gnss_noise_profiles.yaml` | RTK fix-state tiers and per-episode sampling weights |
 | `configs/layouts/*.yaml` | Floor plan geometry (corners, bays, spawn, patrol, zones) |
 | `uncertainty_rl/utils/constants.py` | `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3), `TARGET_POSE_DIM` (3), `OBSTACLE_FEATURES_DIM` (5), `TOTAL_OBS_DIM` (12), `ACTION_DIM` (3) |

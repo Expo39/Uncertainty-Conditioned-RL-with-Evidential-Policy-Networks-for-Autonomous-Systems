@@ -10,7 +10,7 @@ Requires a windowed CARLA session (X11 display) and the `carla-server-demo` cont
 |------|---------|
 | Lot geometry overlay | `make docker-inspect INSPECT_LAYOUT=rectangle` |
 | Sensor placement overlay | `make docker-inspect-sensors` |
-| Sensor side / front profile | `make docker-inspect-sensors INSPECT_VIEW=side` |
+| Sensor side / front profile | `make docker-inspect-sensors SENSORS_VIEW=side` |
 | Full FOV arc (wide camera) | `make docker-inspect-sensors INSPECT_ZOOM=wide` |
 | Live LiDAR scan dots | `make docker-inspect-live` |
 | Dryrun - keyboard control | `make docker-inspect-dryrun MANUAL=true` |
@@ -29,6 +29,7 @@ Requires a windowed CARLA session (X11 display) and the `carla-server-demo` cont
 | `inspectors/__init__.py` | Subpackage exports |
 | `_drawing.py` | Free functions for CARLA debug geometry (dots, arcs, labels) |
 | `dryrun.sh` | Shell driver: streams logs and tears down inspect containers on exit |
+| `markov_analyser.py` | Offline diagnostic for the GNSS tier Markov chain. CPU-only (no CARLA). Run via `make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]`; reports stationary distribution, mean dwell, and time to first contiguous good window for episodes starting in a bad tier. |
 
 ## Modes
 
@@ -66,8 +67,8 @@ Mount positions and ranges are read from `configs/deployment/sim/env_config.yaml
 
 ```bash
 make docker-inspect-sensors                            # Birds-eye (default)
-make docker-inspect-sensors INSPECT_VIEW=side          # Side profile (mount heights)
-make docker-inspect-sensors INSPECT_VIEW=front         # Front profile
+make docker-inspect-sensors SENSORS_VIEW=side          # Side profile (mount heights)
+make docker-inspect-sensors SENSORS_VIEW=front         # Front profile
 make docker-inspect-sensors INSPECT_ZOOM=wide          # Raise camera to show full arc
 ```
 
@@ -113,7 +114,7 @@ Keyboard controls (dryrun, `MANUAL=true`): Up = throttle, Down = brake, Left/Rig
 | `--host` | string | `carla-server-demo` | CARLA server hostname |
 | `--port` | int | `2100` | CARLA server port |
 
-Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `INSPECT_VIEW` -> `--view`, `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`.
+Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `SENSORS_VIEW` -> `--view` (sensors mode only), `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`.
 
 ## Requirements
 
