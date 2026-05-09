@@ -82,20 +82,20 @@ gnss_noise_relay:
   output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
   odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
   enable_gnss_noise: true  # true = inject per-episode tier noise. false = pure flat-earth projector (no covariance variation).
-  enable_markov_transitions: true  # false = constant tier per episode.
+  enable_markov_transitions: false  # true = tier switching in each episode.false = constant tier per episode.
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
-  cog_min_speed_ms: 0.3  # Min speed (m/s) to update COG heading. IMU handles near-standstill.
+  cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.
+  enable_cog_reverse_detection: true  # flips COG by pi when it differs from the EKF's yaw by more than 90 deg. 
 
 imu_noise_relay:
   imu_input_topic: "/carla/ego_vehicle/imu"
   imu_output_topic: "/carla/ego_vehicle/imu/stamped"
-  enable_imu_noise: true
-  imu_gyro_variance: 7.4631e-8  # (rad/s)^2 
+  enable_imu_noise: true  # Single master flag: covariance stamping + value noise + per-episode bias.
+  imu_gyro_variance: 7.4631e-8  # (rad/s)^2
   imu_accel_variance: 3.77245e-5  # (m/s^2)^2
   zupt_threshold_rad_s: 0.015
   accel_zupt_threshold_ms2: 0.2
-  enable_imu_value_noise: true
   imu_gyro_bias_limit_rad_s: 2.42407e-5  # rad/s
   imu_accel_bias_limit_ms2: 3.924e-4  # m/s^2
 

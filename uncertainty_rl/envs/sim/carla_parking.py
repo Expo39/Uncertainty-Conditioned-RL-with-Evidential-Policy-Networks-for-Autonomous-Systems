@@ -35,7 +35,6 @@ from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 from uncertainty_rl.envs._parking_core import (
     _layout_cache as _shared_layout_cache,
     build_observation,
-    calibrate_ekf_frame_offset,
     compute_obs_dim,
     extract_obstacle_features,
     load_floor_plan,
@@ -116,6 +115,7 @@ class CARLAParkingEnv(gym.Env):
         gnss_noise_profiles_path: Optional[str] = None,
         gnss_noise_multiplier_override: Optional[float] = None,
         uncertainty_std_max: float = 2.0,
+        success_dwell_steps: int = 5,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -162,6 +162,11 @@ class CARLAParkingEnv(gym.Env):
         @param gnss_noise_multiplier_override: If set, bypasses tier sampling and
                uses this fixed multiplier every episode. Used during evaluation
                to lock GNSS noise to a specific condition.
+        @param success_dwell_steps: Number of consecutive steps all success
+               criteria (position, orientation, velocity) must be satisfied
+               before the episode terminates as a success. Prevents a fast
+               drive-through that momentarily satisfies the thresholds from
+               being counted as a park. Default 5 steps = 0.25 s at 20 Hz.
         """
         super().__init__()
 
@@ -291,9 +296,9 @@ class CARLAParkingEnv(gym.Env):
         )
         self._world_pose_buf: np.ndarray = np.empty(4, dtype=np.float32)
 
-        # Full 2D rigid body transform from EKF odom frame to CARLA world frame,
-        # computed once per episode in _calibrate_ekf_frame_offset() using the
-        # known YAML spawn position paired with the EKF odom reading at spawn.
+        # Identity odom-to-world transform (tx, ty, cos_r, sin_r, r).
+        # The GNSS datum is latched to spawn position each episode reset, so
+        # the odom frame coincides with the world frame by construction.
         self._ekf_odom_offset: Tuple[float, float, float, float, float] = (
             0.0,
             0.0,
@@ -353,10 +358,13 @@ class CARLAParkingEnv(gym.Env):
         self._no_rendering_mode: bool = no_rendering_mode
         self._action_repeat_counter: int = 0
 
+        self._success_dwell_steps: int = max(1, success_dwell_steps)
+
         # Episode state
         self._episode_id: int = 0
         self.steps = 0
         self._actors_frozen: bool = False
+        self._success_counter: int = 0
         # Previous distance to target for potential-based reward shaping
         self._prev_distance: float = 0.0
 
@@ -781,12 +789,17 @@ class CARLAParkingEnv(gym.Env):
             reward = -10.0 if collision_ego_fault else 0.0
             return reward, True, False, diag
 
-        success = (
+        in_bay = (
             position_error < SUCCESS_THRESHOLD_POSITION
             and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
             and speed < SUCCESS_THRESHOLD_VELOCITY
         )
-        if success:
+        if in_bay:
+            self._success_counter += 1
+        else:
+            self._success_counter = 0
+
+        if self._success_counter >= self._success_dwell_steps:
             self._prev_distance = position_error
             return 10.0, True, True, diag
 
@@ -1167,25 +1180,14 @@ class CARLAParkingEnv(gym.Env):
 
     def _calibrate_ekf_frame_offset(self) -> None:
         """
-        @brief Resolve the spawn reference position and delegate EKF
-               convergence to calibrate_ekf_frame_offset() in _parking_core.
+        @brief Set the EKF odom-to-world transform: spawn translation, no rotation.
+
+        The GNSS datum is latched to the spawn position each episode reset, so
+        the EKF odom origin is at the spawn point in world coordinates.
         """
-        if self._cov_subscriber is None:
-            return
-
-        world_x = float(self._chosen_spawn.get("x", 0.0))
-        world_y = float(self._chosen_spawn.get("y", 0.0))
-        world_yaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
-
-        tick_fn = (lambda: self.world.tick(10.0)) if self.world is not None else None
-        self._ekf_odom_offset = calibrate_ekf_frame_offset(
-            world_x=world_x,
-            world_y=world_y,
-            world_yaw=world_yaw,
-            get_pose=self._cov_subscriber.get_latest_pose,
-            timeout=self._ekf_convergence_timeout,
-            tick_fn=tick_fn,
-        )
+        spawn_x = float(self._chosen_spawn.get("x", 0.0))
+        spawn_y = float(self._chosen_spawn.get("y", 0.0))
+        self._ekf_odom_offset = (spawn_x, spawn_y, 1.0, 0.0, 0.0)
 
     def _freeze_all_actors(self) -> None:
         """
@@ -1415,12 +1417,18 @@ class CARLAParkingEnv(gym.Env):
 
         if self._include_covariance:
             self._wait_for_covariance()
+            # Tick a few extra steps so the EKF has time to process the
+            # /set_pose message (published just before _wait_for_covariance).
+            if self.world is not None:
+                for _ in range(5):
+                    self.world.tick(10.0)
             # Always recalibrate: the GNSS datum is re-latched to the spawn
             # position at each episode reset, so the EKF odom origin shifts
             # every episode.
             self._calibrate_ekf_frame_offset()
 
         # Initialise prev_distance for potential-based reward shaping
+        self._success_counter = 0
         if self.vehicle is not None:
             t = self.vehicle.get_transform()
             self._prev_distance = math.hypot(
