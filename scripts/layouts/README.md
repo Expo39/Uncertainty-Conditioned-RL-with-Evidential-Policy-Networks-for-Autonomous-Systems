@@ -17,7 +17,7 @@ make docker-inspect INSPECT_LAYOUT=rectangle  # Verify geometry in CARLA
 | Layout | File | Dims (local frame) | Bays | OOD | World origin (CARLA) |
 |--------|------|--------------------|------|-----|----------------------|
 | `rectangle` | `floor_plans/rectangle.py` | ~60x42.5 m | 54 | No | x=2.0, y=17.5, z=0.3 |
-| `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=44 m | 39 | No | x=2.0, y=30.0, z=0.3 |
+| `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=50 m | 49 | No | x=0.0, y=30.0, z=0.3 |
 | `irregular_a` | `floor_plans/irregular_a.py` | ~80x50 m | 58 | Yes | x=-3.0, y=25.0, z=0.3 |
 
 ---
@@ -51,7 +51,7 @@ Axis-aligned rectangle with centred heterogeneous cluster (perpendicular + angle
 
 ---
 
-## `floor_plans/trapezoid.py` - Trapezoid (front=60, rear=40, depth=44 m, Training)
+## `floor_plans/trapezoid.py` - Trapezoid (front=60, rear=40, depth=50 m, Training)
 
 Wider at the entrance end (front width=60 m) and narrower at the rear (rear width=40 m), giving non-parallel top and bottom walls. Produces a different LiDAR wall signature compared to the rectangle, encouraging generalisation to non-rectangular geometry.
 
@@ -60,31 +60,32 @@ Wider at the entrance end (front width=60 m) and narrower at the rear (rear widt
 | Vertex | x | y | Description |
 |--------|---|---|-------------|
 | P0 | -5.0 | 0.0 | Bottom-left (front) |
-| P1 | 44.0 | 10.0 | Bottom-right (rear) |
-| P2 | 44.0 | 50.0 | Top-right (rear) |
+| P1 | 50.0 | 10.0 | Bottom-right (rear) |
+| P2 | 50.0 | 50.0 | Top-right (rear) |
 | P3 | -5.0 | 60.0 | Top-left (front) |
 
 **Bay groups:**
 
-| Group | Type | Count | Yaw |
-|-------|------|-------|-----|
-| Centre cluster row A (low) | Perpendicular | 9 | 90 deg (nose +Y) |
-| Centre cluster row B (high, back-to-back with A) | Perpendicular | 9 | 270 deg |
-| Bottom diagonal wall (perimeter) | Angled 45 deg | 8 | Computed from wall slope |
-| Top wall (perimeter, centred) | Parallel | 5 | Aligned with top wall |
-| Right wall (perimeter, centred) | Parallel | 4 | 90 deg |
-| Left wall lower group | Parallel | 2 | 90 deg |
-| Left wall upper group | Parallel | 2 | 90 deg |
+| Group | Type | Count | Notes |
+|-------|------|-------|-------|
+| Right centre cluster row A (low) | Perpendicular | 5 | Back-to-back pair, 8 m aisle |
+| Right centre cluster row B (high) | Perpendicular | 5 | Back-to-back with A |
+| Mid centre cluster row A (low) | Perpendicular | 7 | Back-to-back pair, 6 m aisle |
+| Mid centre cluster row B (high) | Perpendicular | 7 | Back-to-back with A |
+| Bottom wall | Angled 45 deg | 7 | Packed from left |
+| Top wall | Angled 225 deg | 7 | Packed from left |
+| Left wall - angled (top corner) | Angled -45 deg | 6 | Near top-left corner |
+| Left wall - perpendicular (below spawn) | Perpendicular | 5 | Below primary spawn |
 
-**Total: 39 bays.**
+**Total: 49 bays.**
 
 **Spawns:**
 - S1 (primary): entrance gate, local (x=-2.0, y=30.0), facing +X
 - S2: diagonal bottom wall at x~38, facing inward perpendicular to wall slope
 
-**Patrol:** 4-waypoint loop through lower and upper aisles of the centre cluster.
+**Patrol:** 4-waypoint loop entering between left angled cluster and mid perp cluster, exiting through the gap between mid and right perp clusters.
 
-**World origin (FlatPlane):** ORIGIN_X=2.0, ORIGIN_Y=30.0, ORIGIN_Z=0.3, HEADING_DEG=0.0
+**World origin (FlatPlane):** ORIGIN_X=0.0, ORIGIN_Y=30.0, ORIGIN_Z=0.3, HEADING_DEG=0.0
 
 ---
 

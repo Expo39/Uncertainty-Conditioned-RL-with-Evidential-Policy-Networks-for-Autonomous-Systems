@@ -9,7 +9,7 @@ regenerate from source after any change to a floor plan module.
 | File | Purpose |
 |------|---------|
 | `rectangle.yaml` | Rectangular lot with 7 left-wall perpendicular bays, centred cluster (12 perp + 8 angled), 12 bottom perpendicular, 7 bottom angled, 6 right-wall angled, 2 motorcycle bays. Total 54 bays (training) |
-| `trapezoid.yaml` | 39-bay trapezoid lot (training) |
+| `trapezoid.yaml` | 49-bay trapezoid lot (training) |
 | `irregular_a.yaml` | 58-bay irregular polygon lot (OOD evaluation only) |
 | `flat_plane.xodr` | OpenDRIVE world definition for the FlatPlane CARLA map |
 
