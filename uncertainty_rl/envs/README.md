@@ -7,7 +7,7 @@ Gymnasium-compatible CARLA parking environment with real EKF covariance from `ro
 - 12-dimensional observation (default): vyaw + EKF std devs + relative target pose + hemispheric LiDAR clearance
 - 2-dimensional action space: steering $\in [-1,1]$, drive $\in [-1,1]$ (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
 - Reward shaped by localisation quality: progress attenuated when $\max(\sigma_x, \sigma_y)$ is large
-- Three pre-computed floor plans: `rectangle` (47 bays), `trapezoid` (39 bays), `irregular_a` (58 bays, OOD only)
+- Three pre-computed floor plans: `rectangle` (47 bays), `trapezoid` (49 bays), `irregular_a` (58 bays, OOD only)
 - Sim-to-real capable: all observation features come from EKF and LiDAR, never CARLA ground truth
 - Requires the full Docker stack for training (carla-server + ros2-bridge + training)
 
@@ -135,7 +135,7 @@ where $D_\text{max} = 20.0$ m (`OUT_OF_BOUNDS_THRESHOLD`) and $\sigma_\text{max}
 | Floor plan | Bays | Shape | Role |
 |-----------|------|-------|------|
 | `rectangle` | 47 | Standard rectangular perimeter | Training |
-| `trapezoid` | 39 | Widened at one end | Training |
+| `trapezoid` | 49 | Widened at one end | Training |
 | `irregular_a` | 58 | Nine-sided irregular polygon | OOD only (never seen during training) |
 
 Geometry (corners, bay positions, spawn transform, patrol waypoints, pedestrian zones) is
