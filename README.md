@@ -266,11 +266,11 @@ Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
 
 ### Three Floor Plans
 
-| Layout | Bays | OOD | Training use |
-|--------|------|-----|-------------|
-| `rectangle` | 53 | No | Training + evaluation |
-| `trapezoid` | 39 | No | Training + evaluation |
-| `irregular_a` | 58 | Yes | OOD evaluation only (held out from training) |
+| Layout | Bays | OOD | Training use | Description |
+|--------|------|-----|-------------|-------------|
+| `rectangle` | 54 | No | Training + evaluation | Rectangular lot with 7 left-wall perp bays, centred heterogeneous cluster, 12 bottom perp, 7 bottom angled, 6 right-wall angled, 2 motorcycle bays. 3 spawns: left, bottom-centre, top-right. |
+| `trapezoid` | 39 | No | Training + evaluation | Legacy trapezoid lot. |
+| `irregular_a` | 58 | Yes | OOD evaluation only | Irregular polygon lot (held out from training). |
 
 ### Verify Layout in CARLA
 

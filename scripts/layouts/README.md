@@ -16,38 +16,38 @@ make docker-inspect INSPECT_LAYOUT=rectangle  # Verify geometry in CARLA
 
 | Layout | File | Dims (local frame) | Bays | OOD | World origin (CARLA) |
 |--------|------|--------------------|------|-----|----------------------|
-| `rectangle` | `floor_plans/rectangle.py` | ~65x45 m | 53 | No | x=2.0, y=22.5, z=0.3 |
+| `rectangle` | `floor_plans/rectangle.py` | ~60x42.5 m | 54 | No | x=2.0, y=17.5, z=0.3 |
 | `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=44 m | 39 | No | x=2.0, y=30.0, z=0.3 |
 | `irregular_a` | `floor_plans/irregular_a.py` | ~80x50 m | 58 | Yes | x=-3.0, y=25.0, z=0.3 |
 
 ---
 
-## `floor_plans/rectangle.py` - Standard Rectangle (~65x45 m, Training)
+## `floor_plans/rectangle.py` - Standard Rectangle (~60x42.5 m, Training)
 
-Axis-aligned rectangle. Mixed bay layout designed to maximise training diversity across all three bay types in a single floor plan.
+Axis-aligned rectangle with centred heterogeneous cluster (perpendicular + angled bays back-to-back), perimeter bays on bottom and right walls, left-wall column of perpendicular bays, and motorcycle bays in the top-right. Three spawn points enable varied approach angles during training.
 
 **Bay groups:**
 
-| Group | Type | Count | Yaw |
-|-------|------|-------|-----|
-| Bottom wall (perimeter, west pack) | Perpendicular | 12 | 90 deg (nose +Y) |
-| Bottom wall (perimeter, east pack) | Angled 45 deg | 7 | 45 deg |
-| Centre row A | Perpendicular | 12 | 90 deg (nose +Y) |
-| Centre row B (back-to-back with A) | Angled | 8 | 225 deg |
-| Top wall (perimeter) | Parallel | 6 | 90 deg |
-| Right wall (perimeter) | Parallel | 3 | 90 deg |
-| Inner parallel column (9 m aisle from right) | Parallel | 3 | 270 deg |
-| Motorcycle corner (always_empty=True) | Motorcycle | 2 | 0 deg |
+| Group | Type | Count | Yaw | Notes |
+|-------|------|-------|-----|-------|
+| Left wall | Perpendicular | 7 | 0 deg (nose +X) | Vertical column starting near top wall |
+| Centre row A (lower) | Perpendicular | 12 | 90 deg (nose +Y) | Centred horizontally |
+| Centre row B (upper, back-to-back with A) | Angled | 8 | 225 deg | Heterogeneous cluster configuration |
+| Bottom wall (west section) | Perpendicular | 12 | 90 deg (nose +Y) | Perimeter row |
+| Bottom wall (east section) | Angled 45 deg | 7 | 45 deg | Perimeter diagonal row |
+| Right wall | Angled 45 deg | 6 | 45 deg (nose -X) | Perimeter diagonal row |
+| Motorcycle corner (always_empty=True) | Motorcycle | 2 | 0 deg | Top-right, always unoccupied |
 
-**Total: 53 bays.**
+**Total: 54 bays.**
 
 **Spawns:**
-- S1 (primary): entrance gate, local (x=-2.0, y=22.5), facing +X
-- S2: bottom aisle, local (x=30.0, y=3.0), facing +Y
+- S1 (primary): left entrance gate, local (x=-2.0, y=17.5), facing +X (east)
+- S2: bottom centre aisle, local (x=30.0, y=3.0), facing +Y (north)
+- S3: top-right perimeter, local (x=52.0, y=40.5), facing -Y (south)
 
-**Patrol:** 6-waypoint CCW loop tracing lower aisle -> parallel column aisle -> top aisle -> diagonal -> upper aisle.
+**Patrol:** 4-waypoint CCW loop tracing lower aisle -> right aisle -> upper aisle -> left aisle. Updated to accommodate new left-wall bay column.
 
-**World origin (FlatPlane):** ORIGIN_X=2.0, ORIGIN_Y=22.5, ORIGIN_Z=0.3, HEADING_DEG=0.0
+**World origin (FlatPlane):** ORIGIN_X=2.0, ORIGIN_Y=17.5, ORIGIN_Z=0.3, HEADING_DEG=0.0
 
 ---
 
