@@ -119,10 +119,10 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("heading_output_topic", "/gnss/heading")
         # Minimum per-step displacement (metres) to accept a COG update.
         self.declare_parameter("cog_min_displacement_m", 0.05)
-        # IMU topic used to detect standstill (ZUPT state). When ZUPT is active,
-        # COG publication is suppressed so noise-induced GNSS displacement
-        # cannot inject a random yaw correction into the EKF.
+        # IMU topic used to detect ZUPT (standstill) and gate COG accordingly.
         self.declare_parameter("imu_topic", "/carla/ego_vehicle/imu/stamped")
+        # Master switch: false suppresses all COG heading publication.
+        self.declare_parameter("enable_cog_heading", True)
         self.declare_parameter(
             "noise_profiles_path",
             os.environ.get(
@@ -173,6 +173,9 @@ class GnssNoiseRelayNode(Node):
         )
         imu_topic = str(
             self.get_parameter("imu_topic").get_parameter_value().string_value
+        )
+        self._enable_cog_heading: bool = bool(
+            self.get_parameter("enable_cog_heading").get_parameter_value().bool_value
         )
 
         # Precompute flat-earth scale factors for the datum latitude.
@@ -234,9 +237,7 @@ class GnssNoiseRelayNode(Node):
         # Used to suppress tight-variance publish when gates reject a callback.
         self._cog_active: bool = False
 
-        # ZUPT state observed on the stamped IMU stream. When ImuNoiseRelayNode
-        # clamps gyro and accel to exactly zero, the vehicle is stationary and
-        # GNSS-derived COG is pure noise; suppress publication.
+        # True when the stamped IMU shows ZUPT-clamped zeros on all channels.
         # Default True so COG is gated off until the first IMU sample arrives.
         self._imu_stationary: bool = True
 
@@ -497,13 +498,7 @@ class GnssNoiseRelayNode(Node):
 
     def _imu_callback(self, msg: Imu) -> None:
         """
-        @brief Track ZUPT state from the stamped IMU stream.
-
-        ImuNoiseRelayNode writes angular_velocity.z and linear_acceleration.x/y
-        as exactly 0.0 when ZUPT is active. When all three channels are exactly
-        zero, the vehicle is stationary and any GNSS-derived COG heading would
-        be pure noise; the flag set here gates COG publication in _gnss_callback.
-
+        @brief Set _imu_stationary when ZUPT-clamped zeros are seen on all axes.
         @param msg: sensor_msgs/Imu with ZUPT-clamped fields.
         """
         self._imu_stationary = (
@@ -625,12 +620,9 @@ class GnssNoiseRelayNode(Node):
                 self._last_speed_ms = displacement_m / dt
                 speed_ms = self._last_speed_ms
 
-                # Gate on displacement and on IMU ZUPT state. The displacement
-                # gate alone is insufficient at low GNSS noise tiers: at
-                # rtk_fixed the noise floor (3*sqrt(2)*sigma ~ 0.085 m) is
-                # exceeded by pure noise ~1% of the time, which would inject a
-                # random heading with a falsely-tight variance into the EKF.
-                # Requiring ZUPT to be inactive ensures real motion is present.
+                # Gate on displacement AND on IMU ZUPT. The displacement gate
+                # alone leaks ~1% noise spikes through at rtk_fixed; coupling
+                # with ZUPT ensures real motion is present.
                 sigma_now = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
                 gate = max(
                     self._cog_min_displacement_m,
@@ -673,8 +665,9 @@ class GnssNoiseRelayNode(Node):
         self._prev_y = local_y
         self._prev_stamp_sec = stamp_sec
 
-        # Only publish heading when the COG gate passed (real displacement
-        # detected).
+        if not self._enable_cog_heading:
+            return
+
         if not self._cog_initialised or not self._cog_active:
             return
 
