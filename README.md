@@ -189,7 +189,7 @@ Uncertainty-Conditioned-RL.../
 |   |                                  EvidentialActorCriticPolicy, EvidentialPPO
 |   |
 |   |-- envs/                          Gymnasium environments
-|   |   |-- sim/carla_parking.py       CARLAParkingEnv (12-dim obs, 3-dim action)
+|   |   |-- sim/carla_parking.py       CARLAParkingEnv (12-dim obs, 2-dim action)
 |   |   |-- real/deployment_utils.py   RealWorldDeployment
 |   |   |-- real/inference_loop.py     RealWorldInferenceLoop
 |   |   |-- _parking_core.py           Shared pure logic: obs build, reward,
@@ -217,7 +217,7 @@ Uncertainty-Conditioned-RL.../
 |   |                                  robot_localisation
 |   |
 |   +-- utils/                         Shared utilities (no CARLA or ROS 2 deps)
-|       |-- constants.py               VEHICLE_STATE_DIM=1, ACTION_DIM=3, thresholds
+|       |-- constants.py               VEHICLE_STATE_DIM=1, ACTION_DIM=2, thresholds
 |       |-- covariance_utils.py        extract_2d_covariance_features
 |       |-- geometry.py                point_in_polygon, wrap_angle_symmetric,
 |       |                              _compute_relative_target_pose

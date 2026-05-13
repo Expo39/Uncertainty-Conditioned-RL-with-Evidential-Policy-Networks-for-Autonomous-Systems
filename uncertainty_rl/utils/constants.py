@@ -58,11 +58,11 @@ TOTAL_OBS_DIM = (
 # Action Space Dimensions
 # ---------------------------------------------------------------------------
 
-# Continuous action: [steering, drive, brake]
+# Continuous action: [steering, drive]
 # steering : [-1, 1]  left to right
-# drive    : [-1, 1]  negative = reverse throttle, positive = forward throttle
-# brake    : [ 0, 1]  friction brake (independent of drive direction)
-ACTION_DIM = 3
+# drive    : [-1, 1]  negative = brake (friction), positive = forward throttle.
+#                     No reverse gear: forward perpendicular bay parking only.
+ACTION_DIM = 2
 
 # ---------------------------------------------------------------------------
 # Environment Safety and Termination Thresholds

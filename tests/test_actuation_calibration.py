@@ -108,20 +108,18 @@ class TestActuationCalibrationIdentity:
         @brief identity().apply() must return inputs unchanged.
         """
         cal = ActuationCalibration.identity()
-        s, drv, brk = cal.apply(0.3, -0.5, 0.2)
+        s, drv = cal.apply(0.3, -0.5)
         assert s == pytest.approx(0.3)
         assert drv == pytest.approx(-0.5)
-        assert brk == pytest.approx(0.2)
 
     def test_default_constructor_is_identity(self) -> None:
         """
         @brief ActuationCalibration() with no args must behave as identity.
         """
         cal = ActuationCalibration()
-        s, drv, brk = cal.apply(0.8, 0.2, 0.0)
+        s, drv = cal.apply(0.8, 0.2)
         assert s == pytest.approx(0.8)
         assert drv == pytest.approx(0.2)
-        assert brk == pytest.approx(0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +149,11 @@ class TestActuationCalibrationFromConfig:
                     "calibration": {
                         "steering": {"gain": 0.5},
                         "drive": {},
-                        "brake": {},
                     }
                 },
             )
             cal = ActuationCalibration.from_config(str(p))
-            s, _, _b = cal.apply(1.0, 0.0, 0.0)
+            s, _ = cal.apply(1.0, 0.0)
             assert s == pytest.approx(0.5)
 
     def test_loads_drive_deadband(self) -> None:
@@ -171,12 +168,11 @@ class TestActuationCalibrationFromConfig:
                     "calibration": {
                         "steering": {},
                         "drive": {"deadband": 0.15},
-                        "brake": {},
                     }
                 },
             )
             cal = ActuationCalibration.from_config(str(p))
-            _, drv, _b = cal.apply(0.0, 0.05, 0.0)
+            _, drv = cal.apply(0.0, 0.05)
             assert drv == pytest.approx(0.0)
 
     def test_missing_file_returns_identity(self) -> None:
@@ -184,10 +180,9 @@ class TestActuationCalibrationFromConfig:
         @brief from_config() must return identity when the file does not exist.
         """
         cal = ActuationCalibration.from_config("/nonexistent/path/cal.yaml")
-        s, drv, brk = cal.apply(0.6, -0.3, 0.5)
+        s, drv = cal.apply(0.6, -0.3)
         assert s == pytest.approx(0.6)
         assert drv == pytest.approx(-0.3)
-        assert brk == pytest.approx(0.5)
 
     def test_empty_yaml_returns_identity(self) -> None:
         """
@@ -197,18 +192,16 @@ class TestActuationCalibrationFromConfig:
             p = Path(d) / "empty.yaml"
             p.write_text("")
             cal = ActuationCalibration.from_config(str(p))
-            s, drv, brk = cal.apply(0.4, 0.9, 0.0)
+            s, drv = cal.apply(0.4, 0.9)
             assert s == pytest.approx(0.4)
             assert drv == pytest.approx(0.9)
-            assert brk == pytest.approx(0.0)
 
-    def test_apply_returns_tuple_of_three_floats(self) -> None:
+    def test_apply_returns_tuple_of_two_floats(self) -> None:
         """
-        @brief apply() must return a 3-tuple of floats.
+        @brief apply() must return a 2-tuple of floats.
         """
         cal = ActuationCalibration.identity()
-        result = cal.apply(0.1, 0.2, 0.3)
-        assert len(result) == 3
+        result = cal.apply(0.1, 0.2)
+        assert len(result) == 2
         assert isinstance(result[0], float)
         assert isinstance(result[1], float)
-        assert isinstance(result[2], float)
