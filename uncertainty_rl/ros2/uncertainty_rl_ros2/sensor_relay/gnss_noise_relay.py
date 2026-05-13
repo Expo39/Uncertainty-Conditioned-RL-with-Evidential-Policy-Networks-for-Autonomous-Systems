@@ -119,10 +119,6 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("heading_output_topic", "/gnss/heading")
         # Minimum per-step displacement (metres) to accept a COG update.
         self.declare_parameter("cog_min_displacement_m", 0.05)
-        # When true, detect reverse motion by comparing raw COG to the EKF's
-        # current yaw (from /odometry/filtered) and flipping by pi when the
-        # difference exceeds 90 deg.
-        self.declare_parameter("enable_cog_reverse_detection", True)
         self.declare_parameter(
             "noise_profiles_path",
             os.environ.get(
@@ -170,11 +166,6 @@ class GnssNoiseRelayNode(Node):
             self.get_parameter("cog_min_displacement_m")
             .get_parameter_value()
             .double_value
-        )
-        self._enable_cog_reverse_detection: bool = bool(
-            self.get_parameter("enable_cog_reverse_detection")
-            .get_parameter_value()
-            .bool_value
         )
 
         # Precompute flat-earth scale factors for the datum latitude.
@@ -235,9 +226,6 @@ class GnssNoiseRelayNode(Node):
         # True only when the last callback met both COG gates (speed + displacement).
         # Used to suppress tight-variance publish when gates reject a callback.
         self._cog_active: bool = False
-        # Latest EKF yaw (ROS frame, radians) cached from /odometry/filtered.
-        # Used to disambiguate forward vs reverse motion.
-        self._ekf_yaw_rad: Optional[float] = None
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -259,12 +247,6 @@ class GnssNoiseRelayNode(Node):
         self._heading_pub = self.create_publisher(
             PoseWithCovarianceStamped, heading_output_topic, qos_be
         )
-        # Subscribe to EKF output for reverse-motion detection. RELIABLE matches
-        # robot_localization's default publisher QoS on /odometry/filtered.
-        if self._enable_cog_reverse_detection:
-            self._ekf_odom_sub = self.create_subscription(
-                Odometry, "/odometry/filtered", self._ekf_odom_callback, qos
-            )
 
         self.get_logger().info(
             f"GnssNoiseRelay: {input_topic} -> {output_topic} "
@@ -471,23 +453,6 @@ class GnssNoiseRelayNode(Node):
     # COG heading helpers
     # ------------------------------------------------------------------
 
-    def _ekf_odom_callback(self, msg: Odometry) -> None:
-        """
-        @brief Cache latest EKF yaw for COG forward/reverse disambiguation.
-
-        Extracts yaw from the EKF's /odometry/filtered quaternion and stores
-        it for use in _gnss_callback.
-
-        @param msg: EKF state estimate from robot_localization.
-        """
-        qx = msg.pose.pose.orientation.x
-        qy = msg.pose.pose.orientation.y
-        qz = msg.pose.pose.orientation.z
-        qw = msg.pose.pose.orientation.w
-        siny_cosp = 2.0 * (qw * qz + qx * qy)
-        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        self._ekf_yaw_rad = math.atan2(siny_cosp, cosy_cosp)
-
     def _cog_heading_variance(self, displacement_m: float) -> float:
         """
         @brief Compute COG heading variance from GNSS position noise and displacement.
@@ -635,26 +600,10 @@ class GnssNoiseRelayNode(Node):
                     # pi/2=north, anticlockwise positive).
                     raw_heading = math.atan2(-dy, dx)
 
-                    # Forward / reverse disambiguation. COG is the direction of
-                    # the velocity vector, which equals vehicle yaw when going
-                    # forward and yaw + pi when reversing.
-                    ref_yaw: Optional[float] = None
-                    if self._enable_cog_reverse_detection:
-                        if self._ekf_yaw_rad is not None:
-                            ref_yaw = self._ekf_yaw_rad
-                        elif self._cog_initialised:
-                            # spawn_yaw seed loaded by _check_config_file.
-                            ref_yaw = self._last_heading_rad
-                    if ref_yaw is not None:
-                        diff = math.atan2(
-                            math.sin(raw_heading - ref_yaw),
-                            math.cos(raw_heading - ref_yaw),
-                        )
-                        if abs(diff) > math.pi / 2.0:
-                            # raw_heading is in (-pi, pi]; flipping by pi and
-                            # rewrapping reduces to a sign-conditional offset.
-                            raw_heading += -math.pi if raw_heading > 0.0 else math.pi
-
+                    # Forward-only operation: COG is the direction of the
+                    # velocity vector, which equals vehicle yaw when moving
+                    # forward. No reverse manoeuvres are demonstrated, so no
+                    # disambiguation is required.
                     self._last_heading_rad = raw_heading
                     self._last_heading_var = self._cog_heading_variance(displacement_m)
 
