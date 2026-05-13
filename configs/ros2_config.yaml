@@ -86,7 +86,6 @@ gnss_noise_relay:
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.
-  enable_cog_reverse_detection: true  # flips COG by pi when it differs from the EKF's yaw by more than 90 deg.
   noise_profiles_path: "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"  # Path inside ros2-bridge container; transition_matrix loaded from this YAML at startup.
 
 imu_noise_relay:

@@ -4,7 +4,7 @@ ROS 2 ament_python package bridging CARLA sensors to the `robot_localization` EK
 
 ## At a glance
 
-- `GnssNoiseRelayNode` injects per-episode GNSS noise (with optional mid-episode Markov tier transitions loaded from `gnss_noise_profiles.yaml`) and projects lat/lon to metric Odometry via flat-earth (replaces `navsat_transform_node`); also derives a COG heading with forward/reverse disambiguation against the EKF yaw
+- `GnssNoiseRelayNode` injects per-episode GNSS noise (with optional mid-episode Markov tier transitions loaded from `gnss_noise_profiles.yaml`) and projects lat/lon to metric Odometry via flat-earth (replaces `navsat_transform_node`); also derives a forward-only COG heading from successive noisy fixes
 - `ImuNoiseRelayNode` stamps covariance on the CARLA IMU
 - Both sensor relay nodes are co-spun in one process via `MultiThreadedExecutor`
 - `CovarianceExtractorNode` extracts the $3 \times 3$ $[x, y, \psi]$ submatrix from the EKF's $6 \times 6$ covariance and writes `ekf_state.json` for the training container
@@ -80,7 +80,7 @@ flowchart TB
 | `/gnss/heading` | `PoseWithCovarianceStamped` | out | `GnssNoiseRelayNode` -> EKF |
 | `/carla/ego_vehicle/imu` | `Imu` | in | `ImuNoiseRelayNode` |
 | `/carla/ego_vehicle/imu/stamped` | `Imu` | out | `ImuNoiseRelayNode` -> EKF |
-| `/odometry/filtered` | `Odometry` | in | `CovarianceExtractorNode`, `GnssNoiseRelayNode` (for COG forward/reverse detection) |
+| `/odometry/filtered` | `Odometry` | in | `CovarianceExtractorNode` |
 | `/ekf_uncertainty/covariance` | `CovarianceEstimate` | out | `CovarianceExtractorNode` |
 
 ## `CovarianceEstimate.msg`
@@ -148,7 +148,7 @@ All ROS 2 parameters are loaded from `configs/ros2_config.yaml`:
 | Key prefix | Controls |
 |------------|---------|
 | `ekf.*` | EKF frequency, `two_d_mode`, fusion matrix configs (`odom0_config`, `imu0_config`, `pose0_config`) |
-| `gnss_noise_relay.*` | Input/output topics, `enable_gnss_noise`, `enable_markov_transitions`, `base_metric_stddev_m`, `cog_min_displacement_m`, `enable_cog_reverse_detection`, `noise_profiles_path` (path to the YAML providing the per-step transition matrix), flat-earth datum |
+| `gnss_noise_relay.*` | Input/output topics, `enable_gnss_noise`, `enable_markov_transitions`, `base_metric_stddev_m`, `cog_min_displacement_m`, `noise_profiles_path` (path to the YAML providing the per-step transition matrix), flat-earth datum |
 | `imu_noise_relay.*` | IMU topic, `enable_imu_noise` (single master flag for covariance stamping, value noise, and per-episode bias), noise variances, ZUPT thresholds |
 | `odom_topic` | Input odometry topic for `CovarianceExtractorNode` (default: `/odometry/filtered`) |
 | `covariance_topic` | Output covariance topic (default: `/ekf_uncertainty/covariance`) |
