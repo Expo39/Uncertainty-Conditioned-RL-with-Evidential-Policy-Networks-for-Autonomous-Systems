@@ -172,9 +172,6 @@ def generate_launch_description() -> LaunchDescription:
                 "cog_min_displacement_m": gnss_relay_cfg.get(
                     "cog_min_displacement_m", 0.05
                 ),
-                "enable_cog_reverse_detection": gnss_relay_cfg.get(
-                    "enable_cog_reverse_detection", True
-                ),
                 "noise_profiles_path": gnss_relay_cfg.get(
                     "noise_profiles_path",
                     "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml",
