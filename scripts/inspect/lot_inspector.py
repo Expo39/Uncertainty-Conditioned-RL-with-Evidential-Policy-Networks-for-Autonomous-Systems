@@ -191,9 +191,7 @@ def main() -> None:
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
     if args.mode == "dryrun":
-        print(
-            f"Mode: {args.mode}  |  Layout: sampled per episode (training distribution)"
-        )
+        print(f"Mode: {args.mode}  |  Layout: {args.layout} (pinned)")
     else:
         print(f"Mode: {args.mode}  |  Layout: {args.layout}", end="")
         if args.mode == "sensors":
@@ -264,6 +262,17 @@ def main() -> None:
 
         dryrun_cfg = dict(train_cfg)
         dryrun_cfg["no_rendering_mode"] = False
+
+        # Pin to the requested layout so the user always sees the intended floor plan.
+        scenarios = dict(dryrun_cfg.get("parking_scenarios", {}))
+        scenarios["floor_plans"] = {
+            args.layout: {
+                "weight": 1.0,
+                "always_empty": [],
+                "layout_file": f"configs/layouts/{args.layout}.yaml",
+            }
+        }
+        dryrun_cfg["parking_scenarios"] = scenarios
 
         env = make_env(
             dryrun_cfg,
