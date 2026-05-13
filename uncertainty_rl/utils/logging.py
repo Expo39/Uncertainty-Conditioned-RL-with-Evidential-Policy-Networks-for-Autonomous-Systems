@@ -61,7 +61,8 @@ class DebugLogger:
         @param pos_error: Distance from ego to target bay centre (metres).
         @param yaw_error: Heading error to target (radians).
         @param speed: Ego speed (m/s).
-        @param action: 3-element action array [steer, throttle, brake].
+        @param action: 2-element action array [steer, drive]. drive is bipolar:
+                       positive = throttle, negative = brake.
         @param uncertainty: 9-element EKF covariance feature vector (log1p-
                             transformed), or None when covariance is disabled.
         @param obstacle_dist: Distance to nearest obstacle from LiDAR (metres).
@@ -81,8 +82,7 @@ class DebugLogger:
             cov_mag = float(np.sqrt(np.mean(uncertainty[:3] ** 2)))
 
         steer = float(action[0]) if len(action) > 0 else 0.0
-        throttle = float(action[1]) if len(action) > 1 else 0.0
-        brake = float(action[2]) if len(action) > 2 else 0.0
+        drive = float(action[1]) if len(action) > 1 else 0.0
 
         yaw_deg = math.degrees(yaw_error)
         self._last_dict = {
@@ -95,8 +95,7 @@ class DebugLogger:
             "ekf_drift": round(ekf_drift, 3),
             "lidar_pts": lidar_points,
             "steer": round(steer, 3),
-            "throttle": round(throttle, 3),
-            "brake": round(brake, 3),
+            "drive": round(drive, 3),
         }
 
         self._logger.debug(
@@ -104,7 +103,7 @@ class DebugLogger:
             "pos_err=%.2fm  yaw=%.1fdeg  spd=%.2fm/s  "
             "rwd=%.4f  cov_rms=%.4f  "
             "obs=%.2fm  ekf_drift=%.3fm  lidar=%dpts  "
-            "act=[%.2f %.2f %.2f]",
+            "act=[%.2f %.2f]",
             step,
             pos_error,
             yaw_deg,
@@ -115,8 +114,7 @@ class DebugLogger:
             ekf_drift,
             lidar_points,
             steer,
-            throttle,
-            brake,
+            drive,
         )
 
     def step_debug_dict(self) -> Dict[str, Any]:
@@ -127,7 +125,7 @@ class DebugLogger:
         consumers can safely do ``frame.get('debug', {})``.
 
         @return Dict with keys: pos_err, yaw_err_deg, speed, reward, cov_rms,
-                obs_dist, ekf_drift, lidar_pts, steer, throttle, brake.
+                obs_dist, ekf_drift, lidar_pts, steer, drive.
         """
         if not self._debug:
             return {}

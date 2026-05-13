@@ -5,7 +5,7 @@
 debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
 inspect:
-  dryrun_action: [0.0, 0.5]  # [steer, longitudinal] applied each step in dryrun mode.
+  dryrun_action: [0.0, 0.5]  # [steer, drive] applied each step in dryrun mode. drive bipolar: +ve = throttle, -ve = brake.
 
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000

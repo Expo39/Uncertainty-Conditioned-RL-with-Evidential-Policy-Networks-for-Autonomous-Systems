@@ -5,7 +5,7 @@ Main Python package. Trains, evaluates, and deploys an uncertainty-conditioned R
 ## At a glance
 
 - 12-dimensional observation: vyaw + 3 EKF covariance features + 3 relative target-pose features + 5 LiDAR obstacle features
-- 3-dimensional action space: [steering, drive, brake]
+- 2-dimensional action space: [steering, drive] (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
 - PPO with a Normal-Inverse-Gamma evidential actor head; standard MLP critic
 - Dual-encoder path processes state and covariance features separately before fusion
 - Evaluates across 9 GNSS degradation conditions (nominal RTK-fixed to worst-case RTK loss)
@@ -64,7 +64,7 @@ from uncertainty_rl.evaluation import evaluate_across_conditions
 # Constants and utilities
 from uncertainty_rl.utils import (
     TOTAL_OBS_DIM,             # 12
-    ACTION_DIM,                # 3
+    ACTION_DIM,                # 2
     VEHICLE_STATE_DIM,         # 1
     COVARIANCE_FEATURES_DIM,   # 3
     extract_2d_covariance_features,
