@@ -199,6 +199,7 @@ def plot_layout(
     shape: str,
     world_layout: Dict[str, Any],
     plot_path: Path,
+    legend_loc: str = "upper right",
 ) -> None:
     """
     @brief Render a bird's-eye PNG of the lot layout.
@@ -209,6 +210,7 @@ def plot_layout(
     @param shape: Floor plan shape name for title.
     @param world_layout: World-frame layout dict.
     @param plot_path: Path to save the PNG.
+    @param legend_loc: Legend location (default: 'upper right').
     """
     try:
         import matplotlib.patches as mpatches
@@ -367,7 +369,7 @@ def plot_layout(
     handles = [
         mpatches.Patch(color=BAY_HEX["perpendicular"], label="Perpendicular bays"),
         mpatches.Patch(color=BAY_HEX["angled"], label="Angled (45 deg) bays"),
-        mpatches.Patch(color=BAY_HEX["parallel"], label="Parallel bays"),
+        mpatches.Patch(color=BAY_HEX["motorcycle"], label="Motorcycle bays"),
         mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
         Line2D(
             [0],
@@ -389,7 +391,7 @@ def plot_layout(
             label="Pedestrian zones",
         ),
     ]
-    ax.legend(handles=handles, loc="upper right", fontsize=9)
+    ax.legend(handles=handles, loc=legend_loc, fontsize=9)
     ax.grid(True, alpha=0.3)
 
     plot_path.parent.mkdir(parents=True, exist_ok=True)
