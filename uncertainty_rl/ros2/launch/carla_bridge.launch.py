@@ -172,6 +172,9 @@ def generate_launch_description() -> LaunchDescription:
                 "cog_min_displacement_m": gnss_relay_cfg.get(
                     "cog_min_displacement_m", 0.05
                 ),
+                "imu_topic": imu_relay_cfg.get(
+                    "imu_output_topic", "/carla/ego_vehicle/imu/stamped"
+                ),
                 "noise_profiles_path": gnss_relay_cfg.get(
                     "noise_profiles_path",
                     "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml",

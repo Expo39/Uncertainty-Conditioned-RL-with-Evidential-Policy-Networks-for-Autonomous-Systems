@@ -23,7 +23,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import NavSatFix
+from sensor_msgs.msg import Imu, NavSatFix
 
 # Ordered tier names - index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
@@ -119,6 +119,10 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("heading_output_topic", "/gnss/heading")
         # Minimum per-step displacement (metres) to accept a COG update.
         self.declare_parameter("cog_min_displacement_m", 0.05)
+        # IMU topic used to detect standstill (ZUPT state). When ZUPT is active,
+        # COG publication is suppressed so noise-induced GNSS displacement
+        # cannot inject a random yaw correction into the EKF.
+        self.declare_parameter("imu_topic", "/carla/ego_vehicle/imu/stamped")
         self.declare_parameter(
             "noise_profiles_path",
             os.environ.get(
@@ -166,6 +170,9 @@ class GnssNoiseRelayNode(Node):
             self.get_parameter("cog_min_displacement_m")
             .get_parameter_value()
             .double_value
+        )
+        imu_topic = str(
+            self.get_parameter("imu_topic").get_parameter_value().string_value
         )
 
         # Precompute flat-earth scale factors for the datum latitude.
@@ -227,6 +234,12 @@ class GnssNoiseRelayNode(Node):
         # Used to suppress tight-variance publish when gates reject a callback.
         self._cog_active: bool = False
 
+        # ZUPT state observed on the stamped IMU stream. When ImuNoiseRelayNode
+        # clamps gyro and accel to exactly zero, the vehicle is stationary and
+        # GNSS-derived COG is pure noise; suppress publication.
+        # Default True so COG is gated off until the first IMU sample arrives.
+        self._imu_stationary: bool = True
+
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
@@ -242,6 +255,10 @@ class GnssNoiseRelayNode(Node):
         self._sub = self.create_subscription(
             NavSatFix, input_topic, self._gnss_callback, qos
         )
+        # ImuNoiseRelayNode publishes the stamped IMU with BEST_EFFORT QoS.
+        self._imu_sub = self.create_subscription(
+            Imu, imu_topic, self._imu_callback, qos_be
+        )
         self._pub = self.create_publisher(NavSatFix, output_topic, qos)
         self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos_be)
         self._heading_pub = self.create_publisher(
@@ -253,6 +270,7 @@ class GnssNoiseRelayNode(Node):
             f"-> {odom_output_topic} (flat-earth, "
             f"COG heading -> {heading_output_topic}, "
             f"cog_min_disp={self._cog_min_displacement_m:.3f} m, "
+            f"imu_gate={imu_topic}, "
             f"markov_transitions={self._markov_enabled})"
         )
 
@@ -474,6 +492,27 @@ class GnssNoiseRelayNode(Node):
         return max(raw_var, min_var)
 
     # ------------------------------------------------------------------
+    # IMU callback (ZUPT detection)
+    # ------------------------------------------------------------------
+
+    def _imu_callback(self, msg: Imu) -> None:
+        """
+        @brief Track ZUPT state from the stamped IMU stream.
+
+        ImuNoiseRelayNode writes angular_velocity.z and linear_acceleration.x/y
+        as exactly 0.0 when ZUPT is active. When all three channels are exactly
+        zero, the vehicle is stationary and any GNSS-derived COG heading would
+        be pure noise; the flag set here gates COG publication in _gnss_callback.
+
+        @param msg: sensor_msgs/Imu with ZUPT-clamped fields.
+        """
+        self._imu_stationary = (
+            msg.angular_velocity.z == 0.0
+            and msg.linear_acceleration.x == 0.0
+            and msg.linear_acceleration.y == 0.0
+        )
+
+    # ------------------------------------------------------------------
     # Main callback
     # ------------------------------------------------------------------
 
@@ -586,13 +625,18 @@ class GnssNoiseRelayNode(Node):
                 self._last_speed_ms = displacement_m / dt
                 speed_ms = self._last_speed_ms
 
-                # Gate on displacement
+                # Gate on displacement and on IMU ZUPT state. The displacement
+                # gate alone is insufficient at low GNSS noise tiers: at
+                # rtk_fixed the noise floor (3*sqrt(2)*sigma ~ 0.085 m) is
+                # exceeded by pure noise ~1% of the time, which would inject a
+                # random heading with a falsely-tight variance into the EKF.
+                # Requiring ZUPT to be inactive ensures real motion is present.
                 sigma_now = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
                 gate = max(
                     self._cog_min_displacement_m,
                     self._NOISE_FLOOR_K * sigma_now,
                 )
-                if displacement_m >= gate:
+                if displacement_m >= gate and not self._imu_stationary:
                     self._cog_active = True
                     # CARLA GnssSensor reports latitude increasing with CARLA +Y
                     # (which is south), so local_y increases southward. Negate dy
