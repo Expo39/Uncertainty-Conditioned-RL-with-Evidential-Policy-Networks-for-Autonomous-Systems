@@ -8,7 +8,7 @@ regenerate from source after any change to a floor plan module.
 
 | File | Purpose |
 |------|---------|
-| `rectangle.yaml` | Standard 53-bay rectangle lot (training) |
+| `rectangle.yaml` | Rectangular lot with 7 left-wall perpendicular bays, centred cluster (12 perp + 8 angled), 12 bottom perpendicular, 7 bottom angled, 6 right-wall angled, 2 motorcycle bays. Total 54 bays (training) |
 | `trapezoid.yaml` | 39-bay trapezoid lot (training) |
 | `irregular_a.yaml` | 58-bay irregular polygon lot (OOD evaluation only) |
 | `flat_plane.xodr` | OpenDRIVE world definition for the FlatPlane CARLA map |
@@ -48,11 +48,11 @@ Each bay dict:
 
 ## Layout summary
 
-| Layout | Bays | Training | World origin (CARLA) |
-|--------|------|----------|----------------------|
-| `rectangle` | 53 | Yes | x=2.0, y=22.5, z=0.3 |
-| `trapezoid` | 39 | Yes | x=2.0, y=30.0, z=0.3 |
-| `irregular_a` | 58 | No (OOD) | x=-3.0, y=25.0, z=0.3 |
+| Layout | Bays | Training | World origin (CARLA) | Notes |
+|--------|------|----------|----------------------|-------|
+| `rectangle` | 54 | Yes | x=2.0, y=17.5, z=0.3 | 3 spawns: left (y=17.5), bottom-centre (y=3.0), top-right (y=-23.0) |
+| `trapezoid` | 39 | Yes | x=2.0, y=30.0, z=0.3 | Legacy layout |
+| `irregular_a` | 58 | No (OOD) | x=-3.0, y=25.0, z=0.3 | Held-out OOD evaluation |
 
 ## See also
 
