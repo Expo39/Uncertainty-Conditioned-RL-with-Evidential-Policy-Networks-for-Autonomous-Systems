@@ -92,7 +92,7 @@ GNSS noise escalation (base stddev = 0.02 m at 1x):
 
 ### OOD calibration (epistemic uncertainty check)
 
-Tests whether epistemic uncertainty rises on the `irregular_a` floor plan (58 bays, nine-sided irregular polygon), which is never seen during training.
+Tests whether epistemic uncertainty rises on the `irregular_a` floor plan (56 bays, nine-sided irregular polygon), which is never seen during training.
 
 | Condition | Floor plan | GNSS mult | IMU mult | Patrol | Ped. prob | Bay occ. |
 |-----------|-----------|-----------|----------|--------|-----------|----------|

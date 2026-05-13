@@ -18,7 +18,7 @@ make docker-inspect INSPECT_LAYOUT=rectangle  # Verify geometry in CARLA
 |--------|------|--------------------|------|-----|----------------------|
 | `rectangle` | `floor_plans/rectangle.py` | ~60x42.5 m | 54 | No | x=2.0, y=17.5, z=0.3 |
 | `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=50 m | 49 | No | x=0.0, y=30.0, z=0.3 |
-| `irregular_a` | `floor_plans/irregular_a.py` | ~80x50 m | 58 | Yes | x=-3.0, y=25.0, z=0.3 |
+| `irregular_a` | `floor_plans/irregular_a.py` | ~85x50 m | 56 | Yes | x=-3.0, y=25.0, z=0.3 |
 
 ---
 
@@ -91,7 +91,7 @@ Wider at the entrance end (front width=60 m) and narrower at the rear (rear widt
 
 ## `floor_plans/irregular_a.py` - Nine-sided Irregular Polygon (~80x50 m, OOD)
 
-Inspired by a shed-style building footprint. Never sampled during training - held out for out-of-distribution evaluation only. Combines three OOD features the agent has not seen: a diagonal top wall, a non-convex bottom notch, and bay groups on all four faces of an interior obstacle rectangle.
+Inspired by a shed-style building footprint. Never sampled during training - held out for out-of-distribution evaluation only. Combines three OOD features the agent has not seen: a diagonal top wall, a non-convex bottom notch, and bay groups on three faces of an interior obstacle rectangle.
 
 **Perimeter vertices (local frame, CCW):**
 
@@ -99,15 +99,15 @@ Inspired by a shed-style building footprint. Never sampled during training - hel
 |--------|---|---|-------------|
 | P0 | 0.0 | 0.0 | Bottom-left |
 | P1 | 53.0 | 0.0 | Notch bottom-left |
-| P2 | 53.0 | 8.0 | Notch top-left |
-| P3 | 65.0 | 8.0 | Notch top-right |
+| P2 | 53.0 | 16.0 | Notch top-left |
+| P3 | 65.0 | 16.0 | Notch top-right |
 | P4 | 65.0 | 0.0 | Notch bottom-right |
-| P5 | 80.0 | 0.0 | Bottom-right |
-| P6 | 80.0 | 37.0 | Diagonal wall start (top-right) |
+| P5 | 85.0 | 0.0 | Bottom-right |
+| P6 | 85.0 | 37.0 | Diagonal wall start (top-right) |
 | P7 | 20.0 | 50.0 | Diagonal/flat wall junction |
 | P8 | 0.0 | 50.0 | Top-left |
 
-**Central obstacle (CARLA cone wall):** x_min=23.25, x_max=39.25, y_min=17.0, y_max=21.0
+**Central obstacle (CARLA cone wall):** x_min=27.25, x_max=43.25, y_min=17.0, y_max=21.0
 
 **Bay groups:**
 
@@ -115,22 +115,20 @@ Inspired by a shed-style building footprint. Never sampled during training - hel
 |-------|------|-------|-------|
 | Obstacle south face | Perpendicular | 6 | Backs against south face (y_min=17) |
 | Obstacle north face | Perpendicular | 6 | Backs against north face (y_max=21) |
-| Obstacle west face | Perpendicular | 2 | Backs against west face (x_min=23.25) |
-| Obstacle east face | Perpendicular | 2 | Backs against east face (x_max=39.25) |
+| Obstacle west face | Perpendicular | 6 | Backs against west face (x_min=27.25) |
 | Left wall (P8->P0) | Angled 45 deg | 4 | Packing from bottom upward |
 | Diagonal top wall (P6->P7) | Angled 45 deg | 11 | Hugging P7 end |
-| Top-flat wall (P7->P8), back row | Perpendicular | 7 | Centred along wall |
-| Top-flat wall, facing row | Perpendicular | 7 | Back-to-back across 6 m aisle |
+| Top-flat wall (P7->P8), back row | Perpendicular | 7 | Packed from left wall |
+| Top-flat wall, facing row | Perpendicular | 4 | Right-aligned, back-to-back across 6 m aisle |
 | Notch top wall (P2->P3) | Perpendicular | 4 | Centred, nose facing +Y into notch |
-| Bottom-left wall (P0->P1) | Parallel | 5 | Centred |
-| Right wall (P5->P6) | Parallel | 4 | Centred |
+| Right wall (P5->P6) | Angled 45 deg | 8 | Centred, start_along=8.0 |
 
-**Total: 58 bays.**
+**Total: 56 bays.**
 
 **Spawns:**
 - S1 (primary): left wall mid-height, local (x=3.0, y=25.0), facing +X
 - S2: diagonal top wall at x~70, facing inward perpendicular to wall slope
-- S3: bottom wall right section, local (x=70.0, y=3.0), facing +Y
+- S3: bottom wall right section, local (x=71.0, y=3.0), facing +Y
 
 **Patrol:** 5-waypoint CCW orbit around the central obstacle.
 

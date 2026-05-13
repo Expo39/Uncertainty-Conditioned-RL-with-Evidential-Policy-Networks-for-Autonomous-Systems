@@ -270,7 +270,7 @@ Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
 |--------|------|-----|-------------|-------------|
 | `rectangle` | 54 | No | Training + evaluation | Rectangular lot with 7 left-wall perp bays, centred heterogeneous cluster, 12 bottom perp, 7 bottom angled, 6 right-wall angled, 2 motorcycle bays. 3 spawns: left, bottom-centre, top-right. |
 | `trapezoid` | 49 | No | Training + evaluation | Trapezoid lot (front=60 m, rear=40 m, depth=50 m). Two central perp clusters, angled perimeter bays, left-wall angled and perp groups. |
-| `irregular_a` | 58 | Yes | OOD evaluation only | Irregular polygon lot (held out from training). |
+| `irregular_a` | 56 | Yes | OOD evaluation only | Irregular polygon lot (held out from training). |
 
 ### Verify Layout in CARLA
 
