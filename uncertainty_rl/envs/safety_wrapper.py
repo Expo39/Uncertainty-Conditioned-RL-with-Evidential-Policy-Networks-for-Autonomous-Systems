@@ -96,7 +96,7 @@ class SafetyWrapper(gym.Wrapper):
         Static method so it can be called by both SafetyWrapper.step() (sim eval)
         and RealWorldInferenceLoop (real deployment) without duplicating logic.
 
-        @param action: Raw policy action [steering, drive, brake].
+        @param action: Raw policy action [steering, drive].
         @param epistemic: Epistemic uncertainty from evidential actor.
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @param aleatoric_scaling: Scaling factor for drive cap.

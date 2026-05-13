@@ -191,7 +191,7 @@ All four baselines share identical PPO hyperparameters from `train_config.yaml`.
 | `configs/train_config.yaml` | All PPO hyperparameters, `net_arch`, `activation`, `evidential.*`, `policy_type`, `total_timesteps`, `seed`, `checkpoint_freq` |
 | `configs/deployment/sim/env_config.yaml` | `carla_host`, `carla_port`, `max_steps`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
 | `configs/training/tuning_config.yaml` | `study_name`, `n_trials`, `timesteps_per_trial`, `seed`, search space bounds |
-| `uncertainty_rl/utils/constants.py` | `TOTAL_OBS_DIM` (12), `ACTION_DIM` (3), `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3) |
+| `uncertainty_rl/utils/constants.py` | `TOTAL_OBS_DIM` (12), `ACTION_DIM` (2), `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3) |
 
 <!-- gif:placeholder name="training_curves" caption="PPO reward and evidential uncertainty metrics over 1 M steps" -->
 ![Training curves placeholder](docs/media/training_curves.gif)

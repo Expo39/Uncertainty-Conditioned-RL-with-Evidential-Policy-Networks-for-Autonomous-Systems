@@ -5,7 +5,7 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 ## At a glance
 
 - `constants.py` is the single source of truth for all architectural dimensions and success thresholds - never hardcode these elsewhere
-- `ACTION_DIM = 3`: steering $\in [-1, 1]$, drive $\in [-1, 1]$, brake $\in [0, 1]$
+- `ACTION_DIM = 2`: steering $\in [-1, 1]$, drive $\in [-1, 1]$ (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
 - `TOTAL_OBS_DIM = 12` (default, both ablation flags true); use `compute_obs_dim()` in `_parking_core.py` at runtime
 - `VisStateWriter` streams environment state for the detachable 2D bird's-eye visualiser via atomic JSON writes
 - No tuneable hyperparameters here - those live in `configs/*.yaml`
@@ -32,7 +32,7 @@ Structural constants fixed by system architecture. Changing any of these require
 | `TARGET_POSE_DIM` | $3$ | Relative target bay pose: $[dx, dy, d\psi]$ in ego body frame. |
 | `OBSTACLE_FEATURES_DIM` | $5$ | Hemispheric clearance: $[d_\text{left}, \theta_\text{left}, d_\text{right}, \theta_\text{right}, d_\text{fwd}]$. |
 | `TOTAL_OBS_DIM` | $12$ | Full observation: $1 + 3 + 3 + 5$ (both ablation flags true). |
-| `ACTION_DIM` | $3$ | Steering $\in [-1, 1]$, drive $\in [-1, 1]$, brake $\in [0, 1]$. |
+| `ACTION_DIM` | $2$ | Steering $\in [-1, 1]$, drive $\in [-1, 1]$. drive is bipolar: positive = throttle, negative = brake. No reverse gear. |
 | `SUCCESS_THRESHOLD_POSITION` | $0.5$ m | Parking success position threshold. |
 | `SUCCESS_THRESHOLD_ORIENTATION` | $\approx 0.175$ rad | Parking success orientation threshold ($10$ deg). |
 | `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. |

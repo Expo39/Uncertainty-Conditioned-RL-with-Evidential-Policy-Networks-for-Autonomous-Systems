@@ -336,8 +336,9 @@ class CARLAParkingEnv(gym.Env):
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied (3-dim: [steer, drive, brake])
-        self._last_action: np.ndarray = np.zeros(3, dtype=np.float32)
+        # Last action applied (2-dim: [steer, drive]). drive is bipolar:
+        # positive = throttle, negative = brake. No reverse gear.
+        self._last_action: np.ndarray = np.zeros(2, dtype=np.float32)
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -385,13 +386,13 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action space: [steer, drive, brake]
+        # Action space: [steer, drive]
         # steer : [-1, 1]  left to right
-        # drive : [-1, 1]  negative = reverse throttle, positive = forward throttle
-        # brake : [ 0, 1]  friction brake (independent of drive direction)
+        # drive : [-1, 1]  positive = forward throttle, negative = brake.
+        #                  No reverse gear: forward perpendicular parking only.
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0, 0.0]),
-            high=np.array([1.0, 1.0, 1.0]),
+            low=np.array([-1.0, -1.0]),
+            high=np.array([1.0, 1.0]),
             dtype=np.float32,
         )
 
@@ -991,7 +992,6 @@ class CARLAParkingEnv(gym.Env):
             "action": {
                 "steer": float(self._last_action[0]),
                 "drive": float(self._last_action[1]),
-                "brake": float(self._last_action[2]),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -1382,9 +1382,7 @@ class CARLAParkingEnv(gym.Env):
                 datum_lat = float(geo.latitude)
                 datum_lon = float(geo.longitude)
             except Exception as exc:
-                logger.warning(
-                    f"Failed to get spawn geolocation for GNSS datum: {exc}"
-                )
+                logger.warning(f"Failed to get spawn geolocation for GNSS datum: {exc}")
             tier = self._get_current_gnss_tier()
             if tier is not None:
                 self._cov_subscriber.publish_episode_config(
@@ -1491,10 +1489,10 @@ class CARLAParkingEnv(gym.Env):
         Observations are only constructed on the final step of the repeat sequence,
         reducing EKF covariance reads and state construction by action_repeat factor.
 
-        @param action: 3-dim action vector [steering, drive, brake].
+        @param action: 2-dim action vector [steering, drive].
                 steering in [-1, 1]: left to right.
-                drive    in [-1, 1]: negative = reverse throttle, positive = forward throttle.
-                brake    in [ 0, 1]: friction brake (applied regardless of drive direction).
+                drive    in [-1, 1]: positive = forward throttle, negative = brake.
+                                     No reverse gear engaged.
                 Mapped to CARLA throttle/brake internally.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
@@ -1514,19 +1512,22 @@ class CARLAParkingEnv(gym.Env):
         if self.vehicle is not None:
             steer = float(np.clip(action[0], -1.0, 1.0))
             drive = float(np.clip(action[1], -1.0, 1.0))
-            brake = float(np.clip(action[2], 0.0, 1.0))
 
             vel = self.vehicle.get_velocity()
             current_speed = math.hypot(vel.x, vel.y)
 
             control = carla.VehicleControl()
             control.steer = steer
-            control.brake = brake
-            control.reverse = drive < 0.0
-            # Cut throttle when speed limit is exceeded.
-            control.throttle = (
-                0.0 if current_speed >= self._max_ego_speed_ms else abs(drive)
-            )
+            control.reverse = False
+            if drive >= 0.0:
+                # Cut throttle when speed limit is exceeded.
+                control.throttle = (
+                    0.0 if current_speed >= self._max_ego_speed_ms else drive
+                )
+                control.brake = 0.0
+            else:
+                control.throttle = 0.0
+                control.brake = -drive
 
             self.vehicle.apply_control(control)
 

@@ -60,7 +60,7 @@ class TestDebugLoggerDisabled:
             pos_error=1.0,
             yaw_error=0.1,
             speed=0.2,
-            action=np.array([0.0, 0.5, 0.0]),
+            action=np.array([0.0, 0.5]),
             uncertainty=np.array([0.1, 0.1, 0.05]),
             obstacle_dist=3.0,
         )
@@ -106,7 +106,7 @@ class TestDebugLoggerEnabled:
         obstacle_dist: float = 4.0,
     ) -> Dict[str, Any]:
         if action is None:
-            action = np.array([0.1, 0.6, 0.0])
+            action = np.array([0.1, 0.6])
         logger.log_step(
             step=step,
             reward=reward,
@@ -142,8 +142,7 @@ class TestDebugLoggerEnabled:
             "ekf_drift",
             "lidar_pts",
             "steer",
-            "throttle",
-            "brake",
+            "drive",
         }
         assert expected_keys.issubset(d.keys())
 
@@ -183,14 +182,13 @@ class TestDebugLoggerEnabled:
 
     def test_action_components_recorded(self) -> None:
         """
-        @brief steer, throttle, brake must match the first three action elements.
+        @brief steer and drive must match the action elements.
         """
         logger = DebugLogger(debug=True)
-        action = np.array([0.25, 0.75, 0.0])
+        action = np.array([0.25, 0.75])
         d = self._call_log_step(logger, action=action)
         assert d["steer"] == pytest.approx(0.25, abs=1e-3)
-        assert d["throttle"] == pytest.approx(0.75, abs=1e-3)
-        assert d["brake"] == pytest.approx(0.0, abs=1e-3)
+        assert d["drive"] == pytest.approx(0.75, abs=1e-3)
 
     def test_step_dict_returns_copy(self) -> None:
         """

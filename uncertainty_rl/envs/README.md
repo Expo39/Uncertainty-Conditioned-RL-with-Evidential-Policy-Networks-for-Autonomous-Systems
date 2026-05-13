@@ -5,7 +5,7 @@ Gymnasium-compatible CARLA parking environment with real EKF covariance from `ro
 ## At a glance
 
 - 12-dimensional observation (default): vyaw + EKF std devs + relative target pose + hemispheric LiDAR clearance
-- 3-dimensional action space: steering $\in [-1,1]$, drive $\in [-1,1]$, brake $\in [0,1]$
+- 2-dimensional action space: steering $\in [-1,1]$, drive $\in [-1,1]$ (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
 - Reward shaped by localisation quality: progress attenuated when $\max(\sigma_x, \sigma_y)$ is large
 - Three pre-computed floor plans: `rectangle` (53 bays), `trapezoid` (39 bays), `irregular_a` (58 bays, OOD only)
 - Sim-to-real capable: all observation features come from EKF and LiDAR, never CARLA ground truth
@@ -80,15 +80,16 @@ no consistent signal. Navigation intent is encoded by $dx, dy, d\psi$ (indices 4
 
 Use `compute_obs_dim()` from `_parking_core.py` rather than hardcoding.
 
-## Action space (3-dimensional)
+## Action space (2-dimensional)
 
 ```math
-a = [\text{steering},\ \text{drive},\ \text{brake}]
+a = [\text{steering},\ \text{drive}]
 \qquad
-\text{steering} \in [-1,1],\quad \text{drive} \in [-1,1],\quad \text{brake} \in [0,1]
+\text{steering} \in [-1,1],\quad \text{drive} \in [-1,1]
 ```
 
-Negative drive engages reverse throttle. Brake is applied independently of drive direction.
+drive is bipolar: positive engages forward throttle, negative engages the friction brake.
+No reverse gear: forward perpendicular bay parking only.
 
 ## Target pose computation
 
@@ -185,7 +186,7 @@ obs, reward, terminated, truncated, info = env.step(action)
 | `configs/deployment/sim/env_config.yaml` | `carla_host`, `carla_port`, `max_steps`, `success_dwell_steps`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
 | `configs/gnss_noise_profiles.yaml` | RTK fix-state tiers and per-episode sampling weights |
 | `configs/layouts/*.yaml` | Floor plan geometry (corners, bays, spawn, patrol, zones) |
-| `uncertainty_rl/utils/constants.py` | `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3), `TARGET_POSE_DIM` (3), `OBSTACLE_FEATURES_DIM` (5), `TOTAL_OBS_DIM` (12), `ACTION_DIM` (3) |
+| `uncertainty_rl/utils/constants.py` | `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3), `TARGET_POSE_DIM` (3), `OBSTACLE_FEATURES_DIM` (5), `TOTAL_OBS_DIM` (12), `ACTION_DIM` (2) |
 
 <!-- gif:placeholder name="parking_episode" caption="Bird's-eye view of a parking episode under RTK float conditions" -->
 ![Parking episode placeholder](docs/media/parking_episode.gif)

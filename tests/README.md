@@ -76,7 +76,7 @@ make docker-test               # Full suite (unit + integration)
 | Constant | Value | Description |
 |----------|-------|-------------|
 | `TOTAL_OBS_DIM` | 12 | vyaw + std_x/y/yaw + dx/dy/dyaw + 5 LiDAR obstacle features |
-| `ACTION_DIM` | 3 | Steering, drive, brake |
+| `ACTION_DIM` | 2 | Steering, drive (drive is bipolar: positive = throttle, negative = brake) |
 | `BATCH_SIZE` | 8 | Default batch size for tensor fixtures |
 | `HIDDEN_DIMS` | [64, 64] | Default network architecture for test policies |
 
