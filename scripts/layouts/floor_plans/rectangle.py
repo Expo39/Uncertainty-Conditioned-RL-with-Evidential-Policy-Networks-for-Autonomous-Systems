@@ -68,7 +68,7 @@ def generate() -> Dict[str, Any]:
     # ---------- Spawns -------------------------------------------------
     lot.spawn(x=-2.0, y=WIDTH / 2.0 - 5.0, yaw_deg=0.0, primary=True)
     lot.spawn(x=DEPTH / 2.0, y=3.0, yaw_deg=90.0)
-    lot.spawn(x=52.0, y=40.5, yaw_deg=270.0)
+    lot.spawn(x=52.0, y=38.5, yaw_deg=270.0)
 
     # ---------- Patrol path (4-waypoint CCW loop) ----------------------
     # Loop the open aisles: lower aisle -> right aisle (in front of
