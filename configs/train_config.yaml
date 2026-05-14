@@ -12,7 +12,7 @@ gamma: 0.99  # High gamma needed: success bonus at ~step 300 must propagate back
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.02  # Higher entropy bonus to break the cold-start (gamma bias = 0)
+ent_coef: 0.0005  # Small entropy bonus. Larger values (e.g. 0.02) dwarf the per-step progress reward (~0.0025) and cause the policy to maximise randomness instead of progress.
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
@@ -39,13 +39,13 @@ uncertainty_std_max: 2.0  # EKF std (metres) at which progress reward reaches ze
 
 # Logging and checkpointing
 checkpoint_freq: 50000  # Save checkpoint every N steps.
-log_interval: 10  # Log every N episodes.
+log_interval: 1  # Log every PPO update for fine-grained reward diagnostics.
 verbose: 1  # SB3 verbosity: 0=silent, 1=info, 2=debug.
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 1000000
+total_timesteps: 300000  # Diagnostic: confirm driving + pos_error reduction. Restore to 1000000 once learning is confirmed.
 seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).

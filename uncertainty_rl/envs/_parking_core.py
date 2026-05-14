@@ -222,6 +222,7 @@ def load_floor_plan(
     floor_plans_config: Dict[str, Any],
     eval_mode: bool,
     layout_cache: Dict[str, Any],
+    fixed_name: Optional[str] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     @brief Select and load a floor plan layout YAML for one episode.
@@ -233,15 +234,27 @@ def load_floor_plan(
                                parking_scenarios.floor_plans in train_config.yaml.
     @param eval_mode: If True, OOD plans are included.
     @param layout_cache: Mutable dict used as a read-through cache.
+    @param fixed_name: If set, force selection of this plan (curriculum stages).
+                       Must exist in floor_plans_config; eligibility checks
+                       are bypassed for explicit selection.
     @return Tuple (plan_name, layout_dict).
     @raises RuntimeError if no eligible plans are configured.
     @raises FileNotFoundError if the chosen layout YAML does not exist.
     """
-    eligible = {
-        name: cfg
-        for name, cfg in floor_plans_config.items()
-        if eval_mode or not cfg.get("ood", False)
-    }
+    if fixed_name is not None:
+        if fixed_name not in floor_plans_config:
+            raise RuntimeError(
+                f"fixed_floor_plan='{fixed_name}' not found in "
+                f"parking_scenarios.floor_plans. Available: "
+                f"{list(floor_plans_config.keys())}"
+            )
+        eligible = {fixed_name: floor_plans_config[fixed_name]}
+    else:
+        eligible = {
+            name: cfg
+            for name, cfg in floor_plans_config.items()
+            if eval_mode or not cfg.get("ood", False)
+        }
 
     if not eligible:
         raise RuntimeError(
