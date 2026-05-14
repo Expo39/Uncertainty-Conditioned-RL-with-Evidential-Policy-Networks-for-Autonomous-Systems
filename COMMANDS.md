@@ -117,11 +117,11 @@ the parking lot, sensor feeds, and vehicle state.
 
 | Command | Purpose | GPU? | Notes |
 |---------|---------|------|-------|
-| `make docker-inspect` | Default layout inspector (static view) | Yes | |
-| `make docker-inspect-sensors` | Inspector with sensor feed overlay | Yes | |
-| `make docker-inspect-live` | Live inspector (step-by-step episode) | Yes | |
-| `make docker-inspect-dryrun` | Dry-run inspector (manual drive) | Yes | Do not run this via Claude - it blocks indefinitely |
-| `make docker-demo` | Demo mode (pre-trained policy, no training) | Yes | |
+| `make docker-inspect` | Default layout inspector (static view) | Yes |
+| `make docker-inspect-sensors` | Inspector with sensor feed overlay | Yes |
+| `make docker-inspect-live` | Live inspector (step-by-step episode) | Yes |
+| `make docker-inspect-dryrun` | Dry-run inspector (manual drive) | Yes |
+| `make docker-demo` | Demo mode (pre-trained policy, no training) | Yes |
 
 > **Further reading:** [scripts/inspect/README.md](scripts/inspect/README.md) - inspector modes, CLI flags, per-mode GIF previews.
 
