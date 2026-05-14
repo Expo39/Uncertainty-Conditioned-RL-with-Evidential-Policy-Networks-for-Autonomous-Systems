@@ -63,6 +63,13 @@ class ImuNoiseRelayNode(Node):
         _accel_bias_limit_default: float = 0.04e-3 * 9.81
         self.declare_parameter("imu_accel_bias_limit_ms2", _accel_bias_limit_default)
 
+        # Per-episode multiplicative scale-factor error on the gyroscope,
+        # constant per power-cycle.
+        self.declare_parameter("imu_gyro_scale_factor_limit", 0.005)
+        # Per-episode accelerometer scale-factor error, per axis. Each axis
+        # has independent residual scale after factory calibration.
+        self.declare_parameter("imu_accel_scale_factor_limit", 0.005)
+
         imu_input_topic: str = str(
             self.get_parameter("imu_input_topic").get_parameter_value().string_value
         )
@@ -98,16 +105,38 @@ class ImuNoiseRelayNode(Node):
             .get_parameter_value()
             .double_value
         )
+        gyro_scale_limit: float = float(
+            self.get_parameter("imu_gyro_scale_factor_limit")
+            .get_parameter_value()
+            .double_value
+        )
+        accel_scale_limit: float = float(
+            self.get_parameter("imu_accel_scale_factor_limit")
+            .get_parameter_value()
+            .double_value
+        )
         # Pre-compute per-sample noise stddevs (sqrt taken once at init).
         self._gyro_noise_stddev: float = math.sqrt(self._imu_gyro_variance)
         self._accel_noise_stddev: float = math.sqrt(self._imu_accel_variance)
         # Per-episode bias limits (stored for resampling on each episode reset).
         self._gyro_bias_limit: float = gyro_bias_limit
         self._accel_bias_limit: float = accel_bias_limit
+        self._gyro_scale_limit: float = gyro_scale_limit
+        self._accel_scale_limit: float = accel_scale_limit
         # Per-episode in-run bias offsets. Resampled when episode_config.json seq increments.
         self._gyro_bias: float = random.uniform(-gyro_bias_limit, gyro_bias_limit)
         self._accel_bias_x: float = random.uniform(-accel_bias_limit, accel_bias_limit)
         self._accel_bias_y: float = random.uniform(-accel_bias_limit, accel_bias_limit)
+        # Per-episode multiplicative scale factors. 1.0 == perfect.
+        self._gyro_scale_factor: float = 1.0 + random.uniform(
+            -gyro_scale_limit, gyro_scale_limit
+        )
+        self._accel_scale_factor_x: float = 1.0 + random.uniform(
+            -accel_scale_limit, accel_scale_limit
+        )
+        self._accel_scale_factor_y: float = 1.0 + random.uniform(
+            -accel_scale_limit, accel_scale_limit
+        )
         # Episode config file watching - same file written by _CovarianceSubscriber at reset.
         self._episode_config_path: str = os.environ.get(
             "EPISODE_CONFIG_FILE", "/workspace/outputs/episode_config.json"
@@ -205,6 +234,15 @@ class ImuNoiseRelayNode(Node):
             self._accel_bias_y = random.uniform(
                 -self._accel_bias_limit, self._accel_bias_limit
             )
+            self._gyro_scale_factor = 1.0 + random.uniform(
+                -self._gyro_scale_limit, self._gyro_scale_limit
+            )
+            self._accel_scale_factor_x = 1.0 + random.uniform(
+                -self._accel_scale_limit, self._accel_scale_limit
+            )
+            self._accel_scale_factor_y = 1.0 + random.uniform(
+                -self._accel_scale_limit, self._accel_scale_limit
+            )
             self.get_logger().debug(
                 f"IMU bias resampled (seq={seq}): "
                 f"gyro={self._gyro_bias*1e6:.2f} urad/s "
@@ -264,15 +302,24 @@ class ImuNoiseRelayNode(Node):
 
         if self._enable_imu_noise:
             if not gyro_zupt_active:
-                out.angular_velocity.z += (
-                    random.gauss(0.0, self._gyro_noise_stddev) + self._gyro_bias
+                # Apply multiplicative scale factor first (acts on signal), then
+                # additive noise and bias on top. Real gyro errors compose this
+                # way: scale * truth + bias + noise.
+                out.angular_velocity.z = (
+                    out.angular_velocity.z * self._gyro_scale_factor
+                    + random.gauss(0.0, self._gyro_noise_stddev)
+                    + self._gyro_bias
                 )
             if not accel_zupt:
-                out.linear_acceleration.x += (
-                    random.gauss(0.0, self._accel_noise_stddev) + self._accel_bias_x
+                out.linear_acceleration.x = (
+                    out.linear_acceleration.x * self._accel_scale_factor_x
+                    + random.gauss(0.0, self._accel_noise_stddev)
+                    + self._accel_bias_x
                 )
-                out.linear_acceleration.y += (
-                    random.gauss(0.0, self._accel_noise_stddev) + self._accel_bias_y
+                out.linear_acceleration.y = (
+                    out.linear_acceleration.y * self._accel_scale_factor_y
+                    + random.gauss(0.0, self._accel_noise_stddev)
+                    + self._accel_bias_y
                 )
 
         self._pub.publish(out)

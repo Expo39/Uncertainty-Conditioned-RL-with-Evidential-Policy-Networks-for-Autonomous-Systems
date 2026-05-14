@@ -175,6 +175,13 @@ def generate_launch_description() -> LaunchDescription:
                 "enable_cog_heading": gnss_relay_cfg.get(
                     "enable_cog_heading", True
                 ),
+                "enable_gnss_anisotropy": gnss_relay_cfg.get(
+                    "enable_gnss_anisotropy", True
+                ),
+                "aniso_ratio_max": gnss_relay_cfg.get("aniso_ratio_max", 1.5),
+                "gnss_dropout_probability": gnss_relay_cfg.get(
+                    "gnss_dropout_probability", 0.02
+                ),
                 "imu_topic": imu_relay_cfg.get(
                     "imu_output_topic", "/carla/ego_vehicle/imu/stamped"
                 ),
@@ -194,6 +201,12 @@ def generate_launch_description() -> LaunchDescription:
                 "zupt_threshold_rad_s": imu_relay_cfg.get("zupt_threshold_rad_s", 0.03),
                 "accel_zupt_threshold_ms2": imu_relay_cfg.get(
                     "accel_zupt_threshold_ms2", 0.2
+                ),
+                "imu_gyro_scale_factor_limit": imu_relay_cfg.get(
+                    "imu_gyro_scale_factor_limit", 0.005
+                ),
+                "imu_accel_scale_factor_limit": imu_relay_cfg.get(
+                    "imu_accel_scale_factor_limit", 0.005
                 ),
             }
         ],
