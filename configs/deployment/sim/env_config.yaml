@@ -48,6 +48,12 @@ carla_sensors:
     sensor_tick: 0.05  # Publish rate (seconds).
 
 parking_scenarios:
+  # Curriculum overrides. Leave commented for normal (full-randomisation) training.
+  # See documentation/CURRICULUM_PLAN.md for the staged training procedure.
+  # fixed_floor_plan: rectangle      # Force one floor plan every episode.
+  # fixed_target_bay_id: perpendicular_31  # Force one specific bay every episode.
+  # fixed_gnss_tier: rtk_fixed       # Disable noise tier sampling; lock to one tier.
+
   # CARLA blueprint for perimeter markers.
   perimeter_marker_blueprint: "static.prop.constructioncone"  # CARLA cone blueprint used as perimeter
   perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
