@@ -5,7 +5,6 @@
 
 import argparse
 import os
-import random
 import sys
 import warnings
 from typing import Any, Dict, Optional
@@ -325,7 +324,9 @@ def main() -> None:
             action_desc = f"constant {dryrun_action}"
         layout_mode = "OOD" if inspect_ood else "training"
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
-        print(f"  Layouts ({layout_mode}): {list(eligible_plans.keys())} (randomised per-episode)")
+        print(
+            f"  Layouts ({layout_mode}): {list(eligible_plans.keys())} (randomised per-episode)"
+        )
         print(
             f"  View: {args.inspect_view}  |  " f"pause: {args.termination_pause:.1f}s"
         )
