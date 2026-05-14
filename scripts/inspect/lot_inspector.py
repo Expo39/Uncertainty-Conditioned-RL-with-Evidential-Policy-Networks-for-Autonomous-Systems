@@ -4,6 +4,8 @@
 """
 
 import argparse
+import os
+import random
 import sys
 import warnings
 from typing import Any, Dict, Optional
@@ -190,9 +192,7 @@ def main() -> None:
     train_cfg = load_env_config("configs/deployment/sim/env_config.yaml")
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
-    if args.mode == "dryrun":
-        print(f"Mode: {args.mode}  |  Layout: {args.layout} (pinned)")
-    else:
+    if args.mode != "dryrun":
         print(f"Mode: {args.mode}  |  Layout: {args.layout}", end="")
         if args.mode == "sensors":
             print(f"  |  View: {args.view}", end="")
@@ -263,15 +263,37 @@ def main() -> None:
         dryrun_cfg = dict(train_cfg)
         dryrun_cfg["no_rendering_mode"] = False
 
-        # Pin to the requested layout so the user always sees the intended floor plan.
+        # Randomise layout based on INSPECT_OOD flag.
+        # INSPECT_OOD=true: sample from OOD layouts only.
+        # INSPECT_OOD=false (default): sample from training layouts only.
+        inspect_ood = os.environ.get("INSPECT_OOD", "false").lower() == "true"
+
         scenarios = dict(dryrun_cfg.get("parking_scenarios", {}))
-        scenarios["floor_plans"] = {
-            args.layout: {
-                "weight": 1.0,
-                "always_empty": [],
-                "layout_file": f"configs/layouts/{args.layout}.yaml",
-            }
-        }
+        original_floor_plans = scenarios.get("floor_plans", {})
+
+        # Filter floor plans by OOD flag, matching load_floor_plan() logic.
+        eligible_plans = {}
+        for name, cfg in original_floor_plans.items():
+            is_ood = cfg.get("ood", False)
+            if inspect_ood:
+                # OOD mode: include OOD plans only
+                if is_ood:
+                    # Strip ood flag so the env's eval_mode filter accepts it.
+                    eligible_plans[name] = {k: v for k, v in cfg.items() if k != "ood"}
+            else:
+                # Training mode: exclude OOD plans
+                if not is_ood:
+                    eligible_plans[name] = cfg
+
+        if not eligible_plans:
+            raise RuntimeError(
+                f"No eligible floor plans found. "
+                f"INSPECT_OOD={inspect_ood}, available plans: {list(original_floor_plans.keys())}"
+            )
+
+        # Pass ALL eligible plans to the environment (do not pin to one).
+        # The environment's load_floor_plan() will randomise per-episode.
+        scenarios["floor_plans"] = eligible_plans
         dryrun_cfg["parking_scenarios"] = scenarios
 
         env = make_env(
@@ -301,7 +323,9 @@ def main() -> None:
             action_desc = "keyboard (Up=throttle, Down=brake, Left/Right=steer)"
         else:
             action_desc = f"constant {dryrun_action}"
+        layout_mode = "OOD" if inspect_ood else "training"
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
+        print(f"  Layouts ({layout_mode}): {list(eligible_plans.keys())} (randomised per-episode)")
         print(
             f"  View: {args.inspect_view}  |  " f"pause: {args.termination_pause:.1f}s"
         )

@@ -21,13 +21,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Determine LAYOUT for CARLA server. The training container (lot_inspector.py)
+# will randomise the actual floor plan per episode based on INSPECT_OOD.
+# CARLA server just needs a dummy layout for the OpenDRIVE world.
+LAYOUT="rectangle"
+
 # Start CARLA + ROS 2 bridge detached and wait for health checks
 echo "Starting carla-server-demo and ros2-bridge-inspect..."
-DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
+DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT}" \
     INSPECT_VIEW="${INSPECT_VIEW:-third_person}" \
     INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
     INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
     EPISODES="${EPISODES:-}" \
+    INSPECT_OOD="${INSPECT_OOD:-false}" \
     ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
     --force-recreate --detach --wait \
     carla-server-demo ros2-bridge-inspect
@@ -37,21 +43,23 @@ if [ "${INSPECT_MANUAL:-false}" = "true" ]; then
     echo "  Arrow keys: Up=throttle  Down=brake  Left/Right=steer  Ctrl+C=stop"
     # Run the training container interactively so its stdin is this terminal.
     # --no-deps: carla + ros2 already up. --rm: clean up on exit.
-    DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
+    DISPLAY="${DISPLAY}" \
         INSPECT_VIEW="${INSPECT_VIEW:-third_person}" \
         INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
         INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
         EPISODES="${EPISODES:-}" \
+        INSPECT_OOD="${INSPECT_OOD:-false}" \
         ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun \
         run --rm -it --name "${CONTAINER}" \
         training-inspect-dryrun
 else
     echo "Starting training container..."
-    DISPLAY="${DISPLAY}" LAYOUT="${LAYOUT:-rectangle}" \
+    DISPLAY="${DISPLAY}" \
         INSPECT_VIEW="${INSPECT_VIEW:-third_person}" \
         INSPECT_PAUSE="${INSPECT_PAUSE:-3.0}" \
         INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
         EPISODES="${EPISODES:-}" \
+        INSPECT_OOD="${INSPECT_OOD:-false}" \
         ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
         --force-recreate --detach \
         training-inspect-dryrun

@@ -307,6 +307,7 @@ services:
       - INSPECT_VIEW=${INSPECT_VIEW:-third_person}
       - INSPECT_PAUSE=${INSPECT_PAUSE:-3.0}
       - INSPECT_MANUAL=${INSPECT_MANUAL:-false}
+      - INSPECT_OOD=${INSPECT_OOD:-false}
     depends_on:
       carla-server-demo:
         condition: service_healthy

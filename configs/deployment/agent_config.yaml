@@ -8,7 +8,7 @@
 # ---------------------------------------------------------------------------
 # Policy safety parameters
 # ---------------------------------------------------------------------------
-max_ego_speed_ms: 5.0  # Speed limit (m/s).
+max_ego_speed_ms: 8.0  # Speed limit (m/s).
 
 # SafetyWrapper parameters.
 # aleatoric_scaling: higher = more aggressive longitudinal cap under outcome noise.
