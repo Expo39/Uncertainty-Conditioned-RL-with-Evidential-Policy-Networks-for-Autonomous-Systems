@@ -5,7 +5,7 @@
 debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
 inspect:
-  dryrun_action: [0.0, 0.5]  # [steer, longitudinal] applied each step in dryrun mode.
+  dryrun_action: [0.0, 0.5]  # [steer, drive] applied each step in dryrun mode. drive bipolar: +ve = throttle, -ve = brake.
 
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
@@ -38,7 +38,7 @@ carla_sensors:
     sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
 
     noise:
-      enabled: false
+      enabled: true
       range_random_stddev_m: 0.020  # m 1-sigma - see sensor_noise_models.md
       range_bias_limit_m: 0.060     # m half-range - see sensor_noise_models.md
       dropout_rate: 0.0             # no datasheet basis for non-zero value

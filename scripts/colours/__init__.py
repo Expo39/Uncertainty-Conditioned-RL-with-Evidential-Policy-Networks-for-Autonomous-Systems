@@ -19,6 +19,7 @@ from typing import Dict, Tuple
 HEX_PERP_BAY = "#0000DC"  # Blue
 HEX_ANGLED_BAY = "#FFD700"  # Yellow
 HEX_PARALLEL_BAY = "#B400FF"  # Violet
+HEX_MOTORCYCLE_BAY = "#888888"  # Grey
 HEX_TARGET_BAY = "#00FF00"  # Bright green
 
 HEX_PEDESTRIAN_ZONE = "#00CED1"  # Dark turquoise
@@ -37,6 +38,7 @@ BAY_HEX: Dict[str, str] = {
     "perpendicular": HEX_PERP_BAY,
     "angled": HEX_ANGLED_BAY,
     "parallel": HEX_PARALLEL_BAY,
+    "motorcycle": HEX_MOTORCYCLE_BAY,
 }
 
 # ---------------------------------------------------------------------------

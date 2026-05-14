@@ -29,10 +29,8 @@ def _make_mock_env(obs_shape: int = 12) -> MagicMock:
     return env
 
 
-def _make_action(
-    steer: float = 0.0, lon: float = 0.5, brake: float = 0.0
-) -> np.ndarray:
-    return np.array([steer, lon, brake], dtype=np.float32)
+def _make_action(steer: float = 0.0, lon: float = 0.5) -> np.ndarray:
+    return np.array([steer, lon], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +104,7 @@ class TestSafetyWrapperApply:
             handoff_threshold=5.0,
         )
         assert handoff
-        np.testing.assert_array_equal(modulated, np.zeros(3))
+        np.testing.assert_array_equal(modulated, np.zeros(2))
 
     def test_epistemic_below_threshold_no_handoff(self) -> None:
         """
