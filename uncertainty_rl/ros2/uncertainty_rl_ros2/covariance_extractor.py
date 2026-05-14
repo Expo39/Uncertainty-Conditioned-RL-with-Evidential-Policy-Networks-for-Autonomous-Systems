@@ -269,6 +269,16 @@ class CovarianceExtractorNode(Node):
             return
 
         seq = int(data.get("seq", 0))
+        # A regression in seq indicates the training container's subscriber
+        # was reconstructed (e.g. new Optuna trial). Reset the counter so
+        # the first reset of the new session is honoured rather than dropped.
+        if seq < self._initial_pose_last_seq:
+            self.get_logger().info(
+                f"initial_pose seq regression ({seq} < "
+                f"{self._initial_pose_last_seq}): new training session, "
+                "resetting counter."
+            )
+            self._initial_pose_last_seq = 0
         if seq <= self._initial_pose_last_seq:
             return
         self._initial_pose_last_seq = seq

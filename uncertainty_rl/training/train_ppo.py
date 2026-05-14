@@ -91,6 +91,11 @@ class TrainResult:
     log_dir: str
     """Absolute path to the TensorBoard logs directory."""
 
+    env: Optional["VecNormalize"] = None
+    """Training environment (only populated when the caller passed an external
+    env in, so it can be reused across trials). None when train() created and
+    closed the env itself."""
+
 
 def linear_schedule(initial_value: float) -> Callable[[float], float]:
     """
@@ -311,6 +316,7 @@ class EnvDiagnosticsCallback(BaseCallback):
 def train(
     config: Dict[str, Any],
     extra_callbacks: Optional[List[BaseCallback]] = None,
+    env: Optional["VecNormalize"] = None,
 ) -> TrainResult:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
@@ -319,6 +325,11 @@ def train(
            this dict. CLI arguments override YAML values before this is called.
     @param extra_callbacks: Optional list of additional callbacks to append to
            the training callback list (e.g. for Optuna trial evaluation).
+    @param env: Pre-built VecNormalize env to reuse across calls. When None,
+           train() creates and closes its own env. Optuna tuning passes a
+           shared env so the CARLA actors and ROS bridge stay warm between
+           trials (a destroy+respawn cycle breaks the EKF, see
+           tune_hyperparams.run_study).
     @return TrainResult containing final metrics, model path, and log directory.
     """
     # Resolve operational settings from config
@@ -361,18 +372,23 @@ def train(
 
     # Create training environment - one worker per CARLA instance.
     # parallel_workers > 1 requires docker-compose.parallel.yml (see make docker-train-parallel).
-    n_workers: int = config.get("parallel_workers", 1)
-    logger.info(f"Creating training environment ({n_workers} worker(s))...")
-    train_vec_env = DummyVecEnv([make_env(config, rank=i) for i in range(n_workers)])
+    own_env: bool = env is None
+    if own_env:
+        n_workers: int = config.get("parallel_workers", 1)
+        logger.info(f"Creating training environment ({n_workers} worker(s))...")
+        train_vec_env = DummyVecEnv(
+            [make_env(config, rank=i) for i in range(n_workers)]
+        )
 
-    # Normalise observations but not rewards - reward components will be
-    # manually scaled via potential-based shaping
-    env = VecNormalize(
-        train_vec_env,
-        norm_obs=True,
-        norm_reward=False,
-        clip_obs=10.0,
-    )
+        # Normalise observations
+        env = VecNormalize(
+            train_vec_env,
+            norm_obs=True,
+            norm_reward=False,
+            clip_obs=10.0,
+        )
+    else:
+        logger.info("Reusing existing training environment (caller-owned).")
 
     # Evaluation environment is disabled when using a single CARLA instance
     # in synchronous mode.  Two clients calling world.tick() on the same
@@ -507,8 +523,9 @@ def train(
         logger.info("Training complete. Model saved to %s", final_model_path)
 
     finally:
-        # Clean up (always runs, even if CARLA crashes during training)
-        env.close()
+        # Clean up (always runs, even if CARLA crashes during training).
+        if own_env:
+            env.close()
         if eval_env is not None:
             eval_env.close()
 
@@ -519,6 +536,7 @@ def train(
         final_metrics=final_metrics,
         model_path=final_model_path,
         log_dir=log_dir,
+        env=None if own_env else env,
     )
 
 
