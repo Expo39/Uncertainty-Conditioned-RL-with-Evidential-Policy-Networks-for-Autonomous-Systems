@@ -73,29 +73,50 @@ Per-worker paths for parallel training (multi-worker):
 ## COG heading derivation (GnssNoiseRelayNode)
 
 Course Over Ground (COG) heading is derived entirely from successive noisy GNSS
-positions - no CARLA ground truth or API calls.
+positions - no CARLA ground truth or API calls. The heading is forward-only:
+no reverse-motion disambiguation is performed, which is consistent with the
+forward-only action space (no reverse gear).
 
-Speed estimate: `speed = displacement / dt`, where both displacement and `dt`
-come from NavSatFix message timestamps and the flat-earth-projected positions.
-
-Heading variance (error propagation of `atan2(dy, dx)` from two independent
-noisy fixes, where dist is the displacement between the two fix positions):
+Heading variance is the error propagation of `atan2(dy, dx)` from two
+independent noisy fixes:
 
 ```
-var(heading) = 2 * sigma_pos^2 / dist^2
+var(heading) = 2 * sigma_pos^2 / displacement^2
 ```
 
-The implementation substitutes `speed = dist / dt` and uses `speed^2` directly
-(`raw_var = 2 * sigma^2 / speed^2`). Since `1/speed^2 = dt^2/dist^2`, the
-implementation computes `2 * sigma^2 * dt^2 / dist^2`, differing from the
-theoretical formula by `dt^2`. At a fixed GNSS publish rate (constant `dt`),
-this is a constant scale factor, not a systematic drift. See `sensor_noise_models.md`
-for the implementation form.
+`sigma_pos` is read from the input message's position covariance (using the
+larger of the two axis sigmas when noise is anisotropic), so the same logic
+works in sim (covariance stamped by this node) and in real deployments
+(covariance supplied by the receiver).
 
-At low speed (below `cog_min_speed_ms`, default 0.3 m/s) the variance grows
-without bound; heading is held at its last valid value until speed exceeds the
-threshold. The spawn yaw (known from lot geometry, available equally in sim and
-real deployment) seeds the heading at episode start to avoid a cold-start period.
+Publication is gated on three conditions:
+
+1. **Minimum displacement**: per-step displacement >= `cog_min_displacement_m`
+   (default 0.05 m). Filters out pure-noise updates at standstill.
+2. **IMU not stationary**: the stamped IMU subscription detects ZUPT-clamped
+   zeros on `angular_velocity.z` and `linear_acceleration.x/y`. While ZUPT is
+   active, COG is suppressed regardless of GNSS displacement.
+3. **Variance ceiling**: candidate heading variance must be below `pi^2/3`
+   (variance of a uniform distribution on `[-pi, pi]`). An observation more
+   uncertain than "any angle" is not published.
+
+The first GNSS fix pair that passes all three gates initialises the COG state.
+There is no spawn-yaw seeding; the EKF runs on `imu0` yaw-rate prediction
+until COG becomes available.
+
+## Sim-real parity additions
+
+The sensor relay nodes apply several effects observed in real RTK / inertial
+hardware. These are gated behind `enable_gnss_noise` / `enable_imu_noise` master
+switches and are skipped on the real-vehicle launch (`real_vehicle.launch.py`)
+because the physical sensors already exhibit them.
+
+| Effect | Where | Rationale |
+|--------|-------|-----------|
+| GNSS east/north anisotropy | `GnssNoiseRelayNode._resample_anisotropy()` | Real receivers have unequal east/north variances driven by satellite geometric dilution of precision. Sampled per episode with `aniso_ratio_max` (default 1.5) and geometric mean preserved at unity so the tier's nominal sigma is unchanged on average. |
+| GNSS per-callback dropout | `GnssNoiseRelayNode._gnss_callback()` | Cycle slips and brief satellite occlusions cause RTK receivers to skip individual fixes. Sampled at rate `gnss_dropout_probability` (default 0.02). The EKF goes open-loop on position for that tick. |
+| Tier-mapped NavSatStatus | `GnssNoiseRelayNode._apply_tier()` | The outgoing `NavSatFix.status` is stamped with `STATUS_GBAS_FIX` for RTK fixed/float and `STATUS_FIX` for standalone/degraded, matching what a real u-blox ZED-F9P-05B would publish at each fix state. Real-API parity for downstream consumers. |
+| IMU per-axis scale-factor error | `ImuNoiseRelayNode` | Real gyros/accelerometers have residual multiplicative scale errors after factory calibration (`+-0.5 %` for the VN-100). Modelled as `out = scale * truth + bias + noise`. Resampled per episode together with the in-run bias. |
 
 ## Markov fix-state transitions (GnssNoiseRelayNode)
 

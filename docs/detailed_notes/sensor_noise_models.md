@@ -189,11 +189,29 @@ Derivation (both computed exactly in code):
     gyro:  5 * pi/180 / 3600 = 2.42407e-5 rad/s    [5 deg/hr: low end of 5-7 deg/hr typical; slightly optimistic]
     accel: 0.04e-3 * 9.81    = 3.92400e-4 m/s^2    [< 0.04 mg from datasheet; upper bound used]
 
-The bias is held constant for the entire training run since `ImuNoiseRelayNode`
-is a long-running process that is not restarted between episodes.
+The bias is resampled at every episode boundary. `ImuNoiseRelayNode` polls
+the shared `episode_config.json` (written by `_CovarianceSubscriber` at each
+`reset()`) and redraws all bias values when the `seq` field increments, so a
+fresh in-run bias is presented to the EKF on every new episode.
 
 Config keys: `imu_noise_relay.imu_gyro_bias_limit_rad_s = 2.42407e-5`,
              `imu_noise_relay.imu_accel_bias_limit_ms2 = 3.924e-4`
+
+**Per-axis scale-factor error:**
+
+The VN-100 calibration sheet specifies a residual scale-factor error of
++-0.5 % per axis (1-sigma) on both gyro and accelerometer channels after
+factory calibration. This is a multiplicative error on the measured signal,
+distinct from additive bias. Modelled as:
+
+    out = scale * truth + bias + noise
+    scale ~ 1.0 + Uniform(-scale_limit, +scale_limit)
+
+with `scale_limit = 0.005` for both gyro and each accel axis. Each axis has
+an independent factor that is resampled together with the per-episode bias.
+
+Config keys: `imu_noise_relay.imu_gyro_scale_factor_limit = 0.005`,
+             `imu_noise_relay.imu_accel_scale_factor_limit = 0.005`
 
 #### 2c. ZUPT (Zero-velocity Update)
 
@@ -334,13 +352,59 @@ The ZED-F9P-05B in moving-base RTK mode achieves 0.4 deg (50th percentile)
 heading accuracy at 30 m/s with a short baseline (Table 6). The simulation
 does not use moving-base RTK for heading; instead, Course Over Ground is derived
 from successive noisy GNSS position fixes in `GnssNoiseRelayNode._gnss_callback()`.
-COG heading variance is computed analytically by propagating position noise:
+COG heading variance is computed analytically by propagating position noise
+through `atan2(dy, dx)`:
 
-    var_heading = 2 * sigma_xy^2 / speed^2
+    var_heading = 2 * sigma_xy^2 / displacement^2
 
-where sigma_xy is the current tier's metric_stddev_m and speed is the
-GNSS-derived displacement / dt. This is always larger than the datasheet
-moving-base figure and is the correct model for COG-based heading.
+`sigma_xy` is read directly from the input NavSatFix's position covariance
+(the larger of the two diagonal entries when noise is anisotropic), so the
+same logic works in sim and on real receivers. `displacement` is the
+per-callback flat-earth distance between successive fixes.
+
+COG is forward-only (no reverse-motion disambiguation against EKF yaw); the
+action space has no reverse gear. Publication is gated on (a) displacement
+>= `cog_min_displacement_m`, (b) IMU not in ZUPT (read from the stamped IMU
+topic), and (c) candidate variance below `pi^2 / 3` (the variance of a uniform
+heading distribution - any wider observation is uninformative).
+
+### GNSS east/north anisotropy
+
+Real RTK receivers have unequal east/north variances determined by satellite
+geometric dilution of precision (HDOP). `GnssNoiseRelayNode._resample_anisotropy()`
+draws a per-episode ratio uniformly from `[1.0, aniso_ratio_max]` (default 1.5)
+and assigns it to either the x or y axis at random. The factors satisfy
+`sigma_x_factor * sigma_y_factor = 1`, so the tier's nominal sigma is preserved
+on average across episodes. Config key:
+`gnss_noise_relay.enable_gnss_anisotropy = true`,
+`gnss_noise_relay.aniso_ratio_max = 1.5`.
+
+### GNSS per-callback dropout
+
+Cycle slips and brief satellite occlusions cause RTK receivers to skip fixes
+in real operation. Modelled as a Bernoulli draw on each callback:
+
+    P(skip) = gnss_dropout_probability  (default 0.02)
+
+When a callback is skipped the EKF receives no position update for that tick
+and propagates on IMU prediction alone. Config key:
+`gnss_noise_relay.gnss_dropout_probability = 0.02`.
+
+### NavSatStatus mapping
+
+The outgoing `NavSatFix.status.status` is overridden by the active tier so
+downstream consumers that branch on fix quality see realistic values:
+
+| Tier | NavSatStatus value |
+|------|-------------------|
+| rtk_fixed | `STATUS_GBAS_FIX` (ground-based augmentation) |
+| rtk_float | `STATUS_GBAS_FIX` |
+| standalone | `STATUS_FIX` |
+| degraded | `STATUS_FIX` |
+
+Real ZED-F9P-05B receivers use ground-based augmentation (RTCM) for both
+RTK FIXED and RTK FLOAT, hence the shared GBAS code. This is API parity,
+not data realism.
 
 ---
 

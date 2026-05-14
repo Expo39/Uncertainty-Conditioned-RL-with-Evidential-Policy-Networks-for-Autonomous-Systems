@@ -51,7 +51,7 @@ Each bay dict:
 | Layout | Bays | Training | World origin (CARLA) | Notes |
 |--------|------|----------|----------------------|-------|
 | `rectangle` | 54 | Yes | x=2.0, y=17.5, z=0.3 | 3 spawns: left (y=17.5), bottom-centre (y=3.0), top-right (y=-23.0) |
-| `trapezoid` | 39 | Yes | x=2.0, y=30.0, z=0.3 | Legacy layout |
+| `trapezoid` | 49 | Yes | x=0.0, y=30.0, z=0.3 | Two central perp clusters, angled perimeter, left-wall mix |
 | `irregular_a` | 56 | No (OOD) | x=-3.0, y=25.0, z=0.3 | Held-out OOD evaluation |
 
 ## See also
