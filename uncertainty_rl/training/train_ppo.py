@@ -508,11 +508,15 @@ def train(
     # Train the agent (wrapped in try/finally for CARLA crash safety)
     try:
         logger.info("Starting training for %d timesteps...", total_timesteps)
+        # Disable progress bar when env is caller-owned (e.g. Optuna tuning).
+        # tqdm[rich] leaks a "live display" between trials when model.learn()
+        # is called repeatedly in one process, so the second call onwards
+        # raises "Only one live display may be active at once".
         model.learn(
             total_timesteps=total_timesteps,
             callback=callback_list,
             log_interval=config.get("log_interval", 10),
-            progress_bar=True,
+            progress_bar=own_env,
         )
 
         # Save final model

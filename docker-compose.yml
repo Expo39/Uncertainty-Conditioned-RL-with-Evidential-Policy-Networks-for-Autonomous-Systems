@@ -25,7 +25,9 @@ services:
       - uncertainty-rl-network
     volumes:
       - ./uncertainty_rl:/workspace/uncertainty_rl:ro
-      - ./configs:/workspace/configs:ro
+      # configs/ is rw so tune_hyperparams.py can write the best trial's params
+      # back into train_config.yaml at end of study.
+      - ./configs:/workspace/configs:rw
       - ./scripts:/workspace/scripts:ro
       - ./logs:/workspace/logs:rw
       - ./checkpoints:/workspace/checkpoints:rw
