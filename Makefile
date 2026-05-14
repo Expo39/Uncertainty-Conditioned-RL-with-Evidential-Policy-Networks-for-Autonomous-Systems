@@ -51,7 +51,7 @@ install: ## Create .venv and install package + dev dependencies
 	python3 -m venv $(VENV)
 	$(VENV)/bin/pip install --upgrade pip
 	$(VENV)/bin/pip install -e ".[dev]"
-	$(VENV)/bin/pre-commit install || true  # Non-fatal: core.hooksPath may be managed externally (e.g. Claude Code)
+	$(VENV)/bin/pre-commit install || true  # Non-fatal: core.hooksPath may be managed externally
 
 
 # ======================================================================
