@@ -23,7 +23,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import Imu, NavSatFix
+from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
 
 # Ordered tier names - index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
@@ -78,6 +78,17 @@ _DEFAULT_TRANSITION_MATRIX: List[List[float]] = [
     [0.0000, 0.0000, 0.0050, 0.9950],  # from: degraded
 ]
 
+# Map tier name to the corresponding NavSatStatus value that a real receiver
+# would publish in this fix state. RTK FIX/FLOAT solutions use ground-based
+# augmentation (RTCM corrections), so both report STATUS_GBAS_FIX. SPP and
+# degraded SPP report STATUS_FIX. This is real-API parity, not data realism.
+_TIER_STATUS: Dict[str, int] = {
+    "rtk_fixed": NavSatStatus.STATUS_GBAS_FIX,
+    "rtk_float": NavSatStatus.STATUS_GBAS_FIX,
+    "standalone": NavSatStatus.STATUS_FIX,
+    "degraded": NavSatStatus.STATUS_FIX,
+}
+
 
 class GnssNoiseRelayNode(Node):
     """
@@ -123,6 +134,14 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("imu_topic", "/carla/ego_vehicle/imu/stamped")
         # Master switch: false suppresses all COG heading publication.
         self.declare_parameter("enable_cog_heading", True)
+        # Per-episode axis-aligned anisotropy on GNSS position noise. Models
+        # geometric dilution of precision: real receivers have unequal east/north
+        # variances depending on satellite geometry.
+        self.declare_parameter("enable_gnss_anisotropy", True)
+        self.declare_parameter("aniso_ratio_max", 1.5)
+        # Per-callback probability of skipping a GNSS fix entirely. Models
+        # cycle slips and brief satellite occlusions.
+        self.declare_parameter("gnss_dropout_probability", 0.02)
         self.declare_parameter(
             "noise_profiles_path",
             os.environ.get(
@@ -177,6 +196,23 @@ class GnssNoiseRelayNode(Node):
         self._enable_cog_heading: bool = bool(
             self.get_parameter("enable_cog_heading").get_parameter_value().bool_value
         )
+        self._enable_anisotropy: bool = bool(
+            self.get_parameter("enable_gnss_anisotropy")
+            .get_parameter_value()
+            .bool_value
+        )
+        self._aniso_ratio_max: float = float(
+            self.get_parameter("aniso_ratio_max").get_parameter_value().double_value
+        )
+        self._dropout_probability: float = float(
+            self.get_parameter("gnss_dropout_probability")
+            .get_parameter_value()
+            .double_value
+        )
+        # Per-episode anisotropy factors. 1.0 == isotropic. Geometric mean is
+        # always 1.0 so the tier's nominal sigma still describes the average.
+        self._sigma_x_factor: float = 1.0
+        self._sigma_y_factor: float = 1.0
 
         # Precompute flat-earth scale factors for the datum latitude.
         self._metres_per_deg_lat: float = 111320.0
@@ -194,6 +230,9 @@ class GnssNoiseRelayNode(Node):
         self._active_tier_idx: int = 0
 
         self._extra_alt_stddev_m: float = 0.0
+        # Current tier's NavSatStatus code, updated by _apply_tier and stamped
+        # on each outgoing NavSatFix when sim noise is enabled.
+        self._tier_status: int = NavSatStatus.STATUS_FIX
         self._metric_stddev_m: float = self._base_metric_stddev
 
         self._config_seq: int = -1
@@ -328,6 +367,28 @@ class GnssNoiseRelayNode(Node):
         self.get_logger().info(f"Loaded transition matrix from {profiles_path}.")
         return P
 
+    def _resample_anisotropy(self) -> None:
+        """
+        @brief Sample per-episode axis-aligned GNSS noise anisotropy.
+
+        Sets sigma_x_factor and sigma_y_factor such that the geometric mean is
+        unity (so the tier's nominal sigma is preserved on average), with a
+        ratio drawn uniformly from [1.0, aniso_ratio_max]. The major-sigma axis
+        is randomly x or y per episode.
+        """
+        if not self._enable_anisotropy:
+            self._sigma_x_factor = 1.0
+            self._sigma_y_factor = 1.0
+            return
+        ratio = float(self._rng.uniform(1.0, max(1.0, self._aniso_ratio_max)))
+        factor = math.sqrt(ratio)
+        if self._rng.random() < 0.5:
+            self._sigma_x_factor = factor
+            self._sigma_y_factor = 1.0 / factor
+        else:
+            self._sigma_x_factor = 1.0 / factor
+            self._sigma_y_factor = factor
+
     def _apply_tier(self, tier_name: str) -> None:
         """
         @brief Update active noise state from tier name.
@@ -343,6 +404,7 @@ class GnssNoiseRelayNode(Node):
         extra_alt = max(0.0, params["alt_stddev_m"] - 0.05)
         self._extra_alt_stddev_m = extra_alt
         self._metric_stddev_m = params["metric_stddev_m"]
+        self._tier_status = _TIER_STATUS.get(tier_name, NavSatStatus.STATUS_FIX)
 
         if tier_name in _TIER_INDEX:
             self._active_tier_idx = _TIER_INDEX[tier_name]
@@ -400,9 +462,14 @@ class GnssNoiseRelayNode(Node):
                 self._prev_stamp_sec = None
                 self._cog_initialised = False
                 self._cog_active = False
+                # Resample anisotropy at the episode boundary so each episode
+                # sees a different satellite-geometry pattern.
+                self._resample_anisotropy()
                 self.get_logger().info(
                     f"GNSS datum re-latched: lat={self._datum_lat:.7f} "
-                    f"lon={self._datum_lon:.7f}"
+                    f"lon={self._datum_lon:.7f} "
+                    f"aniso_factors=({self._sigma_x_factor:.3f},"
+                    f"{self._sigma_y_factor:.3f})"
                 )
 
             self.get_logger().info(
@@ -497,6 +564,16 @@ class GnssNoiseRelayNode(Node):
         if self._markov_enabled:
             self._step_markov()
 
+        # Simulated GNSS dropout: occasionally skip a fix entirely so the EKF
+        # goes open-loop on position for one tick. Models cycle slips and brief
+        # satellite occlusions seen in real RTK operation.
+        if (
+            self._gnss_noise_enabled
+            and self._dropout_probability > 0.0
+            and self._rng.random() < self._dropout_probability
+        ):
+            return
+
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
         # -- Datum latch -------------------------------------------------------
@@ -525,17 +602,25 @@ class GnssNoiseRelayNode(Node):
         # -- Inject noise to lat/lon -------------------------------------------
         out = NavSatFix()
         out.header = msg.header
-        out.status = msg.status
+        if self._gnss_noise_enabled:
+            # Sim: override the bridge's pass-through status with one that
+            # reflects the active tier (real-API parity for downstream
+            # consumers that branch on fix quality).
+            out.status.status = self._tier_status
+            out.status.service = msg.status.service
+        else:
+            out.status = msg.status
 
         if self._gnss_noise_enabled:
-            sigma = self._metric_stddev_m
-            # Single PRNG draw for all three noise terms then scale.
+            # Per-axis sigmas: tier sigma scaled by per-episode anisotropy.
+            sigma_x = self._metric_stddev_m * self._sigma_x_factor
+            sigma_y = self._metric_stddev_m * self._sigma_y_factor
             n_xy, n_xy2, n_alt = self._rng.standard_normal(3)
             out.longitude = msg.longitude + (
-                n_xy * sigma / self._metres_per_deg_lon if sigma > 0.0 else 0.0
+                n_xy * sigma_x / self._metres_per_deg_lon if sigma_x > 0.0 else 0.0
             )
             out.latitude = msg.latitude + (
-                n_xy2 * sigma / self._metres_per_deg_lat if sigma > 0.0 else 0.0
+                n_xy2 * sigma_y / self._metres_per_deg_lat if sigma_y > 0.0 else 0.0
             )
             out.altitude = msg.altitude + (
                 n_alt * self._extra_alt_stddev_m
@@ -548,15 +633,17 @@ class GnssNoiseRelayNode(Node):
             out.altitude = msg.altitude
 
         if self._gnss_noise_enabled:
-            # Sim path: stamp covariance derived from the active tier.
-            metric_var = self._metric_stddev_m**2
+            # Sim path: stamp anisotropic covariance derived from the active
+            # tier and the per-episode anisotropy factors.
+            var_x = (self._metric_stddev_m * self._sigma_x_factor) ** 2
+            var_y = (self._metric_stddev_m * self._sigma_y_factor) ** 2
             alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
             out.position_covariance = [
-                metric_var,
+                var_x,
                 0.0,
                 0.0,
                 0.0,
-                metric_var,
+                var_y,
                 0.0,
                 0.0,
                 0.0,
@@ -581,12 +668,10 @@ class GnssNoiseRelayNode(Node):
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
 
-        # xy_var follows the position covariance just written (tier-stamped in
-        # sim, receiver-supplied in real deployment).
-        xy_var = float(out.position_covariance[0])
+        # Per-axis position variance from the NavSatFix
         pose_cov = list(self._odom_cov_template)
-        pose_cov[0] = xy_var
-        pose_cov[7] = xy_var
+        pose_cov[0] = float(out.position_covariance[0])
+        pose_cov[7] = float(out.position_covariance[4])
         odom_msg.pose.covariance = pose_cov
         self._odom_pub.publish(odom_msg)
 
@@ -604,10 +689,14 @@ class GnssNoiseRelayNode(Node):
 
                 # Gate on (a) minimum displacement, (b) IMU not in ZUPT, and
                 # (c) computed heading variance below uniform-distribution
-                # ceiling. Sigma is read from the message covariance we just
-                # stamped, so the same logic works in real deployments where
-                # the receiver supplies its own covariance.
-                sigma_now = math.sqrt(out.position_covariance[0])
+                # ceiling. Use the larger of the two axis sigmas so the gate
+                # is conservative when noise is anisotropic. Sigma is read
+                # from the message covariance, so the same
+                # logic works in real deployments where the receiver supplies
+                # its own covariance.
+                sigma_now = math.sqrt(
+                    max(out.position_covariance[0], out.position_covariance[4])
+                )
                 candidate_var = self._cog_heading_variance(
                     max(displacement_m, 1e-6), sigma_now
                 )

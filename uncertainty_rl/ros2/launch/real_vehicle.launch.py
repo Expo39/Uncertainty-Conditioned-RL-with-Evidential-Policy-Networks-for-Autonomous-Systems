@@ -120,6 +120,11 @@ def generate_launch_description() -> LaunchDescription:
                 "enable_cog_heading": gnss_relay_cfg.get(
                     "enable_cog_heading", True
                 ),
+                # Sim-only noise generators are off in real deployment; the
+                # receiver's reported covariance and natural dropouts pass
+                # through unmodified.
+                "enable_gnss_anisotropy": False,
+                "gnss_dropout_probability": 0.0,
                 "imu_topic": imu_stamped_topic,
                 # IMU: real driver -> covariance-stamped, ZUPT-clamped.
                 "imu_input_topic": imu_input_topic,
@@ -135,6 +140,10 @@ def generate_launch_description() -> LaunchDescription:
                 "accel_zupt_threshold_ms2": imu_relay_cfg.get(
                     "accel_zupt_threshold_ms2", 0.2
                 ),
+                # Sim-only scale factor errors are off in real deployment;
+                # the physical IMU already has its own scale-factor properties.
+                "imu_gyro_scale_factor_limit": 0.0,
+                "imu_accel_scale_factor_limit": 0.0,
             }
         ],
     )
