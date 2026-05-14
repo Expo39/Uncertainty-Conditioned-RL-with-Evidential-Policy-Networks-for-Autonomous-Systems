@@ -4,7 +4,6 @@
 """
 
 import importlib.util
-import math
 import os
 
 from launch import LaunchDescription
@@ -40,10 +39,13 @@ def generate_launch_description() -> LaunchDescription:
 
     real_cfg = ros2_cfg.get("real_vehicle", {})
     gnss_fix_topic: str = str(real_cfg.get("gnss_fix_topic", "/gnss/fix"))
-    imu_topic: str = str(real_cfg.get("imu_topic", "/imu/data"))
+    imu_input_topic: str = str(real_cfg.get("imu_topic", "/imu/data"))
 
-    # Internal topic names match sim so CovarianceExtractorNode config is identical.
+    # Internal topic names match sim so the EKF and CovarianceExtractor configs
+    # are identical across deployments.
     gnss_odom_topic: str = "/odometry/gps"
+    heading_topic: str = "/gnss/heading"
+    imu_stamped_topic: str = "/imu/data/stamped"
     odom_filtered_topic: str = str(ros2_cfg.get("odom_topic", "/odometry/filtered"))
     covariance_topic: str = str(
         ros2_cfg.get("covariance_topic", "/ekf_uncertainty/covariance")
@@ -51,7 +53,6 @@ def generate_launch_description() -> LaunchDescription:
 
     datum_lat: float = float(datum_doc.get("datum_lat", 0.0))
     datum_lon: float = float(datum_doc.get("datum_lon", 0.0))
-    datum_yaw: float = math.radians(float(datum_doc.get("heading_deg", 0.0)))
 
     if datum_lat == 0.0 and datum_lon == 0.0:
         raise RuntimeError(
@@ -68,7 +69,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
         DeclareLaunchArgument(
             "imu_topic",
-            default_value=imu_topic,
+            default_value=imu_input_topic,
             description="Physical IMU driver topic (sensor_msgs/Imu).",
         ),
     ]
@@ -89,52 +90,74 @@ def generate_launch_description() -> LaunchDescription:
         static_tf("map_to_odom_tf", "map", "odom", 0.0, 0.0, 0.0)
     )
 
-    # -- navsat_transform_node ---------------------------------------------
-    # Converts NavSatFix -> metric Odometry in the local ENU frame.
-    # Replaces GnssNoiseRelayNode's flat-earth projection from the sim pipeline.
-    # Launch aborts above if datum_lat/datum_lon are still 0.0 placeholders.
-    navsat_cfg = ros2_cfg.get("navsat_transform", {})
-    navsat_node = Node(
-        package="robot_localization",
-        executable="navsat_transform_node",
-        name="navsat_transform_node",
+    # -- Sensor relay node -------------------------------------------------
+    # Same executable as sim, with all noise injection disabled. The relays
+    # do flat-earth projection (GNSS), COG heading derivation, IMU covariance
+    # stamping and ZUPT clamping. Real receiver/IMU values flow through
+    # unmodified except for ZUPT.
+    gnss_relay_cfg = ros2_cfg.get("gnss_noise_relay", {})
+    imu_relay_cfg = ros2_cfg.get("imu_noise_relay", {})
+
+    sensor_relay_node = Node(
+        package="uncertainty_rl_ros2",
+        executable="sensor_relay",
+        name="sensor_relay",
         parameters=[
             {
                 "use_sim_time": False,
-                "datum": [datum_lat, datum_lon, datum_yaw],
-                "magnetic_declination_radians": float(
-                    navsat_cfg.get("magnetic_declination_radians", 0.0)
+                # GNSS: real receiver -> flat-earth XY + COG heading.
+                "input_topic": gnss_fix_topic,
+                "output_topic": gnss_relay_cfg.get("output_topic", "/gnss/noisy"),
+                "odom_output_topic": gnss_odom_topic,
+                "heading_output_topic": heading_topic,
+                "enable_gnss_noise": False,
+                "enable_markov_transitions": False,
+                "datum_lat": datum_lat,
+                "datum_lon": datum_lon,
+                "cog_min_displacement_m": gnss_relay_cfg.get(
+                    "cog_min_displacement_m", 0.05
                 ),
-                "yaw_offset": float(navsat_cfg.get("yaw_offset", 0.0)),
-                "zero_altitude": True,
-                "broadcast_utm_transform": navsat_cfg.get(
-                    "broadcast_utm_transform", False
+                "enable_cog_heading": gnss_relay_cfg.get("enable_cog_heading", True),
+                # Sim-only noise generators are off in real deployment; the
+                # receiver's reported covariance and natural dropouts pass
+                # through unmodified.
+                "enable_gnss_anisotropy": False,
+                "gnss_dropout_probability": 0.0,
+                "imu_topic": imu_stamped_topic,
+                # IMU: real driver -> covariance-stamped, ZUPT-clamped.
+                "imu_input_topic": imu_input_topic,
+                "imu_output_topic": imu_stamped_topic,
+                "enable_imu_noise": False,
+                "imu_gyro_variance": imu_relay_cfg.get("imu_gyro_variance", 7.4631e-8),
+                "imu_accel_variance": imu_relay_cfg.get(
+                    "imu_accel_variance", 3.77245e-5
                 ),
-                "publish_filtered_gps": navsat_cfg.get("publish_filtered_gps", False),
-                "use_odometry_yaw": navsat_cfg.get("use_odometry_yaw", False),
-                "wait_for_datum": navsat_cfg.get("wait_for_datum", False),
-                "frequency": float(navsat_cfg.get("frequency", 20.0)),
-                "delay": float(navsat_cfg.get("delay", 3.0)),
+                "zupt_threshold_rad_s": imu_relay_cfg.get(
+                    "zupt_threshold_rad_s", 0.015
+                ),
+                "accel_zupt_threshold_ms2": imu_relay_cfg.get(
+                    "accel_zupt_threshold_ms2", 0.2
+                ),
+                # Sim-only scale factor errors are off in real deployment;
+                # the physical IMU already has its own scale-factor properties.
+                "imu_gyro_scale_factor_limit": 0.0,
+                "imu_accel_scale_factor_limit": 0.0,
             }
-        ],
-        remappings=[
-            ("imu/data", imu_topic),
-            ("gps/fix", gnss_fix_topic),
-            ("odometry/gps", gnss_odom_topic),
         ],
     )
 
     # -- EKF node ----------------------------------------------------------
-    # Same EKF params as sim except use_sim_time=False, base_link_frame=base_link,
-    # and no pose0 (COG heading): navsat_transform handles heading internally.
+    # Same EKF params as sim, including pose0=/gnss/heading so the COG-derived
+    # yaw correction is available in real deployment too. Only frame names,
+    # topic names, and use_sim_time differ from the sim launch.
     ekf_params = {
         **ros2_cfg.get("ekf", {}),
         "use_sim_time": False,
         "base_link_frame": "base_link",
         "world_frame": "odom",
         "odom0": gnss_odom_topic,
-        "imu0": imu_topic,
-        "pose0": "",
+        "imu0": imu_stamped_topic,
+        "pose0": heading_topic,
     }
     ekf_node = Node(
         package="robot_localization",
@@ -164,7 +187,7 @@ def generate_launch_description() -> LaunchDescription:
     actions = [
         *launch_args,
         *sensor_tf_nodes,
-        navsat_node,
+        sensor_relay_node,
         ekf_node,
         covariance_extractor,
     ]

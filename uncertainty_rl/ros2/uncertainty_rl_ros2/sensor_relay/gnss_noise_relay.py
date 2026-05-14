@@ -23,7 +23,7 @@ from geometry_msgs.msg import PoseWithCovarianceStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
-from sensor_msgs.msg import NavSatFix
+from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
 
 # Ordered tier names - index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
@@ -78,6 +78,17 @@ _DEFAULT_TRANSITION_MATRIX: List[List[float]] = [
     [0.0000, 0.0000, 0.0050, 0.9950],  # from: degraded
 ]
 
+# Map tier name to the corresponding NavSatStatus value that a real receiver
+# would publish in this fix state. RTK FIX/FLOAT solutions use ground-based
+# augmentation (RTCM corrections), so both report STATUS_GBAS_FIX. SPP and
+# degraded SPP report STATUS_FIX. This is real-API parity, not data realism.
+_TIER_STATUS: Dict[str, int] = {
+    "rtk_fixed": NavSatStatus.STATUS_GBAS_FIX,
+    "rtk_float": NavSatStatus.STATUS_GBAS_FIX,
+    "standalone": NavSatStatus.STATUS_FIX,
+    "degraded": NavSatStatus.STATUS_FIX,
+}
+
 
 class GnssNoiseRelayNode(Node):
     """
@@ -92,10 +103,10 @@ class GnssNoiseRelayNode(Node):
         "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"
     )
 
-    # Standstill noise floor on the per-step displacement gate. Successive
-    # noisy GNSS positions differ by ~sigma * sqrt(2) per step from pure
-    # noise alone; 3-sigma drops the false-trigger rate below 1%.
-    _NOISE_FLOOR_K: float = 3.0 * math.sqrt(2.0)
+    # Variance ceiling for publishing COG: pi^2/3 is the variance of a uniform
+    # distribution on [-pi, pi]. A heading observation with variance >= this is
+    # no more informative than "any angle"; do not publish it.
+    _MAX_PUBLISH_VARIANCE: float = (math.pi**2) / 3.0
 
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
         """
@@ -119,10 +130,18 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("heading_output_topic", "/gnss/heading")
         # Minimum per-step displacement (metres) to accept a COG update.
         self.declare_parameter("cog_min_displacement_m", 0.05)
-        # When true, detect reverse motion by comparing raw COG to the EKF's
-        # current yaw (from /odometry/filtered) and flipping by pi when the
-        # difference exceeds 90 deg.
-        self.declare_parameter("enable_cog_reverse_detection", True)
+        # IMU topic used to detect ZUPT (standstill) and gate COG accordingly.
+        self.declare_parameter("imu_topic", "/carla/ego_vehicle/imu/stamped")
+        # Master switch: false suppresses all COG heading publication.
+        self.declare_parameter("enable_cog_heading", True)
+        # Per-episode axis-aligned anisotropy on GNSS position noise. Models
+        # geometric dilution of precision: real receivers have unequal east/north
+        # variances depending on satellite geometry.
+        self.declare_parameter("enable_gnss_anisotropy", True)
+        self.declare_parameter("aniso_ratio_max", 1.5)
+        # Per-callback probability of skipping a GNSS fix entirely. Models
+        # cycle slips and brief satellite occlusions.
+        self.declare_parameter("gnss_dropout_probability", 0.02)
         self.declare_parameter(
             "noise_profiles_path",
             os.environ.get(
@@ -171,11 +190,29 @@ class GnssNoiseRelayNode(Node):
             .get_parameter_value()
             .double_value
         )
-        self._enable_cog_reverse_detection: bool = bool(
-            self.get_parameter("enable_cog_reverse_detection")
+        imu_topic = str(
+            self.get_parameter("imu_topic").get_parameter_value().string_value
+        )
+        self._enable_cog_heading: bool = bool(
+            self.get_parameter("enable_cog_heading").get_parameter_value().bool_value
+        )
+        self._enable_anisotropy: bool = bool(
+            self.get_parameter("enable_gnss_anisotropy")
             .get_parameter_value()
             .bool_value
         )
+        self._aniso_ratio_max: float = float(
+            self.get_parameter("aniso_ratio_max").get_parameter_value().double_value
+        )
+        self._dropout_probability: float = float(
+            self.get_parameter("gnss_dropout_probability")
+            .get_parameter_value()
+            .double_value
+        )
+        # Per-episode anisotropy factors. 1.0 == isotropic. Geometric mean is
+        # always 1.0 so the tier's nominal sigma still describes the average.
+        self._sigma_x_factor: float = 1.0
+        self._sigma_y_factor: float = 1.0
 
         # Precompute flat-earth scale factors for the datum latitude.
         self._metres_per_deg_lat: float = 111320.0
@@ -193,6 +230,9 @@ class GnssNoiseRelayNode(Node):
         self._active_tier_idx: int = 0
 
         self._extra_alt_stddev_m: float = 0.0
+        # Current tier's NavSatStatus code, updated by _apply_tier and stamped
+        # on each outgoing NavSatFix when sim noise is enabled.
+        self._tier_status: int = NavSatStatus.STATUS_FIX
         self._metric_stddev_m: float = self._base_metric_stddev
 
         self._config_seq: int = -1
@@ -235,9 +275,10 @@ class GnssNoiseRelayNode(Node):
         # True only when the last callback met both COG gates (speed + displacement).
         # Used to suppress tight-variance publish when gates reject a callback.
         self._cog_active: bool = False
-        # Latest EKF yaw (ROS frame, radians) cached from /odometry/filtered.
-        # Used to disambiguate forward vs reverse motion.
-        self._ekf_yaw_rad: Optional[float] = None
+
+        # True when the stamped IMU shows ZUPT-clamped zeros on all channels.
+        # Default True so COG is gated off until the first IMU sample arrives.
+        self._imu_stationary: bool = True
 
         qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
@@ -254,23 +295,22 @@ class GnssNoiseRelayNode(Node):
         self._sub = self.create_subscription(
             NavSatFix, input_topic, self._gnss_callback, qos
         )
+        # ImuNoiseRelayNode publishes the stamped IMU with BEST_EFFORT QoS.
+        self._imu_sub = self.create_subscription(
+            Imu, imu_topic, self._imu_callback, qos_be
+        )
         self._pub = self.create_publisher(NavSatFix, output_topic, qos)
         self._odom_pub = self.create_publisher(Odometry, odom_output_topic, qos_be)
         self._heading_pub = self.create_publisher(
             PoseWithCovarianceStamped, heading_output_topic, qos_be
         )
-        # Subscribe to EKF output for reverse-motion detection. RELIABLE matches
-        # robot_localization's default publisher QoS on /odometry/filtered.
-        if self._enable_cog_reverse_detection:
-            self._ekf_odom_sub = self.create_subscription(
-                Odometry, "/odometry/filtered", self._ekf_odom_callback, qos
-            )
 
         self.get_logger().info(
             f"GnssNoiseRelay: {input_topic} -> {output_topic} "
             f"-> {odom_output_topic} (flat-earth, "
             f"COG heading -> {heading_output_topic}, "
             f"cog_min_disp={self._cog_min_displacement_m:.3f} m, "
+            f"imu_gate={imu_topic}, "
             f"markov_transitions={self._markov_enabled})"
         )
 
@@ -327,6 +367,28 @@ class GnssNoiseRelayNode(Node):
         self.get_logger().info(f"Loaded transition matrix from {profiles_path}.")
         return P
 
+    def _resample_anisotropy(self) -> None:
+        """
+        @brief Sample per-episode axis-aligned GNSS noise anisotropy.
+
+        Sets sigma_x_factor and sigma_y_factor such that the geometric mean is
+        unity (so the tier's nominal sigma is preserved on average), with a
+        ratio drawn uniformly from [1.0, aniso_ratio_max]. The major-sigma axis
+        is randomly x or y per episode.
+        """
+        if not self._enable_anisotropy:
+            self._sigma_x_factor = 1.0
+            self._sigma_y_factor = 1.0
+            return
+        ratio = float(self._rng.uniform(1.0, max(1.0, self._aniso_ratio_max)))
+        factor = math.sqrt(ratio)
+        if self._rng.random() < 0.5:
+            self._sigma_x_factor = factor
+            self._sigma_y_factor = 1.0 / factor
+        else:
+            self._sigma_x_factor = 1.0 / factor
+            self._sigma_y_factor = factor
+
     def _apply_tier(self, tier_name: str) -> None:
         """
         @brief Update active noise state from tier name.
@@ -342,6 +404,7 @@ class GnssNoiseRelayNode(Node):
         extra_alt = max(0.0, params["alt_stddev_m"] - 0.05)
         self._extra_alt_stddev_m = extra_alt
         self._metric_stddev_m = params["metric_stddev_m"]
+        self._tier_status = _TIER_STATUS.get(tier_name, NavSatStatus.STATUS_FIX)
 
         if tier_name in _TIER_INDEX:
             self._active_tier_idx = _TIER_INDEX[tier_name]
@@ -399,29 +462,14 @@ class GnssNoiseRelayNode(Node):
                 self._prev_stamp_sec = None
                 self._cog_initialised = False
                 self._cog_active = False
+                # Resample anisotropy at the episode boundary so each episode
+                # sees a different satellite-geometry pattern.
+                self._resample_anisotropy()
                 self.get_logger().info(
                     f"GNSS datum re-latched: lat={self._datum_lat:.7f} "
-                    f"lon={self._datum_lon:.7f}"
-                )
-
-            # Seed COG heading from the known spawn yaw (layout geometry).
-            spawn_yaw = data.get("spawn_yaw")
-            if spawn_yaw is not None:
-                self._last_heading_rad = float(spawn_yaw)
-                # Use a moderately tight variance: the spawn heading is known
-                # from the layout but the vehicle may not be perfectly aligned.
-                self._last_heading_var = (math.radians(5.0)) ** 2
-                self._cog_initialised = True
-                self.get_logger().info(
-                    f"COG heading seeded from spawn_yaw: "
-                    f"{math.degrees(self._last_heading_rad):.1f} deg"
-                )
-            else:
-                self._datum_latched = False
-                self.get_logger().warn(
-                    "No datum_lat/datum_lon in GNSS noise config - "
-                    "auto-latching datum on next GNSS callback. "
-                    "EKF may drift briefly at episode start."
+                    f"lon={self._datum_lon:.7f} "
+                    f"aniso_factors=({self._sigma_x_factor:.3f},"
+                    f"{self._sigma_y_factor:.3f})"
                 )
 
             self.get_logger().info(
@@ -435,8 +483,8 @@ class GnssNoiseRelayNode(Node):
         """
         @brief Write the current active tier back to episode_config.json.
 
-        Read-modify-write so that datum_lat, datum_lon, and spawn_yaw written
-        by the training container at episode reset are preserved.
+        Read-modify-write so that datum_lat and datum_lon written by the
+        training container at episode reset are preserved.
 
         @param tier_name: Active RTK fix-state tier name.
         """
@@ -473,42 +521,32 @@ class GnssNoiseRelayNode(Node):
     # COG heading helpers
     # ------------------------------------------------------------------
 
-    def _ekf_odom_callback(self, msg: Odometry) -> None:
-        """
-        @brief Cache latest EKF yaw for COG forward/reverse disambiguation.
-
-        Extracts yaw from the EKF's /odometry/filtered quaternion and stores
-        it for use in _gnss_callback.
-
-        @param msg: EKF state estimate from robot_localization.
-        """
-        qx = msg.pose.pose.orientation.x
-        qy = msg.pose.pose.orientation.y
-        qz = msg.pose.pose.orientation.z
-        qw = msg.pose.pose.orientation.w
-        siny_cosp = 2.0 * (qw * qz + qx * qy)
-        cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-        self._ekf_yaw_rad = math.atan2(siny_cosp, cosy_cosp)
-
-    def _cog_heading_variance(self, displacement_m: float) -> float:
+    def _cog_heading_variance(self, displacement_m: float, sigma: float) -> float:
         """
         @brief Compute COG heading variance from GNSS position noise and displacement.
-
-        Linearised propagation of per-axis Gaussian position noise through
-        atan2(dy, dx): Var(heading) = 2*sigma^2 / displacement^2 (rad^2).
-        The factor 2 comes from the displacement vector being the difference
-        of two independent noisy fixes, summing their per-axis variances.
-
         @param displacement_m: Per-step GNSS displacement in metres.
+        @param sigma: GNSS position 1-sigma in metres (read from message covariance).
         @return Heading variance in rad^2.
         """
-        sigma = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
-        # displacement_m is guaranteed >= cog_min_displacement_m by the gate
-        # in _gnss_callback, so division is safe.
         disp_sq = displacement_m * displacement_m
         raw_var = 2.0 * (sigma**2) / disp_sq
         min_var = 2.0 * self._rtk_fixed_var / disp_sq
         return max(raw_var, min_var)
+
+    # ------------------------------------------------------------------
+    # IMU callback (ZUPT detection)
+    # ------------------------------------------------------------------
+
+    def _imu_callback(self, msg: Imu) -> None:
+        """
+        @brief Set _imu_stationary when ZUPT-clamped zeros are seen on all axes.
+        @param msg: sensor_msgs/Imu with ZUPT-clamped fields.
+        """
+        self._imu_stationary = (
+            msg.angular_velocity.z == 0.0
+            and msg.linear_acceleration.x == 0.0
+            and msg.linear_acceleration.y == 0.0
+        )
 
     # ------------------------------------------------------------------
     # Main callback
@@ -526,9 +564,24 @@ class GnssNoiseRelayNode(Node):
         if self._markov_enabled:
             self._step_markov()
 
+        # Simulated GNSS dropout: occasionally skip a fix entirely so the EKF
+        # goes open-loop on position for one tick. Models cycle slips and brief
+        # satellite occlusions seen in real RTK operation.
+        if (
+            self._gnss_noise_enabled
+            and self._dropout_probability > 0.0
+            and self._rng.random() < self._dropout_probability
+        ):
+            return
+
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
-        # -- Auto-datum latch --------------------------------------------------
+        # -- Datum latch -------------------------------------------------------
+        # Preferred path: the training container writes datum_lat/datum_lon to
+        # episode_config.json before any GNSS callback fires for the new
+        # episode, and _apply_episode_config() latches that value. Falling
+        # through to auto-latch only happens when the config has not yet
+        # arrived (process startup race, or env-side publish failure).
         if not self._datum_latched:
             self._datum_lat = msg.latitude
             self._datum_lon = msg.longitude
@@ -549,17 +602,25 @@ class GnssNoiseRelayNode(Node):
         # -- Inject noise to lat/lon -------------------------------------------
         out = NavSatFix()
         out.header = msg.header
-        out.status = msg.status
+        if self._gnss_noise_enabled:
+            # Sim: override the bridge's pass-through status with one that
+            # reflects the active tier (real-API parity for downstream
+            # consumers that branch on fix quality).
+            out.status.status = self._tier_status
+            out.status.service = msg.status.service
+        else:
+            out.status = msg.status
 
         if self._gnss_noise_enabled:
-            sigma = self._metric_stddev_m
-            # Single PRNG draw for all three noise terms then scale.
+            # Per-axis sigmas: tier sigma scaled by per-episode anisotropy.
+            sigma_x = self._metric_stddev_m * self._sigma_x_factor
+            sigma_y = self._metric_stddev_m * self._sigma_y_factor
             n_xy, n_xy2, n_alt = self._rng.standard_normal(3)
             out.longitude = msg.longitude + (
-                n_xy * sigma / self._metres_per_deg_lon if sigma > 0.0 else 0.0
+                n_xy * sigma_x / self._metres_per_deg_lon if sigma_x > 0.0 else 0.0
             )
             out.latitude = msg.latitude + (
-                n_xy2 * sigma / self._metres_per_deg_lat if sigma > 0.0 else 0.0
+                n_xy2 * sigma_y / self._metres_per_deg_lat if sigma_y > 0.0 else 0.0
             )
             out.altitude = msg.altitude + (
                 n_alt * self._extra_alt_stddev_m
@@ -571,20 +632,28 @@ class GnssNoiseRelayNode(Node):
             out.latitude = msg.latitude
             out.altitude = msg.altitude
 
-        metric_var = self._metric_stddev_m**2
-        alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
-        out.position_covariance = [
-            metric_var,
-            0.0,
-            0.0,
-            0.0,
-            metric_var,
-            0.0,
-            0.0,
-            0.0,
-            alt_var,
-        ]
-        out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        if self._gnss_noise_enabled:
+            # Sim path: stamp anisotropic covariance derived from the active
+            # tier and the per-episode anisotropy factors.
+            var_x = (self._metric_stddev_m * self._sigma_x_factor) ** 2
+            var_y = (self._metric_stddev_m * self._sigma_y_factor) ** 2
+            alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
+            out.position_covariance = [
+                var_x,
+                0.0,
+                0.0,
+                0.0,
+                var_y,
+                0.0,
+                0.0,
+                0.0,
+                alt_var,
+            ]
+            out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        else:
+            # Real path: pass through the receiver's reported covariance.
+            out.position_covariance = msg.position_covariance
+            out.position_covariance_type = msg.position_covariance_type
         self._pub.publish(out)
 
         # -- Flat-earth projection: noisy lat/lon -> local XY ------------------
@@ -599,10 +668,10 @@ class GnssNoiseRelayNode(Node):
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
 
-        xy_var = metric_var if self._gnss_noise_enabled else self._rtk_fixed_var
+        # Per-axis position variance from the NavSatFix
         pose_cov = list(self._odom_cov_template)
-        pose_cov[0] = xy_var
-        pose_cov[7] = xy_var
+        pose_cov[0] = float(out.position_covariance[0])
+        pose_cov[7] = float(out.position_covariance[4])
         odom_msg.pose.covariance = pose_cov
         self._odom_pub.publish(odom_msg)
 
@@ -618,13 +687,24 @@ class GnssNoiseRelayNode(Node):
                 self._last_speed_ms = displacement_m / dt
                 speed_ms = self._last_speed_ms
 
-                # Gate on displacement
-                sigma_now = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
-                gate = max(
-                    self._cog_min_displacement_m,
-                    self._NOISE_FLOOR_K * sigma_now,
+                # Gate on (a) minimum displacement, (b) IMU not in ZUPT, and
+                # (c) computed heading variance below uniform-distribution
+                # ceiling. Use the larger of the two axis sigmas so the gate
+                # is conservative when noise is anisotropic. Sigma is read
+                # from the message covariance, so the same
+                # logic works in real deployments where the receiver supplies
+                # its own covariance.
+                sigma_now = math.sqrt(
+                    max(out.position_covariance[0], out.position_covariance[4])
                 )
-                if displacement_m >= gate:
+                candidate_var = self._cog_heading_variance(
+                    max(displacement_m, 1e-6), sigma_now
+                )
+                if (
+                    displacement_m >= self._cog_min_displacement_m
+                    and not self._imu_stationary
+                    and candidate_var <= self._MAX_PUBLISH_VARIANCE
+                ):
                     self._cog_active = True
                     # CARLA GnssSensor reports latitude increasing with CARLA +Y
                     # (which is south), so local_y increases southward. Negate dy
@@ -632,28 +712,8 @@ class GnssNoiseRelayNode(Node):
                     # pi/2=north, anticlockwise positive).
                     raw_heading = math.atan2(-dy, dx)
 
-                    # Forward / reverse disambiguation. COG is the direction of
-                    # the velocity vector, which equals vehicle yaw when going
-                    # forward and yaw + pi when reversing.
-                    ref_yaw: Optional[float] = None
-                    if self._enable_cog_reverse_detection:
-                        if self._ekf_yaw_rad is not None:
-                            ref_yaw = self._ekf_yaw_rad
-                        elif self._cog_initialised:
-                            # spawn_yaw seed loaded by _check_config_file.
-                            ref_yaw = self._last_heading_rad
-                    if ref_yaw is not None:
-                        diff = math.atan2(
-                            math.sin(raw_heading - ref_yaw),
-                            math.cos(raw_heading - ref_yaw),
-                        )
-                        if abs(diff) > math.pi / 2.0:
-                            # raw_heading is in (-pi, pi]; flipping by pi and
-                            # rewrapping reduces to a sign-conditional offset.
-                            raw_heading += -math.pi if raw_heading > 0.0 else math.pi
-
                     self._last_heading_rad = raw_heading
-                    self._last_heading_var = self._cog_heading_variance(displacement_m)
+                    self._last_heading_var = candidate_var
 
                     if not self._cog_initialised:
                         self._cog_initialised = True
@@ -677,8 +737,9 @@ class GnssNoiseRelayNode(Node):
         self._prev_y = local_y
         self._prev_stamp_sec = stamp_sec
 
-        # Only publish heading when the COG gate passed (real displacement
-        # detected).
+        if not self._enable_cog_heading:
+            return
+
         if not self._cog_initialised or not self._cog_active:
             return
 

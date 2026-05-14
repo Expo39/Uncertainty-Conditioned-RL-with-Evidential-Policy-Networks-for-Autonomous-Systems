@@ -236,8 +236,8 @@ class CARLAParkingEnv(gym.Env):
         self.world: Optional[Any] = None
         self.vehicle: Optional[Any] = None
 
-        # The spawn transform chosen for this episode (set in _spawn_vehicle()).
-        # Used for /set_pose publishing to seed the EKF on reset.
+        # The spawn transform chosen for this episode (set in reset() before
+        # any world ticks so the GNSS datum config is written first).
         self._chosen_spawn: Dict[str, float] = {}
 
         # Ego vehicle CoM z after settling under gravity.  Set in _spawn_vehicle()
@@ -336,8 +336,9 @@ class CARLAParkingEnv(gym.Env):
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied (3-dim: [steer, drive, brake])
-        self._last_action: np.ndarray = np.zeros(3, dtype=np.float32)
+        # Last action applied (2-dim: [steer, drive]). drive is bipolar:
+        # positive = throttle, negative = brake. No reverse gear.
+        self._last_action: np.ndarray = np.zeros(2, dtype=np.float32)
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -385,13 +386,13 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action space: [steer, drive, brake]
+        # Action space: [steer, drive]
         # steer : [-1, 1]  left to right
-        # drive : [-1, 1]  negative = reverse throttle, positive = forward throttle
-        # brake : [ 0, 1]  friction brake (independent of drive direction)
+        # drive : [-1, 1]  positive = forward throttle, negative = brake.
+        #                  No reverse gear: forward perpendicular parking only.
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0, 0.0]),
-            high=np.array([1.0, 1.0, 1.0]),
+            low=np.array([-1.0, -1.0]),
+            high=np.array([1.0, 1.0]),
             dtype=np.float32,
         )
 
@@ -991,7 +992,6 @@ class CARLAParkingEnv(gym.Env):
             "action": {
                 "steer": float(self._last_action[0]),
                 "drive": float(self._last_action[1]),
-                "brake": float(self._last_action[2]),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -1077,9 +1077,9 @@ class CARLAParkingEnv(gym.Env):
             return
 
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
-        chosen = self._select_spawn()
-        # Store spawn transform so LotSpawner can open this entry gap in cones.
-        self._chosen_spawn = chosen
+        # _chosen_spawn is pre-selected in reset() before ticks so the GNSS
+        # datum config is written before any GNSS callbacks fire.
+        chosen = self._chosen_spawn
         sx = float(chosen.get("x", 0.0))
         sy = float(chosen.get("y", 0.0))
         sz = float(chosen.get("z", default_z))
@@ -1133,9 +1133,9 @@ class CARLAParkingEnv(gym.Env):
         self.vehicle.disable_constant_velocity()
 
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
-        chosen = self._select_spawn()
-        self._chosen_spawn = chosen
-
+        # _chosen_spawn is pre-selected in reset() before ticks so the GNSS
+        # datum config is written before any GNSS callbacks fire.
+        chosen = self._chosen_spawn
         sx = float(chosen.get("x", 0.0))
         sy = float(chosen.get("y", 0.0))
         sz = float(chosen.get("z", default_z))
@@ -1360,6 +1360,37 @@ class CARLAParkingEnv(gym.Env):
         # world queries inside each spawn method.
         self._cache_blueprints()
 
+        # Pre-select spawn and publish GNSS episode config BEFORE any world
+        # ticks. The gravity-settle ticks inside _spawn_vehicle/_teleport_vehicle
+        # fire GNSS callbacks in the ROS 2 bridge.
+        self._chosen_spawn = self._select_spawn()
+        sx = float(self._chosen_spawn.get("x", 0.0))
+        sy = float(self._chosen_spawn.get("y", 0.0))
+        syaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
+
+        if (
+            self._include_covariance
+            and self._cov_subscriber is not None
+            and len(self._gnss_noise_tiers) > 0
+        ):
+            datum_lat: Optional[float] = None
+            datum_lon: Optional[float] = None
+            try:
+                geo = self.world.get_map().transform_to_geolocation(
+                    carla.Location(sx, sy, 0.0)
+                )
+                datum_lat = float(geo.latitude)
+                datum_lon = float(geo.longitude)
+            except Exception as exc:
+                logger.warning(f"Failed to get spawn geolocation for GNSS datum: {exc}")
+            tier = self._get_current_gnss_tier()
+            if tier is not None:
+                self._cov_subscriber.publish_episode_config(
+                    tier_name=str(tier.get("name", "")),
+                    datum_lat=datum_lat,
+                    datum_lon=datum_lon,
+                )
+
         if reuse_vehicle:
             # Teleport the existing vehicle; sensors stay attached and alive.
             self._teleport_vehicle()
@@ -1373,48 +1404,8 @@ class CARLAParkingEnv(gym.Env):
         if self._include_covariance and self._cov_subscriber is not None:
             self._cov_subscriber.invalidate()
 
-        # Spawn coordinates used for GNSS datum and /set_pose.
-        sx = float(self._chosen_spawn.get("x", 0.0))
-        sy = float(self._chosen_spawn.get("y", 0.0))
-        syaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
-
-        # Step 1: Signal GNSS tier AND spawn datum to the ros2-bridge.
-        # The datum re-latch MUST happen before /set_pose so the GNSS local
-        # frame is re-zeroed at the spawn position before the EKF receives
-        # its initial state. Without this, /set_pose and GNSS Odometry use
-        # different frame origins and the EKF drifts toward the stale datum
-        # over the first 5-10 seconds of every episode.
-        if (
-            self._include_covariance
-            and self._cov_subscriber is not None
-            and len(self._gnss_noise_tiers) > 0
-        ):
-            datum_lat: Optional[float] = None
-            datum_lon: Optional[float] = None
-            if self.world is not None:
-                try:
-                    geo = self.world.get_map().transform_to_geolocation(
-                        carla.Location(sx, sy, 0.0)
-                    )
-                    datum_lat = float(geo.latitude)
-                    datum_lon = float(geo.longitude)
-                except Exception as exc:
-                    logger.warning(
-                        f"Failed to get spawn geolocation for GNSS datum: {exc}"
-                    )
-            tier = self._get_current_gnss_tier()
-            if tier is not None:
-                self._cov_subscriber.publish_episode_config(
-                    tier_name=str(tier.get("name", "")),
-                    datum_lat=datum_lat,
-                    datum_lon=datum_lon,
-                    spawn_yaw=-syaw,
-                )
-
-        # Step 2: Publish spawn pose as local (0, 0, yaw) so /set_pose agrees
-        # with the re-latched GNSS frame. The datum is at the spawn position,
-        # so the vehicle starts at local origin (0, 0) in both the GNSS
-        # Odometry and the EKF state - no frame mismatch, no drift.
+        # Publish spawn pose as local (0, 0, yaw) so /set_pose seeds the EKF
+        # at local origin, matching the re-latched GNSS datum frame.
         if (
             self._include_covariance
             and self._cov_subscriber is not None
@@ -1497,10 +1488,10 @@ class CARLAParkingEnv(gym.Env):
         Observations are only constructed on the final step of the repeat sequence,
         reducing EKF covariance reads and state construction by action_repeat factor.
 
-        @param action: 3-dim action vector [steering, drive, brake].
+        @param action: 2-dim action vector [steering, drive].
                 steering in [-1, 1]: left to right.
-                drive    in [-1, 1]: negative = reverse throttle, positive = forward throttle.
-                brake    in [ 0, 1]: friction brake (applied regardless of drive direction).
+                drive    in [-1, 1]: positive = forward throttle, negative = brake.
+                                     No reverse gear engaged.
                 Mapped to CARLA throttle/brake internally.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
@@ -1520,19 +1511,22 @@ class CARLAParkingEnv(gym.Env):
         if self.vehicle is not None:
             steer = float(np.clip(action[0], -1.0, 1.0))
             drive = float(np.clip(action[1], -1.0, 1.0))
-            brake = float(np.clip(action[2], 0.0, 1.0))
 
             vel = self.vehicle.get_velocity()
             current_speed = math.hypot(vel.x, vel.y)
 
             control = carla.VehicleControl()
             control.steer = steer
-            control.brake = brake
-            control.reverse = drive < 0.0
-            # Cut throttle when speed limit is exceeded.
-            control.throttle = (
-                0.0 if current_speed >= self._max_ego_speed_ms else abs(drive)
-            )
+            control.reverse = False
+            if drive >= 0.0:
+                # Cut throttle when speed limit is exceeded.
+                control.throttle = (
+                    0.0 if current_speed >= self._max_ego_speed_ms else drive
+                )
+                control.brake = 0.0
+            else:
+                control.throttle = 0.0
+                control.brake = -drive
 
             self.vehicle.apply_control(control)
 

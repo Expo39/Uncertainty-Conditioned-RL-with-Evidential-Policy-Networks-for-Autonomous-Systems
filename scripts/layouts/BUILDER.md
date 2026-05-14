@@ -360,8 +360,8 @@ scripts/layouts/
 |-- README.md            # scripts/layouts/ onboarding and usage guide
 |-- __init__.py          # package marker
 |-- floor_plans/
-    |-- rectangle.py     # training layout (53 bays)
-    |-- trapezoid.py     # training layout (39 bays)
-    +-- irregular_a.py   # OOD evaluation layout (58 bays)
+    |-- rectangle.py     # training layout (54 bays)
+    |-- trapezoid.py     # training layout (49 bays)
+    +-- irregular_a.py   # OOD evaluation layout (56 bays)
 
 ```

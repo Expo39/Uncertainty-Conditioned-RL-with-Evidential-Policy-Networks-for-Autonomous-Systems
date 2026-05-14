@@ -4,8 +4,8 @@ ROS 2 ament_python package bridging CARLA sensors to the `robot_localization` EK
 
 ## At a glance
 
-- `GnssNoiseRelayNode` injects per-episode GNSS noise (with optional mid-episode Markov tier transitions loaded from `gnss_noise_profiles.yaml`) and projects lat/lon to metric Odometry via flat-earth (replaces `navsat_transform_node`); also derives a COG heading with forward/reverse disambiguation against the EKF yaw
-- `ImuNoiseRelayNode` stamps covariance on the CARLA IMU
+- `GnssNoiseRelayNode` injects per-episode GNSS noise (Markov tier transitions, per-episode east/north anisotropy, per-callback dropout, tier-mapped NavSatStatus), projects lat/lon to metric Odometry via flat-earth (replaces `navsat_transform_node`), and derives a forward-only COG heading from successive noisy fixes (gated on minimum displacement, ZUPT-aware via IMU, and variance ceiling)
+- `ImuNoiseRelayNode` stamps covariance on the CARLA IMU, injects Gaussian noise + per-episode bias and per-axis multiplicative scale-factor errors, and applies gyro/accel ZUPT clamping
 - Both sensor relay nodes are co-spun in one process via `MultiThreadedExecutor`
 - `CovarianceExtractorNode` extracts the $3 \times 3$ $[x, y, \psi]$ submatrix from the EKF's $6 \times 6$ covariance and writes `ekf_state.json` for the training container
 - ROS 2 Jazzy (ros2-bridge container) communicates with ROS 2 Humble (training container) via DDS on `ROS_DOMAIN_ID=42`
@@ -80,7 +80,7 @@ flowchart TB
 | `/gnss/heading` | `PoseWithCovarianceStamped` | out | `GnssNoiseRelayNode` -> EKF |
 | `/carla/ego_vehicle/imu` | `Imu` | in | `ImuNoiseRelayNode` |
 | `/carla/ego_vehicle/imu/stamped` | `Imu` | out | `ImuNoiseRelayNode` -> EKF |
-| `/odometry/filtered` | `Odometry` | in | `CovarianceExtractorNode`, `GnssNoiseRelayNode` (for COG forward/reverse detection) |
+| `/odometry/filtered` | `Odometry` | in | `CovarianceExtractorNode` |
 | `/ekf_uncertainty/covariance` | `CovarianceEstimate` | out | `CovarianceExtractorNode` |
 
 ## `CovarianceEstimate.msg`
@@ -119,12 +119,11 @@ At each episode reset the training container writes `episode_config.json` to the
   "seq": 42,
   "tier_name": "rtk_float",
   "datum_lat": 0.0,
-  "datum_lon": 0.0,
-  "spawn_yaw": 1.5707963
+  "datum_lon": 0.0
 }
 ```
 
-`GnssNoiseRelayNode` polls this file on every GNSS callback (gated by `seq` and mtime), applies the noise tier, re-latches the datum, and seeds the COG heading. This allows per-episode RTK fix-state variation without restarting ROS 2 nodes.
+`GnssNoiseRelayNode` polls this file on every GNSS callback (gated by `seq` and mtime), applies the noise tier, re-latches the datum, and resamples per-episode east/north anisotropy factors. This allows per-episode RTK fix-state variation without restarting ROS 2 nodes. COG heading is no longer seeded from the spawn yaw - the node initialises COG from the first GNSS fix pair that passes the displacement, ZUPT, and variance-ceiling gates.
 
 ## TF tree
 
@@ -148,8 +147,8 @@ All ROS 2 parameters are loaded from `configs/ros2_config.yaml`:
 | Key prefix | Controls |
 |------------|---------|
 | `ekf.*` | EKF frequency, `two_d_mode`, fusion matrix configs (`odom0_config`, `imu0_config`, `pose0_config`) |
-| `gnss_noise_relay.*` | Input/output topics, `enable_gnss_noise`, `enable_markov_transitions`, `base_metric_stddev_m`, `cog_min_displacement_m`, `enable_cog_reverse_detection`, `noise_profiles_path` (path to the YAML providing the per-step transition matrix), flat-earth datum |
-| `imu_noise_relay.*` | IMU topic, `enable_imu_noise` (single master flag for covariance stamping, value noise, and per-episode bias), noise variances, ZUPT thresholds |
+| `gnss_noise_relay.*` | Input/output topics, `enable_gnss_noise`, `enable_markov_transitions`, `base_metric_stddev_m`, `cog_min_displacement_m`, `enable_cog_heading` (master switch for heading publication), `enable_gnss_anisotropy` + `aniso_ratio_max` (per-episode east/north sigma asymmetry), `gnss_dropout_probability` (per-callback fix-skip rate), `imu_topic` (for ZUPT gating), `noise_profiles_path`, flat-earth datum |
+| `imu_noise_relay.*` | IMU topic, `enable_imu_noise` (single master flag for covariance stamping, value noise, per-episode bias, and per-episode scale-factor errors), noise variances, bias limits, `imu_gyro_scale_factor_limit` and `imu_accel_scale_factor_limit` (+-0.5% multiplicative scale residuals, resampled per episode), ZUPT thresholds |
 | `odom_topic` | Input odometry topic for `CovarianceExtractorNode` (default: `/odometry/filtered`) |
 | `covariance_topic` | Output covariance topic (default: `/ekf_uncertainty/covariance`) |
 | `publish_rate` | Covariance publish rate in Hz (default: 10) |

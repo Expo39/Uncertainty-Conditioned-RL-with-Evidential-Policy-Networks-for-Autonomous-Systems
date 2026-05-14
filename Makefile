@@ -246,13 +246,12 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 # Docker: Inspection Tools to confirm all is good in the simulator
 # ----------------------------------------------------------------------
 
-INSPECT_LAYOUT   ?= rectangle
 INSPECT_EPISODES ?=
 INSPECT_VIEW     ?= third_person
 INSPECT_PAUSE    ?= 3.0
-docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: constant forward drive. Usage: make docker-inspect-dryrun [MANUAL=true] [INSPECT_LAYOUT=rectangle] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free] [INSPECT_PAUSE=3.0]
+INSPECT_OOD      ?= false
+docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: constant forward drive. Usage: make docker-inspect-dryrun [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free] [INSPECT_PAUSE=3.0] [INSPECT_OOD=true|false]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
-	$(eval LAYOUT := $(INSPECT_LAYOUT))
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
@@ -260,9 +259,9 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: con
 	@# from processing leftover initial_pose or ekf_state data on startup.
 	rm -f outputs/initial_pose.json outputs/ekf_state.json outputs/ekf_state.json.tmp 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
-	DISPLAY=$(_DISPLAY) LAYOUT=$(LAYOUT) EPISODES=$(INSPECT_EPISODES) \
+	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
-		INSPECT_MANUAL=$(MANUAL) \
+		INSPECT_MANUAL=$(MANUAL) INSPECT_OOD=$(INSPECT_OOD) \
 		bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]

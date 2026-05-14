@@ -22,11 +22,11 @@ OOD = True
 # Perimeter corners (CCW polygon order).
 P0 = (0.0, 0.0)  # bottom-left
 P1 = (53.0, 0.0)  # notch bottom-left
-P2 = (53.0, 8.0)  # notch top-left
-P3 = (65.0, 8.0)  # notch top-right
+P2 = (53.0, 16.0)  # notch top-left
+P3 = (65.0, 16.0)  # notch top-right
 P4 = (65.0, 0.0)  # notch bottom-right
-P5 = (80.0, 0.0)  # bottom-right
-P6 = (80.0, 37.0)  # diagonal start (top-right)
+P5 = (85.0, 0.0)  # bottom-right
+P6 = (85.0, 37.0)  # diagonal start (top-right)
 P7 = (20.0, 50.0)  # diagonal/flat junction
 P8 = (0.0, 50.0)  # top-left
 
@@ -42,7 +42,7 @@ WALL_TOP_FLAT = 7  # P7 -> P8
 WALL_LEFT = 8  # P8 -> P0
 
 # Central obstacle (rectangular cone wall in lot interior).
-OBSTACLE = (23.25, 39.25, 17.0, 21.0)  # (x_min, x_max, y_min, y_max)
+OBSTACLE = (27.25, 43.25, 17.0, 21.0)  # (x_min, x_max, y_min, y_max)
 TOP_FLAT_AISLE = 6.0  # Aisle between top-flat back-to-back perp rows.
 LEFT_ANG_BOTTOM_Y = 3.0  # Local y of the bottom-most left-wall angled bay.
 
@@ -65,10 +65,7 @@ def generate() -> Dict[str, Any]:
         "perpendicular", n=6, obstacle=OBSTACLE, face="north"
     )
     obs_west = lot.row_along_obstacle_face(
-        "perpendicular", n=2, obstacle=OBSTACLE, face="west"
-    )
-    obs_east = lot.row_along_obstacle_face(
-        "perpendicular", n=2, obstacle=OBSTACLE, face="east"
+        "perpendicular", n=6, obstacle=OBSTACLE, face="west"
     )
 
     # ---------- Left wall angled bays ----------------------------------
@@ -107,9 +104,9 @@ def generate() -> Dict[str, Any]:
         bay_type="perpendicular",
         n=7,
         wall=WALL_TOP_FLAT,
-        centred=True,
+        pack_from="end",
     )
-    top_flat_facing = lot.facing_row(top_flat_back, gap=TOP_FLAT_AISLE)
+    top_flat_facing = lot.facing_row(top_flat_back, gap=TOP_FLAT_AISLE, n=4)
 
     # ---------- Notch top wall: 4 perpendicular bays -------------------
     notch_perp = lot.row_along_perimeter(
@@ -119,33 +116,26 @@ def generate() -> Dict[str, Any]:
         centred=True,
     )
 
-    # ---------- Bottom + right parallel groups -------------------------
-    bottom_par = lot.row_along_perimeter(
-        bay_type="parallel",
-        n=5,
-        wall=WALL_BOTTOM_LEFT,
-        bay_angle_deg=90.0,
-        centred=True,
-    )
-    right_par = lot.row_along_perimeter(
-        bay_type="parallel",
-        n=4,
+    # ---------- Right wall angled bays ---------------------------------
+    right_ang = lot.row_along_perimeter(
+        bay_type="angled",
+        n=8,
         wall=WALL_RIGHT,
-        bay_angle_deg=90.0,
-        centred=True,
+        bay_angle_deg=45.0,
+        start_along=8.0,
     )
 
     # ---------- Spawns -------------------------------------------------
     lot.spawn(x=3.0, y=25.0, yaw_deg=0.0, primary=True)
     _diagonal_top_spawn(lot)
-    lot.spawn(x=70.0, y=3.0, yaw_deg=90.0)
+    lot.spawn(x=71.0, y=3.0, yaw_deg=90.0)
 
     # ---------- Patrol path (5-waypoint CCW orbit around obstacle) -----
     patrol = PatrolPath()
-    y_lower = patrol.aisle_y(below=bottom_par, above=obs_south)
+    y_lower = patrol.aisle_y(below=0.0, above=obs_south)
     y_upper = patrol.aisle_y(below=obs_north, above=diag_ang)
     x_left = patrol.aisle_x(left=0.0, right=obs_west)
-    x_right = patrol.aisle_x(left=obs_east, right=notch_perp)
+    x_right = patrol.aisle_x(left=OBSTACLE[1], right=notch_perp)
     patrol.add(x_left, y_lower)
     patrol.add(x_left, 28.0)
     patrol.add(26.0, 34.0)
@@ -156,9 +146,9 @@ def generate() -> Dict[str, Any]:
     # ---------- Pedestrian zones ---------------------------------------
     lot.add_zone(PedestrianZone.along_row(obs_south, side="south"))
     lot.add_zone(PedestrianZone.along_row(obs_north, side="north"))
-    lot.add_zone(PedestrianZone.between_rows(top_flat_back, top_flat_facing))
+    lot.add_zone(PedestrianZone.along_row(top_flat_facing, side="south"))
     lot.add_zone(PedestrianZone.along_row(notch_perp, side="north"))
-    lot.add_zone(PedestrianZone.along_row(right_par, side="west"))
+    lot.add_zone(PedestrianZone.along_row(right_ang, side="west"))
 
     # ---------- Interior obstacle --------------------------------------
     lot.add_obstacle(*OBSTACLE)
