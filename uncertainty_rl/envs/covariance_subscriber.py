@@ -328,29 +328,12 @@ class _CovarianceSubscriber:
         tier_name: str,
         datum_lat: Optional[float] = None,
         datum_lon: Optional[float] = None,
-        spawn_yaw: Optional[float] = None,
     ) -> None:
         """
-        @brief Signal the GNSS noise tier, spawn datum, and initial yaw to the ros2-bridge.
-
-        Writes episode_config.json with the episode's RTK fix-state tier
-        name, the geolocation of the vehicle spawn point, and the spawn yaw.
-
-        Re-latching the datum each episode ensures that GNSS Odometry (0, 0)
-        and /set_pose (0, 0) agree at episode reset, eliminating the systematic
-        EKF drift that occurs when /set_pose and GNSS use different origins.
-
+        @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
         @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed').
         @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
-               When provided, the relay re-latches the GNSS flat-earth datum.
-               When None, the relay falls back to auto-latching on the next
-               GNSS callback (real-vehicle mode without CARLA API).
         @param datum_lon: Longitude (degrees) of vehicle spawn.
-        @param spawn_yaw: Vehicle heading at spawn in radians, CARLA convention
-               (same as used by publish_initial_pose and the EKF /set_pose).
-               Seeds the COG heading so the EKF receives a correct initial yaw
-               before the first valid COG reading. When None, the relay waits
-               for the first valid COG reading before publishing any heading.
         """
         self._episode_config_seq += 1
         data: Dict[str, Any] = {
@@ -361,8 +344,6 @@ class _CovarianceSubscriber:
             data["datum_lat"] = datum_lat
         if datum_lon is not None:
             data["datum_lon"] = datum_lon
-        if spawn_yaw is not None:
-            data["spawn_yaw"] = spawn_yaw
         try:
             with open(self._episode_config_tmp, "w") as f:
                 json.dump(data, f)

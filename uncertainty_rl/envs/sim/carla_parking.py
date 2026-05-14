@@ -1389,7 +1389,6 @@ class CARLAParkingEnv(gym.Env):
                     tier_name=str(tier.get("name", "")),
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,
-                    spawn_yaw=-syaw,
                 )
 
         if reuse_vehicle:
