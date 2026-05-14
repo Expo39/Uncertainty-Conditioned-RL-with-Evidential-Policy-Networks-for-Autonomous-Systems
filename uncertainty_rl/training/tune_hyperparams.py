@@ -38,6 +38,7 @@ except ImportError:
 
 try:
     from stable_baselines3.common.callbacks import BaseCallback
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 except ImportError:
     raise ImportError(
         "stable_baselines3 is required. "
@@ -47,6 +48,7 @@ except ImportError:
 from uncertainty_rl.training.train_ppo import (
     load_config,
     load_env_config,
+    make_env,
     merge_configs,
     train,
 )
@@ -314,6 +316,7 @@ def objective(
     tuning_config: Dict[str, Any],
     train_config_path: str,
     env_config_path: str,
+    shared_env: Optional[VecNormalize] = None,
 ) -> float:
     """
     @brief Optuna objective function for a single trial.
@@ -327,6 +330,8 @@ def objective(
     @param tuning_config: Tuning configuration with study settings.
     @param train_config_path: Path to train_config.yaml.
     @param env_config_path: Path to env_config.yaml.
+    @param shared_env: Pre-built VecNormalize env reused across all trials.
+           Avoids the CARLA destroy/respawn cycle that breaks the EKF.
     @return Composite objective value for this trial.
     """
     try:
@@ -353,8 +358,13 @@ def objective(
         # Create trial eval callback
         trial_callback = TrialEvalCallback(trial)
 
-        # Run training
-        result = train(trial_config, extra_callbacks=[trial_callback])
+        # Run training with the shared env (env stays alive between trials so
+        # CARLA sensors + EKF do not need to re-warm).
+        result = train(
+            trial_config,
+            extra_callbacks=[trial_callback],
+            env=shared_env,
+        )
 
         success_rate = float(result.final_metrics.get("env/success_rate", 0.0))
         progress = float(result.final_metrics.get("env/mean_progress_reward", 0.0))
@@ -451,16 +461,40 @@ def run_study(
         tuning_config.get("timesteps_per_trial", 100000) // 1000,
     )
 
-    study.optimize(
-        lambda trial: objective(
-            trial,
-            base_config,
-            tuning_config,
-            train_config_path,
-            env_config_path,
-        ),
-        n_trials=n_trials,
+    # Build the env once and share it across every trial. A destroy+respawn
+    # cycle of CARLA sensors between trials breaks the ROS bridge so the EKF
+    # stops publishing /odometry/filtered and every subsequent trial times
+    # out in _wait_for_covariance.
+    n_workers = base_config.get("parallel_workers", 1)
+    logger.info(
+        "Creating shared training environment (%d worker(s)) for all trials...",
+        n_workers,
     )
+    shared_vec_env = DummyVecEnv(
+        [make_env(base_config, rank=i) for i in range(n_workers)]
+    )
+    shared_env = VecNormalize(
+        shared_vec_env,
+        norm_obs=True,
+        norm_reward=False,
+        clip_obs=10.0,
+    )
+
+    try:
+        study.optimize(
+            lambda trial: objective(
+                trial,
+                base_config,
+                tuning_config,
+                train_config_path,
+                env_config_path,
+                shared_env=shared_env,
+            ),
+            n_trials=n_trials,
+        )
+    finally:
+        logger.info("Closing shared training environment.")
+        shared_env.close()
 
     # Print summary
     logger.info("Study complete. Best trial:")
