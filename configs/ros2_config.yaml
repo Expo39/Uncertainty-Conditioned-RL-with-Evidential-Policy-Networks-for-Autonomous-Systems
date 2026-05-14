@@ -44,14 +44,14 @@ ekf:
   ]
 
   # Process noise covariance (15x15). Controls covariance inflation between updates.
-  # Active: x/y=1e-2, yaw=1e-5, vyaw=1e-3.
+  # Active: x/y=1e-2, yaw=1e-4, vyaw=1e-3.
   process_noise_covariance: [
     1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
-    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-5, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
+    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-4, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    1.0e-6, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
@@ -86,7 +86,7 @@ gnss_noise_relay:
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.
-  enable_cog_heading: false  # false = suppress all COG publication (diagnostic: isolate IMU prediction error).
+  enable_cog_heading: true  # false = suppress all COG publication (diagnostic: isolate IMU prediction error).
   noise_profiles_path: "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"  # Path inside ros2-bridge container; transition_matrix loaded from this YAML at startup.
 
 imu_noise_relay:
