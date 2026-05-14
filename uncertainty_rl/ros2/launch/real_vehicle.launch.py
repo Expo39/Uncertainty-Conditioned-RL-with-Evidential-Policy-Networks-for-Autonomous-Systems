@@ -117,9 +117,7 @@ def generate_launch_description() -> LaunchDescription:
                 "cog_min_displacement_m": gnss_relay_cfg.get(
                     "cog_min_displacement_m", 0.05
                 ),
-                "enable_cog_heading": gnss_relay_cfg.get(
-                    "enable_cog_heading", True
-                ),
+                "enable_cog_heading": gnss_relay_cfg.get("enable_cog_heading", True),
                 # Sim-only noise generators are off in real deployment; the
                 # receiver's reported covariance and natural dropouts pass
                 # through unmodified.
