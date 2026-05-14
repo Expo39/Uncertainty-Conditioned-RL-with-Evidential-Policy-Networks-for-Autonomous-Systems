@@ -45,7 +45,6 @@ def generate() -> Dict[str, Any]:
     p3 = (LEFT_X, WIDTH_FRONT)  # top-left (front)
 
     lot = LotBuilder(name="trapezoid", corners=[p0, p1, p2, p3])
-    dims_par = lot.dims["parallel"]
 
     # ---------- Bays ---------------------------------------------------
     centre_low, centre_high = lot.row_pair_back_to_back(
@@ -87,7 +86,7 @@ def generate() -> Dict[str, Any]:
         start_along=angled_corner_clearance(lot, angle_deg=45.0) + 1.0,
     )
     # Left wall: perpendicular cluster below the primary spawn (y < 30).
-    left_perp = lot.row_along_perimeter(
+    lot.row_along_perimeter(
         "perpendicular",
         n=5,
         wall=WALL_LEFT,
@@ -112,12 +111,14 @@ def generate() -> Dict[str, Any]:
     lot.set_patrol(patrol)
 
     # ---------- Pedestrian zones ---------------------------------------
-    lot.add_zone(PedestrianZone(
-        x_min=left_ang.bbox[1] + 0.5,
-        x_max=left_ang.bbox[1] + 3.5,
-        y_min=left_ang.bbox[2] + 1.5,
-        y_max=left_ang.bbox[3] - 3.5,
-    ))
+    lot.add_zone(
+        PedestrianZone(
+            x_min=left_ang.bbox[1] + 0.5,
+            x_max=left_ang.bbox[1] + 3.5,
+            y_min=left_ang.bbox[2] + 1.5,
+            y_max=left_ang.bbox[3] - 3.5,
+        )
+    )
     lot.add_zone(PedestrianZone.along_row(centre_low, side="south"))
     lot.add_zone(PedestrianZone.along_row(centre_high, side="north"))
     lot.add_zone(PedestrianZone.along_row(centre_mid_low, side="south"))
