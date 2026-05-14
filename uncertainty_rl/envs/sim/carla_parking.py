@@ -231,6 +231,13 @@ class CARLAParkingEnv(gym.Env):
         )
         self._floor_plans_config: Dict[str, Any] = scenarios.get("floor_plans", {})
 
+        # When set, force the named floor plan / bay / GNSS tier every episode.
+        self._fixed_floor_plan: Optional[str] = scenarios.get("fixed_floor_plan", None)
+        self._fixed_target_bay_id: Optional[str] = scenarios.get(
+            "fixed_target_bay_id", None
+        )
+        self._fixed_gnss_tier: Optional[str] = scenarios.get("fixed_gnss_tier", None)
+
         # CARLA handles
         self.client: Optional[Any] = None
         self.world: Optional[Any] = None
@@ -547,12 +554,30 @@ class CARLAParkingEnv(gym.Env):
             self._current_gnss_tier = None
             return
 
-        idx = self.np_random.choice(
-            len(self._gnss_noise_tiers),
-            p=self._gnss_tier_weights,
-        )
-        tier = self._gnss_noise_tiers[idx]
-        self._current_gnss_tier = tier
+        # Always use that tier instead of sampling from the weight distribution. 
+        if self._fixed_gnss_tier is not None:
+            tier = next(
+                (
+                    t
+                    for t in self._gnss_noise_tiers
+                    if t.get("name") == self._fixed_gnss_tier
+                ),
+                None,
+            )
+            if tier is None:
+                available = [t.get("name", "") for t in self._gnss_noise_tiers]
+                raise RuntimeError(
+                    f"fixed_gnss_tier='{self._fixed_gnss_tier}' not in "
+                    f"loaded tiers: {available}"
+                )
+            self._current_gnss_tier = tier
+        else:
+            idx = self.np_random.choice(
+                len(self._gnss_noise_tiers),
+                p=self._gnss_tier_weights,
+            )
+            tier = self._gnss_noise_tiers[idx]
+            self._current_gnss_tier = tier
 
         # Multiplier = tier metric stddev / base RTK-fixed stddev.
         # The base GNSS sensor noise in env_config.yaml corresponds to
@@ -590,6 +615,7 @@ class CARLAParkingEnv(gym.Env):
             self._floor_plans_config,
             self._eval_mode,
             _shared_layout_cache,
+            fixed_name=self._fixed_floor_plan,
         )
         self._current_floor_plan_name = name
         self._current_layout = layout
@@ -621,8 +647,31 @@ class CARLAParkingEnv(gym.Env):
         if not self._bay_type_keys:
             raise RuntimeError("No eligible bays found in floor plan layout.")
 
-        bay_type = random.choice(self._bay_type_keys)
-        target = random.choice(self._bays_by_type[bay_type])
+        if self._fixed_target_bay_id is not None:
+            target = None
+            for bay_type_key, bays in self._bays_by_type.items():
+                for bay in bays:
+                    if bay.get("id") == self._fixed_target_bay_id:
+                        target = bay
+                        bay_type = bay_type_key
+                        break
+                if target is not None:
+                    break
+            if target is None:
+                available_ids = [
+                    bay.get("id", "")
+                    for bays in self._bays_by_type.values()
+                    for bay in bays
+                ]
+                raise RuntimeError(
+                    f"fixed_target_bay_id='{self._fixed_target_bay_id}' "
+                    f"not found in floor plan "
+                    f"'{self._current_floor_plan_name}'. Available bay ids "
+                    f"(first 20): {available_ids[:20]}"
+                )
+        else:
+            bay_type = random.choice(self._bay_type_keys)
+            target = random.choice(self._bays_by_type[bay_type])
 
         tx: float = float(target["x"])
         ty: float = float(target["y"])
@@ -800,7 +849,8 @@ class CARLAParkingEnv(gym.Env):
         if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
-            reward = -10.0 if collision_ego_fault else 0.0
+
+            reward = -50.0 if collision_ego_fault else -10.0
             return reward, True, False, diag
 
         in_bay = (
@@ -817,15 +867,14 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return 10.0, True, True, diag
 
-        progress = (self._prev_distance - position_error) * self._inv_oob_threshold
+        # Progress is raw metres of distance closed this step. 
+        progress = self._prev_distance - position_error
         self._prev_distance = position_error
 
-        # Scale both progress reward and step penalty by localisation quality
-        # (std_x/std_y at obs indices 1-2). Step penalty is gated by the same
-        # uncertainty_scale so the policy is not punished for waiting under
-        # high EKF covariance.
+        # Scale progress reward by localisation quality (std_x/std_y at obs
+        # indices 1-2). 
         uncertainty_scale = self._uncertainty_scale_fn()
-        reward = (progress - 0.01) * (1.0 - uncertainty_scale)
+        reward = progress * (1.0 - uncertainty_scale)
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
