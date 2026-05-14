@@ -110,9 +110,11 @@ origin used when generating `configs/layouts/*.yaml`.
 
 ## Actuation calibration (`actuation_calibration.yaml`)
 
-Physical actuators (steering rack, throttle, brake) do not respond linearly
-to normalised [-1, 1] policy outputs. `ActuationCalibration` applies a
-per-channel affine map:
+Physical actuators (steering rack and a bipolar drive channel) do not respond
+linearly to normalised [-1, 1] policy outputs. The action space is 2-dimensional:
+`[steering, drive]`, where drive is bipolar (positive engages forward throttle,
+negative engages the friction brake; there is no reverse gear).
+`ActuationCalibration` applies a per-channel affine map:
 
 ```
 physical_cmd = gain * policy_output + bias
@@ -125,7 +127,8 @@ performed.** Procedure: command a sweep of policy outputs, measure the
 physical response (encoder counts, IMU, video), fit gain/bias/deadband per
 channel.
 
-`RealWorldDeployment.calibrate_action()` applies the calibration. It returns
+`RealWorldDeployment.calibrate_action(steering, drive)` applies the
+calibration and returns the calibrated `(steering, drive)` pair. It returns
 the inputs unchanged if the calibration file is absent or set to identity.
 
 ---

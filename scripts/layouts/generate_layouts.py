@@ -120,7 +120,8 @@ def _generate_one(
         name, origin_x, origin_y, origin_z, heading_deg, world_layout, output_path, ood
     )
     if plot_path is not None:
-        plot_layout(name, world_layout, plot_path)
+        legend_loc = "lower left" if name == "rectangle" else "upper right"
+        plot_layout(name, world_layout, plot_path, legend_loc=legend_loc)
 
 
 def main() -> None:

@@ -151,7 +151,7 @@ keeps $\nu$ and $\alpha$ near their initialisation priors without requiring targ
 | Config file | Keys |
 |-------------|------|
 | `configs/train_config.yaml` | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.use_uncertainty_conditioning` |
-| `uncertainty_rl/utils/constants.py` | `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3), `ACTION_DIM` (3) |
+| `uncertainty_rl/utils/constants.py` | `VEHICLE_STATE_DIM` (1), `COVARIANCE_FEATURES_DIM` (3), `ACTION_DIM` (2) |
 
 <!-- gif:placeholder name="uncertainty_evolution" caption="Epistemic and aleatoric uncertainty during a parking episode" -->
 ![Uncertainty evolution placeholder](docs/media/uncertainty_evolution.gif)

@@ -13,7 +13,7 @@ from scripts.layouts.builder import (
     angled_corner_clearance,
 )
 
-ORIGIN_X = 2.0
+ORIGIN_X = 0.0
 ORIGIN_Y = 30.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
@@ -22,10 +22,10 @@ OOD = False
 # Lot dimensions and structural offsets.
 WIDTH_FRONT = 60.0
 WIDTH_REAR = 40.0
-DEPTH = 44.0
+DEPTH = 50.0
 LEFT_X = -5.0
 Y_OFFSET = (WIDTH_FRONT - WIDTH_REAR) / 2.0  # = 10 (top/bottom wall taper).
-CENTRE_X_SHIFT = -1.5 - 3.63  # Cluster left-shift from depth/2.
+CENTRE_X_SHIFT = 18.0  # Cluster right-shift from depth/2 to touch right wall at x=50.
 PERP_AISLE = 6.0  # Aisle between back-to-back perp rows.
 
 # Walls (CCW polygon order: bottom -> right -> top -> left).
@@ -45,52 +45,53 @@ def generate() -> Dict[str, Any]:
     p3 = (LEFT_X, WIDTH_FRONT)  # top-left (front)
 
     lot = LotBuilder(name="trapezoid", corners=[p0, p1, p2, p3])
-    dims_par = lot.dims["parallel"]
 
     # ---------- Bays ---------------------------------------------------
     centre_low, centre_high = lot.row_pair_back_to_back(
         bay_type="perpendicular",
-        n=9,
+        n=5,
         centre=(DEPTH / 2.0 + CENTRE_X_SHIFT, WIDTH_FRONT / 2.0),
+        direction="east",
+        gap=PERP_AISLE + 2.0,
+    )
+    centre_mid_low, centre_mid_high = lot.row_pair_back_to_back(
+        bay_type="perpendicular",
+        n=7,
+        centre=(DEPTH / 2.0 - 1.5 - 5.0 + 3.0, WIDTH_FRONT / 2.0),
         direction="east",
         gap=PERP_AISLE,
     )
     bottom_ang = lot.row_along_perimeter(
         "angled",
-        n=8,
+        n=7,
         wall=WALL_BOTTOM,
         bay_angle_deg=45.0,
-        start_along=angled_corner_clearance(lot) + 8.0,
+        start_along=angled_corner_clearance(lot) + 10.0,
+        pack_from="start",
     )
-    par_top = lot.row_along_perimeter(
-        "parallel",
-        n=5,
+    top_ang = lot.row_along_perimeter(
+        "angled",
+        n=7,
         wall=WALL_TOP,
-        bay_angle_deg=-90.0,
-        centred=True,
+        bay_angle_deg=225.0,
+        start_along=angled_corner_clearance(lot) + 15.0,
+        pack_from="end",
     )
-    par_right = lot.row_along_perimeter(
-        "parallel",
-        n=4,
-        wall=WALL_RIGHT,
-        bay_angle_deg=-90.0,
-        centred=True,
-    )
-    # Left wall: two groups of 2 either side of the entrance spawn (y=30).
-    # Lower group centred at y=15, upper group centred at y=45.
-    lot.row_along_perimeter(
-        "parallel",
-        n=2,
+    # Left wall: angled bays at the top corner, leaning toward top wall.
+    left_ang = lot.row_along_perimeter(
+        "angled",
+        n=6,
         wall=WALL_LEFT,
-        bay_angle_deg=90.0,
-        start_along=15.0 - dims_par["depth"] / 2.0,
+        bay_angle_deg=-45.0,
+        start_along=angled_corner_clearance(lot, angle_deg=45.0) + 1.0,
     )
+    # Left wall: perpendicular cluster below the primary spawn (y < 30).
     lot.row_along_perimeter(
-        "parallel",
-        n=2,
+        "perpendicular",
+        n=5,
         wall=WALL_LEFT,
-        bay_angle_deg=90.0,
-        start_along=45.0 - dims_par["depth"] / 2.0,
+        bay_angle_deg=0.0,
+        start_along=38.0,
     )
 
     # ---------- Spawns -------------------------------------------------
@@ -100,20 +101,29 @@ def generate() -> Dict[str, Any]:
     # ---------- Patrol path (4-waypoint loop) --------------------------
     patrol = PatrolPath()
     y_lower = patrol.aisle_y(below=bottom_ang, above=centre_low)
-    y_upper = patrol.aisle_y(below=centre_high, above=par_top)
-    x_enter = patrol.aisle_x(left=0.0, right=centre_low)
-    x_exit = patrol.aisle_x(left=centre_low, right=par_right)
-    patrol.add(x_enter, y_lower - 4.0)
-    patrol.add(x_exit, y_lower)
-    patrol.add(x_exit, y_upper)
-    patrol.add(x_enter, y_upper + 4.0)
+    y_upper = patrol.aisle_y(below=centre_high, above=top_ang)
+    x_enter = patrol.aisle_x(left=0.0, right=centre_mid_low)
+    x_exit = patrol.aisle_x(left=centre_mid_low, right=centre_low)
+    patrol.add(x_enter, y_lower - 5.0)
+    patrol.add(x_exit, y_lower - 1.0)
+    patrol.add(x_exit, y_upper + 1.0)
+    patrol.add(x_enter, y_upper + 5.0)
     lot.set_patrol(patrol)
 
     # ---------- Pedestrian zones ---------------------------------------
+    lot.add_zone(
+        PedestrianZone(
+            x_min=left_ang.bbox[1] + 0.5,
+            x_max=left_ang.bbox[1] + 3.5,
+            y_min=left_ang.bbox[2] + 1.5,
+            y_max=left_ang.bbox[3] - 3.5,
+        )
+    )
     lot.add_zone(PedestrianZone.along_row(centre_low, side="south"))
-    lot.add_zone(PedestrianZone.between_rows(centre_low, centre_high))
     lot.add_zone(PedestrianZone.along_row(centre_high, side="north"))
-    lot.add_zone(PedestrianZone.along_row(par_right, side="west"))
+    lot.add_zone(PedestrianZone.along_row(centre_mid_low, side="south"))
+    lot.add_zone(PedestrianZone.between_rows(centre_mid_low, centre_mid_high))
+    lot.add_zone(PedestrianZone.along_row(centre_mid_high, side="north"))
 
     return lot.build()
 

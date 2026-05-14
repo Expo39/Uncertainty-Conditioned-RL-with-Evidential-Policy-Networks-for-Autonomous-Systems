@@ -16,42 +16,42 @@ make docker-inspect INSPECT_LAYOUT=rectangle  # Verify geometry in CARLA
 
 | Layout | File | Dims (local frame) | Bays | OOD | World origin (CARLA) |
 |--------|------|--------------------|------|-----|----------------------|
-| `rectangle` | `floor_plans/rectangle.py` | ~65x45 m | 53 | No | x=2.0, y=22.5, z=0.3 |
-| `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=44 m | 39 | No | x=2.0, y=30.0, z=0.3 |
-| `irregular_a` | `floor_plans/irregular_a.py` | ~80x50 m | 58 | Yes | x=-3.0, y=25.0, z=0.3 |
+| `rectangle` | `floor_plans/rectangle.py` | ~60x42.5 m | 54 | No | x=2.0, y=17.5, z=0.3 |
+| `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=50 m | 49 | No | x=0.0, y=30.0, z=0.3 |
+| `irregular_a` | `floor_plans/irregular_a.py` | ~85x50 m | 56 | Yes | x=-3.0, y=25.0, z=0.3 |
 
 ---
 
-## `floor_plans/rectangle.py` - Standard Rectangle (~65x45 m, Training)
+## `floor_plans/rectangle.py` - Standard Rectangle (~60x42.5 m, Training)
 
-Axis-aligned rectangle. Mixed bay layout designed to maximise training diversity across all three bay types in a single floor plan.
+Axis-aligned rectangle with centred heterogeneous cluster (perpendicular + angled bays back-to-back), perimeter bays on bottom and right walls, left-wall column of perpendicular bays, and motorcycle bays in the top-right. Three spawn points enable varied approach angles during training.
 
 **Bay groups:**
 
-| Group | Type | Count | Yaw |
-|-------|------|-------|-----|
-| Bottom wall (perimeter, west pack) | Perpendicular | 12 | 90 deg (nose +Y) |
-| Bottom wall (perimeter, east pack) | Angled 45 deg | 7 | 45 deg |
-| Centre row A | Perpendicular | 12 | 90 deg (nose +Y) |
-| Centre row B (back-to-back with A) | Angled | 8 | 225 deg |
-| Top wall (perimeter) | Parallel | 6 | 90 deg |
-| Right wall (perimeter) | Parallel | 3 | 90 deg |
-| Inner parallel column (9 m aisle from right) | Parallel | 3 | 270 deg |
-| Motorcycle corner (always_empty=True) | Motorcycle | 2 | 0 deg |
+| Group | Type | Count | Yaw | Notes |
+|-------|------|-------|-----|-------|
+| Left wall | Perpendicular | 7 | 0 deg (nose +X) | Vertical column starting near top wall |
+| Centre row A (lower) | Perpendicular | 12 | 90 deg (nose +Y) | Centred horizontally |
+| Centre row B (upper, back-to-back with A) | Angled | 8 | 225 deg | Heterogeneous cluster configuration |
+| Bottom wall (west section) | Perpendicular | 12 | 90 deg (nose +Y) | Perimeter row |
+| Bottom wall (east section) | Angled 45 deg | 7 | 45 deg | Perimeter diagonal row |
+| Right wall | Angled 45 deg | 6 | 45 deg (nose -X) | Perimeter diagonal row |
+| Motorcycle corner (always_empty=True) | Motorcycle | 2 | 0 deg | Top-right, always unoccupied |
 
-**Total: 53 bays.**
+**Total: 54 bays.**
 
 **Spawns:**
-- S1 (primary): entrance gate, local (x=-2.0, y=22.5), facing +X
-- S2: bottom aisle, local (x=30.0, y=3.0), facing +Y
+- S1 (primary): left entrance gate, local (x=-2.0, y=17.5), facing +X (east)
+- S2: bottom centre aisle, local (x=30.0, y=3.0), facing +Y (north)
+- S3: top-right perimeter, local (x=52.0, y=40.5), facing -Y (south)
 
-**Patrol:** 6-waypoint CCW loop tracing lower aisle -> parallel column aisle -> top aisle -> diagonal -> upper aisle.
+**Patrol:** 4-waypoint CCW loop tracing lower aisle -> right aisle -> upper aisle -> left aisle. Updated to accommodate new left-wall bay column.
 
-**World origin (FlatPlane):** ORIGIN_X=2.0, ORIGIN_Y=22.5, ORIGIN_Z=0.3, HEADING_DEG=0.0
+**World origin (FlatPlane):** ORIGIN_X=2.0, ORIGIN_Y=17.5, ORIGIN_Z=0.3, HEADING_DEG=0.0
 
 ---
 
-## `floor_plans/trapezoid.py` - Trapezoid (front=60, rear=40, depth=44 m, Training)
+## `floor_plans/trapezoid.py` - Trapezoid (front=60, rear=40, depth=50 m, Training)
 
 Wider at the entrance end (front width=60 m) and narrower at the rear (rear width=40 m), giving non-parallel top and bottom walls. Produces a different LiDAR wall signature compared to the rectangle, encouraging generalisation to non-rectangular geometry.
 
@@ -60,37 +60,38 @@ Wider at the entrance end (front width=60 m) and narrower at the rear (rear widt
 | Vertex | x | y | Description |
 |--------|---|---|-------------|
 | P0 | -5.0 | 0.0 | Bottom-left (front) |
-| P1 | 44.0 | 10.0 | Bottom-right (rear) |
-| P2 | 44.0 | 50.0 | Top-right (rear) |
+| P1 | 50.0 | 10.0 | Bottom-right (rear) |
+| P2 | 50.0 | 50.0 | Top-right (rear) |
 | P3 | -5.0 | 60.0 | Top-left (front) |
 
 **Bay groups:**
 
-| Group | Type | Count | Yaw |
-|-------|------|-------|-----|
-| Centre cluster row A (low) | Perpendicular | 9 | 90 deg (nose +Y) |
-| Centre cluster row B (high, back-to-back with A) | Perpendicular | 9 | 270 deg |
-| Bottom diagonal wall (perimeter) | Angled 45 deg | 8 | Computed from wall slope |
-| Top wall (perimeter, centred) | Parallel | 5 | Aligned with top wall |
-| Right wall (perimeter, centred) | Parallel | 4 | 90 deg |
-| Left wall lower group | Parallel | 2 | 90 deg |
-| Left wall upper group | Parallel | 2 | 90 deg |
+| Group | Type | Count | Notes |
+|-------|------|-------|-------|
+| Right centre cluster row A (low) | Perpendicular | 5 | Back-to-back pair, 8 m aisle |
+| Right centre cluster row B (high) | Perpendicular | 5 | Back-to-back with A |
+| Mid centre cluster row A (low) | Perpendicular | 7 | Back-to-back pair, 6 m aisle |
+| Mid centre cluster row B (high) | Perpendicular | 7 | Back-to-back with A |
+| Bottom wall | Angled 45 deg | 7 | Packed from left |
+| Top wall | Angled 225 deg | 7 | Packed from left |
+| Left wall - angled (top corner) | Angled -45 deg | 6 | Near top-left corner |
+| Left wall - perpendicular (below spawn) | Perpendicular | 5 | Below primary spawn |
 
-**Total: 39 bays.**
+**Total: 49 bays.**
 
 **Spawns:**
 - S1 (primary): entrance gate, local (x=-2.0, y=30.0), facing +X
 - S2: diagonal bottom wall at x~38, facing inward perpendicular to wall slope
 
-**Patrol:** 4-waypoint loop through lower and upper aisles of the centre cluster.
+**Patrol:** 4-waypoint loop entering between left angled cluster and mid perp cluster, exiting through the gap between mid and right perp clusters.
 
-**World origin (FlatPlane):** ORIGIN_X=2.0, ORIGIN_Y=30.0, ORIGIN_Z=0.3, HEADING_DEG=0.0
+**World origin (FlatPlane):** ORIGIN_X=0.0, ORIGIN_Y=30.0, ORIGIN_Z=0.3, HEADING_DEG=0.0
 
 ---
 
 ## `floor_plans/irregular_a.py` - Nine-sided Irregular Polygon (~80x50 m, OOD)
 
-Inspired by a shed-style building footprint. Never sampled during training - held out for out-of-distribution evaluation only. Combines three OOD features the agent has not seen: a diagonal top wall, a non-convex bottom notch, and bay groups on all four faces of an interior obstacle rectangle.
+Inspired by a shed-style building footprint. Never sampled during training - held out for out-of-distribution evaluation only. Combines three OOD features the agent has not seen: a diagonal top wall, a non-convex bottom notch, and bay groups on three faces of an interior obstacle rectangle.
 
 **Perimeter vertices (local frame, CCW):**
 
@@ -98,15 +99,15 @@ Inspired by a shed-style building footprint. Never sampled during training - hel
 |--------|---|---|-------------|
 | P0 | 0.0 | 0.0 | Bottom-left |
 | P1 | 53.0 | 0.0 | Notch bottom-left |
-| P2 | 53.0 | 8.0 | Notch top-left |
-| P3 | 65.0 | 8.0 | Notch top-right |
+| P2 | 53.0 | 16.0 | Notch top-left |
+| P3 | 65.0 | 16.0 | Notch top-right |
 | P4 | 65.0 | 0.0 | Notch bottom-right |
-| P5 | 80.0 | 0.0 | Bottom-right |
-| P6 | 80.0 | 37.0 | Diagonal wall start (top-right) |
+| P5 | 85.0 | 0.0 | Bottom-right |
+| P6 | 85.0 | 37.0 | Diagonal wall start (top-right) |
 | P7 | 20.0 | 50.0 | Diagonal/flat wall junction |
 | P8 | 0.0 | 50.0 | Top-left |
 
-**Central obstacle (CARLA cone wall):** x_min=23.25, x_max=39.25, y_min=17.0, y_max=21.0
+**Central obstacle (CARLA cone wall):** x_min=27.25, x_max=43.25, y_min=17.0, y_max=21.0
 
 **Bay groups:**
 
@@ -114,22 +115,20 @@ Inspired by a shed-style building footprint. Never sampled during training - hel
 |-------|------|-------|-------|
 | Obstacle south face | Perpendicular | 6 | Backs against south face (y_min=17) |
 | Obstacle north face | Perpendicular | 6 | Backs against north face (y_max=21) |
-| Obstacle west face | Perpendicular | 2 | Backs against west face (x_min=23.25) |
-| Obstacle east face | Perpendicular | 2 | Backs against east face (x_max=39.25) |
+| Obstacle west face | Perpendicular | 6 | Backs against west face (x_min=27.25) |
 | Left wall (P8->P0) | Angled 45 deg | 4 | Packing from bottom upward |
 | Diagonal top wall (P6->P7) | Angled 45 deg | 11 | Hugging P7 end |
-| Top-flat wall (P7->P8), back row | Perpendicular | 7 | Centred along wall |
-| Top-flat wall, facing row | Perpendicular | 7 | Back-to-back across 6 m aisle |
+| Top-flat wall (P7->P8), back row | Perpendicular | 7 | Packed from left wall |
+| Top-flat wall, facing row | Perpendicular | 4 | Right-aligned, back-to-back across 6 m aisle |
 | Notch top wall (P2->P3) | Perpendicular | 4 | Centred, nose facing +Y into notch |
-| Bottom-left wall (P0->P1) | Parallel | 5 | Centred |
-| Right wall (P5->P6) | Parallel | 4 | Centred |
+| Right wall (P5->P6) | Angled 45 deg | 8 | Centred, start_along=8.0 |
 
-**Total: 58 bays.**
+**Total: 56 bays.**
 
 **Spawns:**
 - S1 (primary): left wall mid-height, local (x=3.0, y=25.0), facing +X
 - S2: diagonal top wall at x~70, facing inward perpendicular to wall slope
-- S3: bottom wall right section, local (x=70.0, y=3.0), facing +Y
+- S3: bottom wall right section, local (x=71.0, y=3.0), facing +Y
 
 **Patrol:** 5-waypoint CCW orbit around the central obstacle.
 

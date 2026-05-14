@@ -189,7 +189,7 @@ Uncertainty-Conditioned-RL.../
 |   |                                  EvidentialActorCriticPolicy, EvidentialPPO
 |   |
 |   |-- envs/                          Gymnasium environments
-|   |   |-- sim/carla_parking.py       CARLAParkingEnv (12-dim obs, 3-dim action)
+|   |   |-- sim/carla_parking.py       CARLAParkingEnv (12-dim obs, 2-dim action)
 |   |   |-- real/deployment_utils.py   RealWorldDeployment
 |   |   |-- real/inference_loop.py     RealWorldInferenceLoop
 |   |   |-- _parking_core.py           Shared pure logic: obs build, reward,
@@ -217,7 +217,7 @@ Uncertainty-Conditioned-RL.../
 |   |                                  robot_localisation
 |   |
 |   +-- utils/                         Shared utilities (no CARLA or ROS 2 deps)
-|       |-- constants.py               VEHICLE_STATE_DIM=1, ACTION_DIM=3, thresholds
+|       |-- constants.py               VEHICLE_STATE_DIM=1, ACTION_DIM=2, thresholds
 |       |-- covariance_utils.py        extract_2d_covariance_features
 |       |-- geometry.py                point_in_polygon, wrap_angle_symmetric,
 |       |                              _compute_relative_target_pose
@@ -266,11 +266,11 @@ Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
 
 ### Three Floor Plans
 
-| Layout | Bays | OOD | Training use |
-|--------|------|-----|-------------|
-| `rectangle` | 53 | No | Training + evaluation |
-| `trapezoid` | 39 | No | Training + evaluation |
-| `irregular_a` | 58 | Yes | OOD evaluation only (held out from training) |
+| Layout | Bays | OOD | Training use | Description |
+|--------|------|-----|-------------|-------------|
+| `rectangle` | 54 | No | Training + evaluation | Rectangular lot with 7 left-wall perp bays, centred heterogeneous cluster, 12 bottom perp, 7 bottom angled, 6 right-wall angled, 2 motorcycle bays. 3 spawns: left, bottom-centre, top-right. |
+| `trapezoid` | 49 | No | Training + evaluation | Trapezoid lot (front=60 m, rear=40 m, depth=50 m). Two central perp clusters, angled perimeter bays, left-wall angled and perp groups. |
+| `irregular_a` | 56 | Yes | OOD evaluation only | Irregular polygon lot (held out from training). |
 
 ### Verify Layout in CARLA
 

@@ -302,12 +302,13 @@ class RealWorldInferenceLoop:
     # Actuation and termination (stubs)
     # ------------------------------------------------------------------
 
-    def _apply_action(self, steering: float, drive: float, brake: float) -> None:
+    def _apply_action(self, steering: float, drive: float) -> None:
         """
         @brief Publish a calibrated action to the vehicle via geometry_msgs/Twist.
         @param steering: Calibrated steering command in [-1, 1]; mapped to angular.z.
-        @param drive: Calibrated drive command in [-1, 1]; negative = reverse, mapped to linear.x.
-        @param brake: Brake command in [0, 1]; mapped to linear.y (convention for downstream node).
+        @param drive: Calibrated drive command in [-1, 1]; positive = throttle,
+                      negative = brake. Mapped to linear.x; the downstream
+                      actuation node interprets sign.
 
         Publishes on the topic configured by ros2.actuation_topic (default: /cmd_vel).
         The node and publisher are initialised lazily on the first call inside run().
@@ -323,9 +324,7 @@ class RealWorldInferenceLoop:
         self._twist_msg.linear.x = (
             drive if -1.0 <= drive <= 1.0 else (-1.0 if drive < -1.0 else 1.0)
         )
-        self._twist_msg.linear.y = (
-            brake if 0.0 <= brake <= 1.0 else (0.0 if brake < 0.0 else 1.0)
-        )
+        self._twist_msg.linear.y = 0.0
         self._twist_msg.angular.z = (
             steering if -1.0 <= steering <= 1.0 else (-1.0 if steering < -1.0 else 1.0)
         )
@@ -543,12 +542,11 @@ class RealWorldInferenceLoop:
                     if handoff:
                         handoff_count += 1
 
-                    steering, drive, brake = self._deployment.calibrate_action(
+                    steering, drive = self._deployment.calibrate_action(
                         float(modulated_action[0]),
                         float(modulated_action[1]),
-                        float(modulated_action[2]),
                     )
-                    self._apply_action(steering, drive, brake)
+                    self._apply_action(steering, drive)
 
                     steps += 1
                     terminated, truncated = self._is_done()
