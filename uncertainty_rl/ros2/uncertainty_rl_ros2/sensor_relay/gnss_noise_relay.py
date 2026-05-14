@@ -92,10 +92,10 @@ class GnssNoiseRelayNode(Node):
         "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"
     )
 
-    # Standstill noise floor on the per-step displacement gate. Successive
-    # noisy GNSS positions differ by ~sigma * sqrt(2) per step from pure
-    # noise alone; 3-sigma drops the false-trigger rate below 1%.
-    _NOISE_FLOOR_K: float = 3.0 * math.sqrt(2.0)
+    # Variance ceiling for publishing COG: pi^2/3 is the variance of a uniform
+    # distribution on [-pi, pi]. A heading observation with variance >= this is
+    # no more informative than "any angle"; do not publish it.
+    _MAX_PUBLISH_VARIANCE: float = (math.pi**2) / 3.0
 
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
         """
@@ -405,24 +405,6 @@ class GnssNoiseRelayNode(Node):
                     f"lon={self._datum_lon:.7f}"
                 )
 
-            # Seed COG heading from the known spawn yaw (layout geometry).
-            spawn_yaw = data.get("spawn_yaw")
-            if spawn_yaw is not None:
-                self._last_heading_rad = float(spawn_yaw)
-                # Use a moderately tight variance: the spawn heading is known
-                # from the layout but the vehicle may not be perfectly aligned.
-                self._last_heading_var = (math.radians(5.0)) ** 2
-                self._cog_initialised = True
-                self.get_logger().info(
-                    f"COG heading seeded from spawn_yaw: "
-                    f"{math.degrees(self._last_heading_rad):.1f} deg"
-                )
-            else:
-                self.get_logger().warn(
-                    "No spawn_yaw in GNSS noise config - "
-                    "COG heading not seeded; will initialise from first valid COG reading."
-                )
-
             self.get_logger().info(
                 f"GNSS noise config updated (seq={seq}, tier={tier_name}): "
                 f"metric_stddev={self._metric_stddev_m:.3f}m"
@@ -434,8 +416,8 @@ class GnssNoiseRelayNode(Node):
         """
         @brief Write the current active tier back to episode_config.json.
 
-        Read-modify-write so that datum_lat, datum_lon, and spawn_yaw written
-        by the training container at episode reset are preserved.
+        Read-modify-write so that datum_lat and datum_lon written by the
+        training container at episode reset are preserved.
 
         @param tier_name: Active RTK fix-state tier name.
         """
@@ -472,21 +454,13 @@ class GnssNoiseRelayNode(Node):
     # COG heading helpers
     # ------------------------------------------------------------------
 
-    def _cog_heading_variance(self, displacement_m: float) -> float:
+    def _cog_heading_variance(self, displacement_m: float, sigma: float) -> float:
         """
         @brief Compute COG heading variance from GNSS position noise and displacement.
-
-        Linearised propagation of per-axis Gaussian position noise through
-        atan2(dy, dx): Var(heading) = 2*sigma^2 / displacement^2 (rad^2).
-        The factor 2 comes from the displacement vector being the difference
-        of two independent noisy fixes, summing their per-axis variances.
-
         @param displacement_m: Per-step GNSS displacement in metres.
+        @param sigma: GNSS position 1-sigma in metres (read from message covariance).
         @return Heading variance in rad^2.
         """
-        sigma = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
-        # displacement_m is guaranteed >= cog_min_displacement_m by the gate
-        # in _gnss_callback, so division is safe.
         disp_sq = displacement_m * displacement_m
         raw_var = 2.0 * (sigma**2) / disp_sq
         min_var = 2.0 * self._rtk_fixed_var / disp_sq
@@ -573,20 +547,26 @@ class GnssNoiseRelayNode(Node):
             out.latitude = msg.latitude
             out.altitude = msg.altitude
 
-        metric_var = self._metric_stddev_m**2
-        alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
-        out.position_covariance = [
-            metric_var,
-            0.0,
-            0.0,
-            0.0,
-            metric_var,
-            0.0,
-            0.0,
-            0.0,
-            alt_var,
-        ]
-        out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        if self._gnss_noise_enabled:
+            # Sim path: stamp covariance derived from the active tier.
+            metric_var = self._metric_stddev_m**2
+            alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
+            out.position_covariance = [
+                metric_var,
+                0.0,
+                0.0,
+                0.0,
+                metric_var,
+                0.0,
+                0.0,
+                0.0,
+                alt_var,
+            ]
+            out.position_covariance_type = NavSatFix.COVARIANCE_TYPE_DIAGONAL_KNOWN
+        else:
+            # Real path: pass through the receiver's reported covariance.
+            out.position_covariance = msg.position_covariance
+            out.position_covariance_type = msg.position_covariance_type
         self._pub.publish(out)
 
         # -- Flat-earth projection: noisy lat/lon -> local XY ------------------
@@ -601,7 +581,9 @@ class GnssNoiseRelayNode(Node):
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
 
-        xy_var = metric_var if self._gnss_noise_enabled else self._rtk_fixed_var
+        # xy_var follows the position covariance just written (tier-stamped in
+        # sim, receiver-supplied in real deployment).
+        xy_var = float(out.position_covariance[0])
         pose_cov = list(self._odom_cov_template)
         pose_cov[0] = xy_var
         pose_cov[7] = xy_var
@@ -620,15 +602,20 @@ class GnssNoiseRelayNode(Node):
                 self._last_speed_ms = displacement_m / dt
                 speed_ms = self._last_speed_ms
 
-                # Gate on displacement AND on IMU ZUPT. The displacement gate
-                # alone leaks ~1% noise spikes through at rtk_fixed; coupling
-                # with ZUPT ensures real motion is present.
-                sigma_now = self._metric_stddev_m if self._gnss_noise_enabled else 0.02
-                gate = max(
-                    self._cog_min_displacement_m,
-                    self._NOISE_FLOOR_K * sigma_now,
+                # Gate on (a) minimum displacement, (b) IMU not in ZUPT, and
+                # (c) computed heading variance below uniform-distribution
+                # ceiling. Sigma is read from the message covariance we just
+                # stamped, so the same logic works in real deployments where
+                # the receiver supplies its own covariance.
+                sigma_now = math.sqrt(out.position_covariance[0])
+                candidate_var = self._cog_heading_variance(
+                    max(displacement_m, 1e-6), sigma_now
                 )
-                if displacement_m >= gate and not self._imu_stationary:
+                if (
+                    displacement_m >= self._cog_min_displacement_m
+                    and not self._imu_stationary
+                    and candidate_var <= self._MAX_PUBLISH_VARIANCE
+                ):
                     self._cog_active = True
                     # CARLA GnssSensor reports latitude increasing with CARLA +Y
                     # (which is south), so local_y increases southward. Negate dy
@@ -636,12 +623,8 @@ class GnssNoiseRelayNode(Node):
                     # pi/2=north, anticlockwise positive).
                     raw_heading = math.atan2(-dy, dx)
 
-                    # Forward-only operation: COG is the direction of the
-                    # velocity vector, which equals vehicle yaw when moving
-                    # forward. No reverse manoeuvres are demonstrated, so no
-                    # disambiguation is required.
                     self._last_heading_rad = raw_heading
-                    self._last_heading_var = self._cog_heading_variance(displacement_m)
+                    self._last_heading_var = candidate_var
 
                     if not self._cog_initialised:
                         self._cog_initialised = True
