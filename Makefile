@@ -10,6 +10,7 @@
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
 .PHONY: docker-train docker-train-short docker-tune
+.PHONY: ensure-dirs
 
 VENV        := .venv
 PYTHON      := $(VENV)/bin/python3
@@ -61,6 +62,12 @@ install: ## Create .venv and install package + dev dependencies
 # ----------------------------------------------------------------------
 # Docker: Lifecycle
 # ----------------------------------------------------------------------
+
+# Pre-create host-side bind-mount targets so the Docker daemon (root) does not
+# create them as root-owned. Must run before any `docker compose up` call.
+ensure-dirs: ## Pre-create host directories for bind mounts (avoids root-owned logs/)
+	@mkdir -p logs/ros2 outputs checkpoints
+
 SERVICE ?=
 docker-build: ## Build all Docker images (core + env-workers + inspect stacks).
 	$(DOCKER_COMPOSE) build $(SERVICE)
@@ -80,7 +87,7 @@ docker-build-ros2: ## Rebuild only the ros2-bridge images without cache
 	$(DOCKER_COMPOSE_WORKERS) build --no-cache ros2-bridge
 	$(DOCKER_COMPOSE_INSPECT) build --no-cache ros2-bridge-inspect
 
-docker-up: ## Start all containers (N env workers from train_config.yaml + training stack)
+docker-up: ensure-dirs ## Start all containers (N env workers from train_config.yaml + training stack)
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) up -d
 
@@ -109,7 +116,7 @@ docker-top: ## Show running processes in containers
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train: ## Run training. Usage: make docker-train [LAYOUT=rectangle]
+docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle]
 	@echo "Training: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -117,7 +124,7 @@ docker-train: ## Run training. Usage: make docker-train [LAYOUT=rectangle]
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh
 
-docker-train-short: ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle]
+docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle]
 	@echo "Training (10k steps): layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -125,7 +132,7 @@ docker-train-short: ## Quick training (10k steps). Usage: make docker-train-shor
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000
 
-docker-tune: ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle]
+docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle]
 	@echo "Tuning: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -133,7 +140,7 @@ docker-tune: ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOU
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
 
-docker-eval: ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
 	@echo "Evaluation: layout=$(LAYOUT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
