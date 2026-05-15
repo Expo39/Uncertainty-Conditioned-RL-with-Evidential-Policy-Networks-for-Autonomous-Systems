@@ -281,6 +281,20 @@ def plot_layout(
                 zorder=3,
             )
         )
+        # Add bay ID label at the centre of the bay
+        bay_id = bay.get("id", "").split("_")[-1]  # Extract just the number
+        ax.text(
+            bx,
+            by,
+            bay_id,
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="black",
+            weight="bold",
+            path_effects=[withStroke(linewidth=1, foreground="white")],
+            zorder=4,
+        )
 
     for zone in world_layout.get("pedestrian_zones", []):
         ax.add_patch(
