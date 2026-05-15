@@ -11,9 +11,9 @@ carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost"
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
 max_steps: 1750  # Episode length (steps). 1750 * 0.05s = 87.5s sim time.
-success_dwell_steps: 5  # Consecutive steps all success criteria must hold before episode ends as success.
-action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz. See detailed_notes/ekf_pipeline.md.
-use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs.
+success_dwell_steps: 1  # STAGE 1 relaxed (was 5): with dwell=5 the agent must hold all success criteria for 5 consecutive policy decisions (= 1 sim s at action_repeat=4). The manual dryrun showed dwell is trivial to satisfy once you have a viable park policy (held for 14 steps), but is too narrow a target for PPO to discover from 0 successes during exploration. Relaxing to 1 gives PPO any positive-success signal to learn from. Tighten back to 5 in Stage 3+.
+action_repeat: 4  # Policy runs at 5 Hz. Each action held for 4 sim ticks (0.2 s) - reduces per-step jitter that was destabilising the critic. Was 1.
+use_extra_spawns: false  # STAGE 1: locked to primary spawn only. Was true.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
 no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active). ~3-4x speedup.
@@ -38,7 +38,7 @@ carla_sensors:
     sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
 
     noise:
-      enabled: true
+      enabled: false  # STAGE 1: LiDAR noise disabled. Was true.
       range_random_stddev_m: 0.020  # m 1-sigma - see sensor_noise_models.md
       range_bias_limit_m: 0.060     # m half-range - see sensor_noise_models.md
       dropout_rate: 0.0             # no datasheet basis for non-zero value
@@ -48,24 +48,24 @@ carla_sensors:
     sensor_tick: 0.05  # Publish rate (seconds).
 
 parking_scenarios:
-  # Curriculum overrides. Leave commented for normal (full-randomisation) training.
-  # See documentation/CURRICULUM_PLAN.md for the staged training procedure.
-  # fixed_floor_plan: rectangle      # Force one floor plan every episode.
-  # fixed_target_bay_id: perpendicular_31  # Force one specific bay every episode.
-  # fixed_gnss_tier: rtk_fixed       # Disable noise tier sampling; lock to one tier.
+  # STAGE 1 curriculum overrides. See documentation/CURRICULUM_PLAN.md.
+  # Comment out the three fixed_* keys to return to random selection (Stage 2+).
+  fixed_floor_plan: rectangle
+  fixed_target_bay_id: angled_12  # STAGE 1: central angled bay. Requires gentle left arc from spawn. Far from perimeter walls.
+  fixed_gnss_tier: rtk_fixed
 
   # CARLA blueprint for perimeter markers.
   perimeter_marker_blueprint: "static.prop.constructioncone"  # CARLA cone blueprint used as perimeter
   perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
-  bay_occupancy_min: 0.3  # Lower bound for per-episode bay occupancy.
-  bay_occupancy_max: 0.8  # Upper bound for per-episode bay occupancy.
-  num_patrol_vehicles_max: 1  # NPC patrol vehicles per episode.
+  bay_occupancy_min: 0.0  # STAGE 1: no parked cars. Was 0.3.
+  bay_occupancy_max: 0.0  # STAGE 1: no parked cars. Was 0.8.
+  num_patrol_vehicles_max: 0  # STAGE 1: no patrol NPCs. Was 1.
   patrol_obstacle_stop_distance: 5.0  # Metres - patrol brakes for vehicles in forward cone.
   patrol_pedestrian_stop_distance: 4.0  # Metres - patrol brakes for pedestrians in range.
   patrol_max_speed_ms: 3.0  # Patrol speed (m/s), applied via kinematic control.
   patrol_heading_gain: 0.8  # Proportional gain for patrol heading controller.
   pedestrian_speed_ms: 1.4  # Walk speed (m/s), applied via WalkerControl.
-  pedestrian_spawn_probability: 0.8  # Per-zone spawn probability each episode (0.0-1.0).
+  pedestrian_spawn_probability: 0.0  # STAGE 1: no pedestrians. Was 0.8.
   pedestrian_heading_resample_steps: 30  # Steps between direction changes.
   pedestrian_max_lifetime_steps: 200  # Steps before despawn and respawn in zone.
   floor_plans:

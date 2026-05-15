@@ -554,7 +554,7 @@ class CARLAParkingEnv(gym.Env):
             self._current_gnss_tier = None
             return
 
-        # Always use that tier instead of sampling from the weight distribution. 
+        # Always use that tier instead of sampling from the weight distribution.
         if self._fixed_gnss_tier is not None:
             tier = next(
                 (
@@ -849,8 +849,13 @@ class CARLAParkingEnv(gym.Env):
         if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
-
-            reward = -50.0 if collision_ego_fault else -10.0
+            # Terminal collision penalty. Scaled down from -50/-10 to -15/-5
+            # so the per-episode cumulative shaping signal (~ +30 distance
+            # term) is comparable in magnitude. With the old -50 the agent
+            # converged on slow + timeout because "fast + risk crash" had
+            # worse expected return than "slow + zero". -15 keeps crashing
+            # meaningfully bad without dominating the entire return.
+            reward = -15.0 if collision_ego_fault else -5.0
             return reward, True, False, diag
 
         in_bay = (
@@ -865,19 +870,59 @@ class CARLAParkingEnv(gym.Env):
 
         if self._success_counter >= self._success_dwell_steps:
             self._prev_distance = position_error
-            return 10.0, True, True, diag
+            # Terminal success bonus. Symmetric in magnitude with the ego-fault
+            # collision penalty so the agent has a clean cost/benefit trade-off.
+            return 15.0, True, True, diag
 
-        # Progress is raw metres of distance closed this step. 
+        # Per-step reward: four additive components.
+        #
+        # (1) distance_term: raw metres of distance closed this step.
+        #     Positive when approaching, zero when stationary, negative when
+        #     moving away. The dominant gradient signal.
+        #
+        # (2) orientation_term: small constant penalty proportional to
+        #     absolute yaw error from the bay's target yaw. Drives the agent
+        #     to arc toward the bay alignment rather than drive straight at
+        #     it (the car cannot reverse - it must approach with the bay's
+        #     yaw or it cannot enter).
+        #     coefficient 0.02: -0.031/step at 90 deg, -3 to -8 per episode.
+        #
+        # (3) position_term: small constant penalty proportional to absolute
+        #     distance from the bay centre. Creates a continuous pressure to
+        #     FINISH (hovering accumulates penalty), so the agent does not
+        #     learn slow-timeout as a safe local optimum.
+        #     coefficient 0.002: -0.06/step at 30 m, ~-7 per episode for full
+        #     approach trajectory, -15 if standing still at spawn for entire
+        #     episode (matches the magnitude of an ego-fault collision).
+        #
+        # (4) uncertainty_scale gate: all per-step shaping is multiplied by
+        #     (1 - uncertainty_scale). Under high EKF covariance the per-step
+        #     gradient shrinks to zero, so the policy is not pushed around by
+        #     noisy localisation estimates. Terminal events (success, collision)
+        #     bypass this gate because they are ground-truth events.
         progress = self._prev_distance - position_error
         self._prev_distance = position_error
 
-        # Scale progress reward by localisation quality (std_x/std_y at obs
-        # indices 1-2). 
+        distance_term = progress
+        orientation_term = -0.02 * orientation_error
+        position_term = -0.002 * position_error
+
+        # Final-approach bonus: strong signal to stop when within 2m of bay.
+        # Overcomes the forward-driving bias from distance_term alone.
+        final_approach_bonus = 0.0
+        if position_error < 2.0:
+            final_approach_bonus = 0.1 * (2.0 - position_error)
+
         uncertainty_scale = self._uncertainty_scale_fn()
-        reward = progress * (1.0 - uncertainty_scale)
+        reward = (
+            distance_term + orientation_term + position_term + final_approach_bonus
+        ) * (1.0 - uncertainty_scale)
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
+        diag["orientation_penalty"] = float(orientation_term)
+        diag["position_penalty"] = float(position_term)
+        diag["final_approach_bonus"] = float(final_approach_bonus)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------

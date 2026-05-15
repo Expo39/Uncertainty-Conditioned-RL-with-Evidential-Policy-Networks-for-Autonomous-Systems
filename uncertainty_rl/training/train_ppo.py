@@ -317,6 +317,7 @@ def train(
     config: Dict[str, Any],
     extra_callbacks: Optional[List[BaseCallback]] = None,
     env: Optional["VecNormalize"] = None,
+    resume_from: Optional[str] = None,
 ) -> TrainResult:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
@@ -330,6 +331,11 @@ def train(
            shared env so the CARLA actors and ROS bridge stay warm between
            trials (a destroy+respawn cycle breaks the EKF, see
            tune_hyperparams.run_study).
+    @param resume_from: Optional path to checkpoint directory (contains
+           final_model.zip and vec_normalize.pkl). When provided, loads the
+           saved model and environment normalisation from this checkpoint and
+           continues training with reset_num_timesteps=False. If None, trains
+           from scratch.
     @return TrainResult containing final metrics, model path, and log directory.
     """
     # Resolve operational settings from config
@@ -442,36 +448,115 @@ def train(
     logger.info("Initialising %s PPO agent...", policy_type)
 
     model: PPO
-    if policy_type == "evidential":
-        evidential_config = config.get("evidential", {})
-        lambda_reg = evidential_config.get("lambda_reg", 0.01)
-        lambda_reg_warmup_steps = evidential_config.get(
-            "lambda_reg_warmup_steps", 50000
-        )
-        use_uncertainty_conditioning = evidential_config.get(
-            "use_uncertainty_conditioning", False
-        )
-        # Forward conditioning flag into policy_kwargs so the policy can wire the
-        # dual-encoder actor (UncertaintyConditionedActor) when requested.
-        ppo_kwargs["policy_kwargs"][
-            "use_uncertainty_conditioning"
-        ] = use_uncertainty_conditioning
-        model = EvidentialPPO(
-            policy=EvidentialActorCriticPolicy,
-            lambda_reg=lambda_reg,
-            lambda_reg_warmup_steps=lambda_reg_warmup_steps,
-            **ppo_kwargs,
-        )
-    elif policy_type == "standard":
-        model = PPO(
-            policy="MlpPolicy",
-            **ppo_kwargs,
-        )
+    if resume_from is not None:
+        # Load model from checkpoint. Resume path may point to:
+        # 1. final_model (from a completed training run)
+        # 2. A directory containing periodic checkpoints (ppo_*.zip files)
+        logger.info("Resuming from checkpoint: %s", resume_from)
+
+        # Find the latest checkpoint (either final_model or the highest-step
+        # intermediate checkpoint).
+        checkpoint_model_path: Optional[str] = None
+        checkpoint_vec_norm_path: Optional[str] = None
+
+        final_model = os.path.join(resume_from, "final_model")
+        final_vec_norm = os.path.join(resume_from, "vec_normalize.pkl")
+
+        if os.path.exists(final_model):
+            checkpoint_model_path = final_model
+            checkpoint_vec_norm_path = (
+                final_vec_norm if os.path.exists(final_vec_norm) else None
+            )
+            logger.info("Found final_model checkpoint")
+        else:
+            # Look for the latest periodic checkpoint (highest step count)
+            import glob
+
+            pattern = os.path.join(resume_from, "ppo_uncertainty_rl_*_steps.zip")
+            checkpoints = sorted(glob.glob(pattern))
+            if checkpoints:
+                checkpoint_model_path = checkpoints[-1]
+                step_count = checkpoint_model_path.split("_steps.zip")[0].split("_")[-1]
+                vec_norm_path = os.path.join(
+                    resume_from,
+                    f"ppo_uncertainty_rl_vecnormalize_{step_count}_steps.pkl",
+                )
+                checkpoint_vec_norm_path = (
+                    vec_norm_path if os.path.exists(vec_norm_path) else None
+                )
+                logger.info(
+                    "Found periodic checkpoint at %s steps: %s",
+                    step_count,
+                    checkpoint_model_path,
+                )
+            else:
+                raise ValueError(
+                    f"No checkpoint found in {resume_from}. "
+                    f"Expected either final_model or ppo_uncertainty_rl_*_steps.zip"
+                )
+
+        # Determine which model class to load based on policy_type
+        if policy_type == "evidential":
+            model = EvidentialPPO.load(checkpoint_model_path)
+        elif policy_type == "standard":
+            model = PPO.load(checkpoint_model_path)
+        else:
+            raise ValueError(
+                f"Unknown policy_type '{policy_type}'. "
+                f"Expected 'evidential' or 'standard'."
+            )
+
+        # Load environment normalisation statistics if we have a new env to wrap.
+        if (
+            own_env
+            and checkpoint_vec_norm_path
+            and os.path.exists(checkpoint_vec_norm_path)
+        ):
+            logger.info(
+                "Loading VecNormalize from checkpoint: %s", checkpoint_vec_norm_path
+            )
+            env = VecNormalize.load(checkpoint_vec_norm_path, env)
+        elif not own_env:
+            logger.warning(
+                "VecNormalize not reloaded - caller-owned env is being used."
+            )
+        elif not checkpoint_vec_norm_path:
+            logger.warning("VecNormalize checkpoint not found")
+
+        # Attach the environment to the model for continued training
+        model.set_env(env)
     else:
-        raise ValueError(
-            f"Unknown policy_type '{policy_type}'. "
-            f"Expected 'evidential' or 'standard'."
-        )
+        # Create fresh agent
+        if policy_type == "evidential":
+            evidential_config = config.get("evidential", {})
+            lambda_reg = evidential_config.get("lambda_reg", 0.01)
+            lambda_reg_warmup_steps = evidential_config.get(
+                "lambda_reg_warmup_steps", 50000
+            )
+            use_uncertainty_conditioning = evidential_config.get(
+                "use_uncertainty_conditioning", False
+            )
+            # Forward conditioning flag into policy_kwargs so the policy can wire the
+            # dual-encoder actor (UncertaintyConditionedActor) when requested.
+            ppo_kwargs["policy_kwargs"][
+                "use_uncertainty_conditioning"
+            ] = use_uncertainty_conditioning
+            model = EvidentialPPO(
+                policy=EvidentialActorCriticPolicy,
+                lambda_reg=lambda_reg,
+                lambda_reg_warmup_steps=lambda_reg_warmup_steps,
+                **ppo_kwargs,
+            )
+        elif policy_type == "standard":
+            model = PPO(
+                policy="MlpPolicy",
+                **ppo_kwargs,
+            )
+        else:
+            raise ValueError(
+                f"Unknown policy_type '{policy_type}'. "
+                f"Expected 'evidential' or 'standard'."
+            )
 
     # Set up SB3 logger (TensorBoard + stdout). Named sb3_logger to avoid
     # shadowing the module-level Python logger.
@@ -512,16 +597,19 @@ def train(
         # tqdm[rich] leaks a "live display" between trials when model.learn()
         # is called repeatedly in one process, so the second call onwards
         # raises "Only one live display may be active at once".
+        reset_num_ts = resume_from is None
         model.learn(
             total_timesteps=total_timesteps,
             callback=callback_list,
             log_interval=config.get("log_interval", 10),
             progress_bar=own_env,
+            reset_num_timesteps=reset_num_ts,
         )
 
         # Save final model
         final_model_path = os.path.join(checkpoint_dir, "final_model")
         model.save(final_model_path)
+        assert env is not None
         env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
 
         logger.info("Training complete. Model saved to %s", final_model_path)
@@ -529,6 +617,7 @@ def train(
     finally:
         # Clean up (always runs, even if CARLA crashes during training).
         if own_env:
+            assert env is not None
             env.close()
         if eval_env is not None:
             eval_env.close()
@@ -606,6 +695,12 @@ def main() -> None:
         default=None,
         help="Override random seed from config",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint directory (contains final_model.zip and vec_normalize.pkl)",
+    )
 
     args = parser.parse_args()
 
@@ -636,7 +731,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    train(config)
+    # Pass resume checkpoint path if provided.
+    train(config, resume_from=args.resume_from)
 
 
 if __name__ == "__main__":
