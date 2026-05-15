@@ -504,7 +504,7 @@ class DryRunInspector(_Inspector):
                             _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
-                    time.sleep(self._env._action_repeat * self._env._carla_timestep)
+                    time.sleep(self._env._carla_timestep)
                     self._update_spectator()
 
                     if step % self._LOG_INTERVAL == 0:
