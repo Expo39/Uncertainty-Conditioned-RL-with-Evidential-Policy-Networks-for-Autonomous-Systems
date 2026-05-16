@@ -691,8 +691,10 @@ class EvidentialPPO(PPO):
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
         # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
-        _nu_prior = 1.24
-        _alpha_prior = 2.24
+        # nu/alpha: softplus(0.9) (+1.0 offset on alpha). beta: softplus(0.0).
+        _nu_prior = 1.241
+        _alpha_prior = 2.241
+        _beta_prior = 0.693
         continue_training = True
         for epoch in range(self.n_epochs):
             approx_kl_divs: List[float] = []
@@ -708,12 +710,19 @@ class EvidentialPPO(PPO):
                 values = values.flatten()
 
                 # Prior-anchoring log-penalty on NIG evidence parameters.
+                # Squared log-ratio: zero at the prior, positive either side, so
+                # it anchors (not just shrinks) each parameter. All three of
+                # nu/alpha/beta are anchored - beta was previously left free,
+                # and since aleatoric = beta/(alpha-1), an unconstrained beta
+                # let action variance drift upward over long runs (the head
+                # drift seen after ~1M steps in run 15052026-1954).
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
                 evidential_reg = (
                     th.log(nu / _nu_prior).pow(2).mean()
                     + th.log(alpha / _alpha_prior).pow(2).mean()
+                    + th.log(beta / _beta_prior).pow(2).mean()
                 )
 
                 with th.no_grad():
