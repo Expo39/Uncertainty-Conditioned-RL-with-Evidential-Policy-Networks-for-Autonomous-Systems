@@ -366,6 +366,18 @@ class TestBaySampling:
 
         env = CARLAParkingEnv(max_steps=5)
         env._current_layout = layout
+        # _sample_target_bay() reads _bays_by_type / _bay_type_keys, which are
+        # normally populated by _load_floor_plan(). Group the supplied bays here
+        # so the helper does not require a CARLA connection.
+        eligible = [
+            b for b in layout.get("bays", []) if not b.get("always_empty", False)
+        ]
+        bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for bay in eligible:
+            bay_type_key = bay.get("bay_type", "perpendicular")
+            bays_by_type.setdefault(bay_type_key, []).append(bay)
+        env._bays_by_type = bays_by_type
+        env._bay_type_keys = list(bays_by_type.keys())
         return env
 
     def test_all_bay_types_reachable(self) -> None:
@@ -524,23 +536,23 @@ class TestVisStateWriter:
 
 
 # ---------------------------------------------------------------------------
-# log1p covariance transform
+# Covariance features in the observation
 # ---------------------------------------------------------------------------
 
 
-class TestLog1pCovarianceTransform:
+class TestCovarianceObservation:
     """
-    @class TestLog1pCovarianceTransform
-    @brief Verify covariance features are log1p-transformed in _get_state().
+    @class TestCovarianceObservation
+    @brief Verify EKF covariance features are written to obs[1:1+COVARIANCE_FEATURES_DIM].
 
-    In simulation (no CARLA), _get_state() returns zeros because the vehicle
-    is None.  We test the transform by injecting a mock _cov_subscriber and
-    constructing the obs buffer directly via the env internals.
+    The EKF produces COVARIANCE_FEATURES_DIM (3) uncertainty features
+    (std_x, std_y, std_yaw). _get_state() writes them verbatim into the
+    observation at indices 1-3, immediately after the vyaw scalar.
     """
 
-    def test_log1p_applied_to_nonzero_covariance(self) -> None:
+    def test_covariance_features_written_to_obs(self) -> None:
         """
-        @brief Covariance features in obs[6:15] equal log1p(raw_uncertainty).
+        @brief Covariance features appear unchanged in obs[1:1+COVARIANCE_FEATURES_DIM].
         """
         from unittest.mock import MagicMock
 
@@ -549,16 +561,16 @@ class TestLog1pCovarianceTransform:
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
 
-        # Inject a mock subscriber that returns known covariance values
-        raw = np.array([1.0, 4.0, 9.0, 0.5, 2.5, 0.1, 0.0, 0.3, 7.0], dtype=np.float32)
+        # Inject a mock subscriber that returns known covariance values.
+        raw = np.array([1.0, 4.0, 9.0], dtype=np.float32)
         assert len(raw) == COVARIANCE_FEATURES_DIM
 
-        mock_sub = MagicMock()
-        # _get_state() calls get_latest_state() once for both pose and uncertainty.
-        mock_sub.get_latest_state.return_value = (None, raw.copy())
-        env._cov_subscriber = mock_sub
+        # The _read_ekf_state callable is bound at construction time, when the
+        # subscriber is still None. Override it directly so _get_state() reads
+        # the test's covariance values.
+        env._read_ekf_state = lambda: (None, raw.copy())
 
-        # Simulate a minimal vehicle mock so _get_state() doesn't early-return
+        # Simulate a minimal vehicle mock so _get_state() doesn't early-return.
         mock_vehicle = MagicMock()
         mock_vehicle.get_transform.return_value = MagicMock(
             location=MagicMock(x=0.0, y=0.0),
@@ -572,29 +584,27 @@ class TestLog1pCovarianceTransform:
 
         obs = env._get_state()
 
-        # Code uses signed log1p to preserve sign of off-diagonal covariance terms.
-        expected_cov = np.sign(raw) * np.log1p(np.abs(raw))
         np.testing.assert_allclose(
-            obs[3:12],
-            expected_cov,
+            obs[1 : 1 + COVARIANCE_FEATURES_DIM],
+            raw,
             rtol=1e-5,
-            err_msg="Covariance features must be signed log1p-transformed",
+            err_msg="Covariance features must be written verbatim to obs[1:4]",
         )
 
-    def test_log1p_zero_uncertainty_stays_zero(self) -> None:
+    def test_zero_uncertainty_stays_zero(self) -> None:
         """
-        @brief log1p(0) == 0: zero uncertainty should remain zero in obs.
+        @brief Zero uncertainty should remain zero in the observation.
         """
         from unittest.mock import MagicMock
 
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
 
-        zero_cov = np.zeros(9, dtype=np.float32)
-        mock_sub = MagicMock()
-        mock_sub.get_latest_state.return_value = (None, zero_cov.copy())
-        env._cov_subscriber = mock_sub
+        zero_cov = np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32)
+        # _read_ekf_state is bound at construction; override it directly.
+        env._read_ekf_state = lambda: (None, zero_cov.copy())
 
         mock_vehicle = MagicMock()
         mock_vehicle.get_transform.return_value = MagicMock(
@@ -608,7 +618,10 @@ class TestLog1pCovarianceTransform:
         env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
 
         obs = env._get_state()
-        np.testing.assert_array_equal(obs[6:15], np.zeros(9))
+        np.testing.assert_array_equal(
+            obs[1 : 1 + COVARIANCE_FEATURES_DIM],
+            np.zeros(COVARIANCE_FEATURES_DIM),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -767,9 +780,9 @@ class TestComputeReward:
         assert terminated is False
         assert success is False
 
-    def test_collision_ego_fault_returns_minus_ten_and_terminates(self) -> None:
+    def test_collision_ego_fault_returns_minus_fifteen_and_terminates(self) -> None:
         """
-        @brief Ego-fault collision -> reward = -10, terminated = True, success = False.
+        @brief Ego-fault collision -> reward = -15, terminated = True, success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -777,13 +790,13 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        assert reward == pytest.approx(-10.0)
+        assert reward == pytest.approx(-15.0)
         assert terminated is True
         assert success is False
 
-    def test_collision_pedestrian_fault_terminates_no_penalty(self) -> None:
+    def test_collision_non_ego_fault_returns_minus_five(self) -> None:
         """
-        @brief Pedestrian-fault collision -> reward = 0.0, terminated = True, success = False.
+        @brief Non-ego-fault collision -> reward = -5.0, terminated = True, success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -791,11 +804,11 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        assert reward == pytest.approx(0.0)
+        assert reward == pytest.approx(-5.0)
         assert terminated is True
         assert success is False
 
-    def test_success_returns_plus_ten_after_dwell(self) -> None:
+    def test_success_returns_plus_fifteen_after_dwell(self) -> None:
         """
         @brief Success requires all thresholds to hold for success_dwell_steps
                consecutive steps. Before the dwell is complete, the episode
@@ -826,7 +839,7 @@ class TestComputeReward:
 
         # Final dwell step: success fires
         reward, terminated, success, diag = env._compute_reward()
-        assert reward == pytest.approx(10.0)
+        assert reward == pytest.approx(15.0)
         assert terminated is True
         assert success is True
 
@@ -925,10 +938,11 @@ class TestComputeReward:
 
         assert env._prev_distance == pytest.approx(5.0)
 
-    def test_yaw_symmetry_nose_in_nose_out(self) -> None:
+    def test_yaw_180_offset_not_valid_no_reverse(self) -> None:
         """
-        @brief A 180-deg yaw offset is equivalent to 0-deg (nose-out = nose-in).
-        Both should trigger success if position and speed thresholds are also met.
+        @brief With no reverse gear, a 180-deg yaw offset is a full orientation
+        error, not a valid nose-out. It must not trigger success even when the
+        position and speed thresholds are met.
         """
         from uncertainty_rl.utils.constants import (
             SUCCESS_THRESHOLD_POSITION,
@@ -938,7 +952,7 @@ class TestComputeReward:
         env = _make_env_for_reward()
         env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
-        # Nose-out: vehicle yaw = 180 deg
+        # Vehicle yaw = 180 deg: opposite to the bay's target yaw.
         _set_vehicle(
             env,
             x=SUCCESS_THRESHOLD_POSITION * 0.5,
@@ -948,7 +962,7 @@ class TestComputeReward:
         )
         reward, terminated, success, diag = env._compute_reward()
 
-        assert success is True, "180-deg yaw offset should be treated as valid nose-out"
+        assert success is False, "180-deg yaw offset must not count as success"
 
     def test_diag_keys_present(self) -> None:
         """

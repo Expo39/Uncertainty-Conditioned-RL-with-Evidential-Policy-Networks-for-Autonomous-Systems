@@ -95,14 +95,15 @@ class TestEnvDiagnosticsCallback:
 
     def test_on_step_accumulates_pos_error(self) -> None:
         """
-        @brief _on_step() appends pos_error values from each info dict.
+        @brief _on_step() accumulates pos_error into a running sum and step count.
         """
         cb = EnvDiagnosticsCallback()
         cb.locals = {"infos": [{"pos_error": 3.0}, {"pos_error": 7.0}]}
         mock_property = property(lambda self: MagicMock())
         with patch.object(type(cb), "logger", new_callable=lambda: mock_property):
             cb._on_step()
-        assert cb._ep_pos_errors == [3.0, 7.0]
+        assert cb._pos_sum == pytest.approx(10.0)
+        assert cb._step_count == 2
 
     def test_on_rollout_end_records_mean_pos_error(self) -> None:
         """
@@ -140,7 +141,7 @@ class TestEnvDiagnosticsCallback:
 
     def test_on_rollout_end_clears_accumulators(self) -> None:
         """
-        @brief After _on_rollout_end(), all accumulators are empty.
+        @brief After _on_rollout_end(), all running accumulators are reset to zero.
         """
         cb = EnvDiagnosticsCallback()
         cb.locals = {
@@ -160,10 +161,11 @@ class TestEnvDiagnosticsCallback:
             cb._on_step()
             cb._on_rollout_end()
 
-        assert cb._ep_pos_errors == []
-        assert cb._ep_orientation_errors == []
-        assert cb._ep_speeds == []
-        assert cb._ep_progress_rewards == []
+        assert cb._pos_sum == 0.0
+        assert cb._ori_sum == 0.0
+        assert cb._spd_sum == 0.0
+        assert cb._prog_sum == 0.0
+        assert cb._step_count == 0
 
     def test_episode_outcome_rates_logged_on_terminal_step(self) -> None:
         """
