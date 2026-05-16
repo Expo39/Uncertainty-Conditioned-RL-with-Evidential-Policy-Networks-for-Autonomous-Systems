@@ -6,8 +6,9 @@ CPU-only, no CARLA or ROS 2 required. The underlying env is mocked so
 all tests run without a live simulation.
 """
 
-from unittest.mock import MagicMock
+from typing import Any, Dict, Optional, Tuple
 
+import gymnasium as gym
 import numpy as np
 import pytest
 
@@ -18,15 +19,42 @@ from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_env(obs_shape: int = 12) -> MagicMock:
-    """Return a minimal mock Gymnasium env for wrapping."""
-    env = MagicMock()
-    env.observation_space = MagicMock()
-    env.action_space = MagicMock()
-    obs = np.zeros(obs_shape, dtype=np.float32)
-    env.reset.return_value = (obs, {})
-    env.step.return_value = (obs, 0.5, False, False, {})
-    return env
+class _StubEnv(gym.Env):
+    """
+    @class _StubEnv
+    @brief Minimal real Gymnasium env for wrapping in SafetyWrapper tests.
+
+    gymnasium.Wrapper asserts the wrapped env is a genuine gymnasium.Env, so a
+    MagicMock cannot be used directly. This stub returns fixed reset()/step()
+    values without requiring CARLA or ROS 2.
+    """
+
+    def __init__(self, obs_shape: int = 12) -> None:
+        self._obs = np.zeros(obs_shape, dtype=np.float32)
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float32
+        )
+        self.action_space = gym.spaces.Box(
+            low=-1.0, high=1.0, shape=(2,), dtype=np.float32
+        )
+
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        return self._obs.copy(), {}
+
+    def step(
+        self, action: np.ndarray
+    ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        return self._obs.copy(), 0.5, False, False, {}
+
+
+def _make_mock_env(obs_shape: int = 12) -> _StubEnv:
+    """Return a minimal real Gymnasium env for wrapping."""
+    return _StubEnv(obs_shape)
 
 
 def _make_action(steer: float = 0.0, lon: float = 0.5) -> np.ndarray:
@@ -136,11 +164,13 @@ class TestSafetyWrapperApply:
         )
         np.testing.assert_array_equal(action, original)
 
-    def test_negative_drive_clipped_to_minus_one(self) -> None:
+    def test_negative_drive_passes_through_unchanged(self) -> None:
         """
-        @brief Large reverse drive commands are still clamped to -1.0.
+        @brief apply() only caps the upper drive limit; negative (braking) drive
+               commands pass through untouched. Lower-bound clamping is the
+               action_space's responsibility, not apply()'s.
         """
-        action = np.array([0.0, -2.0, 0.0], dtype=np.float32)
+        action = np.array([0.0, -0.7], dtype=np.float32)
         modulated, _, _s = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -148,7 +178,7 @@ class TestSafetyWrapperApply:
             aleatoric_scaling=0.5,
             handoff_threshold=5.0,
         )
-        assert modulated[1] >= -1.0
+        assert modulated[1] == pytest.approx(-0.7)
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +231,8 @@ class TestSafetyWrapperStep:
         """
         @brief When epistemic < threshold the underlying truncated value is preserved.
         """
+        # _StubEnv.step() returns truncated=False; the wrapper must preserve it.
         env = _make_mock_env()
-        env.step.return_value = (np.zeros(12), 0.0, False, False, {})
         wrapper = SafetyWrapper(env, handoff_threshold=5.0)
         wrapper.set_uncertainty(epistemic=0.0, aleatoric=0.0)
         _, _, terminated, truncated, _ = wrapper.step(_make_action())
