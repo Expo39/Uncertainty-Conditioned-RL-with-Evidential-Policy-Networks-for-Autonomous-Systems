@@ -360,6 +360,9 @@ class CARLAParkingEnv(gym.Env):
         # filesystem calls when the visualiser is not active (the common case).
         self._vis_active: bool = False
         self._vis_check_counter: int = 0
+        # Truncate vis_history.jsonl every N episodes to bound file size.
+        self._vis_episodes_since_rotation: int = 0
+        self._vis_rotation_interval: int = 10
         self._carla_timestep: float = carla_timestep
 
         self._action_repeat: int = action_repeat
@@ -1380,6 +1383,18 @@ class CARLAParkingEnv(gym.Env):
         # Force signal-file recheck at episode start so new episodes don't
         # inherit a stale cached value from the previous episode's final step.
         self._vis_check_counter = 30
+
+        # Every _vis_rotation_interval episodes, close the vis file and reopen
+        # in write mode to truncate it. The visualiser detects the shrink via
+        # the offset-vs-size guard and resets its read pointer to zero.
+        self._vis_episodes_since_rotation += 1
+        if (
+            self._vis_file is not None
+            and self._vis_episodes_since_rotation >= self._vis_rotation_interval
+        ):
+            self._vis_episodes_since_rotation = 0
+            self._vis_file.close()
+            self._vis_file = open(self._vis_history_path, "w")
 
         # Sample GNSS noise tier for this episode (RTK fix-state variation).
         # Must happen before _spawn_sensors() so the multiplier is available.

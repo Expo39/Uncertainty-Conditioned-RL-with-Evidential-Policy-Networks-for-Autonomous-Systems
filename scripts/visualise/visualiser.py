@@ -417,6 +417,12 @@ class LiveVisualiser:
     def _read_new_frames(self) -> List[Dict[str, Any]]:
         """
         @brief Read all complete JSONL lines written since the last call.
+
+        The env truncates vis_history.jsonl every N episodes (see
+        CARLAParkingEnv._vis_rotation_interval). When the file shrinks below
+        _file_offset the offset is reset to zero so the visualiser reads from
+        the start of the new data without stalling.
+
         @return List of parsed frame dicts in arrival order.
         """
         if not self._history_file.exists():
