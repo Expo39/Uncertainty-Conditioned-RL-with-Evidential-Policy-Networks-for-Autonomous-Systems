@@ -24,7 +24,7 @@ activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
 
 # Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
 evidential:
-  lambda_reg: 0.01  # Evidential regularisation coefficient (target after warmup). Raised from 0.001: too weak to hold the NIG anchor against PPO pressure over long runs - the head drifted after ~1M steps in run 15052026-1954. Still small relative to the policy-gradient loss.
+  lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup). The NIG head is now kept stable primarily by the alpha >= 1.5 construction bound in EvidentialLayer (the High Uncertainty Area is structurally unreachable), so this anchor is a helper, not the load-bearing fix - it does not need to be cranked. 0.01 was a failed attempt to make a regulariser hold a divergence it provably could not (run 16052026-0741).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
   use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty.
 
