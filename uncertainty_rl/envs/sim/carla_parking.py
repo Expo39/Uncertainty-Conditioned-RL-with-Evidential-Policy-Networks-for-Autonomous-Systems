@@ -910,15 +910,19 @@ class CARLAParkingEnv(gym.Env):
         orientation_term = -0.02 * orientation_error
         position_term = -0.002 * position_error
 
-        # Final-approach bonus: quadratic in distance-from-centre inside the
-        # 2 m window. Linear form (0.1 * (2 - r)) gave too weak a gradient near
-        # the bay centre - in the 15052026-1910 run the policy stopped at
-        # ~1.5 m and could not dial in the final metre. Quadratic 0.3 * (2 - r)^2
-        # peaks at +1.2/step at pos=0 (vs +0.2/step linear) and grows steeply
-        # as the agent approaches, giving PPO a much stronger spatial gradient.
+        # Final-approach bonus: quadratic in distance-from-centre inside a
+        # 4 m window. The quadratic 0.3 * (4 - r)^2 has gradient 0.6 * (4 - r),
+        # which is steepest at the bay centre and zero at the window edge - so
+        # it pulls the agent toward the centre and never rewards stopping
+        # short (standing at r = 4 m earns zero bonus). The window was 2 m in
+        # run 16052026-0908, where the agent plateaued at ~1.7 m: at that
+        # distance the 2 m window gave gradient 0.6 * 0.3 = 0.18/m, too weak to
+        # overcome the safe stop-short local optimum. A 4 m window gives
+        # gradient 0.6 * 2.3 = 1.38/m at that same 1.7 m - a 7.6x stronger pull
+        # exactly where the agent was giving up.
         final_approach_bonus = 0.0
-        if position_error < 2.0:
-            final_approach_bonus = 0.3 * (2.0 - position_error) ** 2
+        if position_error < 4.0:
+            final_approach_bonus = 0.3 * (4.0 - position_error) ** 2
 
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (

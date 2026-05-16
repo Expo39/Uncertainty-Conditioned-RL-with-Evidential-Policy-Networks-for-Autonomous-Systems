@@ -12,7 +12,7 @@ gamma: 0.99  # High gamma needed: success bonus at ~step 300 must propagate back
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.0005  # Small entropy bonus. Larger values (e.g. 0.02) dwarf the per-step progress reward (~0.0025) and cause the policy to maximise randomness instead of progress.
+ent_coef: 0.002  # Entropy bonus. Bracketed by two runs: 0.0005 gave too little pressure and the policy collapsed to a frozen near-deterministic behaviour (run 16052026-1049, aleatoric -> 0.016); 0.01 gave too much and the policy stayed permanently noisy, unable to execute a precise approach (run 16052026-1151, aleatoric -> 2.08, 81% collisions). 0.002 sits between them - 4x the collapse value, 5x below the over-explore value - targeting an aleatoric of ~0.3-0.6 (the regime of the stable run 16052026-0908).
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
