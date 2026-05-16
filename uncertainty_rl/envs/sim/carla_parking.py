@@ -907,11 +907,15 @@ class CARLAParkingEnv(gym.Env):
         orientation_term = -0.02 * orientation_error
         position_term = -0.002 * position_error
 
-        # Final-approach bonus: strong signal to stop when within 2m of bay.
-        # Overcomes the forward-driving bias from distance_term alone.
+        # Final-approach bonus: quadratic in distance-from-centre inside the
+        # 2 m window. Linear form (0.1 * (2 - r)) gave too weak a gradient near
+        # the bay centre - in the 15052026-1910 run the policy stopped at
+        # ~1.5 m and could not dial in the final metre. Quadratic 0.3 * (2 - r)^2
+        # peaks at +1.2/step at pos=0 (vs +0.2/step linear) and grows steeply
+        # as the agent approaches, giving PPO a much stronger spatial gradient.
         final_approach_bonus = 0.0
         if position_error < 2.0:
-            final_approach_bonus = 0.1 * (2.0 - position_error)
+            final_approach_bonus = 0.3 * (2.0 - position_error) ** 2
 
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (
@@ -1706,11 +1710,14 @@ class CARLAParkingEnv(gym.Env):
             "collision": bool(reward_diag["collision"]),
             "timeout": truncated,
             "floor_plan": self._current_floor_plan_name,
-            # Per-step reward diagnostics for TensorBoard callback
             "pos_error": reward_diag["pos_error"],
             "orientation_error": reward_diag["orientation_error"],
             "speed": reward_diag["speed"],
             "progress_reward": reward_diag["progress_reward"],
+            "final_approach_bonus": reward_diag.get("final_approach_bonus", 0.0),
+            "uncertainty_scale": reward_diag.get("uncertainty_scale", 0.0),
+            "orientation_penalty": reward_diag.get("orientation_penalty", 0.0),
+            "position_penalty": reward_diag.get("position_penalty", 0.0),
         }
 
         return state, reward, terminated, truncated, info

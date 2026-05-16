@@ -111,10 +111,11 @@ Keyboard controls (dryrun, `MANUAL=true`): Up = throttle, Down = brake, Left/Rig
 | `--episodes` | int | unlimited | Max episodes (dryrun only) |
 | `--duration` | int (seconds) | `86400` | Max run time (24 h) |
 | `--manual` | flag | off | Keyboard control (dryrun only) |
+| `--verbose` | flag | off | Print per-step reward diagnostics (dryrun only) |
 | `--host` | string | `carla-server-demo` | CARLA server hostname |
 | `--port` | int | `2100` | CARLA server port |
 
-Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `SENSORS_VIEW` -> `--view` (sensors mode only), `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`.
+Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `SENSORS_VIEW` -> `--view` (sensors mode only), `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`, `VERBOSE=true` -> `--verbose`.
 
 ## Requirements
 
