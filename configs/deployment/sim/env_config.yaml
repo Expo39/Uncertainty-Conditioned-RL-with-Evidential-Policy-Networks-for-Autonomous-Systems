@@ -51,7 +51,7 @@ parking_scenarios:
   # STAGE 1 curriculum overrides. See documentation/CURRICULUM_PLAN.md.
   # Comment out the three fixed_* keys to return to random selection (Stage 2+).
   fixed_floor_plan: rectangle
-  fixed_target_bay_id: angled_12  # STAGE 1: central angled bay. Requires gentle left arc from spawn. Far from perimeter walls.
+  fixed_target_bay_id: angled_13  # STAGE 1: central angled bay. Requires gentle left arc from spawn. Far from perimeter walls.
   fixed_gnss_tier: rtk_fixed
 
   # CARLA blueprint for perimeter markers.
