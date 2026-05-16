@@ -288,16 +288,19 @@ class TestTrialEvalCallback:
     @brief Tests for the trial evaluation callback.
     """
 
-    def test_trial_eval_callback_reports_progress_reward(self) -> None:
+    def test_trial_eval_callback_reports_progress_tiebreaker(self) -> None:
         """
-        @brief TrialEvalCallback reports env/mean_progress_reward to trial.
+        @brief Before any success is observed, TrialEvalCallback reports the
+               progress-based tiebreaker (_TIEBREAK_SCALE * mean_progress_reward).
         """
+        from uncertainty_rl.training.tune_hyperparams import _TIEBREAK_SCALE
+
         # Mock trial and model logger
         trial = MagicMock()
         trial.should_prune.return_value = False  # Don't prune
         callback = TrialEvalCallback(trial)
 
-        # Mock model and logger
+        # Mock model and logger - no success_rate yet, only progress reward.
         callback.model = MagicMock()
         callback.model.logger = MagicMock()
         callback.model.logger.name_to_value = {"env/mean_progress_reward": 0.05}
@@ -306,10 +309,11 @@ class TestTrialEvalCallback:
         # Simulate rollout end
         callback._on_rollout_end()
 
-        # Verify trial.report was called with the metric
+        # Verify trial.report was called with the composite objective. With no
+        # success, the objective is the scaled progress tiebreaker.
         trial.report.assert_called_once()
         args, kwargs = trial.report.call_args
-        assert args[0] == 0.05  # The metric value
+        assert args[0] == pytest.approx(_TIEBREAK_SCALE * 0.05)
         assert kwargs["step"] == 10000  # num_timesteps as keyword arg
 
     def test_trial_eval_callback_handles_missing_metric(self) -> None:

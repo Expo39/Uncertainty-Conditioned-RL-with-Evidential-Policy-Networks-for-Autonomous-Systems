@@ -5,8 +5,8 @@
 Tests cover JSON file reading, seq-based staleness guard, cache invalidation,
 get_latest_uncertainty(), get_latest_pose(), get_latest_state(), and has_data
 - all without requiring ROS 2 or rclpy.  The _CovarianceSubscriber is
-constructed with _ROS2_AVAILABLE forced to False so no Node superclass
-initialisation occurs.
+file-based and has no ROS 2 dependency; tests construct it via __new__ to
+bypass __init__.
 """
 
 import json
@@ -65,7 +65,6 @@ def _make_subscriber(ekf_path: Path):
     import uncertainty_rl.envs.covariance_subscriber as mod
 
     with (
-        patch.object(mod, "_ROS2_AVAILABLE", False),
         patch.object(mod, "_EKF_STATE_PATH", ekf_path),
     ):
         sub = mod._CovarianceSubscriber.__new__(mod._CovarianceSubscriber)
@@ -74,6 +73,8 @@ def _make_subscriber(ekf_path: Path):
         sub._latest_pose = None
         sub._valid_after_seq = 0
         sub._last_read_seq = 0
+        # _read_file() skips a re-parse when the file mtime is unchanged.
+        sub._last_mtime_ns = mod._MTIME_UNSET
         # _read_file() now uses self._ekf_state_path (set in __init__).
         # Bypass __init__ sets it directly so tests remain self-contained.
         sub._ekf_state_path = ekf_path
@@ -110,7 +111,6 @@ class TestReadFileValid:
             _write_ekf_json(path, 1.0, 2.0, 0.5, 0.05, cov, seq=1)
 
             with (
-                patch.object(mod, "_ROS2_AVAILABLE", False),
                 patch.object(mod, "_EKF_STATE_PATH", path),
             ):
                 sub, _ = _make_subscriber(path)
@@ -132,7 +132,6 @@ class TestReadFileValid:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -153,7 +152,6 @@ class TestReadFileValid:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -174,7 +172,6 @@ class TestReadFileValid:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -195,7 +192,6 @@ class TestReadFileValid:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -224,7 +220,6 @@ class TestReadFileMissing:
         missing = Path("/tmp/does_not_exist_ekf_state_123456.json")
         with (
             patch.object(mod, "_EKF_STATE_PATH", missing),
-            patch.object(mod, "_ROS2_AVAILABLE", False),
         ):
             sub, _ = _make_subscriber(missing)
             _patch_read_file_path(sub, mod, missing)
@@ -244,7 +239,6 @@ class TestReadFileMissing:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -275,7 +269,6 @@ class TestReadFileMissing:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -292,7 +285,6 @@ class TestReadFileMissing:
         missing = Path("/tmp/ekf_never_written.json")
         with (
             patch.object(mod, "_EKF_STATE_PATH", missing),
-            patch.object(mod, "_ROS2_AVAILABLE", False),
         ):
             sub, _ = _make_subscriber(missing)
             _patch_read_file_path(sub, mod, missing)
@@ -325,11 +317,10 @@ class TestStalenessGuard:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=5)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=5)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -347,11 +338,10 @@ class TestStalenessGuard:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=3)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=3)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -368,11 +358,10 @@ class TestStalenessGuard:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            _write_ekf_json(path, 1.0, 2.0, 0.3, 0.0, 0.0, 0.0, [0.01] * 9, seq=6)
+            _write_ekf_json(path, 1.0, 2.0, 0.3, 0.0, [0.01] * 9, seq=6)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -402,7 +391,6 @@ class TestStalenessGuard:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -432,11 +420,10 @@ class TestInvalidate:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            with patch.object(mod, "_ROS2_AVAILABLE", False):
-                sub, _ = _make_subscriber(path)
-                sub._latest_uncertainty = np.zeros(9)
-                sub._latest_pose = np.zeros(6)
-                sub.invalidate()
+            sub, _ = _make_subscriber(path)
+            sub._latest_uncertainty = np.zeros(9)
+            sub._latest_pose = np.zeros(6)
+            sub.invalidate()
 
         assert sub._latest_uncertainty is None
         assert sub._latest_pose is None
@@ -450,10 +437,9 @@ class TestInvalidate:
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
-            with patch.object(mod, "_ROS2_AVAILABLE", False):
-                sub, _ = _make_subscriber(path)
-                sub._last_read_seq = 17
-                sub.invalidate()
+            sub, _ = _make_subscriber(path)
+            sub._last_read_seq = 17
+            sub.invalidate()
 
         assert sub._valid_after_seq == 17
 
@@ -468,7 +454,6 @@ class TestInvalidate:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -478,7 +463,7 @@ class TestInvalidate:
                 sub.invalidate()  # barrier = 10
 
                 # New extractor write arrives with seq=11
-                _write_ekf_json(path, 1.0, 2.0, 0.0, 0.0, 0.0, 0.0, [0.02] * 9, seq=11)
+                _write_ekf_json(path, 1.0, 2.0, 0.0, 0.0, [0.02] * 9, seq=11)
                 result = sub._read_file()
 
         assert result is True
@@ -496,7 +481,6 @@ class TestInvalidate:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -505,7 +489,7 @@ class TestInvalidate:
                 sub.invalidate()  # barrier = 10
 
                 # Stale file still has seq=10
-                _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=10)
+                _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, [0.01] * 9, seq=10)
                 result = sub._read_file()
 
         assert result is False
@@ -536,7 +520,6 @@ class TestGetLatest:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -557,7 +540,6 @@ class TestGetLatest:
         missing = Path("/tmp/ekf_no_file_999.json")
         with (
             patch.object(mod, "_EKF_STATE_PATH", missing),
-            patch.object(mod, "_ROS2_AVAILABLE", False),
         ):
             sub, _ = _make_subscriber(missing)
             _patch_read_file_path(sub, mod, missing)
@@ -578,7 +560,6 @@ class TestGetLatest:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -596,7 +577,6 @@ class TestGetLatest:
         missing = Path("/tmp/ekf_no_file_pose_999.json")
         with (
             patch.object(mod, "_EKF_STATE_PATH", missing),
-            patch.object(mod, "_ROS2_AVAILABLE", False),
         ):
             sub, _ = _make_subscriber(missing)
             _patch_read_file_path(sub, mod, missing)
@@ -629,7 +609,6 @@ class TestHasData:
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
@@ -646,7 +625,6 @@ class TestHasData:
         missing = Path("/tmp/ekf_has_data_missing.json")
         with (
             patch.object(mod, "_EKF_STATE_PATH", missing),
-            patch.object(mod, "_ROS2_AVAILABLE", False),
         ):
             sub, _ = _make_subscriber(missing)
             _patch_read_file_path(sub, mod, missing)
@@ -664,11 +642,10 @@ class TestHasData:
         with tempfile.TemporaryDirectory() as tmp_dir:
             path = Path(tmp_dir) / "ekf_state.json"
             cov = [0.02] * 9
-            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, cov, seq=5)
+            _write_ekf_json(path, 0.0, 0.0, 0.0, 0.0, cov, seq=5)
 
             with (
                 patch.object(mod, "_EKF_STATE_PATH", path),
-                patch.object(mod, "_ROS2_AVAILABLE", False),
             ):
                 sub, _ = _make_subscriber(path)
                 _patch_read_file_path(sub, mod, path)
