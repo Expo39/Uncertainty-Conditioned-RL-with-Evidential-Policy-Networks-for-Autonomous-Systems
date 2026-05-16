@@ -184,6 +184,18 @@ def main() -> None:
             "Ignored in all other modes."
         ),
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help=(
+            "Dryrun mode only. Print per-step reward function diagnostics "
+            "(progress_reward, final_approach_bonus, uncertainty_scale, "
+            "orientation_penalty, position_penalty) alongside the obs block "
+            "every 50 steps. Default off so manual-drive terminals stay "
+            "uncluttered. Activate via `make docker-inspect-dryrun VERBOSE=true`."
+        ),
+    )
     args = parser.parse_args()
 
     from uncertainty_rl.training.train_ppo import load_env_config
@@ -316,6 +328,7 @@ def main() -> None:
             initial_view=args.inspect_view,
             termination_pause=args.termination_pause,
             manual=args.manual,
+            verbose=args.verbose,
         )
         inspector.place_spectator()  # type: ignore[attr-defined]
         if args.manual:

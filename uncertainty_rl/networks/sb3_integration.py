@@ -712,8 +712,8 @@ class EvidentialPPO(PPO):
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
                 evidential_reg = (
-                    th.log1p(nu / _nu_prior).mean()
-                    + th.log1p(alpha / _alpha_prior).mean()
+                    th.log(nu / _nu_prior).pow(2).mean()
+                    + th.log(alpha / _alpha_prior).pow(2).mean()
                 )
 
                 with th.no_grad():

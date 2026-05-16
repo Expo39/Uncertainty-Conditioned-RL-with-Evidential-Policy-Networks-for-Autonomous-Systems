@@ -6,7 +6,7 @@
 import math
 import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -31,6 +31,7 @@ _ANSI_WHITE = "\033[97m"
 _ANSI_YELLOW = "\033[33m"
 _ANSI_RED = "\033[31m"
 _ANSI_CYAN = "\033[36m"
+_ANSI_GREEN = "\033[32m"
 _ANSI_RESET = "\033[0m"
 
 # ---------------------------------------------------------------------------
@@ -165,6 +166,7 @@ class DryRunInspector(_Inspector):
         initial_view: str = "third_person",
         termination_pause: float = 3.0,
         manual: bool = False,
+        verbose: bool = False,
     ) -> None:
         """
         @brief Construct the dry-run inspector.
@@ -177,6 +179,11 @@ class DryRunInspector(_Inspector):
         @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
         @param termination_pause: Seconds to hold scene after episode ends.
         @param manual: If True, use keyboard arrow keys instead of random/fixed action.
+        @param verbose: If True, also print per-step reward function diagnostics
+               (progress_reward, final_approach_bonus, uncertainty_scale,
+               orientation_penalty, position_penalty) every _LOG_INTERVAL steps.
+               Default False keeps the foreground terminal uncluttered during
+               manual drives.
         """
         super().__init__(env, duration)
         self._n_episodes = n_episodes
@@ -194,6 +201,7 @@ class DryRunInspector(_Inspector):
         self._keyboard: Optional[KeyboardController] = (
             KeyboardController() if manual else None
         )
+        self._verbose: bool = verbose
 
     # ------------------------------------------------------------------
     # Spectator placement
@@ -294,15 +302,26 @@ class DryRunInspector(_Inspector):
     # Observation logging
     # ------------------------------------------------------------------
 
-    def _print_obs(self, obs: Any, step: int, episode: int) -> None:
+    def _print_obs(
+        self,
+        obs: Any,
+        step: int,
+        episode: int,
+        info: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         @brief Print key observation values to the console for diagnosis.
 
-        WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic.
+        WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic,
+        GREEN = reward function diagnostics (when info dict is provided).
 
         @param obs: Observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
+        @param info: Optional info dict from env.step() containing reward
+                     diagnostic keys (progress_reward, final_approach_bonus,
+                     uncertainty_scale, orientation_penalty, position_penalty).
+                     When None (e.g. after env.reset()), reward diag is omitted.
         """
         if obs is None or len(obs) < 3:
             return
@@ -383,6 +402,28 @@ class DryRunInspector(_Inspector):
                 W + f"obs  L={obs[7]:.2f}m({math.degrees(obs[8]):+.1f}deg)"
                 f"  R={obs[9]:.2f}m({math.degrees(obs[10]):+.1f}deg)"
                 f"  F={obs[11]:.2f}m" + X
+            )
+
+        # Reward diagnostics: gated by --verbose (Makefile flag VERBOSE=true,
+        # docker-compose env INSPECT_VERBOSE=true). Default off so the
+        # foreground manual-drive terminal stays uncluttered. When enabled
+        # the rew/pen lines appear in both the foreground terminal and the
+        # Docker logs (`make docker-inspect-dryrun-logs`).
+        if info is not None and self._verbose:
+            G = _ANSI_GREEN
+            progress = float(info.get("progress_reward", 0.0))
+            final_appr = float(info.get("final_approach_bonus", 0.0))
+            unc_scale = float(info.get("uncertainty_scale", 0.0))
+            orient_pen = float(info.get("orientation_penalty", 0.0))
+            pos_pen = float(info.get("position_penalty", 0.0))
+            lines.append(
+                G + f"rew  progress={progress:+.4f}m"
+                f"  final_appr={final_appr:+.4f}"
+                f"  unc_scale={unc_scale:.3f}" + X
+            )
+            lines.append(
+                G + f"pen  orient={orient_pen:+.4f}"
+                f"  pos={pos_pen:+.4f}" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -509,7 +550,7 @@ class DryRunInspector(_Inspector):
 
                     if step % self._LOG_INTERVAL == 0:
                         self._draw_overlays(life_time=self._OVERLAY_LIFE)
-                        self._print_obs(obs, step, episode)
+                        self._print_obs(obs, step, episode, info=info)
                     _latest_obs = obs
 
                 if info.get("success", False):
@@ -535,7 +576,7 @@ class DryRunInspector(_Inspector):
                     f"  steps={step}  total_steps={total_steps}  " + _rmse_str
                 )
                 print("--- Final observation ---")
-                self._print_obs(obs, step, episode)
+                self._print_obs(obs, step, episode, info=info)
 
                 if self._termination_pause > 0:
                     print(
