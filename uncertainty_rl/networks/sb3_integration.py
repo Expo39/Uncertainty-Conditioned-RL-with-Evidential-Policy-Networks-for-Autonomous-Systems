@@ -100,10 +100,13 @@ class EvidentialDistribution(Distribution):
         self._alpha = alpha
         self._beta = beta
 
-        # Clamp before sqrt to guard against numerical drift producing near-zero
-        # or negative values under GPU fp32 arithmetic, which would yield NaN/inf
-        # std and trigger a CUDA illegal memory access in Normal().
-        aleatoric = th.clamp(beta / (alpha - 1), min=1e-6)
+        # Clamp before sqrt. min guards against near-zero/negative values from
+        # GPU fp32 drift (NaN/inf std -> CUDA illegal memory access in Normal()).
+        # max is a numerical backstop only: with the alpha >= 1.5 construction
+        # bound, aleatoric = beta/(alpha-1) <= beta_max/0.5 and stays ~0.5 in
+        # practice, so max=50.0 should never bind - it just closes the path to
+        # a runaway sampling std should beta itself ever misbehave.
+        aleatoric = th.clamp(beta / (alpha - 1), min=1e-6, max=50.0)
         std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
@@ -691,9 +694,9 @@ class EvidentialPPO(PPO):
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
         # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
-        # nu/alpha: softplus(0.9) (+1.0 offset on alpha). beta: softplus(0.0).
+        # nu: softplus(0.9). alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0).
         _nu_prior = 1.241
-        _alpha_prior = 2.241
+        _alpha_prior = 2.741
         _beta_prior = 0.693
         continue_training = True
         for epoch in range(self.n_epochs):
@@ -709,20 +712,24 @@ class EvidentialPPO(PPO):
                 )
                 values = values.flatten()
 
-                # Prior-anchoring log-penalty on NIG evidence parameters.
-                # Squared log-ratio: zero at the prior, positive either side, so
-                # it anchors (not just shrinks) each parameter. All three of
-                # nu/alpha/beta are anchored - beta was previously left free,
-                # and since aleatoric = beta/(alpha-1), an unconstrained beta
-                # let action variance drift upward over long runs (the head
-                # drift seen after ~1M steps in run 15052026-1954).
+                # Prior-anchoring penalty on the NIG evidence parameters.
+                # Raw-ratio quadratic (x/prior - 1)^2: zero at the prior,
+                # positive either side, and crucially its restoring gradient
+                # GROWS linearly with distance from the prior. The earlier
+                # squared-log-ratio form had a 1/x gradient that vanished far
+                # from the prior, so it could not reel a drifting parameter
+                # back (run 16052026-0741 diverged to aleatoric ~2000). With
+                # the alpha >= 1.5 construction bound the High Uncertainty Area
+                # is now unreachable, so this anchor only ever operates in the
+                # well-behaved region where its gradient is meaningful. All
+                # three of nu/alpha/beta are anchored.
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
                 evidential_reg = (
-                    th.log(nu / _nu_prior).pow(2).mean()
-                    + th.log(alpha / _alpha_prior).pow(2).mean()
-                    + th.log(beta / _beta_prior).pow(2).mean()
+                    (nu / _nu_prior - 1.0).pow(2).mean()
+                    + (alpha / _alpha_prior - 1.0).pow(2).mean()
+                    + (beta / _beta_prior - 1.0).pow(2).mean()
                 )
 
                 with th.no_grad():

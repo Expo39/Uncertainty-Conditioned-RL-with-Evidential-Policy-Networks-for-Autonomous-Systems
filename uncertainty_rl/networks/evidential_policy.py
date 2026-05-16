@@ -74,7 +74,17 @@ class EvidentialLayer(nn.Module):
         gamma = out[:, :n]
         pos = F.softplus(out[:, n:]).clamp_(max=100.0)  # one kernel for nu/alpha/beta
         nu = pos[:, :n] + 1e-6
-        alpha = pos[:, n : 2 * n] + 1.0
+        # alpha offset 1.5 (not the usual 1.0). aleatoric = beta/(alpha-1)
+        # diverges as alpha -> 1 (the "High Uncertainty Area" - see Pandey &
+        # Yu, Uncertainty Regularized Evidential Regression, 2024). In an
+        # evidential ACTOR the NIG variance is the action sampling std, so
+        # that divergence is a policy collapse, not just a bad uncertainty
+        # number. The regulariser gradient provably vanishes inside the HUA,
+        # so it cannot pull alpha back. Offsetting by 1.5 keeps alpha - 1 >= 0.5
+        # by construction, making the HUA structurally unreachable while
+        # leaving the prior-region aleatoric (~0.56) unchanged.
+        # ARCHITECTURAL CONSTANT: must stay identical across curriculum stages.
+        alpha = pos[:, n : 2 * n] + 1.5
         beta = pos[:, 2 * n :] + 1e-6
 
         return gamma, nu, alpha, beta
