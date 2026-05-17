@@ -66,11 +66,18 @@ TOTAL_OBS_DIM = (
 # Action Space Dimensions
 # ---------------------------------------------------------------------------
 
-# Continuous action: [steering, drive]
+# Continuous action: [steering, throttle, brake]
 # steering : [-1, 1]  left to right
-# drive    : [-1, 1]  negative = brake (friction), positive = forward throttle.
-#                     No reverse gear: forward perpendicular bay parking only.
-ACTION_DIM = 2
+# throttle : [ 0, 1]  forward throttle (no reverse gear: forward perpendicular
+#                     bay parking only)
+# brake    : [ 0, 1]  friction brake
+# Throttle and brake are SEPARATE axes (was a single bipolar `drive` axis). A
+# bipolar axis put the delicate "brake gently to a stop / hold still" endgame
+# control on the throttle/brake discontinuity at zero, where action-sampling
+# noise flips a gentle brake into a throttle. Separate non-negative axes make
+# "hold a stop" (throttle ~ 0, brake > 0) a stable region instead of a knife
+# edge on a sign change.
+ACTION_DIM = 3
 
 # ---------------------------------------------------------------------------
 # Environment Safety and Termination Thresholds

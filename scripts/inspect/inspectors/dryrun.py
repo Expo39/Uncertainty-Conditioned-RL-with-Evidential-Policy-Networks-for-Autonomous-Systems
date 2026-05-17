@@ -44,16 +44,21 @@ class KeyboardController:
     @class KeyboardController
     @brief Latching TTY keyboard input for manual dryrun control.
 
-    Key bindings (action space: [steer, drive], drive bipolar):
-      Up arrow   - increase drive (positive = throttle)
-      Down arrow - decrease drive (negative = brake; no reverse gear)
+    Key bindings (action space: [steer, throttle, brake]):
+      Up arrow   - more throttle / release brake (single bipolar pedal)
+      Down arrow - more brake / release throttle (no reverse gear)
       Left/Right - steer left / right
-      Space      - full stop (zero both axes)
+      Space      - full stop (zero throttle and steer, full brake)
       Ctrl+C     - quit
+
+    @note The Up/Down keys drive an internal bipolar `_pedal` value in [-1, 1];
+          get_action() maps it to the separate throttle (>=0) and brake (>=0)
+          axes the env now expects. This keeps the one-pedal feel for manual
+          driving while emitting the 3-dim action.
     """
 
     _STEER_STEP: float = 0.1
-    _DRIVE_STEP: float = 0.1
+    _PEDAL_STEP: float = 0.1
 
     def __init__(self) -> None:
         """@brief Initialise controller with zeroed latched state."""
@@ -61,7 +66,7 @@ class KeyboardController:
         import tty  # noqa: F401
 
         self._steer: float = 0.0
-        self._drive: float = 0.0
+        self._pedal: float = 0.0  # bipolar: +ve = throttle, -ve = brake
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -82,12 +87,17 @@ class KeyboardController:
 
     def get_action(self) -> np.ndarray:
         """
-        @brief Return the current latched [steer, drive] action.
-        @return numpy array of shape (2,) with steer and drive in [-1, 1].
-                drive is bipolar: positive = throttle, negative = brake.
+        @brief Return the current latched [steer, throttle, brake] action.
+        @return numpy array of shape (3,). steer in [-1, 1]; throttle and brake
+                in [0, 1]. The internal bipolar pedal maps to a positive
+                throttle (pedal >= 0) or a positive brake (pedal < 0).
         """
         with self._lock:
-            return np.array([self._steer, self._drive], dtype=np.float32)
+            throttle = max(0.0, self._pedal)
+            brake = max(0.0, -self._pedal)
+            return np.array(
+                [self._steer, throttle, brake], dtype=np.float32
+            )
 
     def _read_loop(self) -> None:
         """@brief Read raw escape sequences from stdin and update latched state."""
@@ -119,19 +129,20 @@ class KeyboardController:
                     os.kill(os.getpid(), signal.SIGINT)
                     break
                 if ch == " ":
+                    # Space: zero steer/throttle and apply full brake.
                     with self._lock:
                         self._steer = 0.0
-                        self._drive = 0.0
+                        self._pedal = -1.0
                 elif ch == "\x1b":
                     rest = sys.stdin.read(2)
                     seq = ch + rest
                     with self._lock:
                         if seq == "\x1b[A":
                             # Up arrow: more throttle (or release brake)
-                            self._drive = min(1.0, self._drive + self._DRIVE_STEP)
+                            self._pedal = min(1.0, self._pedal + self._PEDAL_STEP)
                         elif seq == "\x1b[B":
                             # Down arrow: more brake (or release throttle)
-                            self._drive = max(-1.0, self._drive - self._DRIVE_STEP)
+                            self._pedal = max(-1.0, self._pedal - self._PEDAL_STEP)
                         elif seq == "\x1b[D":
                             self._steer = max(-1.0, self._steer - self._STEER_STEP)
                         elif seq == "\x1b[C":
@@ -173,8 +184,8 @@ class DryRunInspector(_Inspector):
         @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
         @param duration: Maximum wall-clock seconds to run (across all episodes).
         @param n_episodes: Stop after this many episodes; None = run until duration.
-        @param dryrun_action: Fixed [steer, drive] to apply each step. drive
-               is bipolar: positive = throttle, negative = brake.
+        @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
+               steer in [-1, 1]; throttle and brake in [0, 1].
                None = action_space.sample(). Ignored when manual=True.
         @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
         @param termination_pause: Seconds to hold scene after episode ends.
