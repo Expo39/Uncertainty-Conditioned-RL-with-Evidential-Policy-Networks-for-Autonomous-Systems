@@ -12,7 +12,8 @@ gamma: 0.99  # High gamma needed: success bonus at ~step 300 must propagate back
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.002  # Entropy bonus. Bracketed by two runs: 0.0005 gave too little pressure and the policy collapsed to a frozen near-deterministic behaviour (run 16052026-1049, aleatoric -> 0.016); 0.01 gave too much and the policy stayed permanently noisy, unable to execute a precise approach (run 16052026-1151, aleatoric -> 2.08, 81% collisions). 0.002 sits between them - 4x the collapse value, 5x below the over-explore value - targeting an aleatoric of ~0.3-0.6 (the regime of the stable run 16052026-0908).
+ent_coef: 0.01  # Entropy bonus at the START of training. ent_coef is a linear DECAY schedule (ent_coef -> ent_coef_final over total_timesteps), NOT a constant - see ent_coef_final below and the wiring in train_ppo.py. In the evidential policy the action sampling std IS sqrt(aleatoric), so the entropy bonus is a direct pressure on the action std; a constant value cannot let the policy both explore early and commit late. 0.01 gives strong exploration at the start.
+ent_coef_final: 0.0005  # Entropy bonus at the END of training. A constant ent_coef=0.01 ratcheted aleatoric to ~2.2 (action std ~1.5 on a [-1, 1] space) and the policy regressed from working (pos_error ~1.1-1.9 m at ~250-550k) to flailing (pos_error 4-6 m at ~1M) - run 17052026-1107. Decaying to 0.0005 removes that late-training pressure so the policy can commit. Non-zero floor retains minimal exploration throughout. 0.002 as a constant previously collapsed the policy (run 16052026-1653) - the schedule avoids both failure modes.
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
