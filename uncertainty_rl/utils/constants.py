@@ -16,14 +16,22 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 # Position error threshold for successful parking (metres).
-SUCCESS_THRESHOLD_POSITION = 0.75
+# STAGE 1 CURRICULUM: relaxed from 0.75 to 1.5. The 0.75 m window gave PPO
+# essentially no success signal from random init (8+ runs, ~0 successes), so
+# the +50 terminal reward never propagated back. 1.5 m makes success reachable
+# so the agent can learn what winning looks like. RESTORE TO 0.75 before
+# evaluation - 0.75 m is the real-world parking standard.
+SUCCESS_THRESHOLD_POSITION = 1.5
 
 # Orientation error threshold for successful parking (radians)
-# Equivalent to 10 degrees
-SUCCESS_THRESHOLD_ORIENTATION = np.deg2rad(10)
+# STAGE 1 CURRICULUM: relaxed from 10 to 25 degrees - see note above.
+# RESTORE TO np.deg2rad(10) before evaluation.
+SUCCESS_THRESHOLD_ORIENTATION = np.deg2rad(25)
 
 # Velocity threshold for successful parking (m/s)
-SUCCESS_THRESHOLD_VELOCITY = 0.1
+# STAGE 1 CURRICULUM: relaxed from 0.1 to 0.3 - see note above.
+# RESTORE TO 0.1 before evaluation.
+SUCCESS_THRESHOLD_VELOCITY = 0.3
 
 # ---------------------------------------------------------------------------
 # State Space Dimensions

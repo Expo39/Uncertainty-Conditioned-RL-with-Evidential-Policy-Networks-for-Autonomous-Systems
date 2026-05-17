@@ -116,6 +116,7 @@ class CARLAParkingEnv(gym.Env):
         gnss_noise_multiplier_override: Optional[float] = None,
         uncertainty_std_max: float = 2.0,
         success_dwell_steps: int = 5,
+        success_approach_radius: float = 2.0,
     ) -> None:
         """
         @brief Construct the CARLA parking environment.
@@ -167,6 +168,11 @@ class CARLAParkingEnv(gym.Env):
                before the episode terminates as a success. Prevents a fast
                drive-through that momentarily satisfies the thresholds from
                being counted as a park. Default 5 steps = 0.25 s at 20 Hz.
+        @param success_approach_radius: Radius (metres) around the bay within
+               which the bounded approach_term reward peak is active. The term
+               pays for being both close and slow, decaying to zero at this
+               radius. Installs a reward maximum at the bay so braking becomes
+               optimal. Default 2.0 m.
         """
         super().__init__()
 
@@ -184,6 +190,8 @@ class CARLAParkingEnv(gym.Env):
         self._gnss_noise_multiplier_override = gnss_noise_multiplier_override
 
         self._uncertainty_std_max: float = max(uncertainty_std_max, 1e-6)
+        self._success_approach_radius: float = max(success_approach_radius, 1e-6)
+        self._inv_approach_radius: float = 1.0 / self._success_approach_radius
 
         self._inv_uncertainty_std_max: float = 1.0 / self._uncertainty_std_max
         self._inv_oob_threshold: float = 1.0 / OUT_OF_BOUNDS_THRESHOLD
@@ -852,13 +860,16 @@ class CARLAParkingEnv(gym.Env):
         if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
-            # Terminal collision penalty. Scaled down from -50/-10 to -15/-5
-            # so the per-episode cumulative shaping signal (~ +30 distance
-            # term) is comparable in magnitude. With the old -50 the agent
-            # converged on slow + timeout because "fast + risk crash" had
-            # worse expected return than "slow + zero". -15 keeps crashing
-            # meaningfully bad without dominating the entire return.
-            reward = -15.0 if collision_ego_fault else -5.0
+            # Terminal collision penalty. Lowered from -50/-20 to -25/-10: at
+            # -50 the agent became so collision-averse it refused to commit to
+            # the final approach near the perimeter and learned to circle
+            # instead (run 16052026-1553). -25 still clearly outweighs a
+            # successful episode's shaping, keeping the ordering
+            # success(+50) > timeout(~0) > collision(-25), but is no longer so
+            # punishing that not-approaching beats approaching. Ego-fault
+            # (static cone, or a dynamic actor hit while moving) is penalised
+            # harder than a non-fault contact.
+            reward = -25.0 if collision_ego_fault else -10.0
             return reward, True, False, diag
 
         in_bay = (
@@ -874,66 +885,105 @@ class CARLAParkingEnv(gym.Env):
         if self._success_counter >= self._success_dwell_steps:
             self._prev_distance = position_error
             # Terminal success bonus. Symmetric in magnitude with the ego-fault
-            # collision penalty so the agent has a clean cost/benefit trade-off.
-            return 15.0, True, True, diag
+            # collision penalty (-50). Must dominate the per-step shaping: with
+            # the unbounded final_approach_bonus removed, the per-step potential
+            # shaping telescopes to zero over the trajectory, so a one-off +50
+            # for success is the largest single reward available - reaching the
+            # bay is unambiguously the best outcome.
+            return 50.0, True, True, diag
 
-        # Per-step reward: four additive components.
+        # Per-step reward: three additive components (Ng et al. 1999 shaping).
         #
-        # (1) distance_term: raw metres of distance closed this step.
-        #     Positive when approaching, zero when stationary, negative when
-        #     moving away. The dominant gradient signal.
+        # (1) distance_term: phi(s') - phi(s) with potential phi(r) = -r, the
+        #     metres of distance closed this step. The PROGRESS signal:
+        #     positive approaching, zero stationary, negative receding. As a
+        #     true potential difference it telescopes to zero over any closed
+        #     path, so it cannot be farmed by hovering.
         #
-        # (2) orientation_term: small constant penalty proportional to
-        #     absolute yaw error from the bay's target yaw. Drives the agent
-        #     to arc toward the bay alignment rather than drive straight at
-        #     it (the car cannot reverse - it must approach with the bay's
-        #     yaw or it cannot enter).
-        #     coefficient 0.02: -0.031/step at 90 deg, -3 to -8 per episode.
+        # (2) position_term: small linear penalty proportional to absolute
+        #     distance from the bay centre. The PROXIMITY signal: far is bad,
+        #     centre is ~0. distance_term alone telescopes to zero and gives no
+        #     net reward for *being* close, so on its own it left a flat
+        #     per-step landscape and the agent wandered with no gradient (run
+        #     16052026-1515: mean_progress ~ 0, pos_error ~ 4 m). position_term
+        #     restores a continuous pull toward the bay. It is a bounded linear
+        #     PENALTY (negative everywhere except r=0) so, unlike the removed
+        #     quadratic final_approach_bonus, it cannot be farmed - it is only
+        #     minimised by reaching the centre and finishing.
+        #     coefficient 0.005 (see the lowering rationale at the term itself
+        #     below): weak enough that timing out near the bay no longer costs
+        #     more than crashing.
         #
-        # (3) position_term: small constant penalty proportional to absolute
-        #     distance from the bay centre. Creates a continuous pressure to
-        #     FINISH (hovering accumulates penalty), so the agent does not
-        #     learn slow-timeout as a safe local optimum.
-        #     coefficient 0.002: -0.06/step at 30 m, ~-7 per episode for full
-        #     approach trajectory, -15 if standing still at spawn for entire
-        #     episode (matches the magnitude of an ego-fault collision).
+        # (3) orientation_term: penalty proportional to absolute yaw error
+        #     from the bay's target yaw. Drives the agent to arc toward the
+        #     bay alignment rather than drive straight at it (the car cannot
+        #     reverse - it must approach with the bay's yaw or it cannot
+        #     enter). coefficient 0.2 (raised from 0.02): -0.31/step at 90 deg.
+        #     At 0.02 it was ~6x weaker than position_term, so the agent
+        #     solved (x, y) and ignored heading - it reached the bay area but
+        #     never rotated into the bay (runs up to 16052026-1553). At 0.2 it
+        #     is comparable to position_term, forcing an arcing approach that
+        #     rotates into the bay yaw while closing distance.
         #
-        # (4) uncertainty_scale gate: all per-step shaping is multiplied by
-        #     (1 - uncertainty_scale). Under high EKF covariance the per-step
+        # (4) uncertainty_scale gate: per-step SHAPING (terms 1-3) is multiplied
+        #     by (1 - uncertainty_scale). Under high EKF covariance the per-step
         #     gradient shrinks to zero, so the policy is not pushed around by
         #     noisy localisation estimates. Terminal events (success, collision)
-        #     bypass this gate because they are ground-truth events.
+        #     and the approach_term (5) bypass this gate.
+        #
+        # (5) approach_term: a bounded reward PEAK co-located with the bay.
+        #     Terms 1-3 are all monotonic in progress - they have no maximum,
+        #     so "stop at the bay" is never the optimal action and the agent
+        #     learns to drive straight through and crash into the perimeter
+        #     (runs up to 17052026-0824: pos_error flatlined at ~3.3 m, 100%
+        #     collision, 0% success). approach_term installs the missing
+        #     maximum: proximity (0 at the radius, 1 at the bay centre) times
+        #     slowness (0 at top speed, 1 stopped) is maximised ONLY when the
+        #     car is both at the bay AND stopped - exactly the success state.
+        #     Overshooting the bay now sacrifices reward, which makes braking
+        #     optimal without a separate speed penalty. Bounded at 0.3/step and
+        #     zero beyond success_approach_radius so it cannot be farmed by
+        #     circling (the failure mode of the removed quadratic
+        #     final_approach_bonus, run 16052026-1332). Un-gated by
+        #     uncertainty_scale: "near the bay and slow" is a geometric fact,
+        #     not a noisy progress estimate, so it belongs with the terminals.
         progress = self._prev_distance - position_error
         self._prev_distance = position_error
 
         distance_term = progress
-        orientation_term = -0.02 * orientation_error
-        position_term = -0.002 * position_error
+        orientation_term = -0.2 * orientation_error
+        # coefficient 0.005 (lowered from 0.05). At 0.05 the per-step proximity
+        # penalty made stopping short of the bay and timing out (~337 idle
+        # policy steps x -0.165/step ~ -60) cost FAR more than an immediate
+        # ego-fault crash (-25), so the optimal policy was to drive straight
+        # through the bay and crash quickly to end the episode - exactly the
+        # observed failure (runs up to 17052026-0852: pos_error flatlined
+        # ~3.3 m, 100% collision, 0% success). The car CAN brake and turn in
+        # (confirmed by manual dryrun) - it was rewarded for not doing so.
+        # At 0.005 a stop-and-timeout episode costs ~-12, which now beats the
+        # -25 crash, so braking near the bay becomes the optimal action. The
+        # term still provides a continuous proximity gradient (its original
+        # purpose - it was added to stop the agent wandering in a flat
+        # landscape, run 16052026-1515), just an order of magnitude weaker so
+        # it no longer poisons the brake-vs-crash terminal trade-off.
+        position_term = -0.005 * position_error
 
-        # Final-approach bonus: quadratic in distance-from-centre inside a
-        # 4 m window. The quadratic 0.3 * (4 - r)^2 has gradient 0.6 * (4 - r),
-        # which is steepest at the bay centre and zero at the window edge - so
-        # it pulls the agent toward the centre and never rewards stopping
-        # short (standing at r = 4 m earns zero bonus). The window was 2 m in
-        # run 16052026-0908, where the agent plateaued at ~1.7 m: at that
-        # distance the 2 m window gave gradient 0.6 * 0.3 = 0.18/m, too weak to
-        # overcome the safe stop-short local optimum. A 4 m window gives
-        # gradient 0.6 * 2.3 = 1.38/m at that same 1.7 m - a 7.6x stronger pull
-        # exactly where the agent was giving up.
-        final_approach_bonus = 0.0
-        if position_error < 4.0:
-            final_approach_bonus = 0.3 * (4.0 - position_error) ** 2
+        approach_term = 0.0
+        if position_error < self._success_approach_radius:
+            proximity = 1.0 - position_error * self._inv_approach_radius
+            slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
+            approach_term = 0.3 * proximity * slowness
 
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (
-            distance_term + orientation_term + position_term + final_approach_bonus
-        ) * (1.0 - uncertainty_scale)
+            distance_term + orientation_term + position_term
+        ) * (1.0 - uncertainty_scale) + approach_term
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
         diag["orientation_penalty"] = float(orientation_term)
         diag["position_penalty"] = float(position_term)
-        diag["final_approach_bonus"] = float(final_approach_bonus)
+        diag["approach_reward"] = float(approach_term)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -1733,7 +1783,6 @@ class CARLAParkingEnv(gym.Env):
             "orientation_error": reward_diag["orientation_error"],
             "speed": reward_diag["speed"],
             "progress_reward": reward_diag["progress_reward"],
-            "final_approach_bonus": reward_diag.get("final_approach_bonus", 0.0),
             "uncertainty_scale": reward_diag.get("uncertainty_scale", 0.0),
             "orientation_penalty": reward_diag.get("orientation_penalty", 0.0),
             "position_penalty": reward_diag.get("position_penalty", 0.0),
