@@ -412,18 +412,15 @@ class DryRunInspector(_Inspector):
         if info is not None and self._verbose:
             G = _ANSI_GREEN
             progress = float(info.get("progress_reward", 0.0))
-            final_appr = float(info.get("final_approach_bonus", 0.0))
             unc_scale = float(info.get("uncertainty_scale", 0.0))
             orient_pen = float(info.get("orientation_penalty", 0.0))
             pos_pen = float(info.get("position_penalty", 0.0))
             lines.append(
                 G + f"rew  progress={progress:+.4f}m"
-                f"  final_appr={final_appr:+.4f}"
                 f"  unc_scale={unc_scale:.3f}" + X
             )
             lines.append(
-                G + f"pen  orient={orient_pen:+.4f}"
-                f"  pos={pos_pen:+.4f}" + X
+                G + f"pen  orient={orient_pen:+.4f}  pos={pos_pen:+.4f}" + X
             )
 
         print("\n" + "\n".join(lines))

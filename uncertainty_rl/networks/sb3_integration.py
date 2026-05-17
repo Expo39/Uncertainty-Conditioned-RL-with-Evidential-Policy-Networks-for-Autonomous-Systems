@@ -102,11 +102,20 @@ class EvidentialDistribution(Distribution):
 
         # Clamp before sqrt. min guards against near-zero/negative values from
         # GPU fp32 drift (NaN/inf std -> CUDA illegal memory access in Normal()).
-        # max is a numerical backstop only: with the alpha >= 1.5 construction
-        # bound, aleatoric = beta/(alpha-1) <= beta_max/0.5 and stays ~0.5 in
-        # practice, so max=50.0 should never bind - it just closes the path to
-        # a runaway sampling std should beta itself ever misbehave.
-        aleatoric = th.clamp(beta / (alpha - 1), min=1e-6, max=50.0)
+        # max=1.0 is a HARD ceiling on the action sampling std: aleatoric is the
+        # NIG variance and std=sqrt(aleatoric) is the action noise, so max=1.0
+        # caps the noise at std<=1.0 (the action half-range on [-1, 1]). The
+        # alpha >= 1.5 construction bound only bounds the DENOMINATOR
+        # (alpha-1 >= 0.5); beta, the numerator, is softplus-unbounded, so
+        # aleatoric = beta/(alpha-1) can still run away via beta. It did: run
+        # 17052026-1107 plateaued at aleatoric ~2.2 (std ~1.5, wider than the
+        # whole action range) and the policy regressed to flailing. The old
+        # max=50.0 (std ~7) was far too loose to catch this. 1.0 is 2x the
+        # design-assumed ~0.5, so it does not bind in healthy operation but
+        # does catch divergence. The decaying ent_coef (see train_ppo.py)
+        # removes the pressure inflating beta; this clamp is the backstop for
+        # the early high-ent_coef phase before the decay takes effect.
+        aleatoric = th.clamp(beta / (alpha - 1), min=1e-6, max=1.0)
         std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
@@ -674,6 +683,17 @@ class EvidentialPPO(PPO):
 
         clip_range_fn = cast(Schedule, self.clip_range)
         clip_range = clip_range_fn(self._current_progress_remaining)
+
+        # ent_coef may be a float (constant) or a Schedule callable (decay).
+        # Unlike clip_range / learning_rate, SB3 does NOT wrap ent_coef into a
+        # schedule internally - it is stored verbatim as passed to the
+        # constructor - so this override must resolve a callable itself.
+        ent_coef_attr: Any = self.ent_coef
+        if callable(ent_coef_attr):
+            ent_coef = float(ent_coef_attr(self._current_progress_remaining))
+        else:
+            ent_coef = float(ent_coef_attr)
+
         clip_range_vf: Optional[float] = None
         if self.clip_range_vf is not None:
             clip_range_vf_fn = cast(Schedule, self.clip_range_vf)
@@ -779,7 +799,7 @@ class EvidentialPPO(PPO):
                 # Combined loss with annealed evidential regularisation
                 loss = (
                     policy_loss
-                    + self.ent_coef * entropy_loss
+                    + ent_coef * entropy_loss
                     + self.vf_coef * value_loss
                     + current_lambda_reg * evidential_reg
                 )
@@ -845,6 +865,9 @@ class EvidentialPPO(PPO):
             exclude="tensorboard",
         )
         self.logger.record("train/clip_range", clip_range)
+        # ent_coef is a decay schedule - log it so the decay is visible in
+        # TensorBoard alongside aleatoric_uncertainty / entropy_loss.
+        self.logger.record("train/ent_coef", ent_coef)
         if self.clip_range_vf is not None:
             self.logger.record("train/clip_range_vf", clip_range_vf)
 

@@ -97,15 +97,22 @@ class TrainResult:
     closed the env itself."""
 
 
-def linear_schedule(initial_value: float) -> Callable[[float], float]:
+def linear_schedule(
+    initial_value: float, final_value: float = 0.0
+) -> Callable[[float], float]:
     """
-    @brief Linear learning rate schedule decaying to zero.
-    @param initial_value: Initial learning rate.
-    @return Callable that takes progress_remaining (1.0 -> 0.0) and returns LR.
+    @brief Linear schedule decaying from initial_value to final_value.
+    @param initial_value: Value at the start of training (progress_remaining=1.0).
+    @param final_value: Value at the end of training (progress_remaining=0.0).
+           Defaults to 0.0 (the learning-rate-decay use case).
+    @return Callable that takes progress_remaining (1.0 -> 0.0) and returns the
+            interpolated value.
+    @note Used for both the learning rate (decays to 0) and ent_coef (decays to
+          a small non-zero floor - see the ent_coef wiring below).
     """
 
     def func(progress_remaining: float) -> float:
-        return progress_remaining * initial_value
+        return final_value + progress_remaining * (initial_value - final_value)
 
     return func
 
@@ -176,6 +183,7 @@ def make_env(
             vis_output_path=vis_path,
             uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
             success_dwell_steps=config.get("success_dwell_steps", 5),
+            success_approach_radius=config.get("success_approach_radius", 2.0),
         )
         return env
 
@@ -424,6 +432,20 @@ def train(
     lr_initial = config.get("learning_rate", 3e-4)
     lr_schedule = linear_schedule(lr_initial)
 
+    # ent_coef is a linear DECAY schedule, not a constant. In the evidential
+    # policy the action sampling std IS sqrt(aleatoric), so entropy and the
+    # action std are the same quantity - a constant entropy bonus is a constant
+    # pressure to widen the action std, with no counter-force once a good
+    # policy exists. Run 17052026-1107 showed this: aleatoric ratcheted to ~2.2
+    # (action std ~1.5 on a [-1, 1] space) and the policy regressed from
+    # working (pos_error ~1.1-1.9 m, ~250-550k) to flailing (pos_error 4-6 m,
+    # ~1M). Decaying ent_coef gives strong exploration early and lets the
+    # policy commit late. Decays to a small non-zero floor, not 0, to retain a
+    # little exploration pressure throughout.
+    ent_coef_initial = config.get("ent_coef", 0.01)
+    ent_coef_final = config.get("ent_coef_final", 0.0005)
+    ent_coef_schedule = linear_schedule(ent_coef_initial, ent_coef_final)
+
     ppo_kwargs = dict(
         env=env,
         learning_rate=lr_schedule,
@@ -434,7 +456,7 @@ def train(
         gae_lambda=config.get("gae_lambda", 0.95),
         clip_range=config.get("clip_range", 0.2),
         clip_range_vf=config.get("clip_range_vf", None),
-        ent_coef=config.get("ent_coef", 0.0),
+        ent_coef=ent_coef_schedule,
         vf_coef=config.get("vf_coef", 0.5),
         max_grad_norm=config.get("max_grad_norm", 0.5),
         target_kl=config.get("target_kl", 0.02),
