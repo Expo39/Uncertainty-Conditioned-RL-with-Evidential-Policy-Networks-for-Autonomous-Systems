@@ -56,11 +56,13 @@ def obs_space() -> spaces.Box:
 @pytest.fixture
 def act_space() -> spaces.Box:
     """
-    @brief 2-dim continuous action space matching parking env [steering, longitudinal].
+    @brief 3-dim continuous action space matching parking env
+           [steering, throttle, brake]. steering in [-1, 1]; throttle and
+           brake in [0, 1].
     """
     return spaces.Box(
-        low=np.array([-1.0, -1.0], dtype=np.float32),
-        high=np.array([1.0, 1.0], dtype=np.float32),
+        low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+        high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
         dtype=np.float32,
     )
 
@@ -698,11 +700,11 @@ class TestUncertaintyConditionedActorWiring:
     @pytest.fixture
     def act_space(self) -> spaces.Box:
         """
-        @brief 2-dim action space [steering, longitudinal].
+        @brief 3-dim action space [steering, throttle, brake].
         """
         return spaces.Box(
-            low=np.array([-1.0, -1.0], dtype=np.float32),
-            high=np.array([1.0, 1.0], dtype=np.float32),
+            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
 
