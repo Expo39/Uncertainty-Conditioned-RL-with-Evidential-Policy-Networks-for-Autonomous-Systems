@@ -5,14 +5,14 @@
 debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
 inspect:
-  dryrun_action: [0.0, 0.5]  # [steer, drive] applied each step in dryrun mode. drive bipolar: +ve = throttle, -ve = brake.
+  dryrun_action: [0.0, 0.5, 0.0]  # [steer, throttle, brake] applied each step in dryrun mode. steer in [-1,1]; throttle and brake in [0,1].
 
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
 max_steps: 1750  # Episode length (steps). 1750 * 0.05s = 87.5s sim time.
 success_dwell_steps: 1  # STAGE 1 relaxed (was 5): with dwell=5 the agent must hold all success criteria for 5 consecutive policy decisions (= 1 sim s at action_repeat=4). The manual dryrun showed dwell is trivial to satisfy once you have a viable park policy (held for 14 steps), but is too narrow a target for PPO to discover from 0 successes during exploration. Relaxing to 1 gives PPO any positive-success signal to learn from. Tighten back to 5 in Stage 3+.
-success_approach_radius: 2.0  # Radius (m) of the bounded approach_term reward peak around the bay. The distance/position/orientation terms are all monotonic in progress - no reward maximum - so the agent learnt to drive through the bay and crash (runs up to 17052026-0824: pos_error flatlined ~3.3 m, 100% collision, 0% success). approach_term pays for being both close AND slow, peaking at the bay centre and decaying to 0 at this radius, so overshooting now costs reward and braking becomes optimal.
+success_approach_radius: 2.0  # Radius (m) of the bounded approach_term reward peak around the bay. The distance/position/orientation terms are all monotonic in progress - no reward maximum - so the agent learnt to drive through the bay and crash (runs up to 17052026-0824: pos_error flatlined ~3.3 m, 100% collision, 0% success). approach_term pays for being both close AND slow, peaking at the bay centre and decaying to 0 at this radius. NOTE: widening this to 3.0 (run 17052026-1430) made training worse - it enlarged a farmable loiter subsidy. Kept at 2.0 (run 17052026-1246 form).
 action_repeat: 4  # Policy runs at 5 Hz. Each action held for 4 sim ticks (0.2 s) - reduces per-step jitter that was destabilising the critic. Was 1.
 use_extra_spawns: false  # STAGE 1: locked to primary spawn only. Was true.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.

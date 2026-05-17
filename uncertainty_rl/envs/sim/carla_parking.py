@@ -41,6 +41,7 @@ from uncertainty_rl.envs._parking_core import (
 from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 from uncertainty_rl.envs.sim.helpers import LotSpawner, NPCController, SensorManager
 from uncertainty_rl.utils.constants import (
+    ACTION_DIM,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_ORIENTATION,
@@ -351,9 +352,9 @@ class CARLAParkingEnv(gym.Env):
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied (2-dim: [steer, drive]). drive is bipolar:
-        # positive = throttle, negative = brake. No reverse gear.
-        self._last_action: np.ndarray = np.zeros(2, dtype=np.float32)
+        # Last action applied (3-dim: [steer, throttle, brake]). throttle and
+        # brake are separate non-negative axes. No reverse gear.
+        self._last_action: np.ndarray = np.zeros(ACTION_DIM, dtype=np.float32)
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -404,13 +405,19 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action space: [steer, drive]
-        # steer : [-1, 1]  left to right
-        # drive : [-1, 1]  positive = forward throttle, negative = brake.
-        #                  No reverse gear: forward perpendicular parking only.
+        # Action space: [steer, throttle, brake]
+        # steer    : [-1, 1]  left to right
+        # throttle : [ 0, 1]  forward throttle (no reverse gear)
+        # brake    : [ 0, 1]  friction brake
+        # Throttle and brake are separate non-negative axes (was a single
+        # bipolar `drive` axis). The bipolar axis put the precise endgame
+        # control - brake gently to a stop and hold still - on the
+        # throttle/brake discontinuity at zero, where action-sampling noise
+        # flips a gentle brake into a throttle. Separate axes make "hold a
+        # stop" (throttle ~ 0, brake > 0) a stable region.
         self.action_space = spaces.Box(
-            low=np.array([-1.0, -1.0]),
-            high=np.array([1.0, 1.0]),
+            low=np.array([-1.0, 0.0, 0.0]),
+            high=np.array([1.0, 1.0, 1.0]),
             dtype=np.float32,
         )
 
@@ -968,6 +975,16 @@ class CARLAParkingEnv(gym.Env):
         # it no longer poisons the brake-vs-crash terminal trade-off.
         position_term = -0.005 * position_error
 
+        # @note An attempt to strengthen this term (run 17052026-1430:
+        # coefficient 0.3 -> 0.6, proximity squared, radius 2 m -> 3 m) made
+        # training WORSE - success fell from ~0.07 to ~0.01. The stronger
+        # slowness-weighted term became a farmable loiter subsidy: crawling
+        # slowly anywhere within the radius banked a safe steady positive
+        # reward until timeout, so the policy stopped pushing into the success
+        # window. Reverted to the run-17052026-1246 form below (coefficient
+        # 0.3, linear proximity, radius 2 m). Do not strengthen a
+        # slowness-weighted shaping term to fix a final-precision gap - it
+        # rewards the hovering that IS the problem.
         approach_term = 0.0
         if position_error < self._success_approach_radius:
             proximity = 1.0 - position_error * self._inv_approach_radius
@@ -1146,7 +1163,8 @@ class CARLAParkingEnv(gym.Env):
             },
             "action": {
                 "steer": float(self._last_action[0]),
-                "drive": float(self._last_action[1]),
+                "throttle": float(self._last_action[1]),
+                "brake": float(self._last_action[2]),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,
@@ -1677,7 +1695,8 @@ class CARLAParkingEnv(gym.Env):
 
         if self.vehicle is not None:
             steer = float(np.clip(action[0], -1.0, 1.0))
-            drive = float(np.clip(action[1], -1.0, 1.0))
+            throttle = float(np.clip(action[1], 0.0, 1.0))
+            brake = float(np.clip(action[2], 0.0, 1.0))
 
             vel = self.vehicle.get_velocity()
             current_speed = math.hypot(vel.x, vel.y)
@@ -1685,15 +1704,14 @@ class CARLAParkingEnv(gym.Env):
             control = carla.VehicleControl()
             control.steer = steer
             control.reverse = False
-            if drive >= 0.0:
-                # Cut throttle when speed limit is exceeded.
-                control.throttle = (
-                    0.0 if current_speed >= self._max_ego_speed_ms else drive
-                )
-                control.brake = 0.0
-            else:
-                control.throttle = 0.0
-                control.brake = -drive
+            # Throttle and brake are independent axes. Cut throttle when the
+            # speed limit is exceeded; brake is applied as commanded. The two
+            # may be non-zero at once (CARLA resolves throttle-vs-brake) but
+            # the policy is free to learn pure-brake / pure-throttle.
+            control.throttle = (
+                0.0 if current_speed >= self._max_ego_speed_ms else throttle
+            )
+            control.brake = brake
 
             self.vehicle.apply_control(control)
 
