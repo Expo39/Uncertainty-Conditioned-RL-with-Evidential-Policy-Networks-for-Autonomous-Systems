@@ -1161,10 +1161,16 @@ class CARLAParkingEnv(gym.Env):
                 "vy": velocity.y,
                 "speed": math.hypot(velocity.x, velocity.y),
             },
+            # Applied (clamped) action - what the vehicle actually receives,
+            # not the policy's raw pre-clip output. steer is clipped to
+            # [-1, 1]; throttle and brake to [0, 1] (same clamps as step()).
+            # The visualiser HUD shows these, so it reflects vehicle state -
+            # showing the raw output would imply the car is braking when a
+            # negative raw brake is clamped to 0.
             "action": {
-                "steer": float(self._last_action[0]),
-                "throttle": float(self._last_action[1]),
-                "brake": float(self._last_action[2]),
+                "steer": float(np.clip(self._last_action[0], -1.0, 1.0)),
+                "throttle": float(np.clip(self._last_action[1], 0.0, 1.0)),
+                "brake": float(np.clip(self._last_action[2], 0.0, 1.0)),
             },
             "trajectory": list(self._trajectory_buffer),
             "actors": actor_transforms,

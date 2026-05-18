@@ -6,7 +6,7 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 
 - `train_ppo.py` is config-driven: all hyperparameters come from `configs/train_config.yaml`
 - `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` uses SB3 `PPO` + `MlpPolicy`
-- `VecNormalize` wraps the environment for observation normalisation only (`norm_reward=False`)
+- `VecNormalize` wraps the environment with observation and reward normalisation (`norm_obs=True`, `norm_reward=True`)
 - $\lambda_{\text{reg}}$ is linearly annealed from $0$ to $0.001$ over the first $50\,000$ steps
 - Learning rate decays linearly: $\alpha(t) = \alpha_0 \cdot (1 - t / T)$
 - Optuna TPE + MedianPruner study over 10 parameters; 40 trials x $100\,000$ steps each, optimising `env/success_rate` with `env/mean_progress_reward` as a tiebreaker
