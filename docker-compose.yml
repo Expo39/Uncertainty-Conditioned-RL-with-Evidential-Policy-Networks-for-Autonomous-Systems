@@ -60,7 +60,10 @@ services:
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
-      - CARLA_HOST=carla-server-0
+      # CARLA_HOST is intentionally not set here: demo_drive.py falls back to
+      # carla_host in env_config.yaml ("uncertainty-rl-carla-0"), which is the
+      # actual worker 0 container alias. Hardcoding "carla-server-0" here would
+      # override the config with a hostname that does not resolve.
       - CARLA_PORT=2000
     networks:
       - uncertainty-rl-network

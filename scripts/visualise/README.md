@@ -76,8 +76,9 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 7. Ego trajectory trail (faded cyan, capped at 500 points)
 8. Ego vehicle (cyan rectangle + heading arrow)
 9. HUD bar (floor plan, episode, step, sim time)
-10. Debug HUD bar (position error, yaw error, speed, reward, covariance, actions) - only when `debug` key is present
-11. Legend panel (right-hand side, static)
+10. State HUD bar (speed, action vector `[steer, throttle, brake]`) - always shown; read from the `ego` and `action` keys the env writes every frame
+11. Debug HUD bar (position error, yaw error, reward, covariance, EKF drift) - only when the `debug` key is present (env `debug: true`)
+12. Legend panel (right-hand side, static)
 
 ## Controls
 
@@ -91,7 +92,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | File | Purpose |
 |------|---------|
 | `visualiser.py` | `LiveVisualiser` class + CLI entry point (`python scripts/visualise/visualiser.py`) |
-| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection |
+| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection. Per-step trace logging is on by default: each episode is written to `outputs/demo_traces/<DD-MM-YYYY-HHMMSS>/episode_<N>.csv` (step, speed, applied + raw throttle/brake/steer, position/orientation error, reward components) for offline behaviour analysis. Written under `outputs/` because that is the directory bind-mounted into the demo container. Pass `--no-trace` to disable. |
 | `__init__.py` | Package marker - sets non-interactive Matplotlib backend |
 
 ## Window dimensions

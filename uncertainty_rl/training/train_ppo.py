@@ -394,11 +394,21 @@ def train(
             [make_env(config, rank=i) for i in range(n_workers)]
         )
 
-        # Normalise observations
+        # Normalise observations and rewards. norm_reward divides rewards by a
+        # running estimate of the discounted-return std, so the critic predicts
+        # a ~unit-variance target instead of the raw return range (~-25 to +55,
+        # near-bimodal: the +50 success bonus is either earned or not). With
+        # norm_reward=False the critic could not track that target - value_loss
+        # spiked to 8-12 and explained_variance collapsed to ~0.2-0.5 every run
+        # (up to 17052026-1748), so the advantage estimate was noise and the
+        # policy gradient with it, capping success at ~0.12 regardless of
+        # actor / reward / action-space changes. Normalisation is monotonic and
+        # uniform, so the reward-term ratios (success >> timeout >> collision)
+        # and all tuned coefficients are preserved.
         env = VecNormalize(
             train_vec_env,
             norm_obs=True,
-            norm_reward=False,
+            norm_reward=True,
             clip_obs=10.0,
         )
     else:

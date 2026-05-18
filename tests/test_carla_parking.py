@@ -779,9 +779,11 @@ class TestComputeReward:
         assert terminated is False
         assert success is False
 
-    def test_collision_ego_fault_returns_minus_fifteen_and_terminates(self) -> None:
+    def test_collision_ego_fault_returns_minus_twentyfive_and_terminates(
+        self,
+    ) -> None:
         """
-        @brief Ego-fault collision -> reward = -15, terminated = True, success = False.
+        @brief Ego-fault collision -> reward = -25, terminated = True, success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -789,13 +791,14 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        assert reward == pytest.approx(-15.0)
+        assert reward == pytest.approx(-25.0)
         assert terminated is True
         assert success is False
 
-    def test_collision_non_ego_fault_returns_minus_five(self) -> None:
+    def test_collision_non_ego_fault_returns_minus_ten(self) -> None:
         """
-        @brief Non-ego-fault collision -> reward = -5.0, terminated = True, success = False.
+        @brief Non-ego-fault collision -> reward = -10.0, terminated = True,
+               success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -803,11 +806,11 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        assert reward == pytest.approx(-5.0)
+        assert reward == pytest.approx(-10.0)
         assert terminated is True
         assert success is False
 
-    def test_success_returns_plus_fifteen_after_dwell(self) -> None:
+    def test_success_returns_plus_fifty_after_dwell(self) -> None:
         """
         @brief Success requires all thresholds to hold for success_dwell_steps
                consecutive steps. Before the dwell is complete, the episode
@@ -838,7 +841,7 @@ class TestComputeReward:
 
         # Final dwell step: success fires
         reward, terminated, success, diag = env._compute_reward()
-        assert reward == pytest.approx(15.0)
+        assert reward == pytest.approx(50.0)
         assert terminated is True
         assert success is True
 
@@ -908,9 +911,10 @@ class TestComputeReward:
         assert reward < 0.0
         assert terminated is False
 
-    def test_time_penalty_always_applied(self) -> None:
+    def test_position_penalty_always_applied(self) -> None:
         """
-        @brief Even when making zero progress, reward includes the -0.01 time penalty.
+        @brief Even when making zero progress, reward includes the position_term
+               proximity penalty (-0.005 * position_error).
         """
         env = _make_env_for_reward()
         dist = 5.0
@@ -921,8 +925,10 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        # progress = 0, so reward = 0 - 0.01 = -0.01
-        assert reward == pytest.approx(-0.01, abs=1e-4)
+        # progress = 0 and yaw aligned, so distance_term = orientation_term = 0.
+        # dist = 5.0 m is outside the 2 m approach_term radius, so approach_term
+        # = 0. Only position_term remains: -0.005 * 5.0 = -0.025.
+        assert reward == pytest.approx(-0.025, abs=1e-4)
 
     def test_prev_distance_updated_after_step(self) -> None:
         """

@@ -4,9 +4,12 @@
 """
 
 import argparse
+import csv
 import os
+import time
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, List, Optional, TextIO, cast
 
 import numpy as np
 import torch as th
@@ -55,7 +58,45 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable CARLA 3D spectator rendering (requires display).",
     )
+    parser.add_argument(
+        "--no-realtime",
+        dest="realtime",
+        action="store_false",
+        help="Step as fast as CARLA allows instead of pacing to wall-clock "
+        "time. By default the demo runs at real-time speed so the drive is "
+        "watchable; pass this to run flat out.",
+    )
+    parser.add_argument(
+        "--no-trace",
+        dest="trace",
+        action="store_false",
+        help="Disable per-step CSV trace logging. By default each episode is "
+        "traced to logs/demo_runs/<timestamp>/episode_<N>.csv (step, speed, "
+        "applied + raw throttle/brake/steer, pos error, reward) for offline "
+        "behaviour analysis.",
+    )
+    parser.set_defaults(realtime=True, trace=True)
     return parser.parse_args()
+
+
+# Trace CSV column order. Logged once per environment step.
+_TRACE_COLUMNS = [
+    "step",
+    "speed_ms",
+    "pos_error_m",
+    "orientation_error_rad",
+    "steer_applied",
+    "throttle_applied",
+    "brake_applied",
+    "steer_raw",
+    "throttle_raw",
+    "brake_raw",
+    "reward",
+    "progress_reward",
+    "position_penalty",
+    "orientation_penalty",
+    "uncertainty_scale",
+]
 
 
 def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
@@ -131,7 +172,24 @@ def main() -> None:
     _get_action = model.policy.get_action_with_uncertainty if is_evidential else None
 
     episode = 0
+
+    # Per-step trace logging. One timestamped folder per demo run, one CSV per
+    # episode inside it. Timestamp uses DD-MM-YYYY-HHMMSS (European format).
+    # Written under outputs/ because that is the directory bind-mounted rw into
+    # the demo container - demo_drive.py runs inside the container, so a path
+    # outside the mounted volume would be lost when the --rm container exits.
+    trace_dir: Optional[Path] = None
+    if args.trace:
+        run_stamp = datetime.now().strftime("%d-%m-%Y-%H%M%S")
+        trace_dir = Path("outputs") / "demo_traces" / run_stamp
+        trace_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Trace logging enabled: {trace_dir}/episode_<N>.csv")
+
     print("Driving. Close the visualiser or Ctrl+C to stop.")
+
+    # Current episode's trace file handle. Hoisted out of the loop so the
+    # finally block can close it if the run is interrupted mid-episode.
+    trace_file: Optional[TextIO] = None
 
     try:
         while args.episodes == 0 or episode < args.episodes:
@@ -140,10 +198,28 @@ def main() -> None:
             steps = 0
             episode += 1
 
+            # Open a fresh per-episode trace CSV.
+            trace_file = None
+            trace_writer: Optional[Any] = None
+            if trace_dir is not None:
+                trace_file = open(
+                    trace_dir / f"episode_{episode}.csv", "w", newline=""
+                )
+                trace_writer = csv.writer(trace_file)
+                trace_writer.writerow(_TRACE_COLUMNS)
+
             while not done_arr[0]:
+                # Wall-clock timestamp at the start of this step, used to pace
+                # the loop to real-time when --realtime is set (the default).
+                step_start = time.monotonic()
+
                 if is_evidential and _get_action is not None:
+                    # Move the observation onto the model's device: the model
+                    # may load onto CUDA while th.as_tensor(obs) defaults to
+                    # CPU, which crashes the dual-encoder actor's first matmul.
+                    obs_tensor = th.as_tensor(obs).to(model.device)
                     action_tensor, _ = _get_action(
-                        th.as_tensor(obs), deterministic=True
+                        obs_tensor, deterministic=True
                     )
                     action = action_tensor.cpu().numpy()
                 else:
@@ -151,13 +227,61 @@ def main() -> None:
 
                 step_result = env.step(action)
                 obs = cast(np.ndarray, step_result[0])
+                rewards = cast(np.ndarray, step_result[1])
                 done_arr = cast(np.ndarray, step_result[2])
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
                 infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
+                if trace_writer is not None:
+                    # action is shape (1, 3) from the vec env: [steer, throttle,
+                    # brake]. raw = the policy's pre-clip output; applied = what
+                    # the env actually sends to CARLA (steer clipped to [-1, 1],
+                    # throttle and brake clipped to [0, 1]).
+                    raw = np.asarray(action, dtype=np.float32).reshape(-1)
+                    s_raw, t_raw, b_raw = (
+                        float(raw[0]),
+                        float(raw[1]),
+                        float(raw[2]),
+                    )
+                    info0 = infos[0]
+                    trace_writer.writerow(
+                        [
+                            steps,
+                            f"{info0.get('speed', 0.0):.4f}",
+                            f"{info0.get('pos_error', 0.0):.4f}",
+                            f"{info0.get('orientation_error', 0.0):.4f}",
+                            f"{float(np.clip(s_raw, -1.0, 1.0)):.4f}",
+                            f"{float(np.clip(t_raw, 0.0, 1.0)):.4f}",
+                            f"{float(np.clip(b_raw, 0.0, 1.0)):.4f}",
+                            f"{s_raw:.4f}",
+                            f"{t_raw:.4f}",
+                            f"{b_raw:.4f}",
+                            f"{float(rewards[0]):.4f}",
+                            f"{info0.get('progress_reward', 0.0):.4f}",
+                            f"{info0.get('position_penalty', 0.0):.4f}",
+                            f"{info0.get('orientation_penalty', 0.0):.4f}",
+                            f"{info0.get('uncertainty_scale', 0.0):.4f}",
+                        ]
+                    )
+
                 if args.render:
                     env.render()
+
+                # Pace the loop to wall-clock time so the drive is watchable.
+                # CARLA runs in synchronous mode, where world.tick() advances
+                # physics instantly - without this sleep the episode would
+                # play back many times faster than real time. carla_timestep
+                # (default 0.05s = 20 Hz) is the sim seconds one step covers.
+                if args.realtime:
+                    timestep = float(infos[0].get("carla_timestep", 0.05))
+                    elapsed = time.monotonic() - step_start
+                    remaining = timestep - elapsed
+                    if remaining > 0.0:
+                        time.sleep(remaining)
+
+            if trace_file is not None:
+                trace_file.close()
 
             success = infos[0].get("success", False)
             result = "SUCCESS" if success else "FAIL"
@@ -166,6 +290,10 @@ def main() -> None:
     except KeyboardInterrupt:
         print(f"\nStopped after {episode} episodes.")
     finally:
+        # Close the current episode's trace file if the run was interrupted
+        # mid-episode (the normal per-episode close happens in the loop above).
+        if trace_file is not None and not trace_file.closed:
+            trace_file.close()
         env.close()
 
 
