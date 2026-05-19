@@ -202,9 +202,7 @@ def main() -> None:
             trace_file = None
             trace_writer: Optional[Any] = None
             if trace_dir is not None:
-                trace_file = open(
-                    trace_dir / f"episode_{episode}.csv", "w", newline=""
-                )
+                trace_file = open(trace_dir / f"episode_{episode}.csv", "w", newline="")
                 trace_writer = csv.writer(trace_file)
                 trace_writer.writerow(_TRACE_COLUMNS)
 
@@ -218,9 +216,7 @@ def main() -> None:
                     # may load onto CUDA while th.as_tensor(obs) defaults to
                     # CPU, which crashes the dual-encoder actor's first matmul.
                     obs_tensor = th.as_tensor(obs).to(model.device)
-                    action_tensor, _ = _get_action(
-                        obs_tensor, deterministic=True
-                    )
+                    action_tensor, _ = _get_action(obs_tensor, deterministic=True)
                     action = action_tensor.cpu().numpy()
                 else:
                     action, _ = model.predict(obs, deterministic=True)

@@ -49,7 +49,6 @@ if [ "${INSPECT_MANUAL:-false}" = "true" ]; then
         INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
         EPISODES="${EPISODES:-}" \
         INSPECT_OOD="${INSPECT_OOD:-false}" \
-        INSPECT_VERBOSE="${INSPECT_VERBOSE:-false}" \
         ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun \
         run --rm -it --name "${CONTAINER}" \
         training-inspect-dryrun
@@ -61,7 +60,6 @@ else
         INSPECT_MANUAL="${INSPECT_MANUAL:-false}" \
         EPISODES="${EPISODES:-}" \
         INSPECT_OOD="${INSPECT_OOD:-false}" \
-        INSPECT_VERBOSE="${INSPECT_VERBOSE:-false}" \
         ${DOCKER_COMPOSE_INSPECT} --profile inspect-dryrun up \
         --force-recreate --detach \
         training-inspect-dryrun

@@ -31,8 +31,8 @@ flowchart TB
     end
 
     subgraph dual["Dual-encoder mode  (use_uncertainty_conditioning = True)"]
-        SE["state encoder\nobs[0]  vyaw"] --> CAT["concat + fusion MLP"]
-        UE["uncertainty encoder\nobs[1:4]  std_x, std_y, std_yaw"] --> CAT
+        SE["state encoder\nobs[0:2]  speed, vyaw"] --> CAT["concat + fusion MLP"]
+        UE["uncertainty encoder\nobs[2:5]  std_x, std_y, std_yaw"] --> CAT
         CAT --> EL2["EvidentialLayer"]
     end
 
@@ -45,8 +45,8 @@ flowchart TB
     OBS --> CRIT["critic MLP  (full obs)  ->  value"]
 ```
 
-> In dual-encoder mode, only `obs[0]` (vyaw) and `obs[1:4]` (std_x, std_y, std_yaw) reach the
-> actor. Indices 4-11 (target pose, LiDAR) feed the critic but not the actor.
+> In dual-encoder mode, only `obs[0:2]` (speed, vyaw) and `obs[2:5]` (std_x, std_y, std_yaw) reach
+> the actor. Indices 5-12 (target pose, LiDAR) feed the critic but not the actor.
 
 ## NIG uncertainty decomposition
 

@@ -203,8 +203,18 @@ class _CovarianceSubscriber:
                 return False
             cov_3x3 = np.asarray(data["covariance"], dtype=np.float64).reshape(3, 3)
             features = extract_2d_covariance_features(cov_3x3)
+            # vx is signed body-frame longitudinal velocity (m/s) from the EKF.
+            # `data.get` with a 0.0 default keeps backwards compatibility with
+            # any stale ekf_state.json left over from a pre-Phase-2 container
+            # run (the extractor would not have written vx in that file).
             pose = np.array(
-                [data["x"], data["y"], data["yaw"], data["vyaw"]],
+                [
+                    data["x"],
+                    data["y"],
+                    data["yaw"],
+                    data["vyaw"],
+                    data.get("vx", 0.0),
+                ],
                 dtype=np.float64,
             )
         except (KeyError, ValueError):
@@ -238,7 +248,7 @@ class _CovarianceSubscriber:
         redundant stat + JSON parse when both values are needed (e.g. _get_state).
 
         @return Tuple of (pose, uncertainty) where:
-                pose: shape (4,) = [x, y, yaw, vyaw], or None.
+                pose: shape (5,) = [x, y, yaw, vyaw, vx], or None.
                 uncertainty: shape (COVARIANCE_FEATURES_DIM,) feature vector, or None.
         """
         self._read_file()
@@ -275,7 +285,7 @@ class _CovarianceSubscriber:
 
         @note Use get_latest_state() when uncertainty is also needed to avoid
               a second file read.
-        @return Array of shape (4,) = [x, y, yaw, vyaw] or None.
+        @return Array of shape (5,) = [x, y, yaw, vyaw, vx] or None.
         """
         self._read_file()
         with self._lock:

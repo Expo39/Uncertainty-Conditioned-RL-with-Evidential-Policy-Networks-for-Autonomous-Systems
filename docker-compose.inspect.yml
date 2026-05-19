@@ -308,7 +308,6 @@ services:
       - INSPECT_PAUSE=${INSPECT_PAUSE:-3.0}
       - INSPECT_MANUAL=${INSPECT_MANUAL:-false}
       - INSPECT_OOD=${INSPECT_OOD:-false}
-      - INSPECT_VERBOSE=${INSPECT_VERBOSE:-false}
     depends_on:
       carla-server-demo:
         condition: service_healthy
@@ -335,7 +334,6 @@ services:
       --inspect-view ${INSPECT_VIEW:-third_person}
       --termination-pause ${INSPECT_PAUSE:-3.0}
       $([ '${INSPECT_MANUAL:-false}' = 'true' ] && echo --manual || true)
-      $([ '${INSPECT_VERBOSE:-false}' = 'true' ] && echo --verbose || true)
       $([ -n '${EPISODES}' ] && echo --episodes ${EPISODES} || true)
       2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
     deploy:

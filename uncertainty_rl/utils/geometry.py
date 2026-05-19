@@ -185,16 +185,30 @@ def _compute_relative_target_pose(
 ) -> Tuple[float, float, float]:
     """
     @brief Compute target bay pose in the ego vehicle body frame.
-    @param x_ego: Ego x position (metres).
-    @param y_ego: Ego y position (metres).
-    @param yaw_ego: Ego heading (radians).
+    @param x_ego: Ego x position (metres, CARLA world frame).
+    @param y_ego: Ego y position (metres, CARLA world frame).
+    @param yaw_ego: Ego heading (radians, CARLA convention - positive = CW
+                    from above = right turn).
     @param x_target: Target bay x position (metres).
     @param y_target: Target bay y position (metres).
     @param yaw_target: Target bay heading (radians).
-    @return Tuple (dx, dy, dyaw) where dx/dy are in the ego body frame and
-            dyaw is the heading error wrapped to (-pi, pi].
+    @return Tuple (dx, dy, dyaw) in the ego body frame using a left-positive
+            convention consistent with the LiDAR sectoring and the obs[1]
+            vyaw sign convention:
+            - dx > 0: target is ahead;  dx < 0: target is behind.
+            - dy > 0: target is on the left;  dy < 0: target is on the right.
+            - dyaw > 0: target requires a left rotation from ego;
+              dyaw < 0: target requires a right rotation.
+            All three shrink in magnitude to zero at the bay. dyaw is wrapped
+            with 180-degree parking symmetry (target = ego or target = ego+pi
+            both count as aligned) and is then in (-pi/2, pi/2].
 
-    @note Body frame: +x forward, +y left. dx > 0 means target is ahead.
+    @note CARLA's world frame is left-handed (+x east, +y south). The standard
+          CCW rotation matrix used here preserves chirality, so without the
+          explicit `-` on dy and dyaw the body frame would inherit CARLA's
+          left-handed convention (+y_body = right). The negation rewrites the
+          body frame in REP-103 convention (+y_body = left), matching the
+          LiDAR scan sectoring in extract_obstacle_features.
     """
     dx_world = x_target - x_ego
     dy_world = y_target - y_ego
@@ -203,7 +217,10 @@ def _compute_relative_target_pose(
     sin_yaw = math.sin(yaw_ego)
 
     dx = cos_yaw * dx_world + sin_yaw * dy_world
-    dy = -sin_yaw * dx_world + cos_yaw * dy_world
+    # Sign flipped vs the standard CCW rotation matrix to put body +y on the
+    # left (REP-103) rather than on the right (CARLA-world chirality).
+    dy = sin_yaw * dx_world - cos_yaw * dy_world
 
-    dyaw = wrap_angle_symmetric(yaw_target - yaw_ego)
+    # Sign flipped for the same reason: positive dyaw = left rotation needed.
+    dyaw = -wrap_angle_symmetric(yaw_target - yaw_ego)
     return dx, dy, dyaw

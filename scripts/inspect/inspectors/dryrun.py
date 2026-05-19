@@ -95,9 +95,7 @@ class KeyboardController:
         with self._lock:
             throttle = max(0.0, self._pedal)
             brake = max(0.0, -self._pedal)
-            return np.array(
-                [self._steer, throttle, brake], dtype=np.float32
-            )
+            return np.array([self._steer, throttle, brake], dtype=np.float32)
 
     def _read_loop(self) -> None:
         """@brief Read raw escape sequences from stdin and update latched state."""
@@ -177,7 +175,6 @@ class DryRunInspector(_Inspector):
         initial_view: str = "third_person",
         termination_pause: float = 3.0,
         manual: bool = False,
-        verbose: bool = False,
     ) -> None:
         """
         @brief Construct the dry-run inspector.
@@ -190,11 +187,6 @@ class DryRunInspector(_Inspector):
         @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
         @param termination_pause: Seconds to hold scene after episode ends.
         @param manual: If True, use keyboard arrow keys instead of random/fixed action.
-        @param verbose: If True, also print per-step reward function diagnostics
-               (progress_reward, final_approach_bonus, uncertainty_scale,
-               orientation_penalty, position_penalty) every _LOG_INTERVAL steps.
-               Default False keeps the foreground terminal uncluttered during
-               manual drives.
         """
         super().__init__(env, duration)
         self._n_episodes = n_episodes
@@ -212,7 +204,6 @@ class DryRunInspector(_Inspector):
         self._keyboard: Optional[KeyboardController] = (
             KeyboardController() if manual else None
         )
-        self._verbose: bool = verbose
 
     # ------------------------------------------------------------------
     # Spectator placement
@@ -323,16 +314,20 @@ class DryRunInspector(_Inspector):
         """
         @brief Print key observation values to the console for diagnosis.
 
-        WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic,
-        GREEN = reward function diagnostics (when info dict is provided).
+        WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic.
+
+        Observation index map (13-dim default):
+            0     = signed body-frame speed (m/s)
+            1     = yaw rate vyaw (rad/s)
+            2..4  = covariance features (std_x, std_y, std_yaw)
+            5..7  = target relative pose (dx, dy, dyaw)
+            8..12 = hemispheric obstacle features
 
         @param obs: Observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
-        @param info: Optional info dict from env.step() containing reward
-                     diagnostic keys (progress_reward, final_approach_bonus,
-                     uncertainty_scale, orientation_penalty, position_penalty).
-                     When None (e.g. after env.reset()), reward diag is omitted.
+        @param info: Optional info dict from env.step(). Currently unused;
+                     reserved for future per-step diagnostics.
         """
         if obs is None or len(obs) < 3:
             return
@@ -354,23 +349,43 @@ class DryRunInspector(_Inspector):
             + "-" * 28
         )
 
-        lines.append(W + f"vel  vyaw={math.degrees(obs[0]):+.1f}deg/s" + X)
+        # Model inputs: speed + vyaw (the first two slots of the obs vector).
+        lines.append(
+            W + f"vel  spd={float(obs[0]):+.2f}m/s  "
+            f"vyaw={math.degrees(float(obs[1])):+.1f}deg/s" + X
+        )
 
+        gt_speed = 0.0
+        gt_vyaw_rad = 0.0
         if self._env.vehicle is not None:
             t = self._env.vehicle.get_transform()
             v = self._env.vehicle.get_velocity()
-            spd = math.hypot(v.x, v.y)
+            av = self._env.vehicle.get_angular_velocity()
+            gt_speed = math.hypot(v.x, v.y)
+            # ROS REP-103 convention (left turn = positive, right turn =
+            # negative). Matches obs[1] - covariance_extractor.py leaves the
+            # EKF vyaw un-negated - and the LiDAR bearing sign convention
+            # (left obstacles have positive bearings). CARLA's av.z is in
+            # CARLA frame where left = negative, hence the negation here.
+            gt_vyaw_rad = -math.radians(av.z)
             lines.append(
                 Y + f"GT   pos=({t.location.x:.2f},{t.location.y:.2f})"
-                f"  yaw={t.rotation.yaw:+.1f}deg  spd={spd:.2f}m/s" + X
+                f"  yaw={t.rotation.yaw:+.1f}deg"
+                f"  spd={gt_speed:.2f}m/s"
+                f"  vyaw={math.degrees(gt_vyaw_rad):+.1f}deg/s" + X
             )
 
         if self._env._cov_subscriber is not None:
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None:
                 ekf_x = float(ekf_pose[0])
-                ekf_y = -float(ekf_pose[1])
+                # ekf_pose[1] is already in CARLA convention (y=south, negative
+                # toward the bay) - covariance_extractor.py negates from ROS to
+                # CARLA on write. No further negation needed here.
+                ekf_y = float(ekf_pose[1])
                 ekf_yaw = float(ekf_pose[2])
+                ekf_vyaw = float(ekf_pose[3])
+                ekf_vx = float(ekf_pose[4]) if len(ekf_pose) > 4 else 0.0
                 lines.append(
                     R + f"EKF(odom)   x={ekf_x:.2f}  y={ekf_y:.2f}"
                     f"  yaw={math.degrees(ekf_yaw):+.1f}deg" + X
@@ -383,14 +398,23 @@ class DryRunInspector(_Inspector):
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
                     f"  yaw={math.degrees(wyaw_rad):+.1f}deg" + X
                 )
+                # EKF vs GT kinematic deltas: this is the verification signal
+                # for the IMU-accel-fusion / GNSS-degradation behaviour.
+                lines.append(
+                    R + f"delta  spd={ekf_vx - gt_speed:+.3f}m/s"
+                    f"  vyaw={math.degrees(ekf_vyaw - gt_vyaw_rad):+.2f}deg/s" + X
+                )
 
-        if len(obs) >= 4:
-            lines.append(W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})" + X)
-
-        if len(obs) >= 7:
+        if len(obs) >= 5:
             lines.append(
-                W + f"tgt  dx={obs[4]:+.2f}m  dy={obs[5]:+.2f}m"
-                f"  dyaw={math.degrees(obs[6]):+.1f}deg" + X
+                W + f"cov  std=({float(obs[2]):.3f},{float(obs[3]):.3f},"
+                f"{float(obs[4]):.3f})" + X
+            )
+
+        if len(obs) >= 8:
+            lines.append(
+                W + f"tgt  dx={float(obs[5]):+.2f}m  dy={float(obs[6]):+.2f}m"
+                f"  dyaw={math.degrees(float(obs[7])):+.1f}deg" + X
             )
 
         gt = self._env._target_bay
@@ -408,30 +432,13 @@ class DryRunInspector(_Inspector):
             f"  ekf_std={ekf_std:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
 
-        if len(obs) >= 12:
+        if len(obs) >= 13:
             lines.append(
-                W + f"obs  L={obs[7]:.2f}m({math.degrees(obs[8]):+.1f}deg)"
-                f"  R={obs[9]:.2f}m({math.degrees(obs[10]):+.1f}deg)"
-                f"  F={obs[11]:.2f}m" + X
-            )
-
-        # Reward diagnostics: gated by --verbose (Makefile flag VERBOSE=true,
-        # docker-compose env INSPECT_VERBOSE=true). Default off so the
-        # foreground manual-drive terminal stays uncluttered. When enabled
-        # the rew/pen lines appear in both the foreground terminal and the
-        # Docker logs (`make docker-inspect-dryrun-logs`).
-        if info is not None and self._verbose:
-            G = _ANSI_GREEN
-            progress = float(info.get("progress_reward", 0.0))
-            unc_scale = float(info.get("uncertainty_scale", 0.0))
-            orient_pen = float(info.get("orientation_penalty", 0.0))
-            pos_pen = float(info.get("position_penalty", 0.0))
-            lines.append(
-                G + f"rew  progress={progress:+.4f}m"
-                f"  unc_scale={unc_scale:.3f}" + X
-            )
-            lines.append(
-                G + f"pen  orient={orient_pen:+.4f}  pos={pos_pen:+.4f}" + X
+                W + f"obs  L={float(obs[8]):.2f}m"
+                f"({math.degrees(float(obs[9])):+.1f}deg)"
+                f"  R={float(obs[10]):.2f}m"
+                f"({math.degrees(float(obs[11])):+.1f}deg)"
+                f"  F={float(obs[12]):.2f}m" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -531,7 +538,8 @@ class DryRunInspector(_Inspector):
                         _ep = self._env._cov_subscriber.get_latest_pose()
                         if _ep is not None:
                             _ep0 = float(_ep[0])
-                            _ep1 = -float(_ep[1])
+                            # ekf_pose[1] already in CARLA convention - no negation.
+                            _ep1 = float(_ep[1])
                             _ep2 = float(_ep[2])
                             _tx, _ty, _cr, _sr, _rr = self._env._ekf_odom_offset
                             _wx = _cr * _ep0 - _sr * _ep1 + _tx

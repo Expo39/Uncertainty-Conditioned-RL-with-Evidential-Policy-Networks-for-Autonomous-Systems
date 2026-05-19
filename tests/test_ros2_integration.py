@@ -12,7 +12,11 @@ Run with: pytest -m integration tests/test_ros2_integration.py
 import numpy as np
 import pytest
 
-from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM, TOTAL_OBS_DIM
+from uncertainty_rl.utils.constants import (
+    COVARIANCE_FEATURES_DIM,
+    TOTAL_OBS_DIM,
+    VEHICLE_STATE_DIM,
+)
 
 try:
     import rclpy
@@ -98,8 +102,10 @@ class TestROS2CovariancePipeline:
         )
         try:
             obs, _ = env.reset()
-            # Uncertainty features are indices 6:15
-            uncertainty_features = obs[6:15]
+            # Covariance features sit immediately after the vehicle-state block.
+            cov_start = VEHICLE_STATE_DIM
+            cov_end = cov_start + COVARIANCE_FEATURES_DIM
+            uncertainty_features = obs[cov_start:cov_end]
             # At least some should be non-zero after EKF has run
             assert np.any(
                 uncertainty_features != 0.0
@@ -107,13 +113,17 @@ class TestROS2CovariancePipeline:
         finally:
             env.close()
 
-    def test_obs_pose_uses_ekf_not_carla_ground_truth(self) -> None:
+    def test_ekf_pose_differs_from_carla_ground_truth(self) -> None:
         """
-        @brief Verify obs indices 0-5 come from EKF estimate, not CARLA ground truth.
+        @brief Verify the EKF pose differs from CARLA ground truth.
 
-        After a few steps with a running EKF, the filtered pose should differ from
-        CARLA ground truth due to sensor noise and filter lag. The difference should
-        exceed the sensor noise floor (~0.001 m) in at least one dimension.
+        Absolute EKF position is not in the obs vector (only relative target
+        offsets are), so this test reads the EKF pose directly via the
+        covariance subscriber and compares to vehicle.get_transform().
+
+        After a few steps with a running EKF, the filtered pose should differ
+        from CARLA ground truth due to sensor noise and filter lag. The
+        difference should exceed the sensor noise floor (~0.001 m).
 
         @note This test requires the full Docker stack: make docker-up
         """
@@ -129,33 +139,38 @@ class TestROS2CovariancePipeline:
             },
         )
         try:
-            obs, _ = env.reset()
+            env.reset()
 
             # Step a few times to let the EKF accumulate filter lag
             for _ in range(5):
                 action = env.action_space.sample()
-                obs, _, terminated, truncated, _ = env.step(action)
+                _, _, terminated, truncated, _ = env.step(action)
                 if terminated or truncated:
-                    obs, _ = env.reset()
+                    env.reset()
                 time.sleep(0.05)
 
             # Read CARLA ground truth directly via the vehicle handle
             assert env.vehicle is not None, "Vehicle not spawned"
             gt_transform = env.vehicle.get_transform()
-
             gt_x = gt_transform.location.x
             gt_y = gt_transform.location.y
 
-            ekf_x = float(obs[0])
-            ekf_y = float(obs[1])
+            # Read the EKF estimate from the covariance subscriber.
+            assert env._cov_subscriber is not None, "Cov subscriber not initialised"
+            ekf_pose = env._cov_subscriber.get_latest_pose()
+            assert ekf_pose is not None, "EKF pose not available"
+            ekf_odom_x = float(ekf_pose[0])
+            ekf_odom_y = -float(ekf_pose[1])
+            tx, ty, cos_r, sin_r, _ = env._ekf_odom_offset
+            ekf_x = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
+            ekf_y = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
 
-            # EKF pose must differ from ground truth by at least sensor noise magnitude.
-            # A perfectly zero difference would mean the env is still using CARLA GT.
             position_diff = np.sqrt((ekf_x - gt_x) ** 2 + (ekf_y - gt_y) ** 2)
             assert position_diff > 1e-3, (
                 f"EKF pose (x={ekf_x:.4f}, y={ekf_y:.4f}) is identical to CARLA "
                 f"ground truth (x={gt_x:.4f}, y={gt_y:.4f}). "
-                f"obs[0:6] must come from the EKF subscriber, not CARLA API."
+                "The EKF subscriber appears to be reading CARLA ground truth "
+                "rather than the filtered EKF estimate."
             )
         finally:
             env.close()

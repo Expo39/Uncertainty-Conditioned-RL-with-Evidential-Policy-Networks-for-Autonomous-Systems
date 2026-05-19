@@ -47,9 +47,9 @@ def compute_obs_dim(
     @param include_obstacle_obs: Whether hemispheric LiDAR features are included.
     @return Integer observation dimension.
 
-    Base: VEHICLE_STATE_DIM (1) + TARGET_POSE_DIM (3) = 4
-    With include_covariance: +COVARIANCE_FEATURES_DIM (3) -> 7
-    With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) -> 12 (or 9 without cov)
+    Base: VEHICLE_STATE_DIM (2) + TARGET_POSE_DIM (3) = 5
+    With include_covariance: +COVARIANCE_FEATURES_DIM (3) -> 8
+    With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) -> 13 (or 10 without cov)
     """
     dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
     if include_covariance:
@@ -75,11 +75,12 @@ def build_observation(
     for providing a pre-allocated buffer of the correct shape.
 
     When ekf_pose is None (EKF not yet initialised), all pose-derived dims
-    (velocity, target) are set to zero. When uncertainty is None, covariance
+    (speed, vyaw, target) are set to zero. When uncertainty is None, covariance
     dims remain zero. When uncertainty is present but all-zero, a debug log
     is emitted (EKF may still be initialising).
 
-    @param ekf_pose: 4-element array [x, y, yaw, vyaw] in world frame,
+    @param ekf_pose: 5-element array [x, y, yaw, vyaw, vx] in world frame
+                     (vx is signed body-frame longitudinal velocity, m/s),
                      or None if EKF is not yet available.
     @param uncertainty: COVARIANCE_FEATURES_DIM-element array of covariance
                         features, or None if unavailable.
@@ -102,6 +103,9 @@ def build_observation(
             if -math.pi <= raw_vyaw <= math.pi
             else max(-math.pi, min(math.pi, raw_vyaw))
         )
+        # speed = signed body-frame longitudinal velocity (positive forward).
+        # No wrap clamp - VecNormalize handles input scaling at train time.
+        speed = float(ekf_pose[4])
 
         dx, dy, dyaw = _compute_relative_target_pose(
             x,
@@ -112,43 +116,47 @@ def build_observation(
             float(target_bay["yaw"]),
         )
     else:
+        speed = 0.0
         vyaw = 0.0
         dx = dy = dyaw = 0.0
 
     if not include_covariance:
-        obs_buffer[0] = vyaw
-        obs_buffer[1] = dx
-        obs_buffer[2] = dy
-        obs_buffer[3] = dyaw
+        # Layout: [speed(1), vyaw(1), target(3), obstacle(5)] -> 10 dims max
+        obs_buffer[0] = speed
+        obs_buffer[1] = vyaw
+        obs_buffer[2] = dx
+        obs_buffer[3] = dy
+        obs_buffer[4] = dyaw
         if include_obstacle_obs:
-            obs_buffer[4 : 4 + OBSTACLE_FEATURES_DIM] = obstacle_features
+            obs_buffer[5 : 5 + OBSTACLE_FEATURES_DIM] = obstacle_features
         else:
-            obs_buffer[4 : 4 + OBSTACLE_FEATURES_DIM] = 0.0
+            obs_buffer[5 : 5 + OBSTACLE_FEATURES_DIM] = 0.0
         return np.asarray(obs_buffer.copy())
 
-    # With covariance: [vyaw(1), cov(3), target(3), obstacle(5)]
-    obs_buffer[0] = vyaw
+    # With covariance: [speed(1), vyaw(1), cov(3), target(3), obstacle(5)] -> 13 dims
+    obs_buffer[0] = speed
+    obs_buffer[1] = vyaw
 
+    cov_start = VEHICLE_STATE_DIM  # index 2
     if uncertainty is not None:
         # asarray avoids a copy when already float32
         unc = np.asarray(uncertainty, dtype=np.float32)
         if not np.any(unc):
             logger.debug("[obs] EKF covariance all-zeros - policy sees no uncertainty")
-        obs_buffer[1 : 1 + COVARIANCE_FEATURES_DIM] = unc
+        obs_buffer[cov_start : cov_start + COVARIANCE_FEATURES_DIM] = unc
     else:
         # Covariance dims remain zero (EKF not yet publishing)
-        obs_buffer[1 : 1 + COVARIANCE_FEATURES_DIM] = 0.0
+        obs_buffer[cov_start : cov_start + COVARIANCE_FEATURES_DIM] = 0.0
 
-    cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 4
+    cov_end = cov_start + COVARIANCE_FEATURES_DIM  # index 5
     obs_buffer[cov_end] = dx
     obs_buffer[cov_end + 1] = dy
     obs_buffer[cov_end + 2] = dyaw
 
+    tgt_end = cov_end + TARGET_POSE_DIM  # index 8
     if include_obstacle_obs:
-        tgt_end = cov_end + TARGET_POSE_DIM  # index 7
         obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
     else:
-        tgt_end = cov_end + TARGET_POSE_DIM
         obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = 0.0
 
     return np.asarray(obs_buffer.copy())
@@ -335,10 +343,10 @@ def calibrate_ekf_frame_offset(
             time.sleep(tick_interval)
             continue
 
-        # ekf_state.json y is negated relative to CARLA world y (ROS REP-103
-        # vs CARLA left-handed axes). Negate here to match _get_state().
+        # ekf_pose[1] is already in CARLA convention - covariance_extractor.py
+        # negates ROS y to CARLA y on write to ekf_state.json.
         ekf_x = float(ekf_pose[0])
-        ekf_y = -float(ekf_pose[1])
+        ekf_y = float(ekf_pose[1])
         ekf_yaw = float(ekf_pose[2])
 
         r = math.atan2(

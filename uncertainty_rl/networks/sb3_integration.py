@@ -245,8 +245,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param lambda_reg: Evidential regularisation weight.
         @param use_uncertainty_conditioning: If True, replace the flat MLP actor
                with UncertaintyConditionedActor (dual-encoder). The observation
-               is split at VEHICLE_STATE_DIM (index 0 = vyaw) and
-               COVARIANCE_FEATURES_DIM (indices 1-3 = std_x/y/yaw) and processed
+               is split at VEHICLE_STATE_DIM (indices 0-1 = speed, vyaw) and
+               COVARIANCE_FEATURES_DIM (indices 2-4 = std_x/y/yaw) and processed
                through separate encoder branches before fusion.
                Requires include_covariance=True in the env config.
         """

@@ -47,6 +47,7 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_THRESHOLD_ORIENTATION,
     SUCCESS_THRESHOLD_POSITION,
     SUCCESS_THRESHOLD_VELOCITY,
+    VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
@@ -310,7 +311,10 @@ class CARLAParkingEnv(gym.Env):
         self._obstacle_features_buffer: np.ndarray = np.zeros(
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
-        self._world_pose_buf: np.ndarray = np.empty(4, dtype=np.float32)
+        # 5-element buffer: [x, y, yaw, vyaw, vx_body]. vx_body is signed
+        # body-frame longitudinal velocity (m/s) from the EKF; the CARLA-only
+        # fallback path fills it from get_velocity() rotated into body frame.
+        self._world_pose_buf: np.ndarray = np.empty(5, dtype=np.float32)
 
         # Identity odom-to-world transform (tx, ty, cos_r, sin_r, r).
         # The GNSS datum is latched to spawn position each episode reset, so
@@ -456,9 +460,19 @@ class CARLAParkingEnv(gym.Env):
         if self._include_covariance:
             _inv = self._inv_uncertainty_std_max
             _buf = self._obs_buffer
+            # std_x and std_y now live at obs[2] and obs[3] (was obs[1], obs[2])
+            # after VEHICLE_STATE_DIM grew from 1 (vyaw) to 2 (speed, vyaw).
+            _stdx_idx = VEHICLE_STATE_DIM
+            _stdy_idx = VEHICLE_STATE_DIM + 1
 
             def _unc_scale_fn() -> float:
-                return min(max(max(float(_buf[1]), float(_buf[2])) * _inv, 0.0), 1.0)
+                return min(
+                    max(
+                        max(float(_buf[_stdx_idx]), float(_buf[_stdy_idx])) * _inv,
+                        0.0,
+                    ),
+                    1.0,
+                )
 
         else:
 
@@ -992,9 +1006,9 @@ class CARLAParkingEnv(gym.Env):
             approach_term = 0.3 * proximity * slowness
 
         uncertainty_scale = self._uncertainty_scale_fn()
-        reward = (
-            distance_term + orientation_term + position_term
-        ) * (1.0 - uncertainty_scale) + approach_term
+        reward = (distance_term + orientation_term + position_term) * (
+            1.0 - uncertainty_scale
+        ) + approach_term
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
@@ -1026,13 +1040,18 @@ class CARLAParkingEnv(gym.Env):
         world_pose: Optional[np.ndarray] = None
         if raw_ekf_pose is not None:
             ekf_odom_x = float(raw_ekf_pose[0])
-            ekf_odom_y = -float(raw_ekf_pose[1])
+            # raw_ekf_pose[1] is already in CARLA convention (extractor negates
+            # ROS y to CARLA y on write). No further negation needed.
+            ekf_odom_y = float(raw_ekf_pose[1])
             ekf_odom_yaw = float(raw_ekf_pose[2])
             tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
             self._world_pose_buf[0] = cos_r * ekf_odom_x - sin_r * ekf_odom_y + tx
             self._world_pose_buf[1] = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
             self._world_pose_buf[2] = ekf_odom_yaw + r
             self._world_pose_buf[3] = raw_ekf_pose[3]
+            # vx is body-frame already (EKF publishes twist in base_link);
+            # frame-invariant w.r.t. the odom->world rigid transform.
+            self._world_pose_buf[4] = raw_ekf_pose[4]
             world_pose = self._world_pose_buf
         else:
             # CI / tests fallback: use CARLA GT (no EKF available)
@@ -1042,10 +1061,15 @@ class CARLAParkingEnv(gym.Env):
             )
             t = self.vehicle.get_transform()
             av = self.vehicle.get_angular_velocity()
+            gt_vel = self.vehicle.get_velocity()
+            yaw_rad = math.radians(t.rotation.yaw)
+            # Rotate world-frame velocity into body frame for signed vx.
+            vx_body = gt_vel.x * math.cos(yaw_rad) + gt_vel.y * math.sin(yaw_rad)
             self._world_pose_buf[0] = t.location.x
             self._world_pose_buf[1] = t.location.y
-            self._world_pose_buf[2] = math.radians(t.rotation.yaw)
+            self._world_pose_buf[2] = yaw_rad
             self._world_pose_buf[3] = math.radians(av.z)
+            self._world_pose_buf[4] = vx_body
             world_pose = self._world_pose_buf
 
         obstacle_features = extract_obstacle_features(
@@ -1112,6 +1136,25 @@ class CARLAParkingEnv(gym.Env):
         y = transform.location.y
         yaw = transform.rotation.yaw
 
+        # Ground-truth yaw rate in ROS REP-103 convention (left turn =
+        # positive, right turn = negative). This matches obs[1]'s convention
+        # (the extractor leaves the EKF vyaw un-negated) and the LiDAR
+        # bearing sign convention (left obstacles have positive bearings).
+        # CARLA's get_angular_velocity().z is in deg/s in CARLA frame where
+        # left = negative, so we negate to bring it into the ROS convention.
+        gt_av_z_deg = self.vehicle.get_angular_velocity().z
+        gt_vyaw = -math.radians(gt_av_z_deg)
+
+        # EKF speed and vyaw are the first two slots of the obs buffer, which
+        # has already been populated this step by _get_state() (called by the
+        # outer step()/reset() before _write_vis_state). Reading from the buffer
+        # avoids a second covariance-subscriber file read.
+        ekf_speed = float(self._obs_buffer[0])
+        ekf_vyaw = float(self._obs_buffer[1])
+
+        tier_info = self._get_current_gnss_tier()
+        gnss_tier_name = str(tier_info.get("name", "")) if tier_info else ""
+
         patrol_npcs = self._npc_controller.patrol_npcs
         # Build an id-set for O(1) membership test in the actor loop.
         patrol_npc_ids = {id(a) for a in patrol_npcs}
@@ -1160,6 +1203,10 @@ class CARLAParkingEnv(gym.Env):
                 "vx": velocity.x,
                 "vy": velocity.y,
                 "speed": math.hypot(velocity.x, velocity.y),
+                "gt_vyaw": gt_vyaw,
+                "ekf_speed": ekf_speed,
+                "ekf_vyaw": ekf_vyaw,
+                "gnss_tier": gnss_tier_name,
             },
             # Applied (clamped) action - what the vehicle actually receives,
             # not the policy's raw pre-clip output. steer is clipped to
@@ -1616,12 +1663,23 @@ class CARLAParkingEnv(gym.Env):
             self._npc_controller.set_vehicle_cache(self._all_vehicle_actors)
 
         if self._include_covariance:
+            # First wait: blocks until the extractor has written any
+            # post-invalidation state (ensures the ROS 2 bridge is alive).
             self._wait_for_covariance()
-            # Tick a few extra steps so the EKF has time to process the
-            # /set_pose message (published just before _wait_for_covariance).
+            # Give the extractor's 10 Hz file-watcher time to detect
+            # initial_pose.json (up to 100 ms) and the EKF time to process
+            # the resulting /set_pose before we sample its state.
+            # 10 ticks at 20 Hz = 500 ms - comfortably covers the poll
+            # interval plus one EKF prediction cycle.
             if self.world is not None:
-                for _ in range(5):
+                for _ in range(10):
                     self.world.tick(10.0)
+            # Second invalidate + wait: the seq barrier is now set after
+            # /set_pose has been consumed, so we only accept EKF state that
+            # was written after the reset completed.
+            if self._cov_subscriber is not None:
+                self._cov_subscriber.invalidate()
+            self._wait_for_covariance()
             # Always recalibrate: the GNSS datum is re-latched to the spawn
             # position at each episode reset, so the EKF odom origin shifts
             # every episode.

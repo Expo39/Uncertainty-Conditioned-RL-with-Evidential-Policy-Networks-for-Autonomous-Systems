@@ -77,11 +77,12 @@ _WINDOW_W = _MAP_W + _LEGEND_W
 _MAP_H = 600
 _MAP_H_MIN = 300
 _MAP_H_MAX = 900
-# HUD band: up to three stacked bars at y-offsets 2 / 24 / 46 (see _draw_frame),
-# each bar ~22px tall. The lowest bar (debug) ends at ~68; 70 trims the band
-# to that with no spare strip below.
+# HUD band: up to four stacked bars at y-offsets 2 / 24 / 46 / 68 (see
+# _draw_frame). Bars 0-2 are always drawn (floor info; action+spd;
+# EKF-vs-GT kinematic comparison); bar 3 is the debug line, only shown when
+# debug=True in env_config.yaml. Each bar is ~22 px tall.
 _HUD_BAR_PITCH = 22
-_HUD_BAND_H = 70
+_HUD_BAND_H = 92
 _WINDOW_H = _MAP_H + _HUD_BAND_H
 _FPS_CAP = 120
 _MARGIN_PX = 40
@@ -547,12 +548,8 @@ class LiveVisualiser:
         self._map_h = new_map_h
         self._window_h = new_map_h + _HUD_BAND_H
         flags = pygame.FULLSCREEN if self._fullscreen else 0
-        self._screen = pygame.display.set_mode(
-            (_WINDOW_W, self._window_h), flags
-        )
-        self._trail_surf = pygame.Surface(
-            (_MAP_W, self._map_h), pygame.SRCALPHA
-        )
+        self._screen = pygame.display.set_mode((_WINDOW_W, self._window_h), flags)
+        self._trail_surf = pygame.Surface((_MAP_W, self._map_h), pygame.SRCALPHA)
         # The static surface was sized to the old height - force a rebuild.
         self._static_episode_id = None
 
@@ -578,9 +575,7 @@ class LiveVisualiser:
         if history_exists:
             history_line = f"History file: present ({self._history_file})"
         else:
-            history_line = (
-                f"History file: not created yet ({self._history_file})"
-            )
+            history_line = f"History file: not created yet ({self._history_file})"
         signal_line = (
             "Signal file: created (env will write frames once driving)"
             if self._signal_file.exists()
@@ -745,6 +740,24 @@ class LiveVisualiser:
             y_offset=self._map_h + 2 + _HUD_BAR_PITCH,
         )
 
+        # EKF vs ground-truth kinematic comparison. Helps verify during the
+        # manual dryrun that the EKF's signed body-frame vx and yaw rate
+        # match what CARLA reports, both in clean tiers (rtk_fixed) and
+        # when the Markov chain degrades the GNSS fix.
+        gt_speed = ego.get("speed", 0.0)
+        ekf_speed = ego.get("ekf_speed", 0.0)
+        gt_vyaw = ego.get("gt_vyaw", 0.0)
+        ekf_vyaw = ego.get("ekf_vyaw", 0.0)
+        tier = ego.get("gnss_tier", "")
+        self._draw_hud(
+            f"ekf_spd={ekf_speed:+.2f}m/s gt_spd={gt_speed:.2f} "
+            f"(d={ekf_speed - gt_speed:+.2f})  "
+            f"ekf_vyaw={ekf_vyaw:+.2f}rad/s gt_vyaw={gt_vyaw:+.2f} "
+            f"(d={ekf_vyaw - gt_vyaw:+.2f})  "
+            f"tier={tier}",
+            y_offset=self._map_h + 2 + 2 * _HUD_BAR_PITCH,
+        )
+
         # Diagnostic fields (pos error, reward, covariance, EKF drift) are only
         # written when debug=True in env_config.yaml.
         dbg = state.get("debug")
@@ -755,7 +768,7 @@ class LiveVisualiser:
                 f"rwd={dbg.get('reward', 0.0):.3f} | "
                 f"cov={dbg.get('cov_rms', 0.0):.3f} "
                 f"drift={dbg.get('ekf_drift', 0.0):.2f}m",
-                y_offset=self._map_h + 2 + 2 * _HUD_BAR_PITCH,
+                y_offset=self._map_h + 2 + 3 * _HUD_BAR_PITCH,
             )
 
         pygame.display.flip()

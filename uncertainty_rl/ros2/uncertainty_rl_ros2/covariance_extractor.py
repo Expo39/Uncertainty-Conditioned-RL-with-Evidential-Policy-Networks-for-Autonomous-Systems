@@ -95,7 +95,7 @@ class CovarianceExtractorNode(Node):
         # Latest extracted state: pose tuple + pre-serialised covariance list.
         # Both updated atomically at the end of odom_callback so publish_covariance
         # never sees a partially-updated state.
-        self._latest_pose: Optional[Tuple[float, float, float, float]] = None
+        self._latest_pose: Optional[Tuple[float, float, float, float, float]] = None
         self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
         # Monotonically increasing counter written into ekf_state.json so the
@@ -167,6 +167,11 @@ class CovarianceExtractorNode(Node):
         # -- Velocity -----------------------------------------------------------
         # vyaw negated for y-axis flip (left-hand to right-hand convention).
         vyaw = -msg.twist.twist.angular.z
+        # vx is signed body-frame longitudinal velocity (m/s). The EKF publishes
+        # twist in the base_link body frame (twist_in_odom_frame: false) and the
+        # body x-axis points forward in both CARLA and ROS conventions, so no
+        # sign flip is needed. Positive vx = forward, negative vx = rolling back.
+        vx = msg.twist.twist.linear.x
 
         # -- Covariance ---------------------------------------------------------
         # Extract the 3x3 [x, y, yaw] submatrix directly from the flat 36-element
@@ -184,6 +189,7 @@ class CovarianceExtractorNode(Node):
             "y": float(y),
             "yaw": float(yaw),
             "vyaw": float(vyaw),
+            "vx": float(vx),
             "covariance": cov_flat,
         }
         # Log a one-shot warning when the EKF first produces NaN so the
@@ -203,7 +209,7 @@ class CovarianceExtractorNode(Node):
 
         # -- Update state atomically -------------------------------------------
         # Both attributes are written here; publish_covariance only reads them.
-        self._latest_pose = (x, y, yaw, vyaw)
+        self._latest_pose = (x, y, yaw, vyaw, vx)
         self._latest_cov_flat = cov_flat
 
         # -- Periodic log -------------------------------------------------------
@@ -231,7 +237,9 @@ class CovarianceExtractorNode(Node):
         if self._latest_pose is None or self._latest_cov_flat is None:
             return
 
-        x, y, yaw, vyaw = self._latest_pose
+        # vx is published in ekf_state.json only; CovarianceEstimate message
+        # carries pose + vyaw + covariance (per ros2/CLAUDE.md field ordering).
+        x, y, yaw, vyaw, _vx = self._latest_pose
 
         msg = CovarianceEstimate()
         msg.header.stamp = self.get_clock().now().to_msg()
