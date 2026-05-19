@@ -14,7 +14,26 @@ ekf:
   world_frame: "odom"
   odom_frame: "odom"
   base_link_frame: "ego_vehicle"
-  # IMU: vyaw prediction step only. Orientation and linear accel disabled.
+  # IMU: vyaw (index 11) ONLY. Linear acceleration (ax, ay) deliberately
+  # disabled.
+  #
+  # History (19-05-2026): ax/ay fusion was trialled to fix speed lag, but
+  # robot_localization's EKF stores ax/ay in the ODOM frame while the IMU
+  # measures them in the BODY frame. The body->odom rotation depends on yaw,
+  # so the acceleration measurement Jacobian is non-zero on the yaw column -
+  # every IMU accel update nudges the yaw state. With the IMU running faster
+  # than GNSS, this accel-coupling fought the COG heading correction on every
+  # tick and locked yaw 30 deg off (confirmed: /gnss/heading was publishing
+  # at 19 Hz with sigma 4 deg, yet yaw would not converge).
+  #
+  # The fix is to remove ax/ay entirely. This is now FREE because the
+  # GNSS-derived velocity correction (odom0 indices 6, 7) gives vx/vy a
+  # direct sensor anchor at 20 Hz - the accelerometer's only job was to
+  # improve the velocity PREDICTION between corrections, and with a 20 Hz
+  # velocity CORRECTION the constant-velocity prediction model is wrong for
+  # at most 50 ms (~0.1 m/s error at parking accelerations), fully absorbed
+  # by the next correction. Paying 30 deg of yaw error for 0.1 m/s of speed
+  # smoothing is a bad trade. The gyro (vyaw) stays - it has no such coupling.
   imu0: "/carla/ego_vehicle/imu/stamped"
   # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   imu0_config: [false, false, false, false, false, false,
@@ -23,8 +42,15 @@ ekf:
   imu0_differential: false
   imu0_relative: false
 
-  # Initial state covariance (15x15). Active states: x, y, yaw, vx, vy, vyaw = 0.25.
-  # Non-zero required to avoid singular Cholesky on first prediction step.
+  # Initial state covariance (15x15). Reloaded by the EKF at every /set_pose
+  # (episode reset). Active states x, y, yaw use 0.25 (sigma 0.5). Velocity
+  # states vx, vy, vyaw use 4.0 (sigma 2.0): /set_pose resets pose but NOT
+  # velocity, so without a loose prior the EKF would start each episode
+  # confident in the previous episode's stale terminal velocity. A loose
+  # prior lets the first GNSS velocity / COG correction dominate immediately.
+  # ax, ay (indices 12, 13) use 1.0e-9 like the other inert states - IMU
+  # accel fusion is disabled so they are dead states (see imu0_config).
+  # Non-zero everywhere required to avoid singular Cholesky on first predict.
   initial_estimate_covariance: [
     0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
@@ -32,19 +58,19 @@ ekf:
     0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  4.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  4.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  4.0,  0.0,  0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9
   ]
 
   # Process noise covariance (15x15). Controls covariance inflation between updates.
-  # Active: x/y=1e-2, yaw=1e-4, vyaw=1e-3.
+  # Active: x/y=1e-2, yaw=1e-4, vyaw=1e-3. ax/ay rows inert (accel fusion off).
   process_noise_covariance: [
     1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
@@ -70,11 +96,17 @@ ekf:
   pose0_differential: false
   pose0_relative: false
 
-  # GNSS flat-earth odometry from GnssNoiseRelayNode (x, y correction step).
+  # GNSS flat-earth odometry from GnssNoiseRelayNode. Corrects position
+  # (x, y - indices 0, 1) and body-frame longitudinal speed (vx - index 6).
+  # vy (index 7) is NOT fused: the relay publishes only the scalar GNSS
+  # speed magnitude as vx, not the 2D velocity vector, because a velocity
+  # vector carries a direction that the EKF reconciles against yaw (GNSS
+  # course differs from body heading by the slip angle, which dragged yaw
+  # ~25 deg off). A scalar speed has no direction and cannot corrupt yaw.
   odom0: "/odometry/gps"
   # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   odom0_config: [true, true, false, false, false, false,
-                 false, false, false, false, false, false,
+                 true, false, false, false, false, false,
                  false, false, false]
 
 gnss_noise_relay:
