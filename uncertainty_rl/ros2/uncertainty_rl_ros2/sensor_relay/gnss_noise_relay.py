@@ -258,6 +258,39 @@ class GnssNoiseRelayNode(Node):
         # odom cov slot 35 (yaw) always 1e6.
         self._odom_cov_template[35] = 1.0e6
 
+        # Twist covariance template for the Odometry message. Only vx (slot 0)
+        # and vy (slot 7) carry signal when GNSS-derived velocity is published;
+        # vz, vroll, vpitch, vyaw all get infinite variance so the EKF ignores
+        # them. vx/vy slots are overwritten per-callback from the measured
+        # GNSS displacement noise. When the velocity gate fails (small
+        # displacement, ZUPT, or low fix quality), vx/vy slots are also set
+        # to infinite variance so the EKF treats the message as position-only.
+        self._twist_cov_template: List[float] = [0.0] * 36
+        self._twist_cov_template[14] = 1.0e6  # vz
+        self._twist_cov_template[21] = 1.0e6  # vroll
+        self._twist_cov_template[28] = 1.0e6  # vpitch
+        self._twist_cov_template[35] = 1.0e6  # vyaw
+        # Minimum velocity displacement (m) for the GNSS velocity measurement
+        # to be trusted. Below this the differentiation amplifies position
+        # noise to the point where velocity would mislead the EKF. Same
+        # principle as cog_min_displacement_m but applied to velocity.
+        self._velocity_min_displacement_m: float = 0.03
+        # Maximum velocity variance (m/s)^2 we will publish. Above this the
+        # GNSS velocity is dominated by position-differencing noise and the
+        # EKF is better off relying on IMU accel prediction. At RTK-fixed
+        # (sigma 0.02 m) over 0.05 s ticks the derived velocity sigma is
+        # ~0.4 m/s (variance ~0.16), well inside this ceiling; RTK-float and
+        # worse tiers fall outside it and the EKF falls back to IMU accel.
+        self._velocity_max_variance: float = 1.0  # 1-sigma 1 m/s
+        # Variance (m/s)^2 published with the zero-velocity measurement when
+        # the car is below the displacement gate (stationary). 0.25 (sigma
+        # 0.5 m/s): tight enough that the EKF settles to ~0 at standstill,
+        # loose enough that the gate flip moving->stopped eases the velocity
+        # state to zero over a few ticks instead of yanking it (a yank
+        # overshoots through zero - seen as a brief negative speed spike at
+        # hard decel-to-stop). obs[0] is also clipped at 0 in build_observation.
+        self._velocity_stopped_variance: float = 0.25  # 1-sigma 0.5 m/s
+
         # Cached RTK-fixed baseline variance (used as floor in odom and COG).
         self._rtk_fixed_var: float = 0.02**2
 
@@ -667,10 +700,56 @@ class GnssNoiseRelayNode(Node):
         local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
         local_y = -(out.latitude - self._datum_lat) * self._metres_per_deg_lat
 
-        # -- Publish GNSS odometry (EKF odom0: x, y correction) ---------------
+        # -- Compute GNSS-derived speed from successive positions -------------
+        # We publish only the speed MAGNITUDE as body-frame longitudinal
+        # velocity (twist.linear.x), NOT the 2D velocity vector. A 2D vector
+        # carries a direction, and the EKF reconciles that direction against
+        # its yaw state - GNSS course-over-ground differs from body heading by
+        # the slip angle, so fusing the vector dragged yaw ~25 deg off. A
+        # scalar speed has no direction and cannot corrupt yaw. vy is left at
+        # infinite variance. The car is forward-only, so the unsigned
+        # magnitude is the correct signed body-frame vx.
+        #
+        # States:
+        #   "moving"  - displacement above the gate: publish speed = disp/dt.
+        #   "stopped" - displacement below the gate: publish speed = 0 (a
+        #               precise measurement of a stationary car).
+        #   "unknown" - first callback / invalid dt: infinite variance.
+        dx: float = 0.0
+        dy: float = 0.0
+        dt: float = 0.0
+        displacement_m: float = 0.0
+        velocity_state: str = "unknown"
+        speed_var: float = self._velocity_max_variance
+        sigma_now: float = math.sqrt(
+            max(out.position_covariance[0], out.position_covariance[4])
+        )
+
+        if self._prev_x is not None and self._prev_stamp_sec is not None:
+            dt = stamp_sec - self._prev_stamp_sec
+            if dt > 0.0:
+                dx = local_x - self._prev_x
+                dy = local_y - self._prev_y
+                displacement_m = math.hypot(dx, dy)
+                self._last_speed_ms = displacement_m / dt
+
+                # Speed variance from differentiating position:
+                # sigma_v = sigma_pos / dt, so variance = position_var / dt^2.
+                speed_var = (sigma_now * sigma_now) / (dt * dt)
+
+                if displacement_m < self._velocity_min_displacement_m:
+                    velocity_state = "stopped"
+                elif speed_var <= self._velocity_max_variance:
+                    velocity_state = "moving"
+                # else: poor fix quality -> "unknown", EKF uses prediction.
+
+        # -- Publish GNSS odometry (EKF odom0: x, y position + vx speed) ------
         odom_msg = Odometry()
         odom_msg.header = out.header
         odom_msg.header.frame_id = "odom"
+        # child_frame_id = ego_vehicle: robot_localization interprets the twist
+        # in the body frame, so twist.linear.x is body-frame longitudinal
+        # velocity - exactly the scalar speed we publish.
         odom_msg.child_frame_id = "ego_vehicle"
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
@@ -680,65 +759,73 @@ class GnssNoiseRelayNode(Node):
         pose_cov[0] = float(out.position_covariance[0])
         pose_cov[7] = float(out.position_covariance[4])
         odom_msg.pose.covariance = pose_cov
+
+        # Twist: scalar speed on body-frame vx only. vy always infinite
+        # variance (no lateral measurement). odom0_config fuses index 6 (vx).
+        twist_cov = list(self._twist_cov_template)
+        twist_cov[7] = 1.0e6  # vy: never measured
+        if velocity_state == "moving":
+            odom_msg.twist.twist.linear.x = displacement_m / dt
+            twist_cov[0] = speed_var
+        elif velocity_state == "stopped":
+            # A car below the displacement gate is genuinely stationary;
+            # speed = 0 is a high-confidence measurement. Tight variance so
+            # the EKF believes the zero and does not drift on prediction.
+            odom_msg.twist.twist.linear.x = 0.0
+            twist_cov[0] = self._velocity_stopped_variance
+        else:  # "unknown"
+            odom_msg.twist.twist.linear.x = 0.0
+            twist_cov[0] = 1.0e6
+        odom_msg.twist.covariance = twist_cov
         self._odom_pub.publish(odom_msg)
 
         # -- COG heading (EKF pose0: yaw correction) ---------------------------
-        # Displacement and dt derived entirely from successive noisy GNSS
-        # positions and NavSatFix message timestamps.
-        if self._prev_x is not None and self._prev_stamp_sec is not None:
-            dt = stamp_sec - self._prev_stamp_sec
-            if dt > 0.0:
-                dx = local_x - self._prev_x
-                dy = local_y - self._prev_y
-                displacement_m = math.hypot(dx, dy)
-                self._last_speed_ms = displacement_m / dt
-                speed_ms = self._last_speed_ms
+        # Reuses dx, dy, displacement_m computed above.
+        if displacement_m > 0.0 and dt > 0.0:
+            speed_ms = self._last_speed_ms
 
-                # Gate on (a) minimum displacement, (b) IMU not in ZUPT, and
-                # (c) computed heading variance below uniform-distribution
-                # ceiling. Use the larger of the two axis sigmas so the gate
-                # is conservative when noise is anisotropic. Sigma is read
-                # from the message covariance, so the same
-                # logic works in real deployments where the receiver supplies
-                # its own covariance.
-                sigma_now = math.sqrt(
-                    max(out.position_covariance[0], out.position_covariance[4])
-                )
-                candidate_var = self._cog_heading_variance(
-                    max(displacement_m, 1e-6), sigma_now
-                )
-                if (
-                    displacement_m >= self._cog_min_displacement_m
-                    and not self._imu_stationary
-                    and candidate_var <= self._MAX_PUBLISH_VARIANCE
-                ):
-                    self._cog_active = True
-                    # local_y is already in ROS REP-103 convention (north
-                    # positive) after the negation at the projection step,
-                    # so dy is north-positive and atan2(dy, dx) directly gives
-                    # heading in REP-103 (0=east, pi/2=north, CCW positive).
-                    raw_heading = math.atan2(dy, dx)
+            # Gate on (a) minimum displacement, (b) IMU not in ZUPT, and
+            # (c) computed heading variance below uniform-distribution
+            # ceiling. Use the larger of the two axis sigmas so the gate
+            # is conservative when noise is anisotropic. Sigma is read
+            # from the message covariance, so the same
+            # logic works in real deployments where the receiver supplies
+            # its own covariance.
+            candidate_var = self._cog_heading_variance(
+                max(displacement_m, 1e-6), sigma_now
+            )
+            if (
+                displacement_m >= self._cog_min_displacement_m
+                and not self._imu_stationary
+                and candidate_var <= self._MAX_PUBLISH_VARIANCE
+            ):
+                self._cog_active = True
+                # local_y is already in ROS REP-103 convention (north
+                # positive) after the negation at the projection step,
+                # so dy is north-positive and atan2(dy, dx) directly gives
+                # heading in REP-103 (0=east, pi/2=north, CCW positive).
+                raw_heading = math.atan2(dy, dx)
 
-                    self._last_heading_rad = raw_heading
-                    self._last_heading_var = candidate_var
+                self._last_heading_rad = raw_heading
+                self._last_heading_var = candidate_var
 
-                    if not self._cog_initialised:
-                        self._cog_initialised = True
-                        self.get_logger().info(
-                            f"COG heading initialised: "
-                            f"heading={math.degrees(self._last_heading_rad):.2f} deg "
-                            f"speed={speed_ms:.2f} m/s"
-                        )
+                if not self._cog_initialised:
+                    self._cog_initialised = True
+                    self.get_logger().info(
+                        f"COG heading initialised: "
+                        f"heading={math.degrees(self._last_heading_rad):.2f} deg "
+                        f"speed={speed_ms:.2f} m/s"
+                    )
 
-                    if self._callback_count % 100 == 0:
-                        self.get_logger().info(
-                            f"[cog_dbg] dx={dx:.4f} dy={dy:.4f} "
-                            f"speed={speed_ms:.2f} m/s "
-                            f"heading={math.degrees(self._last_heading_rad):.2f} deg "
-                            f"var={self._last_heading_var:.4e} rad^2"
-                        )
-                else:
-                    self._cog_active = False
+                if self._callback_count % 100 == 0:
+                    self.get_logger().info(
+                        f"[cog_dbg] dx={dx:.4f} dy={dy:.4f} "
+                        f"speed={speed_ms:.2f} m/s "
+                        f"heading={math.degrees(self._last_heading_rad):.2f} deg "
+                        f"var={self._last_heading_var:.4e} rad^2"
+                    )
+            else:
+                self._cog_active = False
 
         self._prev_x = local_x
         self._prev_y = local_y
