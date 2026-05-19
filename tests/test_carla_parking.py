@@ -143,9 +143,33 @@ class TestComputeRelativeTargetPose:
 
     def test_target_to_left(self) -> None:
         """
-        @brief Target 5m to the left (ego facing +x) -> dy > 0, dx ~ 0.
+        @brief Target 5 m to the left of an ego facing east -> dy > 0, dx ~ 0.
+
+        In CARLA's left-handed world (+x east, +y south), the body's left
+        when facing east is world -y (north). The function returns dy in
+        REP-103 body convention (left = positive), so a target at world
+        (0, -5) should yield dy = +5.
         """
         dx, dy, dyaw = _compute_relative_target_pose(
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.0,
+            x_target=0.0,
+            y_target=-5.0,
+            yaw_target=0.0,
+        )
+        assert abs(dx) < 1e-6
+        assert dy > 0.0
+        assert abs(dyaw) < 1e-6
+
+    def test_target_to_right(self) -> None:
+        """
+        @brief Target 5 m to the right of an ego facing east -> dy < 0.
+
+        CARLA world +y (south) is to the right when facing east, so a target
+        at world (0, +5) yields dy = -5 in the left-positive body frame.
+        """
+        dx, dy, _ = _compute_relative_target_pose(
             x_ego=0.0,
             y_ego=0.0,
             yaw_ego=0.0,
@@ -154,7 +178,26 @@ class TestComputeRelativeTargetPose:
             yaw_target=0.0,
         )
         assert abs(dx) < 1e-6
-        assert dy > 0.0
+        assert dy < 0.0
+
+    def test_dyaw_left_rotation_positive(self) -> None:
+        """
+        @brief Target heading requires a left rotation from ego -> dyaw > 0.
+
+        Ego at yaw=0 (facing east in CARLA). Target at yaw=-pi/4 (CARLA
+        convention - rotated 45 deg CCW = left turn from east). To align,
+        the vehicle must turn left, so dyaw should be positive under the
+        left-positive convention.
+        """
+        _, _, dyaw = _compute_relative_target_pose(
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.0,
+            x_target=0.0,
+            y_target=0.0,
+            yaw_target=-math.pi / 4.0,
+        )
+        assert dyaw > 0.0
 
     def test_yaw_wrap_in_range(self) -> None:
         """
@@ -198,37 +241,37 @@ class TestObservationSpaceShape:
     @brief Verify obs space dim based on include_covariance flag.
     """
 
-    def test_12_dim_with_covariance(self) -> None:
+    def test_13_dim_with_covariance(self) -> None:
         """
-        @brief include_covariance=True -> 12-dim observation space (default).
+        @brief include_covariance=True -> 13-dim observation space (default).
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 12
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 13
         env.close()
 
-    def test_9_dim_without_covariance(self) -> None:
+    def test_10_dim_without_covariance(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=True (default) -> 9-dim.
+        @brief include_covariance=False, include_obstacle_obs=True (default) -> 10-dim.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 9
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 10
         assert env.observation_space.shape == (expected,)
         env.close()
 
-    def test_4_dim_without_covariance_or_obstacles(self) -> None:
+    def test_5_dim_without_covariance_or_obstacles(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=False -> 4-dim.
+        @brief include_covariance=False, include_obstacle_obs=False -> 5-dim.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(
             max_steps=5, include_covariance=False, include_obstacle_obs=False
         )
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 1 + 3 = 4
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 2 + 3 = 5
         assert env.observation_space.shape == (expected,)
         env.close()
 
@@ -280,9 +323,9 @@ class TestGymnasiumAPIContract:
         assert isinstance(info, dict)
         env.close()
 
-    def test_reset_obs_shape_21(self) -> None:
+    def test_reset_obs_shape_total(self) -> None:
         """
-        @brief reset() obs shape must be (21,) when include_covariance=True (default).
+        @brief reset() obs shape must be (TOTAL_OBS_DIM,) when include_covariance=True (default).
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -291,9 +334,9 @@ class TestGymnasiumAPIContract:
         assert obs.shape == (TOTAL_OBS_DIM,)
         env.close()
 
-    def test_reset_obs_shape_9_no_cov(self) -> None:
+    def test_reset_obs_shape_no_cov(self) -> None:
         """
-        @brief reset() observation shape must be (9,) when include_covariance=False.
+        @brief reset() observation shape matches compute_obs_dim() when include_covariance=False.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -1376,9 +1419,14 @@ class TestBuildObservation:
         return {"x": x, "y": y, "yaw": yaw}
 
     def _ekf_pose(
-        self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, vyaw: float = 0.1
+        self,
+        x: float = 0.0,
+        y: float = 0.0,
+        yaw: float = 0.0,
+        vyaw: float = 0.1,
+        vx: float = 0.0,
     ) -> np.ndarray:
-        return np.array([x, y, yaw, vyaw], dtype=np.float32)
+        return np.array([x, y, yaw, vyaw, vx], dtype=np.float32)
 
     def test_full_obs_has_correct_dim(self) -> None:
         """
@@ -1434,7 +1482,10 @@ class TestBuildObservation:
 
     def test_uncertainty_written_to_covariance_indices(self) -> None:
         """
-        @brief Uncertainty values must appear at indices 1-3 when include_covariance=True.
+        @brief Uncertainty values must appear at indices [VEHICLE_STATE_DIM,
+               VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM) when
+               include_covariance=True. With the speed-bearing 13-dim layout
+               that is obs[2:5].
         """
         dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=False)
         buf = np.zeros(dim, dtype=np.float32)
@@ -1448,7 +1499,30 @@ class TestBuildObservation:
             include_obstacle_obs=False,
             obs_buffer=buf,
         )
-        np.testing.assert_allclose(obs[1 : 1 + COVARIANCE_FEATURES_DIM], unc)
+        cov_start = VEHICLE_STATE_DIM
+        np.testing.assert_allclose(
+            obs[cov_start : cov_start + COVARIANCE_FEATURES_DIM], unc
+        )
+
+    def test_speed_written_to_obs_zero(self) -> None:
+        """
+        @brief Signed body-frame speed (ekf_pose[4]) must appear at obs[0].
+        """
+        dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=True)
+        buf = np.zeros(dim, dtype=np.float32)
+        ekf = self._ekf_pose(vx=1.7)
+        obs = build_observation(
+            ekf_pose=ekf,
+            uncertainty=np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32),
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=True,
+            include_obstacle_obs=True,
+            obs_buffer=buf,
+        )
+        np.testing.assert_allclose(obs[0], 1.7, rtol=1e-5)
+        # vyaw still appears immediately after speed.
+        np.testing.assert_allclose(obs[1], ekf[3], rtol=1e-5)
 
     def test_returns_copy_not_buffer(self) -> None:
         """

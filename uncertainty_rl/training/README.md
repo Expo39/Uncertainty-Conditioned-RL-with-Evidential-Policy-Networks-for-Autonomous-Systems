@@ -108,11 +108,11 @@ Total loss at each update:
 
 | `policy_type` | Agent | Policy | Obs consumed by actor |
 |---------------|-------|--------|----------------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | $obs[0]$ (vyaw) + $obs[1\!:\!4]$ (std) in dual-encoder mode |
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | $obs[0\!:\!2]$ (speed, vyaw) + $obs[2\!:\!5]$ (std) in dual-encoder mode |
 | `"standard"` | `PPO` | `MlpPolicy` | Full obs |
 
 `include_covariance` and `include_obstacle_obs` flags (set per baseline) control obs dimensionality:
-$12$ (both on), $9$ (covariance off), $7$ (obstacle off), $4$ (both off).
+$13$ (both on), $10$ (covariance off), $8$ (obstacle off), $5$ (both off).
 
 ## Key interfaces
 

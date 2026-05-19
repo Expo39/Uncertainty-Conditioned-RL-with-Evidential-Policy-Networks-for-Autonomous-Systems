@@ -94,7 +94,9 @@ class RealWorldInferenceLoop:
         )
 
         # Pre-allocated world pose buffer [wx, wy, wyaw, vyaw]
-        self._world_pose_buffer = np.zeros(4, dtype=np.float32)
+        # 5-element buffer: [x, y, yaw, vyaw, vx_body]. vx is body-frame
+        # longitudinal velocity from the EKF.
+        self._world_pose_buffer = np.zeros(5, dtype=np.float32)
         # True once the buffer contains valid data (set after first successful EKF read).
         self._world_pose_valid: bool = False
 
@@ -241,11 +243,11 @@ class RealWorldInferenceLoop:
 
     def _odom_to_world(
         self, raw_ekf_pose: np.ndarray
-    ) -> Tuple[float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float]:
         """
         @brief Apply the stored odom-to-world transform to a raw EKF pose.
-        @param raw_ekf_pose: Array [odom_x, odom_y, odom_yaw, vyaw].
-        @return Tuple (world_x, world_y, world_yaw, vyaw).
+        @param raw_ekf_pose: Array [odom_x, odom_y, odom_yaw, vyaw, vx_body].
+        @return Tuple (world_x, world_y, world_yaw, vyaw, vx_body).
         """
         # ROS REP-103 y is negated relative to lot layout y (same as sim).
         ox = float(raw_ekf_pose[0])
@@ -256,12 +258,16 @@ class RealWorldInferenceLoop:
         wy = sin_r * ox + cos_r * oy + ty
         wyaw = oyaw + r
         vyaw = float(raw_ekf_pose[3])
+        # vx is body-frame already - frame-invariant w.r.t. the rigid odom-to-
+        # world transform applied to position and yaw.
+        vx_body = float(raw_ekf_pose[4]) if len(raw_ekf_pose) > 4 else 0.0
         self._world_pose_buffer[0] = wx
         self._world_pose_buffer[1] = wy
         self._world_pose_buffer[2] = wyaw
         self._world_pose_buffer[3] = vyaw
+        self._world_pose_buffer[4] = vx_body
         self._world_pose_valid = True
-        return wx, wy, wyaw, vyaw
+        return wx, wy, wyaw, vyaw, vx_body
 
     def _get_observation(self) -> np.ndarray:
         """
@@ -277,8 +283,8 @@ class RealWorldInferenceLoop:
 
         world_pose: Optional[np.ndarray] = None
         if raw_ekf_pose is not None:
-            wx, wy, wyaw, vyaw = self._odom_to_world(raw_ekf_pose)
-            world_pose = np.array([wx, wy, wyaw, vyaw], dtype=np.float32)
+            wx, wy, wyaw, vyaw, vx_body = self._odom_to_world(raw_ekf_pose)
+            world_pose = np.array([wx, wy, wyaw, vyaw, vx_body], dtype=np.float32)
         else:
             self._world_pose_valid = False
             logger.debug("EKF pose unavailable - obs will use zero pose.")
@@ -349,7 +355,10 @@ class RealWorldInferenceLoop:
         world_x = float(self._world_pose_buffer[0])
         world_y = float(self._world_pose_buffer[1])
         world_yaw = float(self._world_pose_buffer[2])
-        yaw_rate = float(self._world_pose_buffer[3])
+        # Buffer index 4 = signed body-frame longitudinal velocity (m/s) from
+        # the EKF. SUCCESS_THRESHOLD_VELOCITY is in m/s (matches the sim env's
+        # math.hypot(vx, vy) check against the same threshold).
+        vx_body = float(self._world_pose_buffer[4])
 
         pos_error = math.hypot(world_x - self._target_x, world_y - self._target_y)
         yaw_error = abs(
@@ -372,14 +381,14 @@ class RealWorldInferenceLoop:
         success = (
             pos_error < SUCCESS_THRESHOLD_POSITION
             and yaw_error < SUCCESS_THRESHOLD_ORIENTATION
-            and abs(yaw_rate) < SUCCESS_THRESHOLD_VELOCITY
+            and abs(vx_body) < SUCCESS_THRESHOLD_VELOCITY
         )
         if success:
             logger.info(
-                "Parking success: pos_error=%.3f m  yaw_error=%.2f deg  yaw_rate=%.3f rad/s",
+                "Parking success: pos_error=%.3f m  yaw_error=%.2f deg  speed=%.3f m/s",
                 pos_error,
                 math.degrees(yaw_error),
-                yaw_rate,
+                vx_body,
             )
             return True, False
 

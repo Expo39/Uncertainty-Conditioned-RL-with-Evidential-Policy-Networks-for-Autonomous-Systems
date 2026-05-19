@@ -37,8 +37,12 @@ SUCCESS_THRESHOLD_VELOCITY = 0.3
 # State Space Dimensions
 # ---------------------------------------------------------------------------
 
-# Core vehicle state: [vyaw]
-VEHICLE_STATE_DIM = 1
+# Core vehicle state: [speed, vyaw]
+# speed is signed body-frame longitudinal velocity (m/s) from the EKF
+# (positive = forward, negative = roll-back). Sourced from RTK-GNSS + IMU
+# accelerometer fusion via robot_localization, so the EKF's Kalman gain
+# automatically down-weights speed during GNSS-degradation tiers.
+VEHICLE_STATE_DIM = 2
 
 # EKF localisation uncertainty features: [std_x, std_y, std_yaw]
 COVARIANCE_FEATURES_DIM = 3
@@ -51,16 +55,17 @@ TARGET_POSE_DIM = 3
 OBSTACLE_FEATURES_DIM = 5
 
 # Total observation dimension (with uncertainty conditioning and obstacle obs)
-# Index   0:     yaw rate (vyaw)
-# Indices 1-3:   EKF covariance features (std_x, std_y, std_yaw) (when include_covariance=True)
-# Indices 4-6:   relative target pose (dx, dy, dyaw)
-# Indices 7-11:  hemispheric obstacle clearance (when include_obstacle_obs=True)
+# Index   0:      signed body-frame speed (m/s)
+# Index   1:      yaw rate (vyaw, rad/s)
+# Indices 2-4:    EKF covariance features (std_x, std_y, std_yaw) (when include_covariance=True)
+# Indices 5-7:    relative target pose (dx, dy, dyaw)
+# Indices 8-12:   hemispheric obstacle clearance (when include_obstacle_obs=True)
 TOTAL_OBS_DIM = (
     VEHICLE_STATE_DIM
     + COVARIANCE_FEATURES_DIM
     + TARGET_POSE_DIM
     + OBSTACLE_FEATURES_DIM
-)  # 12
+)  # 13
 
 # ---------------------------------------------------------------------------
 # Action Space Dimensions
