@@ -165,8 +165,12 @@ class CovarianceExtractorNode(Node):
         yaw = -math.atan2(siny_cosp, cosy_cosp)
 
         # -- Velocity -----------------------------------------------------------
-        # vyaw negated for y-axis flip (left-hand to right-hand convention).
-        vyaw = -msg.twist.twist.angular.z
+        # vyaw is left as REP-103 convention (CCW / left turn positive) to
+        # match the rest of the codebase (LiDAR bearing sign, _compute_relative
+        # _target_pose dyaw, reward signals). Position y and yaw above are
+        # negated because they are consumed in CARLA world-frame convention,
+        # but obs[1] vyaw is REP-103 by design - see envs/CLAUDE.md state space.
+        vyaw = msg.twist.twist.angular.z
         # vx is signed body-frame longitudinal velocity (m/s). The EKF publishes
         # twist in the base_link body frame (twist_in_odom_frame: false) and the
         # body x-axis points forward in both CARLA and ROS conventions, so no
