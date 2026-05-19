@@ -657,8 +657,15 @@ class GnssNoiseRelayNode(Node):
         self._pub.publish(out)
 
         # -- Flat-earth projection: noisy lat/lon -> local XY ------------------
+        # CARLA GnssSensor reports latitude increasing with CARLA +Y (which is
+        # south), so the raw latitude delta gives a south-positive y. Negate
+        # to convert to ROS REP-103 convention (y increases north), which is
+        # what robot_localisation expects on /odometry/gps for consistent
+        # fusion with the REP-103-frame IMU yaw rate and COG heading.
+        # covariance_extractor.py negates y again to recover CARLA convention
+        # for the training container.
         local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
-        local_y = (out.latitude - self._datum_lat) * self._metres_per_deg_lat
+        local_y = -(out.latitude - self._datum_lat) * self._metres_per_deg_lat
 
         # -- Publish GNSS odometry (EKF odom0: x, y correction) ---------------
         odom_msg = Odometry()
@@ -706,11 +713,11 @@ class GnssNoiseRelayNode(Node):
                     and candidate_var <= self._MAX_PUBLISH_VARIANCE
                 ):
                     self._cog_active = True
-                    # CARLA GnssSensor reports latitude increasing with CARLA +Y
-                    # (which is south), so local_y increases southward. Negate dy
-                    # so heading follows standard ROS convention (0=east,
-                    # pi/2=north, anticlockwise positive).
-                    raw_heading = math.atan2(-dy, dx)
+                    # local_y is already in ROS REP-103 convention (north
+                    # positive) after the negation at the projection step,
+                    # so dy is north-positive and atan2(dy, dx) directly gives
+                    # heading in REP-103 (0=east, pi/2=north, CCW positive).
+                    raw_heading = math.atan2(dy, dx)
 
                     self._last_heading_rad = raw_heading
                     self._last_heading_var = candidate_var
