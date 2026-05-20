@@ -15,6 +15,7 @@ services:
       args:
         PYTORCH_VERSION: 24.10-py3
     container_name: uncertainty-rl-training
+    user: "${UID}:${GID}"
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
@@ -54,6 +55,7 @@ services:
       args:
         PYTORCH_VERSION: 24.10-py3
     container_name: uncertainty-rl-demo
+    user: "${UID}:${GID}"
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
