@@ -740,24 +740,6 @@ class LiveVisualiser:
             y_offset=self._map_h + 2 + _HUD_BAR_PITCH,
         )
 
-        # EKF vs ground-truth kinematic comparison. Helps verify during the
-        # manual dryrun that the EKF's signed body-frame vx and yaw rate
-        # match what CARLA reports, both in clean tiers (rtk_fixed) and
-        # when the Markov chain degrades the GNSS fix.
-        gt_speed = ego.get("speed", 0.0)
-        ekf_speed = ego.get("ekf_speed", 0.0)
-        gt_vyaw = ego.get("gt_vyaw", 0.0)
-        ekf_vyaw = ego.get("ekf_vyaw", 0.0)
-        tier = ego.get("gnss_tier", "")
-        self._draw_hud(
-            f"ekf_spd={ekf_speed:+.2f}m/s gt_spd={gt_speed:.2f} "
-            f"(d={ekf_speed - gt_speed:+.2f})  "
-            f"ekf_vyaw={ekf_vyaw:+.2f}rad/s gt_vyaw={gt_vyaw:+.2f} "
-            f"(d={ekf_vyaw - gt_vyaw:+.2f})  "
-            f"tier={tier}",
-            y_offset=self._map_h + 2 + 2 * _HUD_BAR_PITCH,
-        )
-
         # Diagnostic fields (pos error, reward, covariance, EKF drift) are only
         # written when debug=True in env_config.yaml.
         dbg = state.get("debug")
@@ -768,7 +750,7 @@ class LiveVisualiser:
                 f"rwd={dbg.get('reward', 0.0):.3f} | "
                 f"cov={dbg.get('cov_rms', 0.0):.3f} "
                 f"drift={dbg.get('ekf_drift', 0.0):.2f}m",
-                y_offset=self._map_h + 2 + 3 * _HUD_BAR_PITCH,
+                y_offset=self._map_h + 2 + 2 * _HUD_BAR_PITCH,
             )
 
         pygame.display.flip()
