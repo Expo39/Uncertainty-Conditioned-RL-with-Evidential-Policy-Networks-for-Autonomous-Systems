@@ -141,14 +141,14 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle]
-	@echo "Evaluation: layout=$(LAYOUT)"
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [CHECKPOINT=path]
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
 	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
-		--model-path checkpoints/final_model \
+		--model-path $(or $(CHECKPOINT),checkpoints/final_model) \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
