@@ -253,9 +253,10 @@ def evaluate_agent(
             model.policy.get_action_with_uncertainty  # type: ignore[union-attr]
         )
         _set_uncertainty = env.env_method
+        _policy_device = model.policy.device
 
         def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
-            obs_tensor = th.as_tensor(obs)
+            obs_tensor = th.as_tensor(obs, device=_policy_device)
             action_tensor, uncertainty_dict = _get_action_with_uncertainty(
                 obs_tensor, deterministic=deterministic
             )
