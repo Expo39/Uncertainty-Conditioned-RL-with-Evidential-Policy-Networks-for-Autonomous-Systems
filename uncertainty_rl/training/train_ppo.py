@@ -557,6 +557,23 @@ def train(
 
         # Attach the environment to the model for continued training
         model.set_env(env)
+
+        # Re-attach the decay schedules from the CURRENT config. EvidentialPPO
+        # resolves ent_coef by calling self.ent_coef(progress_remaining) each
+        # train() step (see sb3_integration.EvidentialPPO.train), but ent_coef
+        # is NOT a first-class SB3 schedule the way learning_rate is, so a
+        # PPO.load() does not restore the original linear_schedule closure - the
+        # resumed model keeps a stale ent_coef that never reaches the decay
+        # floor. Run 20052026-1339 confirmed the failure: ent_coef froze at
+        # ~0.0015 (vs the 0.0002 floor), aleatoric stayed inflated at ~0.4
+        # (vs ~0.07 in the converged fresh run), the action std never collapsed,
+        # and the policy regressed to ~85% timeout (hovering near the bay,
+        # unable to hold a precise stop). Re-binding both schedules makes resume
+        # config-driven; SB3's _current_progress_remaining (recomputed over the
+        # extended total_timesteps window) then continues the decay from where
+        # the original run left off rather than restarting it.
+        model.lr_schedule = lr_schedule
+        model.ent_coef = ent_coef_schedule
     else:
         # Create fresh agent
         if policy_type == "evidential":
