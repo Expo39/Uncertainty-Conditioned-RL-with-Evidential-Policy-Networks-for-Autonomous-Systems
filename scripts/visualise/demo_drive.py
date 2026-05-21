@@ -6,6 +6,7 @@
 import argparse
 import csv
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -130,6 +131,49 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
     return DummyVecEnv([_init])
 
 
+def _write_run_info(trace_dir: Path, checkpoint: str, demo_stamp: str) -> None:
+    """
+    @brief Write provenance metadata for a demo trace run.
+
+    Parses the seed and training-run start time from the checkpoint directory
+    name (format <baseline>_seed<N>_<DDMMYYYY-HHMM>) and writes them, alongside
+    the checkpoint path and the demo run timestamp, to run_info.txt in the
+    trace directory. Fields that cannot be parsed are recorded as "unknown" so
+    the file is always written.
+
+    @param trace_dir: Directory where episode CSVs are written.
+    @param checkpoint: Path to the loaded model checkpoint.
+    @param demo_stamp: DD-MM-YYYY-HHMMSS timestamp of this demo run.
+    @return None.
+    """
+    # The checkpoint path is e.g. checkpoints/<run_name>/final_model; the run
+    # name is the parent directory.
+    run_name = Path(checkpoint).parent.name
+
+    seed = "unknown"
+    run_start = "unknown"
+    seed_match = re.search(r"seed(\d+)", run_name)
+    if seed_match:
+        seed = seed_match.group(1)
+    # Training run start stamp is the trailing DDMMYYYY-HHMM block.
+    stamp_match = re.search(r"(\d{8})-(\d{4})$", run_name)
+    if stamp_match:
+        d, t = stamp_match.group(1), stamp_match.group(2)
+        # DDMMYYYY-HHMM -> DD-MM-YYYY HH:MM (European, human-readable).
+        run_start = f"{d[0:2]}-{d[2:4]}-{d[4:8]} {t[0:2]}:{t[2:4]}"
+
+    lines = [
+        f"checkpoint: {checkpoint}",
+        f"run_name: {run_name}",
+        f"seed: {seed}",
+        f"training_run_started: {run_start}",
+        f"demo_run: {demo_stamp}",
+    ]
+    (trace_dir / "run_info.txt").write_text("\n".join(lines) + "\n")
+    print(f"Run info written: {trace_dir}/run_info.txt (seed={seed}, "
+          f"trained {run_start})")
+
+
 def main() -> None:
     """
     @brief Load checkpoint and run deterministic episodes in a loop.
@@ -184,6 +228,12 @@ def main() -> None:
         trace_dir = Path("outputs") / "demo_traces" / run_stamp
         trace_dir.mkdir(parents=True, exist_ok=True)
         print(f"Trace logging enabled: {trace_dir}/episode_<N>.csv")
+        # Record provenance alongside the traces: which checkpoint produced
+        # them, plus the seed and training-run start time parsed from the
+        # checkpoint directory name (format
+        # <baseline>_seed<N>_<DDMMYYYY-HHMM>). Without this the CSVs are
+        # anonymous - run 20052026 confused three different policies' traces.
+        _write_run_info(trace_dir, args.checkpoint, run_stamp)
 
     print("Driving. Close the visualiser or Ctrl+C to stop.")
 
