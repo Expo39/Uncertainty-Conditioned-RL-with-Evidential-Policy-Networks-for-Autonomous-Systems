@@ -349,7 +349,7 @@ visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
-eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path] [REALTIME=false]
 	$(call ensure-venv)
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
@@ -381,7 +381,8 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
-		--train-config $(CONFIG_DIR)/train_config.yaml | tail -n1); \
+		--train-config $(CONFIG_DIR)/train_config.yaml \
+		$(if $(filter false,$(REALTIME)),--no-realtime,) | tail -n1); \
 	echo "Demo container: $$demo_cid"; \
 	trap 'echo "Stopping demo container..."; docker rm -f $$demo_cid >/dev/null 2>&1 || true' EXIT INT TERM; \
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
