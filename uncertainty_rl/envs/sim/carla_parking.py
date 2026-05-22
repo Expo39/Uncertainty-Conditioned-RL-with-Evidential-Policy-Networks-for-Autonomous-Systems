@@ -995,26 +995,81 @@ class CARLAParkingEnv(gym.Env):
         # slowness-weighted term became a farmable loiter subsidy: crawling
         # slowly anywhere within the radius banked a safe steady positive
         # reward until timeout, so the policy stopped pushing into the success
-        # window. Reverted to the run-17052026-1246 form below (coefficient
-        # 0.3, linear proximity, radius 2 m). Do not strengthen a
+        # window. Reverted to the run-17052026-1246 form (coefficient 0.3,
+        # linear proximity, radius 2 m). Do not strengthen a
         # slowness-weighted shaping term to fix a final-precision gap - it
         # rewards the hovering that IS the problem.
+        #
+        # @note Slowness reference speed lowered from max_ego_speed_ms (8.0 m/s)
+        # to 5 * SUCCESS_THRESHOLD_VELOCITY (1.5 m/s) on 21-05-2026 after run
+        # 20052026-1125 demo showed the policy reaching the bay (min pos_error
+        # 0.03 m, ep 6) but coasting through at 0.5-0.8 m/s with brake at 0 in
+        # all 16 episodes (max brake 0.06, mean 0.00). With the 8.0 m/s
+        # reference, slowness at 0.7 m/s was 0.91 vs 1.0 stopped - a 9 percent
+        # gap that gave the policy no reason to learn the brake axis. Keyed to
+        # 5 * SUCCESS_THRESHOLD_VELOCITY (1.5 m/s) the gap becomes: stopped
+        # -> 1.0, success-threshold speed (0.3 m/s) -> 0.8, observed coasting
+        # speed (0.75 m/s) -> 0.5, 1.5 m/s -> 0.0. The 5x multiplier keeps the
+        # term positive across the speed band the policy actually operates in
+        # near the bay (0-1.5 m/s) while making braking distinctly more
+        # reward-positive than coasting. The loiter-subsidy failure mode of
+        # run 17052026-1430 came from a stronger COEFFICIENT plus squared
+        # proximity plus a wider radius - this change touches none of those;
+        # it sharpens the slowness curve so the bay itself remains the unique
+        # reward peak.
+        #
+        # @note Alignment gate added 22-05-2026 after run 21052026-2200 demo
+        # showed the policy freezing 12-15 m short of the bay in 15 of 16
+        # episodes (brake + throttle co-activated; pos_error never closed). The
+        # sharpened slowness curve made "slow" a powerful local reward, and the
+        # value function bootstrapped that backward in space - low-speed states
+        # everywhere became valuable because they correlated with success-window
+        # proximity, even though `proximity` is zero outside the 2 m radius.
+        # The alignment factor (1 at zero yaw error, 0 at >= SUCCESS_THRESHOLD_
+        # ORIENTATION) only collects the slowness bonus when the car is BOTH
+        # near the bay AND pointed into it. A random freeze far from the bay
+        # has random heading, so alignment kills the bonus and the value-
+        # function backward-bootstrap loses its source. Stopping cleanly in the
+        # bay (small position_error, small orientation_error, low speed) still
+        # collects the full bonus - the success state remains the unique peak.
+        slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         approach_term = 0.0
         if position_error < self._success_approach_radius:
             proximity = 1.0 - position_error * self._inv_approach_radius
-            slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
-            approach_term = 0.3 * proximity * slowness
+            slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
+            alignment = max(
+                0.0, 1.0 - orientation_error / SUCCESS_THRESHOLD_ORIENTATION
+            )
+            approach_term = 0.3 * proximity * slowness * alignment
+
+        # @note Co-activation penalty added 22-05-2026 after run 21052026-2200
+        # demo showed the policy locking throttle ~0.55 and brake ~0.77
+        # simultaneously for hundreds of consecutive steps (15 of 16 episodes,
+        # ep 1 never moved at all). Real cars cannot apply both at once
+        # (mechanical interlock + ECU veto); CARLA's VehicleControl allows it,
+        # so the reward needs to encode the physical constraint. The policy
+        # used the combination to "stay still" without committing to either
+        # action - a stable region of the action space that should not exist.
+        # min(throttle, brake) is zero when one axis is at zero and grows
+        # linearly when both are pressed. Coefficient 0.05: 500 steps of full
+        # co-activation costs ~12.5 reward (more than a per-step shaping
+        # episode is worth, less than collision -25 or success +50). Clamps
+        # match step() (throttle and brake clipped to [0, 1]).
+        throttle_applied = float(np.clip(self._last_action[1], 0.0, 1.0))
+        brake_applied = float(np.clip(self._last_action[2], 0.0, 1.0))
+        co_activation_penalty = -0.05 * min(throttle_applied, brake_applied)
 
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + orientation_term + position_term) * (
             1.0 - uncertainty_scale
-        ) + approach_term
+        ) + approach_term + co_activation_penalty
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
         diag["orientation_penalty"] = float(orientation_term)
         diag["position_penalty"] = float(position_term)
         diag["approach_reward"] = float(approach_term)
+        diag["co_activation_penalty"] = float(co_activation_penalty)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
