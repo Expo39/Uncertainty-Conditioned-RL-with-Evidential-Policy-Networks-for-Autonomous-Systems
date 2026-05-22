@@ -926,6 +926,7 @@ class CARLAParkingEnv(gym.Env):
         # directional gradient pulls the policy mean toward the boundary.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         approach_term = 0.0
+        over_rotation_penalty = 0.0
         if position_error < self._success_approach_radius:
             proximity = 1.0 - position_error * self._inv_approach_radius
             slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
@@ -933,6 +934,12 @@ class CARLAParkingEnv(gym.Env):
                 0.0, 1.0 - orientation_error / SUCCESS_THRESHOLD_ORIENTATION
             )
             approach_term = 0.3 * proximity * slowness * alignment
+            # Once close AND already aligned, large steer can only rotate the
+            # car past the bay heading it has reached. Penalise it only in that
+            # state (gated by proximity * alignment) so the turning approach
+            # and the far-field drive are untouched.
+            steer_now = abs(float(np.clip(self._last_action[0], -1.0, 1.0)))
+            over_rotation_penalty = -0.3 * steer_now * proximity * alignment
         elif position_error < 2.0 * self._success_approach_radius:
             outer_proximity = (
                 1.0
@@ -955,7 +962,12 @@ class CARLAParkingEnv(gym.Env):
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + orientation_term + position_term) * (
             1.0 - uncertainty_scale
-        ) + approach_term + co_activation_penalty + idle_steer_penalty
+        ) + (
+            approach_term
+            + co_activation_penalty
+            + idle_steer_penalty
+            + over_rotation_penalty
+        )
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
@@ -964,6 +976,7 @@ class CARLAParkingEnv(gym.Env):
         diag["approach_reward"] = float(approach_term)
         diag["co_activation_penalty"] = float(co_activation_penalty)
         diag["idle_steer_penalty"] = float(idle_steer_penalty)
+        diag["over_rotation_penalty"] = float(over_rotation_penalty)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
