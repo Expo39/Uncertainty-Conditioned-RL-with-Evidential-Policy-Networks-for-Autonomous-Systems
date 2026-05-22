@@ -4,12 +4,12 @@ Main Python package. Trains, evaluates, and deploys an uncertainty-conditioned R
 
 ## At a glance
 
-- 12-dimensional observation: vyaw + 3 EKF covariance features + 3 relative target-pose features + 5 LiDAR obstacle features
-- 2-dimensional action space: [steering, drive] (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
-- PPO with a Normal-Inverse-Gamma evidential actor head; standard MLP critic
-- Dual-encoder path processes state and covariance features separately before fusion
-- Evaluates across 9 GNSS degradation conditions (nominal RTK-fixed to worst-case RTK loss)
-- Sim-to-real capable: all observations come from the EKF and LiDAR, not CARLA ground truth
+- Continuous observation comprising EKF speed and yaw rate, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance features. Observation flags toggle the covariance and obstacle blocks; the active dimension is computed by `compute_obs_dim()` from the structural constants in [`utils/constants.py`](utils/constants.py).
+- Continuous action space `[steering, throttle, brake]`. Steering is bipolar, throttle and brake are independent non-negative axes. No reverse gear; the agent performs forward perpendicular bay parking only.
+- PPO with a Normal-Inverse-Gamma evidential actor head; standard MLP critic.
+- Optional dual-encoder path that processes state and covariance features separately before fusion.
+- Evaluation sweep across GNSS degradation conditions (RTK fixed through to RTK loss); conditions are listed in [`configs/eval_config.yaml`](../configs/eval_config.yaml).
+- Sim-to-real capable: all observations come from the EKF and LiDAR, not CARLA ground truth.
 
 ## Package layout
 
@@ -18,7 +18,7 @@ Main Python package. Trains, evaluates, and deploys an uncertainty-conditioned R
 | `networks/` | Evidential deep learning policy: NIG distributions, EvidentialPPO, dual-encoder actor |
 | `envs/` | CARLA Gymnasium parking environment with real EKF covariance in observations |
 | `training/` | PPO training loop and Optuna hyperparameter tuning |
-| `evaluation/` | Condition sweep across 9 GNSS degradation scenarios |
+| `evaluation/` | Condition sweep across GNSS degradation scenarios |
 | `ros2/` | ROS 2 bridge: EKF covariance extraction, GNSS/IMU noise relay |
 | `utils/` | Shared constants, covariance tools, geometry helpers, logging, visualisation |
 
@@ -29,7 +29,7 @@ flowchart TB
     subgraph pkg["uncertainty_rl/"]
         U["utils/\nconstants, covariance, geometry"]
         R["ros2/\nCovarianceExtractorNode\nGnssNoiseRelayNode"]
-        E["envs/\nCARLAParkingEnv\n12-dim obs"]
+        E["envs/\nCARLAParkingEnv"]
         N["networks/\nEvidentialActorCriticPolicy\nEvidentialPPO"]
         T["training/\ntrain_ppo.py\ntune_hyperparams.py"]
         V["evaluation/\nevaluate.py"]
@@ -63,33 +63,40 @@ from uncertainty_rl.evaluation import evaluate_across_conditions
 
 # Constants and utilities
 from uncertainty_rl.utils import (
-    TOTAL_OBS_DIM,             # 12
-    ACTION_DIM,                # 2
-    VEHICLE_STATE_DIM,         # 1
-    COVARIANCE_FEATURES_DIM,   # 3
+    TOTAL_OBS_DIM,
+    ACTION_DIM,
+    VEHICLE_STATE_DIM,
+    COVARIANCE_FEATURES_DIM,
     extract_2d_covariance_features,
 )
 ```
 
+Concrete values for the dimension constants live in
+[`utils/constants.py`](utils/constants.py); they are the single source of
+truth for the system's structural shape.
+
 ## Configuration keys consumed
 
-| Config file | Keys |
-|-------------|------|
-| `configs/train_config.yaml` | `learning_rate`, `n_steps`, `batch_size`, `n_epochs`, `net_arch`, `activation`, `total_timesteps`, `policy_type`, `evidential.*`, `seed` |
-| `configs/deployment/sim/env_config.yaml` | `carla_host`, `carla_port`, `max_steps`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
-| `configs/eval_config.yaml` | `eval_conditions`, `n_episodes`, `deterministic`, `output_dir` |
-| `configs/gnss_noise_profiles.yaml` | RTK fix-state tiers and per-episode sampling weights |
-| `configs/layouts/*.yaml` | Floor plan geometry (corners, bays, spawn points, patrol paths) |
+Settings change as the project iterates - read the YAMLs directly for live
+values rather than relying on this list.
 
-<!-- gif:placeholder name="training_overview" caption="Training convergence across 1M steps with uncertainty logging" -->
+| Config file | Section it owns |
+|-------------|-----------------|
+| [`configs/train_config.yaml`](../configs/train_config.yaml) | PPO hyperparameters, evidential settings, training schedule |
+| [`configs/deployment/sim/env_config.yaml`](../configs/deployment/sim/env_config.yaml) | CARLA env, sensors, parking scenarios, curriculum overrides |
+| [`configs/eval_config.yaml`](../configs/eval_config.yaml) | Evaluation condition sweep |
+| [`configs/deployment/sim/gnss_noise_profiles.yaml`](../configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers and per-episode sampling weights |
+| [`configs/layouts/*.yaml`](../configs/layouts/) | Floor plan geometry (corners, bays, spawn points, patrol paths) |
+
+<!-- gif:placeholder name="training_overview" caption="Training convergence with uncertainty logging" -->
 ![Training overview placeholder](docs/media/training_overview.gif)
 
 ## See also
 
 - [networks/README.md](networks/README.md) - NIG actor, dual-encoder, EvidentialPPO
-- [envs/README.md](envs/README.md) - Gymnasium env, 12-dim obs, reward function
+- [envs/README.md](envs/README.md) - Gymnasium env, observation space, reward function
 - [training/README.md](training/README.md) - training loop, Optuna tuning
-- [evaluation/README.md](evaluation/README.md) - 9-condition degradation sweep
+- [evaluation/README.md](evaluation/README.md) - condition degradation sweep
 - [ros2/README.md](ros2/README.md) - EKF covariance extraction, GNSS noise relay
 - [utils/README.md](utils/README.md) - constants, covariance tools, geometry helpers
 - [Root README](../README.md) - system overview, Docker quick start

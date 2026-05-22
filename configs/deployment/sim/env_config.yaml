@@ -5,19 +5,19 @@
 debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
 inspect:
-  dryrun_action: [0.0, 0.5, 0.0]  # [steer, throttle, brake] applied each step in dryrun mode. steer in [-1,1]; throttle and brake in [0,1].
+  dryrun_action: [0.0, 0.5, 0.0]  # [steer, throttle, brake] applied each step in dryrun mode.
 
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
-max_steps: 1750  # Episode length (steps). 1750 * 0.05s = 87.5s sim time.
-success_dwell_steps: 5  # Restored 18-05-2026 (was 1). At dwell=1 (= 0.2 sim s at action_repeat=4) the +50 success terminal fired the instant all three thresholds (pos, ori, speed) momentarily coincided, which a high-speed drive-through can satisfy by accident. Eval of run 17052026-2009 confirmed the failure: deterministic mean policy drove straight past the bay (final pos err ~10.9 m, ori err ~0.56 rad), while training scalars looked fine (mean pos 2.3 m, ori 0.07 rad) because rollout success was carried by stochastic action noise, not the policy mean. PPO updated the mean toward "approach-and-hover" rather than "stop-precisely". Dwell=5 (= 1 sim s) forces success to be a HELD behaviour - the agent must commit to a real stop, not flicker through. Manual dryrun (run 17052026-pre) confirmed a viable park policy holds dwell for 14 steps, so 5 is achievable with margin.
-success_approach_radius: 5.0  # Radius (m) of the bounded approach_term reward peak around the bay. The distance/position/orientation terms are all monotonic in progress - no reward maximum - so the agent learnt to drive through the bay and crash (runs up to 17052026-0824: pos_error flatlined ~3.3 m, 100% collision, 0% success). approach_term pays for being both close AND slow, peaking at the bay centre and decaying to 0 at this radius. EARLIER: widening this to 3.0 (run 17052026-1430) made training worse, but that change combined radius=3 + proximity squared + coefficient=0.6 - the failure was the stronger slowness-weighted term becoming a farmable loiter subsidy for a precision gap (policy already reached the bay area, hovered at 1.8-2.5 m). UPDATE 20-05-2026: widened 2.0 -> 5.0 to address a DIFFERENT failure - the deterministic mean policy after 1.5 M steps (run 20052026-0638) never closed within 4 m of the bay across 7 eval episodes (min pos_error 3.98-7.95 m). Inside 2 m approach_term paid up to 0.3/step; outside 2 m the only deterministic gradient was position_term=-0.005*pos_error (~-0.025/step at 5 m out - noise floor), so the policy had no deterministic pull from the 4-7 m annulus into the bay. Stochastic rollouts occasionally poked inside 2 m and earned approach_term + success(+50), making rollout success climb to ~17% while the mean orbited at 4-8 m. Widening to 5 m, keeping linear proximity and coefficient 0.3, installs a deterministic gradient (0 at the 5 m boundary, smoothly rising to 0.3 at the bay) where the policy actually lives. Not a slowness-strengthening change - linear proximity unchanged, no squaring, no coefficient bump - so the run 17052026-1430 failure mode (farming) does not apply (this addresses REACHING, not farming).
-action_repeat: 4  # Policy runs at 5 Hz. Each action held for 4 sim ticks (0.2 s) - reduces per-step jitter that was destabilising the critic. Was 1.
-use_extra_spawns: false  # STAGE 1: locked to primary spawn only. Was true.
+max_steps: 1750  # Episode length (steps).
+success_dwell_steps: 5  # Consecutive steps the success thresholds must hold before terminating; prevents a fly-through from counting as a park.
+success_approach_radius: 5.0  # Radius (m) of the bounded approach reward peak around the bay.
+action_repeat: 4  # Sim ticks per policy action. Policy runs at carla_timestep * action_repeat seconds per decision.
+use_extra_spawns: false  # When true, sample from extra_spawn_transforms in the layout YAML; false locks to the primary spawn.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
-no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active). ~3-4x speedup.
+no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active).
 
 gnss_noise_profiles: configs/deployment/sim/gnss_noise_profiles.yaml
 
@@ -25,7 +25,7 @@ gnss_datum_lat: 0.0  # degrees north. 0.0 = auto-latch from first GNSS reading.
 gnss_datum_lon: 0.0  # degrees east.  0.0 = auto-latch from first GNSS reading.
 
 carla_sensors:
-  imu: 
+  imu:
     sensor_tick: 0.05  # Publish rate (seconds). IMU noise injected by ImuNoiseRelayNode.
 
   lidar:  # 2D LiDAR (SICK TiM571). Obstacle detection only - not used for localisation.
@@ -39,7 +39,7 @@ carla_sensors:
     sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
 
     noise:
-      enabled: false  # STAGE 1: LiDAR noise disabled. Was true.
+      enabled: false  # Master switch for the LiDAR noise model.
       range_random_stddev_m: 0.020  # m 1-sigma - see sensor_noise_models.md
       range_bias_limit_m: 0.060     # m half-range - see sensor_noise_models.md
       dropout_rate: 0.0             # no datasheet basis for non-zero value
@@ -49,24 +49,24 @@ carla_sensors:
     sensor_tick: 0.05  # Publish rate (seconds).
 
 parking_scenarios:
-  # STAGE 1 curriculum overrides. See documentation/CURRICULUM_PLAN.md.
-  # Comment out the three fixed_* keys to return to random selection (Stage 2+).
+  # When set, the three fixed_* keys force a specific floor plan / bay / GNSS
+  # tier every episode. Comment them out to return to random selection.
   fixed_floor_plan: rectangle
-  fixed_target_bay_id: angled_13  # STAGE 1: central angled bay. Requires gentle left arc from spawn. Far from perimeter walls.
+  fixed_target_bay_id: angled_13
   fixed_gnss_tier: rtk_fixed
 
   # CARLA blueprint for perimeter markers.
-  perimeter_marker_blueprint: "static.prop.constructioncone"  # CARLA cone blueprint used as perimeter
+  perimeter_marker_blueprint: "static.prop.constructioncone"
   perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
-  bay_occupancy_min: 0.0  # STAGE 1: no parked cars. Was 0.3.
-  bay_occupancy_max: 0.0  # STAGE 1: no parked cars. Was 0.8.
-  num_patrol_vehicles_max: 0  # STAGE 1: no patrol NPCs. Was 1.
+  bay_occupancy_min: 0.0  # Per-episode bay occupancy lower bound.
+  bay_occupancy_max: 0.0  # Per-episode bay occupancy upper bound.
+  num_patrol_vehicles_max: 0  # NPC patrol vehicles per episode.
   patrol_obstacle_stop_distance: 5.0  # Metres - patrol brakes for vehicles in forward cone.
   patrol_pedestrian_stop_distance: 4.0  # Metres - patrol brakes for pedestrians in range.
   patrol_max_speed_ms: 3.0  # Patrol speed (m/s), applied via kinematic control.
   patrol_heading_gain: 0.8  # Proportional gain for patrol heading controller.
   pedestrian_speed_ms: 1.4  # Walk speed (m/s), applied via WalkerControl.
-  pedestrian_spawn_probability: 0.0  # STAGE 1: no pedestrians. Was 0.8.
+  pedestrian_spawn_probability: 0.0  # Per-zone spawn probability each episode.
   pedestrian_heading_resample_steps: 30  # Steps between direction changes.
   pedestrian_max_lifetime_steps: 200  # Steps before despawn and respawn in zone.
   floor_plans:

@@ -203,10 +203,8 @@ class _CovarianceSubscriber:
                 return False
             cov_3x3 = np.asarray(data["covariance"], dtype=np.float64).reshape(3, 3)
             features = extract_2d_covariance_features(cov_3x3)
-            # vx is signed body-frame longitudinal velocity (m/s) from the EKF.
-            # `data.get` with a 0.0 default keeps backwards compatibility with
-            # any stale ekf_state.json left over from a pre-Phase-2 container
-            # run (the extractor would not have written vx in that file).
+            # vx defaults to 0.0 for compatibility with stale ekf_state.json
+            # files written by older extractor versions that omit the field.
             pose = np.array(
                 [
                     data["x"],

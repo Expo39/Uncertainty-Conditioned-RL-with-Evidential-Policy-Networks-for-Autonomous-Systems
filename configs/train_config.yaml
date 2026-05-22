@@ -5,15 +5,15 @@
 
 # PPO hyperparameters
 learning_rate: 0.0003  # Linear decay to 0 applied in train_ppo.py.
-n_steps: 2048  # Steps per PPO update (~4 episodes with a single CARLA env).
+n_steps: 2048  # Steps per PPO update.
 batch_size: 256
 n_epochs: 5
-gamma: 0.99  # High gamma needed: success bonus at ~step 300 must propagate back.
+gamma: 0.99  # Discount factor.
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.0019  # Entropy bonus at the START of training. ent_coef is a linear DECAY schedule (ent_coef -> ent_coef_final over total_timesteps), NOT a constant - see ent_coef_final below and the wiring in train_ppo.py. In the evidential policy the action sampling std IS sqrt(aleatoric), so the entropy bonus is a direct pressure on the action std; a constant value cannot let the policy both explore early and commit late. Lowered 0.0067 -> 0.0019 when norm_reward was enabled (run 17052026-1922): VecNormalize divides rewards by the running return std, measured at 3.60 from that run's vec_normalize checkpoint, so the (un-normalised) entropy bonus became ~3.6x too strong relative to the now-shrunken task signal - the policy went too noisy to commit (aleatoric climbing past 1.0, pos_error stuck at 3-4 m, ~0 success). 0.0067 / 3.60 = 0.0019 restores the exploration-vs-task balance to the normalised-reward scale. (Earlier history: 0.01 -> 0.0067 was the x2/3 rescale for the 2-dim -> 3-dim action-space change.)
-ent_coef_final: 0.0015  # Entropy bonus at the END of training. Raised 0.0002 -> 0.0015 on 20-05-2026 after run 20052026-0638 showed late-training entropy collapse driving a train-eval gap: entropy_loss went -2.5 (step 0) -> +1.5 (step 1.5M, sub-uniform), aleatoric collapsed 0.39 -> 0.06 (~7x), and rollout success peaked at 17% then crashed to 2.8% in the last 200k as the stochastic noise carrying rollout successes died. The deterministic eval policy (run 20-05-2026-081631) never closed within 4 m of the bay - the mean had not learned to enter the success window because entropy collapsed before the mean was precise. 0.0015 holds the floor at ~80% of the start value (0.0019) instead of crashing to ~10%, keeping action std alive long enough for the mean to commit. Previous 0.0002 was the norm_reward rescale of 0.00014 ("a token exploration floor"); 20-05-2026 evidence shows a token floor is not enough for the evidential policy under this reward landscape. Authorised by Stage 1 hyperparameter unlock (CURRICULUM_PLAN.md, 20-05-2026).
+ent_coef: 0.0019  # Entropy bonus at the start of training. Wired as a linear decay schedule (ent_coef -> ent_coef_final) in train_ppo.py.
+ent_coef_final: 0.0015  # Entropy bonus at the end of training. Non-zero floor so the action std does not collapse before the policy mean has committed.
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
@@ -21,11 +21,10 @@ target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
 # Network architecture
 net_arch: [256, 256]  # Actor and critic hidden layers.
 activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
-# LayerNorm inserted after each hidden layer via _build_mlp_extractor() in sb3_integration.py.
 
 # Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
 evidential:
-  lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup). The NIG head is now kept stable primarily by the alpha >= 1.5 construction bound in EvidentialLayer (the High Uncertainty Area is structurally unreachable), so this anchor is a helper, not the load-bearing fix - it does not need to be cranked. 0.01 was a failed attempt to make a regulariser hold a divergence it provably could not (run 16052026-0741).
+  lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
   use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty.
 
@@ -35,18 +34,15 @@ policy_type: "evidential"  # evidential: EvidentialPPO + NIG actor. standard: PP
 # Reward function: uncertainty-scaled potential-based shaping. See detailed_notes/reward_function.md.
 uncertainty_std_max: 2.0  # EKF std (metres) at which progress reward reaches zero.
 
-# Observation normalisation: VecNormalize with norm_obs=True. Covariance features
-# are log1p-transformed before VecNormalize.
-
 # Logging and checkpointing
 checkpoint_freq: 50000  # Save checkpoint every N steps.
-log_interval: 1  # Log every PPO update for fine-grained reward diagnostics.
+log_interval: 1  # Log every PPO update.
 verbose: 1  # SB3 verbosity: 0=silent, 1=info, 2=debug.
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 1500000  # Stage 1c overnight: action_repeat=4 added; 1.5M policy decisions = 6M sim ticks (~7h wall-clock). Restore to default once Stage 1 passes.
+total_timesteps: 1500000
 seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
