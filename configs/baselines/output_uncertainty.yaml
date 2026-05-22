@@ -1,7 +1,7 @@
 # Baseline: Output Uncertainty Only
-# 9-dim obs: EKF yaw rate (1) + relative target pose (3) + obstacle clearance (5).
-# The agent sees yaw rate + relative target but no EKF covariance.
-# The policy quantifies its own epistemic and aleatoric uncertainty via NIG distributions.
+# Observation: vehicle state + relative target pose + obstacle clearance.
+# The agent does not see EKF covariance, but the policy quantifies its own
+# epistemic and aleatoric uncertainty via NIG distributions.
 
 baseline_name: "output_uncertainty"
 

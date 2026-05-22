@@ -400,13 +400,9 @@ class LiveVisualiser:
         @brief Read new JSONL frames and render them as fast as they arrive.
 
         Polls the JSONL file each iteration. When no new data is available
-        the loop sleeps briefly to avoid busy-waiting.
-
-        The signal file is re-asserted every iteration: the env stops writing
-        frames the moment outputs/.vis_active is absent, so a single touch at
-        startup is fragile (a concurrent cleanup or a stale process removing
-        it would silently freeze the view). Re-touching keeps the env writing
-        for as long as this window is open.
+        the loop sleeps briefly to avoid busy-waiting. The signal file is
+        re-asserted every iteration so a stale cleanup cannot stop the env
+        from writing while this window is open.
         """
         while not self._exit_requested:
             self._handle_events()

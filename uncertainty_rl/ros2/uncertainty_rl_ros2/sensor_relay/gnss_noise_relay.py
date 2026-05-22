@@ -258,38 +258,29 @@ class GnssNoiseRelayNode(Node):
         # odom cov slot 35 (yaw) always 1e6.
         self._odom_cov_template[35] = 1.0e6
 
-        # Twist covariance template for the Odometry message. Only vx (slot 0)
-        # and vy (slot 7) carry signal when GNSS-derived velocity is published;
-        # vz, vroll, vpitch, vyaw all get infinite variance so the EKF ignores
-        # them. vx/vy slots are overwritten per-callback from the measured
-        # GNSS displacement noise. When the velocity gate fails (small
-        # displacement, ZUPT, or low fix quality), vx/vy slots are also set
-        # to infinite variance so the EKF treats the message as position-only.
+        # Twist covariance template for the Odometry message. Inert states
+        # (vz, vroll, vpitch, vyaw) get infinite variance so the EKF ignores
+        # them; vx/vy are overwritten per callback from the measured GNSS
+        # displacement noise. When the velocity gate fails the vx/vy slots
+        # are also set to infinite variance so the EKF treats the message
+        # as position-only.
         self._twist_cov_template: List[float] = [0.0] * 36
         self._twist_cov_template[14] = 1.0e6  # vz
         self._twist_cov_template[21] = 1.0e6  # vroll
         self._twist_cov_template[28] = 1.0e6  # vpitch
         self._twist_cov_template[35] = 1.0e6  # vyaw
-        # Minimum velocity displacement (m) for the GNSS velocity measurement
-        # to be trusted. Below this the differentiation amplifies position
-        # noise to the point where velocity would mislead the EKF. Same
-        # principle as cog_min_displacement_m but applied to velocity.
+        # Minimum per-step GNSS displacement (m) before the derived velocity
+        # is trusted - below this, differentiating noisy position dominates
+        # the signal.
         self._velocity_min_displacement_m: float = 0.03
-        # Maximum velocity variance (m/s)^2 we will publish. Above this the
-        # GNSS velocity is dominated by position-differencing noise and the
-        # EKF is better off relying on IMU accel prediction. At RTK-fixed
-        # (sigma 0.02 m) over 0.05 s ticks the derived velocity sigma is
-        # ~0.4 m/s (variance ~0.16), well inside this ceiling; RTK-float and
-        # worse tiers fall outside it and the EKF falls back to IMU accel.
-        self._velocity_max_variance: float = 1.0  # 1-sigma 1 m/s
-        # Variance (m/s)^2 published with the zero-velocity measurement when
-        # the car is below the displacement gate (stationary). 0.25 (sigma
-        # 0.5 m/s): tight enough that the EKF settles to ~0 at standstill,
-        # loose enough that the gate flip moving->stopped eases the velocity
-        # state to zero over a few ticks instead of yanking it (a yank
-        # overshoots through zero - seen as a brief negative speed spike at
-        # hard decel-to-stop). obs[0] is also clipped at 0 in build_observation.
-        self._velocity_stopped_variance: float = 0.25  # 1-sigma 0.5 m/s
+        # Maximum velocity variance (m/s)^2 the relay will publish. Beyond
+        # this the EKF falls back to its prediction model.
+        self._velocity_max_variance: float = 1.0
+        # Variance (m/s)^2 attached to the zero-velocity measurement when
+        # the car is below the displacement gate. Tight enough that the EKF
+        # settles to zero at standstill, loose enough that the move-to-stop
+        # transition eases the velocity state down rather than yanking it.
+        self._velocity_stopped_variance: float = 0.25
 
         # Cached RTK-fixed baseline variance (used as floor in odom and COG).
         self._rtk_fixed_var: float = 0.02**2
@@ -690,30 +681,18 @@ class GnssNoiseRelayNode(Node):
         self._pub.publish(out)
 
         # -- Flat-earth projection: noisy lat/lon -> local XY ------------------
-        # CARLA GnssSensor reports latitude increasing with CARLA +Y (which is
-        # south), so the raw latitude delta gives a south-positive y. Negate
-        # to convert to ROS REP-103 convention (y increases north), which is
-        # what robot_localisation expects on /odometry/gps for consistent
-        # fusion with the REP-103-frame IMU yaw rate and COG heading.
-        # covariance_extractor.py negates y again to recover CARLA convention
-        # for the training container.
+        # CARLA latitude increases southward, so the raw delta gives a
+        # south-positive y. Negate to put +y north (REP-103) for the EKF.
         local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
         local_y = -(out.latitude - self._datum_lat) * self._metres_per_deg_lat
 
         # -- Compute GNSS-derived speed from successive positions -------------
-        # We publish only the speed MAGNITUDE as body-frame longitudinal
-        # velocity (twist.linear.x), NOT the 2D velocity vector. A 2D vector
-        # carries a direction, and the EKF reconciles that direction against
-        # its yaw state - GNSS course-over-ground differs from body heading by
-        # the slip angle, so fusing the vector dragged yaw ~25 deg off. A
-        # scalar speed has no direction and cannot corrupt yaw. vy is left at
-        # infinite variance. The car is forward-only, so the unsigned
-        # magnitude is the correct signed body-frame vx.
+        # The scalar speed magnitude is published as body-frame longitudinal
+        # velocity (twist.linear.x). A 2D velocity vector would conflict with
+        # the EKF yaw state through slip angle, so only the scalar is fused.
         #
-        # States:
         #   "moving"  - displacement above the gate: publish speed = disp/dt.
-        #   "stopped" - displacement below the gate: publish speed = 0 (a
-        #               precise measurement of a stationary car).
+        #   "stopped" - displacement below the gate: publish speed = 0.
         #   "unknown" - first callback / invalid dt: infinite variance.
         dx: float = 0.0
         dy: float = 0.0
@@ -747,9 +726,8 @@ class GnssNoiseRelayNode(Node):
         odom_msg = Odometry()
         odom_msg.header = out.header
         odom_msg.header.frame_id = "odom"
-        # child_frame_id = ego_vehicle: robot_localization interprets the twist
-        # in the body frame, so twist.linear.x is body-frame longitudinal
-        # velocity - exactly the scalar speed we publish.
+        # child_frame_id = ego_vehicle so robot_localization interprets the
+        # twist in body frame (twist.linear.x = longitudinal speed).
         odom_msg.child_frame_id = "ego_vehicle"
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
@@ -800,10 +778,8 @@ class GnssNoiseRelayNode(Node):
                 and candidate_var <= self._MAX_PUBLISH_VARIANCE
             ):
                 self._cog_active = True
-                # local_y is already in ROS REP-103 convention (north
-                # positive) after the negation at the projection step,
-                # so dy is north-positive and atan2(dy, dx) directly gives
-                # heading in REP-103 (0=east, pi/2=north, CCW positive).
+                # dy is already north-positive (see projection step above),
+                # so atan2(dy, dx) gives heading directly in REP-103.
                 raw_heading = math.atan2(dy, dx)
 
                 self._last_heading_rad = raw_heading
