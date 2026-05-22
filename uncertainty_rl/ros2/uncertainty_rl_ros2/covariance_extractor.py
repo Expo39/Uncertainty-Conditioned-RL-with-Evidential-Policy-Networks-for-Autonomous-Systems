@@ -165,16 +165,12 @@ class CovarianceExtractorNode(Node):
         yaw = -math.atan2(siny_cosp, cosy_cosp)
 
         # -- Velocity -----------------------------------------------------------
-        # vyaw is left as REP-103 convention (CCW / left turn positive) to
-        # match the rest of the codebase (LiDAR bearing sign, _compute_relative
-        # _target_pose dyaw, reward signals). Position y and yaw above are
-        # negated because they are consumed in CARLA world-frame convention,
-        # but obs[1] vyaw is REP-103 by design - see envs/CLAUDE.md state space.
+        # vyaw stays in REP-103 (left turn positive) to match the rest of the
+        # codebase (LiDAR bearing, target dyaw, reward signs). Position y and
+        # yaw above are negated to recover CARLA's left-handed world frame.
         vyaw = msg.twist.twist.angular.z
-        # vx is signed body-frame longitudinal velocity (m/s). The EKF publishes
-        # twist in the base_link body frame (twist_in_odom_frame: false) and the
-        # body x-axis points forward in both CARLA and ROS conventions, so no
-        # sign flip is needed. Positive vx = forward, negative vx = rolling back.
+        # Body-frame longitudinal velocity. The EKF publishes twist in
+        # base_link, so no rotation is needed.
         vx = msg.twist.twist.linear.x
 
         # -- Covariance ---------------------------------------------------------
@@ -241,8 +237,8 @@ class CovarianceExtractorNode(Node):
         if self._latest_pose is None or self._latest_cov_flat is None:
             return
 
-        # vx is published in ekf_state.json only; CovarianceEstimate message
-        # carries pose + vyaw + covariance (per ros2/CLAUDE.md field ordering).
+        # vx is written to ekf_state.json only; the DDS message carries
+        # pose + vyaw + covariance.
         x, y, yaw, vyaw, _vx = self._latest_pose
 
         msg = CovarianceEstimate()

@@ -16,32 +16,20 @@ import numpy as np
 # ---------------------------------------------------------------------------
 
 # Position error threshold for successful parking (metres).
-# STAGE 1 CURRICULUM: relaxed from 0.75 to 1.5. The 0.75 m window gave PPO
-# essentially no success signal from random init (8+ runs, ~0 successes), so
-# the +50 terminal reward never propagated back. 1.5 m makes success reachable
-# so the agent can learn what winning looks like. RESTORE TO 0.75 before
-# evaluation - 0.75 m is the real-world parking standard.
 SUCCESS_THRESHOLD_POSITION = 1.5
 
-# Orientation error threshold for successful parking (radians)
-# STAGE 1 CURRICULUM: relaxed from 10 to 25 degrees - see note above.
-# RESTORE TO np.deg2rad(10) before evaluation.
+# Orientation error threshold for successful parking (radians).
 SUCCESS_THRESHOLD_ORIENTATION = np.deg2rad(25)
 
-# Velocity threshold for successful parking (m/s)
-# STAGE 1 CURRICULUM: relaxed from 0.1 to 0.3 - see note above.
-# RESTORE TO 0.1 before evaluation.
+# Velocity threshold for successful parking (m/s).
 SUCCESS_THRESHOLD_VELOCITY = 0.3
 
 # ---------------------------------------------------------------------------
 # State Space Dimensions
 # ---------------------------------------------------------------------------
 
-# Core vehicle state: [speed, vyaw]
-# speed is signed body-frame longitudinal velocity (m/s) from the EKF
-# (positive = forward, negative = roll-back). Sourced from RTK-GNSS + IMU
-# accelerometer fusion via robot_localization, so the EKF's Kalman gain
-# automatically down-weights speed during GNSS-degradation tiers.
+# Core vehicle state: [speed, vyaw]. speed is signed body-frame longitudinal
+# velocity (m/s) from the EKF.
 VEHICLE_STATE_DIM = 2
 
 # EKF localisation uncertainty features: [std_x, std_y, std_yaw]
@@ -76,12 +64,8 @@ TOTAL_OBS_DIM = (
 # throttle : [ 0, 1]  forward throttle (no reverse gear: forward perpendicular
 #                     bay parking only)
 # brake    : [ 0, 1]  friction brake
-# Throttle and brake are SEPARATE axes (was a single bipolar `drive` axis). A
-# bipolar axis put the delicate "brake gently to a stop / hold still" endgame
-# control on the throttle/brake discontinuity at zero, where action-sampling
-# noise flips a gentle brake into a throttle. Separate non-negative axes make
-# "hold a stop" (throttle ~ 0, brake > 0) a stable region instead of a knife
-# edge on a sign change.
+# Throttle and brake are separate non-negative axes so a held stop
+# (throttle = 0, brake > 0) is a stable region of the action space.
 ACTION_DIM = 3
 
 # ---------------------------------------------------------------------------

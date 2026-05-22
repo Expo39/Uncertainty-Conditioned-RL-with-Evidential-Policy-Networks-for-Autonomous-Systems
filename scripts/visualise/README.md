@@ -55,7 +55,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | `carla_timestep` | float | Effective CARLA timestep used for `sim_time` |
 | `floor_plan` | str | Layout name (`rectangle`, `trapezoid`, `irregular_a`) |
 | `ego` | dict | `{x, y, yaw, vx, vy, speed}` - ego pose and velocity |
-| `action` | dict | `{steer, drive}` - last action applied (drive bipolar) |
+| `action` | dict | `{steer, throttle, brake}` - last clamped action applied to the vehicle |
 | `trajectory` | list | `[[x, y], ...]` ego trail (last N steps) |
 | `actors` | list | NPC/static vehicles: `[{x, y, yaw, type}]` where `type` is `"npc"` or `"static"` |
 | `pedestrians` | list | `[{x, y}]` for each pedestrian |

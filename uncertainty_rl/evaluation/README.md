@@ -158,10 +158,10 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 
 | Config file | Keys |
 |-------------|------|
-| `configs/eval_config.yaml` | `model_path`, `carla_host`, `carla_port`, `n_episodes`, `deterministic`, `eval_conditions` (all 9), `output_dir`, `success_criteria.*` |
+| `configs/eval_config.yaml` | `model_path`, `carla_host`, `carla_port`, `n_episodes`, `deterministic`, `eval_conditions`, `output_dir`, `success_criteria.*` |
 | `configs/deployment/sim/env_config.yaml` | `carla_sensors.gnss.*`, `carla_sensors.imu.*` (base noise, scaled by condition multipliers) |
 | `configs/train_config.yaml` | `policy_type` (selects evidential vs standard path for uncertainty logging) |
-| `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_POSITION` (0.5 m), `SUCCESS_THRESHOLD_ORIENTATION` (~0.175 rad), `SUCCESS_THRESHOLD_VELOCITY` (0.1 m/s) |
+| `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_POSITION`, `SUCCESS_THRESHOLD_ORIENTATION`, `SUCCESS_THRESHOLD_VELOCITY` |
 
 <!-- gif:placeholder name="eval_degradation" caption="Success rate and epistemic uncertainty across the 9 evaluation conditions" -->
 ![Evaluation degradation placeholder](docs/media/eval_degradation.gif)

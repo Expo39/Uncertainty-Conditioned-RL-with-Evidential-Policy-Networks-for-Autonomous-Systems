@@ -326,8 +326,7 @@ class DryRunInspector(_Inspector):
         @param obs: Observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
-        @param info: Optional info dict from env.step(). Currently unused;
-                     reserved for future per-step diagnostics.
+        @param info: Optional info dict from env.step().
         """
         if obs is None or len(obs) < 3:
             return
@@ -362,11 +361,7 @@ class DryRunInspector(_Inspector):
             v = self._env.vehicle.get_velocity()
             av = self._env.vehicle.get_angular_velocity()
             gt_speed = math.hypot(v.x, v.y)
-            # ROS REP-103 convention (left turn = positive, right turn =
-            # negative). Matches obs[1] - covariance_extractor.py leaves the
-            # EKF vyaw un-negated - and the LiDAR bearing sign convention
-            # (left obstacles have positive bearings). CARLA's av.z is in
-            # CARLA frame where left = negative, hence the negation here.
+            # Negated to put left-turn positive (REP-103), matching obs[1].
             gt_vyaw_rad = -math.radians(av.z)
             lines.append(
                 Y + f"GT   pos=({t.location.x:.2f},{t.location.y:.2f})"
@@ -379,9 +374,6 @@ class DryRunInspector(_Inspector):
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None:
                 ekf_x = float(ekf_pose[0])
-                # ekf_pose[1] is already in CARLA convention (y=south, negative
-                # toward the bay) - covariance_extractor.py negates from ROS to
-                # CARLA on write. No further negation needed here.
                 ekf_y = float(ekf_pose[1])
                 ekf_yaw = float(ekf_pose[2])
                 ekf_vyaw = float(ekf_pose[3])
@@ -398,8 +390,7 @@ class DryRunInspector(_Inspector):
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
                     f"  yaw={math.degrees(wyaw_rad):+.1f}deg" + X
                 )
-                # EKF vs GT kinematic deltas: this is the verification signal
-                # for the IMU-accel-fusion / GNSS-degradation behaviour.
+                # EKF vs GT kinematic deltas (verification signal).
                 lines.append(
                     R + f"delta  spd={ekf_vx - gt_speed:+.3f}m/s"
                     f"  vyaw={math.degrees(ekf_vyaw - gt_vyaw_rad):+.2f}deg/s" + X
@@ -495,11 +486,11 @@ class DryRunInspector(_Inspector):
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
         print(
-            "\nModel inputs per step (12-dim obs):"
-            "\n  [0]    vel: vyaw"
-            "\n  [1-3]  cov: std(x,y,yaw)"
-            "\n  [4-6]  tgt: dx dy dyaw (ego-relative)"
-            "\n  [7-11] obs: L(dist,bear)  R(dist,bear)  F(dist)"
+            "\nModel inputs per step (13-dim obs):"
+            "\n  [0-1]   vel: speed, vyaw"
+            "\n  [2-4]   cov: std(x, y, yaw)"
+            "\n  [5-7]   tgt: dx dy dyaw (ego-relative)"
+            "\n  [8-12]  obs: L(dist, bear)  R(dist, bear)  F(dist)"
             "\n  bay/EKF lines are diagnostic only (not fed to model)"
         )
 
@@ -538,7 +529,6 @@ class DryRunInspector(_Inspector):
                         _ep = self._env._cov_subscriber.get_latest_pose()
                         if _ep is not None:
                             _ep0 = float(_ep[0])
-                            # ekf_pose[1] already in CARLA convention - no negation.
                             _ep1 = float(_ep[1])
                             _ep2 = float(_ep[2])
                             _tx, _ty, _cr, _sr, _rr = self._env._ekf_odom_offset

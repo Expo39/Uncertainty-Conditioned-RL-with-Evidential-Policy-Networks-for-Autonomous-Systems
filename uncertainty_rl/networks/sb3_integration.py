@@ -100,21 +100,11 @@ class EvidentialDistribution(Distribution):
         self._alpha = alpha
         self._beta = beta
 
-        # Clamp before sqrt. min guards against near-zero/negative values from
-        # GPU fp32 drift (NaN/inf std -> CUDA illegal memory access in Normal()).
-        # max=1.0 is a HARD ceiling on the action sampling std: aleatoric is the
-        # NIG variance and std=sqrt(aleatoric) is the action noise, so max=1.0
-        # caps the noise at std<=1.0 (the action half-range on [-1, 1]). The
-        # alpha >= 1.5 construction bound only bounds the DENOMINATOR
-        # (alpha-1 >= 0.5); beta, the numerator, is softplus-unbounded, so
-        # aleatoric = beta/(alpha-1) can still run away via beta. It did: run
-        # 17052026-1107 plateaued at aleatoric ~2.2 (std ~1.5, wider than the
-        # whole action range) and the policy regressed to flailing. The old
-        # max=50.0 (std ~7) was far too loose to catch this. 1.0 is 2x the
-        # design-assumed ~0.5, so it does not bind in healthy operation but
-        # does catch divergence. The decaying ent_coef (see train_ppo.py)
-        # removes the pressure inflating beta; this clamp is the backstop for
-        # the early high-ent_coef phase before the decay takes effect.
+        # Clamp before sqrt. The min guards against GPU fp32 drift producing
+        # near-zero or negative values (NaN std would crash Normal()). The max
+        # is a hard ceiling on the action sampling std at the action half-range:
+        # the alpha >= 1.5 construction bound constrains only the denominator,
+        # so beta can still inflate aleatoric without this backstop.
         aleatoric = th.clamp(beta / (alpha - 1), min=1e-6, max=1.0)
         std = th.sqrt(aleatoric)
 
@@ -732,17 +722,10 @@ class EvidentialPPO(PPO):
                 )
                 values = values.flatten()
 
-                # Prior-anchoring penalty on the NIG evidence parameters.
-                # Raw-ratio quadratic (x/prior - 1)^2: zero at the prior,
-                # positive either side, and crucially its restoring gradient
-                # GROWS linearly with distance from the prior. The earlier
-                # squared-log-ratio form had a 1/x gradient that vanished far
-                # from the prior, so it could not reel a drifting parameter
-                # back (run 16052026-0741 diverged to aleatoric ~2000). With
-                # the alpha >= 1.5 construction bound the High Uncertainty Area
-                # is now unreachable, so this anchor only ever operates in the
-                # well-behaved region where its gradient is meaningful. All
-                # three of nu/alpha/beta are anchored.
+                # Prior-anchoring penalty on the NIG evidence parameters as
+                # a raw-ratio quadratic (x / prior - 1)^2 - zero at the prior,
+                # with a restoring gradient that grows linearly with distance.
+                # All three of nu/alpha/beta are anchored.
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
@@ -865,8 +848,7 @@ class EvidentialPPO(PPO):
             exclude="tensorboard",
         )
         self.logger.record("train/clip_range", clip_range)
-        # ent_coef is a decay schedule - log it so the decay is visible in
-        # TensorBoard alongside aleatoric_uncertainty / entropy_loss.
+        # Logged so the decay schedule is visible in TensorBoard.
         self.logger.record("train/ent_coef", ent_coef)
         if self.clip_range_vf is not None:
             self.logger.record("train/clip_range_vf", clip_range_vf)

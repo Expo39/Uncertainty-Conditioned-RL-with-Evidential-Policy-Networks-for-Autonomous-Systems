@@ -103,13 +103,9 @@ def build_observation(
             if -math.pi <= raw_vyaw <= math.pi
             else max(-math.pi, min(math.pi, raw_vyaw))
         )
-        # speed = body-frame longitudinal velocity. The vehicle is forward-only
-        # (no reverse gear), so speed is physically >= 0. Clip at 0: the EKF can
-        # transiently overshoot negative when the velocity state rings during a
-        # hard decel-to-stop (the GNSS speed measurement is a non-negative
-        # scalar, but the filter undershoots through zero before settling).
-        # A negative reading is never valid for this vehicle, so the clip
-        # enforces a known physical constraint rather than masking a fault.
+        # Clip body-frame speed at zero - the vehicle is forward-only, so a
+        # negative EKF reading (transient filter ringing at hard decel) is
+        # never physically valid.
         speed = max(0.0, float(ekf_pose[4]))
 
         dx, dy, dyaw = _compute_relative_target_pose(
@@ -348,8 +344,6 @@ def calibrate_ekf_frame_offset(
             time.sleep(tick_interval)
             continue
 
-        # ekf_pose[1] is already in CARLA convention - covariance_extractor.py
-        # negates ROS y to CARLA y on write to ekf_state.json.
         ekf_x = float(ekf_pose[0])
         ekf_y = float(ekf_pose[1])
         ekf_yaw = float(ekf_pose[2])

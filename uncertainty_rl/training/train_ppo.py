@@ -104,11 +104,9 @@ def linear_schedule(
     @brief Linear schedule decaying from initial_value to final_value.
     @param initial_value: Value at the start of training (progress_remaining=1.0).
     @param final_value: Value at the end of training (progress_remaining=0.0).
-           Defaults to 0.0 (the learning-rate-decay use case).
+           Defaults to 0.0.
     @return Callable that takes progress_remaining (1.0 -> 0.0) and returns the
             interpolated value.
-    @note Used for both the learning rate (decays to 0) and ent_coef (decays to
-          a small non-zero floor - see the ent_coef wiring below).
     """
 
     def func(progress_remaining: float) -> float:
@@ -394,17 +392,10 @@ def train(
             [make_env(config, rank=i) for i in range(n_workers)]
         )
 
-        # Normalise observations and rewards. norm_reward divides rewards by a
-        # running estimate of the discounted-return std, so the critic predicts
-        # a ~unit-variance target instead of the raw return range (~-25 to +55,
-        # near-bimodal: the +50 success bonus is either earned or not). With
-        # norm_reward=False the critic could not track that target - value_loss
-        # spiked to 8-12 and explained_variance collapsed to ~0.2-0.5 every run
-        # (up to 17052026-1748), so the advantage estimate was noise and the
-        # policy gradient with it, capping success at ~0.12 regardless of
-        # actor / reward / action-space changes. Normalisation is monotonic and
-        # uniform, so the reward-term ratios (success >> timeout >> collision)
-        # and all tuned coefficients are preserved.
+        # norm_reward divides rewards by a running estimate of the discounted-
+        # return std so the critic predicts a unit-variance target. The reward
+        # range is near-bimodal (large terminal bonuses dominate the per-step
+        # shaping), so an unnormalised critic struggles to track it.
         env = VecNormalize(
             train_vec_env,
             norm_obs=True,
@@ -443,15 +434,10 @@ def train(
     lr_schedule = linear_schedule(lr_initial)
 
     # ent_coef is a linear DECAY schedule, not a constant. In the evidential
-    # policy the action sampling std IS sqrt(aleatoric), so entropy and the
-    # action std are the same quantity - a constant entropy bonus is a constant
-    # pressure to widen the action std, with no counter-force once a good
-    # policy exists. Run 17052026-1107 showed this: aleatoric ratcheted to ~2.2
-    # (action std ~1.5 on a [-1, 1] space) and the policy regressed from
-    # working (pos_error ~1.1-1.9 m, ~250-550k) to flailing (pos_error 4-6 m,
-    # ~1M). Decaying ent_coef gives strong exploration early and lets the
-    # policy commit late. Decays to a small non-zero floor, not 0, to retain a
-    # little exploration pressure throughout.
+    # policy the action sampling std IS sqrt(aleatoric), so the entropy bonus
+    # is a direct pressure on the action std. A constant value cannot allow
+    # the policy to both explore early and commit late, so we decay to a small
+    # non-zero floor.
     ent_coef_initial = config.get("ent_coef", 0.01)
     ent_coef_final = config.get("ent_coef_final", 0.0005)
     ent_coef_schedule = linear_schedule(ent_coef_initial, ent_coef_final)
@@ -558,20 +544,10 @@ def train(
         # Attach the environment to the model for continued training
         model.set_env(env)
 
-        # Re-attach the decay schedules from the CURRENT config. EvidentialPPO
-        # resolves ent_coef by calling self.ent_coef(progress_remaining) each
-        # train() step (see sb3_integration.EvidentialPPO.train), but ent_coef
-        # is NOT a first-class SB3 schedule the way learning_rate is, so a
-        # PPO.load() does not restore the original linear_schedule closure - the
-        # resumed model keeps a stale ent_coef that never reaches the decay
-        # floor. Run 20052026-1339 confirmed the failure: ent_coef froze at
-        # ~0.0015 (vs the 0.0002 floor), aleatoric stayed inflated at ~0.4
-        # (vs ~0.07 in the converged fresh run), the action std never collapsed,
-        # and the policy regressed to ~85% timeout (hovering near the bay,
-        # unable to hold a precise stop). Re-binding both schedules makes resume
-        # config-driven; SB3's _current_progress_remaining (recomputed over the
-        # extended total_timesteps window) then continues the decay from where
-        # the original run left off rather than restarting it.
+        # Re-bind the decay schedules from the current config. ent_coef is
+        # not a first-class SB3 schedule, so PPO.load() does not restore the
+        # original closure; without this re-bind a resumed run keeps a stale
+        # ent_coef that never reaches the decay floor.
         model.lr_schedule = lr_schedule
         model.ent_coef = ent_coef_schedule
     else:
@@ -585,8 +561,8 @@ def train(
             use_uncertainty_conditioning = evidential_config.get(
                 "use_uncertainty_conditioning", False
             )
-            # Forward conditioning flag into policy_kwargs so the policy can wire the
-            # dual-encoder actor (UncertaintyConditionedActor) when requested.
+            # Forwarded into policy_kwargs so the policy can wire the
+            # dual-encoder actor when requested.
             ppo_kwargs["policy_kwargs"][
                 "use_uncertainty_conditioning"
             ] = use_uncertainty_conditioning

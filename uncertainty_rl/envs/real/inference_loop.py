@@ -93,9 +93,7 @@ class RealWorldInferenceLoop:
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
 
-        # Pre-allocated world pose buffer [wx, wy, wyaw, vyaw]
-        # 5-element buffer: [x, y, yaw, vyaw, vx_body]. vx is body-frame
-        # longitudinal velocity from the EKF.
+        # Pre-allocated world pose buffer [x, y, yaw, vyaw, vx_body].
         self._world_pose_buffer = np.zeros(5, dtype=np.float32)
         # True once the buffer contains valid data (set after first successful EKF read).
         self._world_pose_valid: bool = False
@@ -258,8 +256,7 @@ class RealWorldInferenceLoop:
         wy = sin_r * ox + cos_r * oy + ty
         wyaw = oyaw + r
         vyaw = float(raw_ekf_pose[3])
-        # vx is body-frame already - frame-invariant w.r.t. the rigid odom-to-
-        # world transform applied to position and yaw.
+        # vx is body-frame, so invariant under the rigid odom-to-world transform.
         vx_body = float(raw_ekf_pose[4]) if len(raw_ekf_pose) > 4 else 0.0
         self._world_pose_buffer[0] = wx
         self._world_pose_buffer[1] = wy
@@ -355,9 +352,8 @@ class RealWorldInferenceLoop:
         world_x = float(self._world_pose_buffer[0])
         world_y = float(self._world_pose_buffer[1])
         world_yaw = float(self._world_pose_buffer[2])
-        # Buffer index 4 = signed body-frame longitudinal velocity (m/s) from
-        # the EKF. SUCCESS_THRESHOLD_VELOCITY is in m/s (matches the sim env's
-        # math.hypot(vx, vy) check against the same threshold).
+        # Body-frame longitudinal velocity (m/s); compared to the same
+        # SUCCESS_THRESHOLD_VELOCITY the sim env checks.
         vx_body = float(self._world_pose_buffer[4])
 
         pos_error = math.hypot(world_x - self._target_x, world_y - self._target_y)

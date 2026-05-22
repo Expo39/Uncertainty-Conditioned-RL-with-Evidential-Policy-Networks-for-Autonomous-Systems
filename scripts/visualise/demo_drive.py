@@ -217,22 +217,17 @@ def main() -> None:
 
     episode = 0
 
-    # Per-step trace logging. One timestamped folder per demo run, one CSV per
-    # episode inside it. Timestamp uses DD-MM-YYYY-HHMMSS (European format).
-    # Written under outputs/ because that is the directory bind-mounted rw into
-    # the demo container - demo_drive.py runs inside the container, so a path
-    # outside the mounted volume would be lost when the --rm container exits.
+    # Per-step trace logging. One timestamped folder per demo run, one CSV
+    # per episode. Written under outputs/ (the rw-mounted volume) so the
+    # traces survive the --rm container exit.
     trace_dir: Optional[Path] = None
     if args.trace:
         run_stamp = datetime.now().strftime("%d-%m-%Y-%H%M%S")
         trace_dir = Path("outputs") / "demo_traces" / run_stamp
         trace_dir.mkdir(parents=True, exist_ok=True)
         print(f"Trace logging enabled: {trace_dir}/episode_<N>.csv")
-        # Record provenance alongside the traces: which checkpoint produced
-        # them, plus the seed and training-run start time parsed from the
-        # checkpoint directory name (format
-        # <baseline>_seed<N>_<DDMMYYYY-HHMM>). Without this the CSVs are
-        # anonymous - run 20052026 confused three different policies' traces.
+        # Provenance so the CSVs are not anonymous (checkpoint, seed, start
+        # time parsed from the checkpoint directory name).
         _write_run_info(trace_dir, args.checkpoint, run_stamp)
 
     print("Driving. Close the visualiser or Ctrl+C to stop.")

@@ -170,11 +170,9 @@ class CARLAParkingEnv(gym.Env):
                before the episode terminates as a success. Prevents a fast
                drive-through that momentarily satisfies the thresholds from
                being counted as a park. Default 5 steps = 0.25 s at 20 Hz.
-        @param success_approach_radius: Radius (metres) around the bay within
-               which the bounded approach_term reward peak is active. The term
-               pays for being both close and slow, decaying to zero at this
-               radius. Installs a reward maximum at the bay so braking becomes
-               optimal. Default 2.0 m.
+        @param success_approach_radius: Radius (metres) within which the
+               bounded approach reward peak is active. Decays to zero at this
+               radius. Default 2.0 m.
         """
         super().__init__()
 
@@ -311,9 +309,8 @@ class CARLAParkingEnv(gym.Env):
         self._obstacle_features_buffer: np.ndarray = np.zeros(
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
-        # 5-element buffer: [x, y, yaw, vyaw, vx_body]. vx_body is signed
-        # body-frame longitudinal velocity (m/s) from the EKF; the CARLA-only
-        # fallback path fills it from get_velocity() rotated into body frame.
+        # World-frame pose buffer: [x, y, yaw, vyaw, vx_body]. vx_body is the
+        # signed body-frame longitudinal velocity (m/s).
         self._world_pose_buf: np.ndarray = np.empty(5, dtype=np.float32)
 
         # Identity odom-to-world transform (tx, ty, cos_r, sin_r, r).
@@ -356,8 +353,7 @@ class CARLAParkingEnv(gym.Env):
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied (3-dim: [steer, throttle, brake]). throttle and
-        # brake are separate non-negative axes. No reverse gear.
+        # Last action applied: [steer, throttle, brake].
         self._last_action: np.ndarray = np.zeros(ACTION_DIM, dtype=np.float32)
 
         # Visualisation state writer
@@ -413,12 +409,8 @@ class CARLAParkingEnv(gym.Env):
         # steer    : [-1, 1]  left to right
         # throttle : [ 0, 1]  forward throttle (no reverse gear)
         # brake    : [ 0, 1]  friction brake
-        # Throttle and brake are separate non-negative axes (was a single
-        # bipolar `drive` axis). The bipolar axis put the precise endgame
-        # control - brake gently to a stop and hold still - on the
-        # throttle/brake discontinuity at zero, where action-sampling noise
-        # flips a gentle brake into a throttle. Separate axes make "hold a
-        # stop" (throttle ~ 0, brake > 0) a stable region.
+        # Separate non-negative throttle / brake axes make a held stop
+        # (throttle = 0, brake > 0) a stable region of the action space.
         self.action_space = spaces.Box(
             low=np.array([-1.0, 0.0, 0.0]),
             high=np.array([1.0, 1.0, 1.0]),
@@ -460,8 +452,7 @@ class CARLAParkingEnv(gym.Env):
         if self._include_covariance:
             _inv = self._inv_uncertainty_std_max
             _buf = self._obs_buffer
-            # std_x and std_y now live at obs[2] and obs[3] (was obs[1], obs[2])
-            # after VEHICLE_STATE_DIM grew from 1 (vyaw) to 2 (speed, vyaw).
+            # std_x and std_y sit immediately after the vehicle-state block.
             _stdx_idx = VEHICLE_STATE_DIM
             _stdy_idx = VEHICLE_STATE_DIM + 1
 
@@ -586,7 +577,7 @@ class CARLAParkingEnv(gym.Env):
             self._current_gnss_tier = None
             return
 
-        # Always use that tier instead of sampling from the weight distribution.
+        # When a fixed tier is configured, bypass the weighted sampler.
         if self._fixed_gnss_tier is not None:
             tier = next(
                 (
@@ -881,15 +872,10 @@ class CARLAParkingEnv(gym.Env):
         if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
-            # Terminal collision penalty. Lowered from -50/-20 to -25/-10: at
-            # -50 the agent became so collision-averse it refused to commit to
-            # the final approach near the perimeter and learned to circle
-            # instead (run 16052026-1553). -25 still clearly outweighs a
-            # successful episode's shaping, keeping the ordering
-            # success(+50) > timeout(~0) > collision(-25), but is no longer so
-            # punishing that not-approaching beats approaching. Ego-fault
-            # (static cone, or a dynamic actor hit while moving) is penalised
-            # harder than a non-fault contact.
+            # Terminal collision penalty. Ego-fault is penalised harder than a
+            # non-fault contact. Magnitudes preserve the ordering
+            # success(+50) > timeout(~0) > collision so a successful park
+            # remains the best outcome.
             reward = -25.0 if collision_ego_fault else -10.0
             return reward, True, False, diag
 
@@ -905,150 +891,39 @@ class CARLAParkingEnv(gym.Env):
 
         if self._success_counter >= self._success_dwell_steps:
             self._prev_distance = position_error
-            # Terminal success bonus. Symmetric in magnitude with the ego-fault
-            # collision penalty (-50). Must dominate the per-step shaping: with
-            # the unbounded final_approach_bonus removed, the per-step potential
-            # shaping telescopes to zero over the trajectory, so a one-off +50
-            # for success is the largest single reward available - reaching the
-            # bay is unambiguously the best outcome.
             return 50.0, True, True, diag
 
-        # Per-step reward: three additive components (Ng et al. 1999 shaping).
+        # Per-step reward: potential-based shaping plus a
+        # bounded approach peak co-located with the bay.
         #
-        # (1) distance_term: phi(s') - phi(s) with potential phi(r) = -r, the
-        #     metres of distance closed this step. The PROGRESS signal:
-        #     positive approaching, zero stationary, negative receding. As a
-        #     true potential difference it telescopes to zero over any closed
-        #     path, so it cannot be farmed by hovering.
+        #   distance_term     = phi(s') - phi(s) with phi(r) = -r. Telescopes
+        #                       to zero over closed paths, so it gives a
+        #                       progress gradient that cannot be farmed.
+        #   position_term     = -0.005 * r. Continuous proximity penalty
+        #                       restoring a pull toward the bay where the
+        #                       potential difference alone gives no net signal.
+        #   orientation_term  = -0.2 * yaw_err. Penalty on alignment error to
+        #                       force an arcing approach (no reverse gear).
+        #   approach_term     = bounded peak inside success_approach_radius
+        #                       plus a small directional gradient in an outer
+        #                       annulus. Maximised when close AND slow AND
+        #                       aligned, so the success state is the unique
+        #                       per-step optimum.
         #
-        # (2) position_term: small linear penalty proportional to absolute
-        #     distance from the bay centre. The PROXIMITY signal: far is bad,
-        #     centre is ~0. distance_term alone telescopes to zero and gives no
-        #     net reward for *being* close, so on its own it left a flat
-        #     per-step landscape and the agent wandered with no gradient (run
-        #     16052026-1515: mean_progress ~ 0, pos_error ~ 4 m). position_term
-        #     restores a continuous pull toward the bay. It is a bounded linear
-        #     PENALTY (negative everywhere except r=0) so, unlike the removed
-        #     quadratic final_approach_bonus, it cannot be farmed - it is only
-        #     minimised by reaching the centre and finishing.
-        #     coefficient 0.005 (see the lowering rationale at the term itself
-        #     below): weak enough that timing out near the bay no longer costs
-        #     more than crashing.
-        #
-        # (3) orientation_term: penalty proportional to absolute yaw error
-        #     from the bay's target yaw. Drives the agent to arc toward the
-        #     bay alignment rather than drive straight at it (the car cannot
-        #     reverse - it must approach with the bay's yaw or it cannot
-        #     enter). coefficient 0.2 (raised from 0.02): -0.31/step at 90 deg.
-        #     At 0.02 it was ~6x weaker than position_term, so the agent
-        #     solved (x, y) and ignored heading - it reached the bay area but
-        #     never rotated into the bay (runs up to 16052026-1553). At 0.2 it
-        #     is comparable to position_term, forcing an arcing approach that
-        #     rotates into the bay yaw while closing distance.
-        #
-        # (4) uncertainty_scale gate: per-step SHAPING (terms 1-3) is multiplied
-        #     by (1 - uncertainty_scale). Under high EKF covariance the per-step
-        #     gradient shrinks to zero, so the policy is not pushed around by
-        #     noisy localisation estimates. Terminal events (success, collision)
-        #     and the approach_term (5) bypass this gate.
-        #
-        # (5) approach_term: a bounded reward PEAK co-located with the bay.
-        #     Terms 1-3 are all monotonic in progress - they have no maximum,
-        #     so "stop at the bay" is never the optimal action and the agent
-        #     learns to drive straight through and crash into the perimeter
-        #     (runs up to 17052026-0824: pos_error flatlined at ~3.3 m, 100%
-        #     collision, 0% success). approach_term installs the missing
-        #     maximum: proximity (0 at the radius, 1 at the bay centre) times
-        #     slowness (0 at top speed, 1 stopped) is maximised ONLY when the
-        #     car is both at the bay AND stopped - exactly the success state.
-        #     Overshooting the bay now sacrifices reward, which makes braking
-        #     optimal without a separate speed penalty. Bounded at 0.3/step and
-        #     zero beyond success_approach_radius so it cannot be farmed by
-        #     circling (the failure mode of the removed quadratic
-        #     final_approach_bonus, run 16052026-1332). Un-gated by
-        #     uncertainty_scale: "near the bay and slow" is a geometric fact,
-        #     not a noisy progress estimate, so it belongs with the terminals.
+        # All terms except approach_term and terminal events are scaled by
+        # (1 - uncertainty_scale) so the gradient shrinks under high EKF
+        # covariance and the policy is not pushed around by noisy estimates.
         progress = self._prev_distance - position_error
         self._prev_distance = position_error
 
         distance_term = progress
         orientation_term = -0.2 * orientation_error
-        # coefficient 0.005 (lowered from 0.05). At 0.05 the per-step proximity
-        # penalty made stopping short of the bay and timing out (~337 idle
-        # policy steps x -0.165/step ~ -60) cost FAR more than an immediate
-        # ego-fault crash (-25), so the optimal policy was to drive straight
-        # through the bay and crash quickly to end the episode - exactly the
-        # observed failure (runs up to 17052026-0852: pos_error flatlined
-        # ~3.3 m, 100% collision, 0% success). The car CAN brake and turn in
-        # (confirmed by manual dryrun) - it was rewarded for not doing so.
-        # At 0.005 a stop-and-timeout episode costs ~-12, which now beats the
-        # -25 crash, so braking near the bay becomes the optimal action. The
-        # term still provides a continuous proximity gradient (its original
-        # purpose - it was added to stop the agent wandering in a flat
-        # landscape, run 16052026-1515), just an order of magnitude weaker so
-        # it no longer poisons the brake-vs-crash terminal trade-off.
         position_term = -0.005 * position_error
 
-        # @note An attempt to strengthen this term (run 17052026-1430:
-        # coefficient 0.3 -> 0.6, proximity squared, radius 2 m -> 3 m) made
-        # training WORSE - success fell from ~0.07 to ~0.01. The stronger
-        # slowness-weighted term became a farmable loiter subsidy: crawling
-        # slowly anywhere within the radius banked a safe steady positive
-        # reward until timeout, so the policy stopped pushing into the success
-        # window. Reverted to the run-17052026-1246 form (coefficient 0.3,
-        # linear proximity, radius 2 m). Do not strengthen a
-        # slowness-weighted shaping term to fix a final-precision gap - it
-        # rewards the hovering that IS the problem.
-        #
-        # @note Slowness reference speed lowered from max_ego_speed_ms (8.0 m/s)
-        # to 5 * SUCCESS_THRESHOLD_VELOCITY (1.5 m/s) on 21-05-2026 after run
-        # 20052026-1125 demo showed the policy reaching the bay (min pos_error
-        # 0.03 m, ep 6) but coasting through at 0.5-0.8 m/s with brake at 0 in
-        # all 16 episodes (max brake 0.06, mean 0.00). With the 8.0 m/s
-        # reference, slowness at 0.7 m/s was 0.91 vs 1.0 stopped - a 9 percent
-        # gap that gave the policy no reason to learn the brake axis. Keyed to
-        # 5 * SUCCESS_THRESHOLD_VELOCITY (1.5 m/s) the gap becomes: stopped
-        # -> 1.0, success-threshold speed (0.3 m/s) -> 0.8, observed coasting
-        # speed (0.75 m/s) -> 0.5, 1.5 m/s -> 0.0. The 5x multiplier keeps the
-        # term positive across the speed band the policy actually operates in
-        # near the bay (0-1.5 m/s) while making braking distinctly more
-        # reward-positive than coasting. The loiter-subsidy failure mode of
-        # run 17052026-1430 came from a stronger COEFFICIENT plus squared
-        # proximity plus a wider radius - this change touches none of those;
-        # it sharpens the slowness curve so the bay itself remains the unique
-        # reward peak.
-        #
-        # @note Alignment gate added 22-05-2026 after run 21052026-2200 demo
-        # showed the policy freezing 12-15 m short of the bay in 15 of 16
-        # episodes (brake + throttle co-activated; pos_error never closed). The
-        # sharpened slowness curve made "slow" a powerful local reward, and the
-        # value function bootstrapped that backward in space - low-speed states
-        # everywhere became valuable because they correlated with success-window
-        # proximity, even though `proximity` is zero outside the 2 m radius.
-        # The alignment factor (1 at zero yaw error, 0 at >= SUCCESS_THRESHOLD_
-        # ORIENTATION) only collects the slowness bonus when the car is BOTH
-        # near the bay AND pointed into it. A random freeze far from the bay
-        # has random heading, so alignment kills the bonus and the value-
-        # function backward-bootstrap loses its source. Stopping cleanly in the
-        # bay (small position_error, small orientation_error, low speed) still
-        # collects the full bonus - the success state remains the unique peak.
-        # @note Outer-zone pull added 22-05-2026 after run 21052026-2342 demo
-        # showed the deterministic mean policy stopping at 7.5-10 m in all 16
-        # episodes - just outside the 5 m approach_radius. During training, 23
-        # rollout updates achieved success (stochastic action noise teleported
-        # the car past the boundary), but PPO's policy gradient could not push
-        # the mean past it because the gradient at the boundary is a cliff
-        # (zero outside, +0.3/step inside). Replacing the cliff with a gentle
-        # ramp in a 5-10 m annulus gives the mean a continuous slope to follow.
-        # The outer-zone term has NO slowness or alignment factors - it is a
-        # directional gradient (reward grows toward the boundary), not a stop-
-        # here bonus. The maximum it can pay if the policy farmed it by sitting
-        # at the boundary is 1750 * 0.02 = +35 reward per episode, less than
-        # success (+50) and less than the inside-radius bonus the policy gets
-        # from actually entering the bay. Real-lot generalisation: the gradient
-        # is anchored on the TARGET bay's position_error - in a multi-bay
-        # layout the outer-zone pull still points at the target, with no
-        # special pull on neighbour bays.
+        # approach_term: bounded reward peak at the bay. Inside the radius
+        # the payout requires being close AND slow AND aligned, so the only
+        # maximiser is "stopped in the bay". Outside the radius a smaller
+        # directional gradient pulls the policy mean toward the boundary.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         approach_term = 0.0
         if position_error < self._success_approach_radius:
@@ -1066,36 +941,13 @@ class CARLAParkingEnv(gym.Env):
             )
             approach_term = 0.02 * outer_proximity
 
-        # @note Co-activation penalty added 22-05-2026 after run 21052026-2200
-        # demo showed the policy locking throttle ~0.55 and brake ~0.77
-        # simultaneously for hundreds of consecutive steps (15 of 16 episodes,
-        # ep 1 never moved at all). Real cars cannot apply both at once
-        # (mechanical interlock + ECU veto); CARLA's VehicleControl allows it,
-        # so the reward needs to encode the physical constraint. The policy
-        # used the combination to "stay still" without committing to either
-        # action - a stable region of the action space that should not exist.
-        # min(throttle, brake) is zero when one axis is at zero and grows
-        # linearly when both are pressed. Coefficient 0.05: 500 steps of full
-        # co-activation costs ~12.5 reward (more than a per-step shaping
-        # episode is worth, less than collision -25 or success +50). Clamps
-        # match step() (throttle and brake clipped to [0, 1]).
+        # Encode physical actuator constraints that CARLA does not enforce:
+        # real cars cannot apply throttle and brake simultaneously, and
+        # steering a stationary vehicle is unwanted actuation in deployment.
         throttle_applied = float(np.clip(self._last_action[1], 0.0, 1.0))
         brake_applied = float(np.clip(self._last_action[2], 0.0, 1.0))
         co_activation_penalty = -0.05 * min(throttle_applied, brake_applied)
 
-        # @note Idle-steer penalty added 22-05-2026 after run 21052026-2342
-        # demo showed the policy steering 0.4-0.95 for ~1500 of 1750 steps in
-        # every episode AFTER coming to a stop. CARLA ignores wheel angle on a
-        # stationary vehicle, but in real-world deployment this is unwanted
-        # actuation (rack wear, alarming behaviour to observers). The reward
-        # function had no term penalising steering when not moving, so the
-        # policy was free to output whatever it wanted on the steer axis. The
-        # stationary scale ramps from 1 at zero speed to 0 at the success-
-        # threshold velocity (0.3 m/s) and stays at 0 above that, so this
-        # penalty is invisible during normal driving and only kicks in below
-        # the success-window speed - exactly where the wiggle is happening.
-        # Coefficient -0.02: 1500 idle steps at full deflection costs ~30
-        # reward, comparable to the collision penalty.
         steer_applied = float(np.clip(self._last_action[0], -1.0, 1.0))
         stationary_scale = max(0.0, 1.0 - speed / SUCCESS_THRESHOLD_VELOCITY)
         idle_steer_penalty = -0.02 * abs(steer_applied) * stationary_scale
@@ -1137,8 +989,6 @@ class CARLAParkingEnv(gym.Env):
         world_pose: Optional[np.ndarray] = None
         if raw_ekf_pose is not None:
             ekf_odom_x = float(raw_ekf_pose[0])
-            # raw_ekf_pose[1] is already in CARLA convention (extractor negates
-            # ROS y to CARLA y on write). No further negation needed.
             ekf_odom_y = float(raw_ekf_pose[1])
             ekf_odom_yaw = float(raw_ekf_pose[2])
             tx, ty, cos_r, sin_r, r = self._ekf_odom_offset
@@ -1146,8 +996,7 @@ class CARLAParkingEnv(gym.Env):
             self._world_pose_buf[1] = sin_r * ekf_odom_x + cos_r * ekf_odom_y + ty
             self._world_pose_buf[2] = ekf_odom_yaw + r
             self._world_pose_buf[3] = raw_ekf_pose[3]
-            # vx is body-frame already (EKF publishes twist in base_link);
-            # frame-invariant w.r.t. the odom->world rigid transform.
+            # vx is body-frame; invariant under the odom-to-world rigid transform.
             self._world_pose_buf[4] = raw_ekf_pose[4]
             world_pose = self._world_pose_buf
         else:
@@ -1233,19 +1082,13 @@ class CARLAParkingEnv(gym.Env):
         y = transform.location.y
         yaw = transform.rotation.yaw
 
-        # Ground-truth yaw rate in ROS REP-103 convention (left turn =
-        # positive, right turn = negative). This matches obs[1]'s convention
-        # (the extractor leaves the EKF vyaw un-negated) and the LiDAR
-        # bearing sign convention (left obstacles have positive bearings).
-        # CARLA's get_angular_velocity().z is in deg/s in CARLA frame where
-        # left = negative, so we negate to bring it into the ROS convention.
+        # Ground-truth yaw rate in REP-103 convention (left turn positive),
+        # matching the EKF vyaw at obs[1] and the LiDAR bearing convention.
         gt_av_z_deg = self.vehicle.get_angular_velocity().z
         gt_vyaw = -math.radians(gt_av_z_deg)
 
-        # EKF speed and vyaw are the first two slots of the obs buffer, which
-        # has already been populated this step by _get_state() (called by the
-        # outer step()/reset() before _write_vis_state). Reading from the buffer
-        # avoids a second covariance-subscriber file read.
+        # Reuse the obs buffer populated earlier this step by _get_state()
+        # rather than re-reading the EKF file.
         ekf_speed = float(self._obs_buffer[0])
         ekf_vyaw = float(self._obs_buffer[1])
 
@@ -1305,12 +1148,8 @@ class CARLAParkingEnv(gym.Env):
                 "ekf_vyaw": ekf_vyaw,
                 "gnss_tier": gnss_tier_name,
             },
-            # Applied (clamped) action - what the vehicle actually receives,
-            # not the policy's raw pre-clip output. steer is clipped to
-            # [-1, 1]; throttle and brake to [0, 1] (same clamps as step()).
-            # The visualiser HUD shows these, so it reflects vehicle state -
-            # showing the raw output would imply the car is braking when a
-            # negative raw brake is clamped to 0.
+            # Clamped action sent to the vehicle (not the policy's pre-clip
+            # output), so the HUD reflects what actually drove the car.
             "action": {
                 "steer": float(np.clip(self._last_action[0], -1.0, 1.0)),
                 "throttle": float(np.clip(self._last_action[1], 0.0, 1.0)),
@@ -1606,9 +1445,8 @@ class CARLAParkingEnv(gym.Env):
         # inherit a stale cached value from the previous episode's final step.
         self._vis_check_counter = 30
 
-        # Every _vis_rotation_interval episodes, close the vis file and reopen
-        # in write mode to truncate it. The visualiser detects the shrink via
-        # the offset-vs-size guard and resets its read pointer to zero.
+        # Reopen the vis history file in write mode periodically to truncate
+        # it. The visualiser detects the shrink and resets its read offset.
         self._vis_episodes_since_rotation += 1
         if (
             self._vis_file is not None
@@ -1760,20 +1598,14 @@ class CARLAParkingEnv(gym.Env):
             self._npc_controller.set_vehicle_cache(self._all_vehicle_actors)
 
         if self._include_covariance:
-            # First wait: blocks until the extractor has written any
-            # post-invalidation state (ensures the ROS 2 bridge is alive).
+            # Wait once to confirm the extractor is writing, tick the world
+            # long enough for the EKF to consume the /set_pose published from
+            # initial_pose.json, then invalidate and wait again so only
+            # post-reset EKF state is accepted.
             self._wait_for_covariance()
-            # Give the extractor's 10 Hz file-watcher time to detect
-            # initial_pose.json (up to 100 ms) and the EKF time to process
-            # the resulting /set_pose before we sample its state.
-            # 10 ticks at 20 Hz = 500 ms - comfortably covers the poll
-            # interval plus one EKF prediction cycle.
             if self.world is not None:
                 for _ in range(10):
                     self.world.tick(10.0)
-            # Second invalidate + wait: the seq barrier is now set after
-            # /set_pose has been consumed, so we only accept EKF state that
-            # was written after the reset completed.
             if self._cov_subscriber is not None:
                 self._cov_subscriber.invalidate()
             self._wait_for_covariance()
@@ -1865,10 +1697,7 @@ class CARLAParkingEnv(gym.Env):
             control = carla.VehicleControl()
             control.steer = steer
             control.reverse = False
-            # Throttle and brake are independent axes. Cut throttle when the
-            # speed limit is exceeded; brake is applied as commanded. The two
-            # may be non-zero at once (CARLA resolves throttle-vs-brake) but
-            # the policy is free to learn pure-brake / pure-throttle.
+            # Cut throttle above the speed limit; brake is forwarded as-is.
             control.throttle = (
                 0.0 if current_speed >= self._max_ego_speed_ms else throttle
             )

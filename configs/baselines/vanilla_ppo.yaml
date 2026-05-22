@@ -1,5 +1,5 @@
 # Baseline: Vanilla PPO
-# 9-dim obs: EKF yaw rate (1) + relative target pose (3) + obstacle clearance (5).
+# Observation: vehicle state + relative target pose + obstacle clearance.
 # No EKF covariance, no evidential actor. Pure PPO baseline.
 
 baseline_name: "vanilla_ppo"
