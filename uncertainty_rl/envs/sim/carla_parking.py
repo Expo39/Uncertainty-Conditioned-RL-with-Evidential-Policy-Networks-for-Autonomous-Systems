@@ -1032,6 +1032,23 @@ class CARLAParkingEnv(gym.Env):
         # function backward-bootstrap loses its source. Stopping cleanly in the
         # bay (small position_error, small orientation_error, low speed) still
         # collects the full bonus - the success state remains the unique peak.
+        # @note Outer-zone pull added 22-05-2026 after run 21052026-2342 demo
+        # showed the deterministic mean policy stopping at 7.5-10 m in all 16
+        # episodes - just outside the 5 m approach_radius. During training, 23
+        # rollout updates achieved success (stochastic action noise teleported
+        # the car past the boundary), but PPO's policy gradient could not push
+        # the mean past it because the gradient at the boundary is a cliff
+        # (zero outside, +0.3/step inside). Replacing the cliff with a gentle
+        # ramp in a 5-10 m annulus gives the mean a continuous slope to follow.
+        # The outer-zone term has NO slowness or alignment factors - it is a
+        # directional gradient (reward grows toward the boundary), not a stop-
+        # here bonus. The maximum it can pay if the policy farmed it by sitting
+        # at the boundary is 1750 * 0.02 = +35 reward per episode, less than
+        # success (+50) and less than the inside-radius bonus the policy gets
+        # from actually entering the bay. Real-lot generalisation: the gradient
+        # is anchored on the TARGET bay's position_error - in a multi-bay
+        # layout the outer-zone pull still points at the target, with no
+        # special pull on neighbour bays.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         approach_term = 0.0
         if position_error < self._success_approach_radius:
@@ -1041,6 +1058,13 @@ class CARLAParkingEnv(gym.Env):
                 0.0, 1.0 - orientation_error / SUCCESS_THRESHOLD_ORIENTATION
             )
             approach_term = 0.3 * proximity * slowness * alignment
+        elif position_error < 2.0 * self._success_approach_radius:
+            outer_proximity = (
+                1.0
+                - (position_error - self._success_approach_radius)
+                * self._inv_approach_radius
+            )
+            approach_term = 0.02 * outer_proximity
 
         # @note Co-activation penalty added 22-05-2026 after run 21052026-2200
         # demo showed the policy locking throttle ~0.55 and brake ~0.77
@@ -1059,10 +1083,27 @@ class CARLAParkingEnv(gym.Env):
         brake_applied = float(np.clip(self._last_action[2], 0.0, 1.0))
         co_activation_penalty = -0.05 * min(throttle_applied, brake_applied)
 
+        # @note Idle-steer penalty added 22-05-2026 after run 21052026-2342
+        # demo showed the policy steering 0.4-0.95 for ~1500 of 1750 steps in
+        # every episode AFTER coming to a stop. CARLA ignores wheel angle on a
+        # stationary vehicle, but in real-world deployment this is unwanted
+        # actuation (rack wear, alarming behaviour to observers). The reward
+        # function had no term penalising steering when not moving, so the
+        # policy was free to output whatever it wanted on the steer axis. The
+        # stationary scale ramps from 1 at zero speed to 0 at the success-
+        # threshold velocity (0.3 m/s) and stays at 0 above that, so this
+        # penalty is invisible during normal driving and only kicks in below
+        # the success-window speed - exactly where the wiggle is happening.
+        # Coefficient -0.02: 1500 idle steps at full deflection costs ~30
+        # reward, comparable to the collision penalty.
+        steer_applied = float(np.clip(self._last_action[0], -1.0, 1.0))
+        stationary_scale = max(0.0, 1.0 - speed / SUCCESS_THRESHOLD_VELOCITY)
+        idle_steer_penalty = -0.02 * abs(steer_applied) * stationary_scale
+
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + orientation_term + position_term) * (
             1.0 - uncertainty_scale
-        ) + approach_term + co_activation_penalty
+        ) + approach_term + co_activation_penalty + idle_steer_penalty
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
@@ -1070,6 +1111,7 @@ class CARLAParkingEnv(gym.Env):
         diag["position_penalty"] = float(position_term)
         diag["approach_reward"] = float(approach_term)
         diag["co_activation_penalty"] = float(co_activation_penalty)
+        diag["idle_steer_penalty"] = float(idle_steer_penalty)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
