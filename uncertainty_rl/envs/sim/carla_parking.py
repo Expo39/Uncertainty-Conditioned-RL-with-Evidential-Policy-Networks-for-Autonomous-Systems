@@ -355,10 +355,8 @@ class CARLAParkingEnv(gym.Env):
         )
         # Last action applied: [steer, throttle, brake].
         self._last_action: np.ndarray = np.zeros(ACTION_DIM, dtype=np.float32)
-        # Previous policy decision components, for the actuator-rate penalties.
+        # Steer of the previous policy decision, for the steer-smoothness penalty.
         self._prev_steer: float = 0.0
-        self._prev_throttle: float = 0.0
-        self._prev_brake: float = 0.0
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -941,14 +939,9 @@ class CARLAParkingEnv(gym.Env):
         stationary_scale = max(0.0, 1.0 - speed / SUCCESS_THRESHOLD_VELOCITY)
         idle_steer_penalty = -0.02 * abs(steer_applied) * stationary_scale
 
-        # Rate-limit penalties on all three actuators: real cars cannot snap any
-        # pedal or the wheel in one policy tick. Penalises rate of change, not
-        # absolute value, so sustained hard inputs remain free.
-        steer_smoothness_penalty = -0.03 * (steer_applied - self._prev_steer) ** 2
-        pedal_smoothness_penalty = -0.03 * (
-            (throttle_applied - self._prev_throttle) ** 2
-            + (brake_applied - self._prev_brake) ** 2
-        )
+        # Penalises the rate of steer change, not absolute steer: encodes a
+        # physical rack rate limit without constraining sustained hard turns.
+        steer_smoothness_penalty = -0.01 * (steer_applied - self._prev_steer) ** 2
 
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
@@ -957,7 +950,6 @@ class CARLAParkingEnv(gym.Env):
             + co_activation_penalty
             + idle_steer_penalty
             + steer_smoothness_penalty
-            + pedal_smoothness_penalty
         )
 
         diag["progress_reward"] = float(progress)
@@ -968,7 +960,6 @@ class CARLAParkingEnv(gym.Env):
         diag["co_activation_penalty"] = float(co_activation_penalty)
         diag["idle_steer_penalty"] = float(idle_steer_penalty)
         diag["steer_smoothness_penalty"] = float(steer_smoothness_penalty)
-        diag["pedal_smoothness_penalty"] = float(pedal_smoothness_penalty)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -1623,8 +1614,6 @@ class CARLAParkingEnv(gym.Env):
         self._success_counter = 0
         self._last_action[:] = 0.0
         self._prev_steer = 0.0
-        self._prev_throttle = 0.0
-        self._prev_brake = 0.0
         if self.vehicle is not None:
             t = self.vehicle.get_transform()
             self._prev_distance = math.hypot(
@@ -1685,8 +1674,6 @@ class CARLAParkingEnv(gym.Env):
         # On a new action (or first call), reset the repeat counter
         if self._action_repeat_counter == 0:
             self._prev_steer = float(self._last_action[0])
-            self._prev_throttle = float(self._last_action[1])
-            self._prev_brake = float(self._last_action[2])
             self._last_action[:] = action
 
         # Execute one sim-step
