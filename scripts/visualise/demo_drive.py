@@ -94,8 +94,8 @@ _TRACE_COLUMNS = [
     "brake_raw",
     "reward",
     "progress_reward",
-    "position_penalty",
-    "orientation_penalty",
+    "approach_reward",
+    "idle_steer_penalty",
     "uncertainty_scale",
 ]
 
@@ -300,8 +300,8 @@ def main() -> None:
                             f"{b_raw:.4f}",
                             f"{float(rewards[0]):.4f}",
                             f"{info0.get('progress_reward', 0.0):.4f}",
-                            f"{info0.get('position_penalty', 0.0):.4f}",
-                            f"{info0.get('orientation_penalty', 0.0):.4f}",
+                            f"{info0.get('approach_reward', 0.0):.4f}",
+                            f"{info0.get('idle_steer_penalty', 0.0):.4f}",
                             f"{info0.get('uncertainty_scale', 0.0):.4f}",
                         ]
                     )

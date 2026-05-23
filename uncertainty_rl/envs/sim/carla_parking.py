@@ -355,6 +355,10 @@ class CARLAParkingEnv(gym.Env):
         )
         # Last action applied: [steer, throttle, brake].
         self._last_action: np.ndarray = np.zeros(ACTION_DIM, dtype=np.float32)
+        # Previous policy decision components, for the actuator-rate penalties.
+        self._prev_steer: float = 0.0
+        self._prev_throttle: float = 0.0
+        self._prev_brake: float = 0.0
 
         # Visualisation state writer
         self._vis_history_path: Path = (
@@ -893,54 +897,23 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return 50.0, True, True, diag
 
-        # Per-step reward: potential-based shaping plus a
-        # bounded approach peak co-located with the bay.
-        #
-        #   distance_term     = phi(s') - phi(s) with phi(r) = -r. Telescopes
-        #                       to zero over closed paths, so it gives a
-        #                       progress gradient that cannot be farmed.
-        #   position_term     = -0.005 * r. Continuous proximity penalty
-        #                       restoring a pull toward the bay where the
-        #                       potential difference alone gives no net signal.
-        #   orientation_term  = -0.2 * yaw_err. Penalty on alignment error to
-        #                       force an arcing approach (no reverse gear).
-        #   approach_term     = bounded peak inside success_approach_radius
-        #                       plus a small directional gradient in an outer
-        #                       annulus. Maximised when close AND slow AND
-        #                       aligned, so the success state is the unique
-        #                       per-step optimum.
-        #
-        # All terms except approach_term and terminal events are scaled by
-        # (1 - uncertainty_scale) so the gradient shrinks under high EKF
-        # covariance and the policy is not pushed around by noisy estimates.
+        # Potential difference; telescopes to zero so it cannot be farmed by loops.
         progress = self._prev_distance - position_error
         self._prev_distance = position_error
 
         distance_term = progress
-        orientation_term = -0.2 * orientation_error
-        position_term = -0.005 * position_error
+        # Coefficient kept small so worst-case "sit at spawn" stays above the
+        # ego-crash penalty, otherwise crashing on purpose beats timing out.
+        position_term = -0.001 * position_error
 
-        # approach_term: bounded reward peak at the bay. Inside the radius
-        # the payout requires being close AND slow AND aligned, so the only
-        # maximiser is "stopped in the bay". Outside the radius a smaller
-        # directional gradient pulls the policy mean toward the boundary.
-        slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
+        # Outer-annulus directional pull only: no slowness/alignment factors so
+        # the policy is not paid to loiter near the bay.
         approach_term = 0.0
-        over_rotation_penalty = 0.0
-        if position_error < self._success_approach_radius:
-            proximity = 1.0 - position_error * self._inv_approach_radius
-            slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
-            alignment = max(
-                0.0, 1.0 - orientation_error / SUCCESS_THRESHOLD_ORIENTATION
-            )
-            approach_term = 0.3 * proximity * slowness * alignment
-            # Once close AND already aligned, large steer can only rotate the
-            # car past the bay heading it has reached. Penalise it only in that
-            # state (gated by proximity * alignment) so the turning approach
-            # and the far-field drive are untouched.
-            steer_now = abs(float(np.clip(self._last_action[0], -1.0, 1.0)))
-            over_rotation_penalty = -0.3 * steer_now * proximity * alignment
-        elif position_error < 2.0 * self._success_approach_radius:
+        if (
+            self._success_approach_radius
+            <= position_error
+            < 2.0 * self._success_approach_radius
+        ):
             outer_proximity = (
                 1.0
                 - (position_error - self._success_approach_radius)
@@ -948,35 +921,54 @@ class CARLAParkingEnv(gym.Env):
             )
             approach_term = 0.02 * outer_proximity
 
-        # Encode physical actuator constraints that CARLA does not enforce:
-        # real cars cannot apply throttle and brake simultaneously, and
-        # steering a stationary vehicle is unwanted actuation in deployment.
+        # Slowness is paid only inside the success window, so it teaches braking
+        # at the goal state without becoming a global "be slow" subsidy.
+        slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
+        parked_bonus = 0.0
+        if in_bay:
+            slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
+            parked_bonus = 0.3 * slowness
+
+        # Simultaneous throttle and brake wastes energy and wears the brake; the
+        # penalty also stops the policy using it as a free way to hold position.
         throttle_applied = float(np.clip(self._last_action[1], 0.0, 1.0))
         brake_applied = float(np.clip(self._last_action[2], 0.0, 1.0))
         co_activation_penalty = -0.05 * min(throttle_applied, brake_applied)
 
+        # Steering at rest is unwanted real-world actuation; free above the
+        # success-window speed so manoeuvring is unconstrained.
         steer_applied = float(np.clip(self._last_action[0], -1.0, 1.0))
         stationary_scale = max(0.0, 1.0 - speed / SUCCESS_THRESHOLD_VELOCITY)
         idle_steer_penalty = -0.02 * abs(steer_applied) * stationary_scale
 
+        # Rate-limit penalties on all three actuators: real cars cannot snap any
+        # pedal or the wheel in one policy tick. Penalises rate of change, not
+        # absolute value, so sustained hard inputs remain free.
+        steer_smoothness_penalty = -0.03 * (steer_applied - self._prev_steer) ** 2
+        pedal_smoothness_penalty = -0.03 * (
+            (throttle_applied - self._prev_throttle) ** 2
+            + (brake_applied - self._prev_brake) ** 2
+        )
+
         uncertainty_scale = self._uncertainty_scale_fn()
-        reward = (distance_term + orientation_term + position_term) * (
-            1.0 - uncertainty_scale
-        ) + (
+        reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
             approach_term
+            + parked_bonus
             + co_activation_penalty
             + idle_steer_penalty
-            + over_rotation_penalty
+            + steer_smoothness_penalty
+            + pedal_smoothness_penalty
         )
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
-        diag["orientation_penalty"] = float(orientation_term)
         diag["position_penalty"] = float(position_term)
         diag["approach_reward"] = float(approach_term)
+        diag["parked_bonus"] = float(parked_bonus)
         diag["co_activation_penalty"] = float(co_activation_penalty)
         diag["idle_steer_penalty"] = float(idle_steer_penalty)
-        diag["over_rotation_penalty"] = float(over_rotation_penalty)
+        diag["steer_smoothness_penalty"] = float(steer_smoothness_penalty)
+        diag["pedal_smoothness_penalty"] = float(pedal_smoothness_penalty)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -1629,6 +1621,10 @@ class CARLAParkingEnv(gym.Env):
 
         # Initialise prev_distance for potential-based reward shaping
         self._success_counter = 0
+        self._last_action[:] = 0.0
+        self._prev_steer = 0.0
+        self._prev_throttle = 0.0
+        self._prev_brake = 0.0
         if self.vehicle is not None:
             t = self.vehicle.get_transform()
             self._prev_distance = math.hypot(
@@ -1688,6 +1684,9 @@ class CARLAParkingEnv(gym.Env):
         """
         # On a new action (or first call), reset the repeat counter
         if self._action_repeat_counter == 0:
+            self._prev_steer = float(self._last_action[0])
+            self._prev_throttle = float(self._last_action[1])
+            self._prev_brake = float(self._last_action[2])
             self._last_action[:] = action
 
         # Execute one sim-step
@@ -1773,6 +1772,17 @@ class CARLAParkingEnv(gym.Env):
 
         truncated = self.steps >= self.max_steps
 
+        # Graded timeout penalty: judge the final state when the clock runs out
+        # without a park. Scaled by how far and how misaligned the car ended, so
+        # ending closer and straighter is always better than stopping short.
+        # Bounded well above the ego-crash (-25) so the car never crashes to
+        # escape a worse timeout.
+        if truncated and not terminated:
+            reward += -(
+                0.3 * reward_diag["pos_error"]
+                + 1.0 * reward_diag["orientation_error"]
+            )
+
         if (terminated or truncated) and self.world is not None:
             self._freeze_all_actors()
             self._actors_frozen = True
@@ -1805,8 +1815,8 @@ class CARLAParkingEnv(gym.Env):
             "speed": reward_diag["speed"],
             "progress_reward": reward_diag["progress_reward"],
             "uncertainty_scale": reward_diag.get("uncertainty_scale", 0.0),
-            "orientation_penalty": reward_diag.get("orientation_penalty", 0.0),
-            "position_penalty": reward_diag.get("position_penalty", 0.0),
+            "approach_reward": reward_diag.get("approach_reward", 0.0),
+            "idle_steer_penalty": reward_diag.get("idle_steer_penalty", 0.0),
         }
 
         return state, reward, terminated, truncated, info
