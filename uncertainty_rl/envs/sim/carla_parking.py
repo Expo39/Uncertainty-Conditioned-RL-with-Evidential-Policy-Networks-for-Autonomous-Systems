@@ -199,9 +199,15 @@ class CARLAParkingEnv(gym.Env):
         # Actuator rate limits and brake-overrides-throttle threshold. See
         # docs/detailed_notes/actuator_model.md.
         am = actuator_model or {}
-        self._steer_max_delta: float = float(am.get("steer_max_delta_per_decision", 0.15))
-        self._throttle_max_delta: float = float(am.get("throttle_max_delta_per_decision", 0.5))
-        self._brake_max_delta: float = float(am.get("brake_max_delta_per_decision", 0.5))
+        self._steer_max_delta: float = float(
+            am.get("steer_max_delta_per_decision", 0.15)
+        )
+        self._throttle_max_delta: float = float(
+            am.get("throttle_max_delta_per_decision", 0.5)
+        )
+        self._brake_max_delta: float = float(
+            am.get("brake_max_delta_per_decision", 0.5)
+        )
         self._brake_override_throttle_threshold: float = float(
             am.get("brake_override_throttle_threshold", 0.1)
         )
@@ -432,14 +438,13 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action space: [steer, throttle, brake]
-        # steer    : [-1, 1]  left to right
-        # throttle : [ 0, 1]  forward throttle (no reverse gear)
-        # brake    : [ 0, 1]  friction brake
-        # Separate non-negative throttle / brake axes make a held stop
-        # (throttle = 0, brake > 0) a stable region of the action space.
+        # Action space: [steer, throttle, brake], uniformly in [-1, 1].
+        # The policy outputs a tanh-squashed Gaussian on every axis. step()
+        # passes steer through and remaps throttle / brake from [-1, 1] to
+        # [0, 1] via (a + 1) / 2 so a held stop (throttle = 0, brake > 0)
+        # remains a stable region of the policy's action space.
         self.action_space = spaces.Box(
-            low=np.array([-1.0, 0.0, 0.0]),
+            low=np.array([-1.0, -1.0, -1.0]),
             high=np.array([1.0, 1.0, 1.0]),
             dtype=np.float32,
         )
@@ -929,8 +934,11 @@ class CARLAParkingEnv(gym.Env):
         # ego-crash penalty, otherwise crashing on purpose beats timing out.
         position_term = -0.001 * position_error
 
-        # Outer-annulus directional pull only: no slowness/alignment factors so
-        # the policy is not paid to loiter near the bay.
+        # Outer-annulus directional pull. The slowness component teaches the
+        # policy to decelerate before entering the success window, so it can
+        # actually dwell once inside; without it the agent reaches the bay at
+        # speed and overshoots. Coefficients stay well below the +50 success
+        # bonus so the optimum remains "park", not "loiter slowly near bay".
         approach_term = 0.0
         if (
             self._success_approach_radius
@@ -942,7 +950,10 @@ class CARLAParkingEnv(gym.Env):
                 - (position_error - self._success_approach_radius)
                 * self._inv_approach_radius
             )
-            approach_term = 0.02 * outer_proximity
+            approach_slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
+            approach_term = (
+                0.02 * outer_proximity + 0.05 * outer_proximity * approach_slowness
+            )
 
         # Slowness is paid only inside the success window, so it teaches braking
         # at the goal state without becoming a global "be slow" subsidy.
@@ -958,8 +969,7 @@ class CARLAParkingEnv(gym.Env):
         # reward function is therefore outcome-only.
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
-            approach_term
-            + parked_bonus
+            approach_term + parked_bonus
         )
 
         diag["progress_reward"] = float(progress)
@@ -1691,31 +1701,46 @@ class CARLAParkingEnv(gym.Env):
         # action_repeat ticks of this decision; CARLA evolves under the
         # constant setpoint for ~0.2 s.
         if self._action_repeat_counter == 0:
+            # Policy axes are uniformly [-1, 1] (tanh-squashed). Steer passes
+            # through. Throttle / brake fold the negative half to zero so the
+            # symmetric prior gamma = 0 maps to pedal-off; only the positive
+            # half engages the pedal. A linear (a + 1) / 2 remap put both
+            # pedals at 0.5 at init, which triggered the brake-overrides-
+            # throttle override and prevented any movement at training start.
             steer_cmd = float(np.clip(action[0], -1.0, 1.0))
             throttle_cmd = float(np.clip(action[1], 0.0, 1.0))
             brake_cmd = float(np.clip(action[2], 0.0, 1.0))
 
-            steer_cmd = float(np.clip(
-                steer_cmd,
-                self._prev_steer_cmd - self._steer_max_delta,
-                self._prev_steer_cmd + self._steer_max_delta,
-            ))
-            throttle_cmd = float(np.clip(
-                throttle_cmd,
-                self._prev_throttle_cmd - self._throttle_max_delta,
-                self._prev_throttle_cmd + self._throttle_max_delta,
-            ))
-            brake_cmd = float(np.clip(
-                brake_cmd,
-                self._prev_brake_cmd - self._brake_max_delta,
-                self._prev_brake_cmd + self._brake_max_delta,
-            ))
+            steer_cmd = float(
+                np.clip(
+                    steer_cmd,
+                    self._prev_steer_cmd - self._steer_max_delta,
+                    self._prev_steer_cmd + self._steer_max_delta,
+                )
+            )
+            brake_cmd = float(
+                np.clip(
+                    brake_cmd,
+                    self._prev_brake_cmd - self._brake_max_delta,
+                    self._prev_brake_cmd + self._brake_max_delta,
+                )
+            )
 
             # Brake-overrides-throttle. A real driver-assistance system cuts
             # throttle whenever the brake is meaningfully pressed; modelling
             # the same here keeps the policy from learning to fight itself.
+            # Apply the override BEFORE the throttle rate limit so the cut
+            # itself still respects the actuator rate (a real throttle plate
+            # cannot slam closed faster than its slew rate).
             if brake_cmd > self._brake_override_throttle_threshold:
                 throttle_cmd = 0.0
+            throttle_cmd = float(
+                np.clip(
+                    throttle_cmd,
+                    self._prev_throttle_cmd - self._throttle_max_delta,
+                    self._prev_throttle_cmd + self._throttle_max_delta,
+                )
+            )
 
             self._prev_steer_cmd = steer_cmd
             self._prev_throttle_cmd = throttle_cmd
@@ -1818,8 +1843,7 @@ class CARLAParkingEnv(gym.Env):
         # so the policy never crashes on purpose to escape a worse timeout.
         if truncated and not terminated:
             reward += -(
-                1.5 * reward_diag["pos_error"]
-                + 2.5 * reward_diag["orientation_error"]
+                1.5 * reward_diag["pos_error"] + 2.5 * reward_diag["orientation_error"]
             )
 
         if (terminated or truncated) and self.world is not None:
@@ -1856,6 +1880,12 @@ class CARLAParkingEnv(gym.Env):
             "uncertainty_scale": reward_diag.get("uncertainty_scale", 0.0),
             "approach_reward": reward_diag.get("approach_reward", 0.0),
             "parked_bonus": reward_diag.get("parked_bonus", 0.0),
+            # Post-clamp commands actually delivered to CARLA. Distinct from
+            # the policy's raw output so diagnostics can verify the actuator
+            # model is doing its job.
+            "steer_cmd": float(self._last_action[0]),
+            "throttle_cmd": float(self._last_action[1]),
+            "brake_cmd": float(self._last_action[2]),
         }
 
         return state, reward, terminated, truncated, info

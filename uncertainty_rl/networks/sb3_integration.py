@@ -53,12 +53,15 @@ def _insert_layernorm(seq: nn.Sequential) -> nn.Sequential:
 class EvidentialDistribution(Distribution):
     """
     @class EvidentialDistribution
-    @brief SB3-compatible distribution using Gaussian approximation of NIG predictive.
+    @brief SB3-compatible tanh-squashed Gaussian approximation of NIG predictive.
     """
 
     # ------------------------------------------------------------------
     # Construction
     # ------------------------------------------------------------------
+
+    # Numerical floor for the tanh Jacobian term; matches SB3.
+    _SQUASH_EPS: float = 1e-6
 
     def __init__(self, action_dim: int) -> None:
         """
@@ -71,6 +74,8 @@ class EvidentialDistribution(Distribution):
         self._nu: Optional[th.Tensor] = None
         self._alpha: Optional[th.Tensor] = None
         self._beta: Optional[th.Tensor] = None
+        # Pre-squash sample retained for the Jacobian correction.
+        self._gaussian_actions: Optional[th.Tensor] = None
 
     def proba_distribution_net(self, latent_dim: int, **kwargs: Any) -> nn.Module:
         """
@@ -99,6 +104,7 @@ class EvidentialDistribution(Distribution):
         self._nu = nu
         self._alpha = alpha
         self._beta = beta
+        self._gaussian_actions = None
 
         # Clamp before sqrt. The min guards against GPU fp32 drift producing
         # near-zero or negative values (NaN std would crash Normal()). The max
@@ -111,43 +117,57 @@ class EvidentialDistribution(Distribution):
         self.distribution = Normal(gamma, std)
         return self
 
-    def log_prob(self, actions: th.Tensor) -> th.Tensor:
+    def log_prob(
+        self, actions: th.Tensor, gaussian_actions: Optional[th.Tensor] = None
+    ) -> th.Tensor:
         """
-        @brief Compute log probability of actions under Gaussian approximation.
-        @param actions: Actions tensor of shape (batch_size, action_dim).
+        @brief Log probability of squashed actions, with tanh Jacobian correction.
+        @param actions: Squashed actions in (-1, 1), shape (batch_size, action_dim).
+        @param gaussian_actions: Optional pre-squash sample retained from sample().
+               When None, recovered via atanh on the clipped input.
         @return Log probability summed over action dimensions, shape (batch_size,).
         """
         assert self.distribution is not None
         dist = cast(Normal, self.distribution)
-        log_prob = dist.log_prob(actions)
-        return sum_independent_dims(log_prob)
+        if gaussian_actions is None:
+            gaussian_actions = self._gaussian_actions
+        if gaussian_actions is None:
+            # atanh is unstable at +-1; clamp by the same epsilon used below.
+            clipped = th.clamp(actions, -1.0 + self._SQUASH_EPS, 1.0 - self._SQUASH_EPS)
+            gaussian_actions = th.atanh(clipped)
+        log_prob_gaussian = sum_independent_dims(dist.log_prob(gaussian_actions))
+        # Jacobian of y = tanh(x): dy/dx = 1 - tanh(x)^2.
+        jacobian = th.log(1.0 - th.tanh(gaussian_actions) ** 2 + self._SQUASH_EPS)
+        return log_prob_gaussian - jacobian.sum(dim=-1)
 
     def entropy(self) -> Optional[th.Tensor]:
         """
-        @brief Compute entropy of the Gaussian approximation.
-        @return Entropy summed over action dimensions, shape (batch_size,).
+        @brief Entropy of the squashed distribution.
+        @return None - no closed form; SB3 falls back to -log_prob estimate.
         """
-        assert self.distribution is not None
-        dist = cast(Normal, self.distribution)
-        return sum_independent_dims(dist.entropy())
+        return None
 
     def sample(self) -> th.Tensor:
         """
-        @brief Sample actions using the reparameterisation trick.
-        @return Sampled actions of shape (batch_size, action_dim).
+        @brief Sample squashed actions via reparameterisation.
+        @return Squashed actions in (-1, 1), shape (batch_size, action_dim).
         """
         assert self.distribution is not None
         dist = cast(Normal, self.distribution)
-        return cast(th.Tensor, dist.rsample())
+        gaussian_actions = cast(th.Tensor, dist.rsample())
+        self._gaussian_actions = gaussian_actions
+        return th.tanh(gaussian_actions)
 
     def mode(self) -> th.Tensor:
         """
-        @brief Return the deterministic action (mean = gamma).
-        @return Mean actions of shape (batch_size, action_dim).
+        @brief Deterministic squashed action (tanh of the NIG mean gamma).
+        @return Squashed mean actions of shape (batch_size, action_dim).
         """
         assert self.distribution is not None
         dist = cast(Normal, self.distribution)
-        return cast(th.Tensor, dist.mean)
+        gaussian_actions = cast(th.Tensor, dist.mean)
+        self._gaussian_actions = gaussian_actions
+        return th.tanh(gaussian_actions)
 
     def actions_from_params(
         self,
@@ -570,13 +590,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             total = epistemic + aleatoric
 
             if deterministic:
-                action = gamma
+                action = th.tanh(gamma)
             else:
                 # Consistent with EvidentialDistribution.proba_distribution:
-                # use aleatoric std only, not total.
+                # use aleatoric std only, not total. Squash with tanh so the
+                # action is in [-1, 1] on every axis.
                 std = th.sqrt(aleatoric)
                 dist = Normal(gamma, std)
-                action = dist.sample()
+                action = th.tanh(dist.sample())
 
         return action, {
             "epistemic": epistemic,
@@ -776,7 +797,12 @@ class EvidentialPPO(PPO):
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.detach())
 
-                entropy_loss = -th.mean(entropy)
+                # Squashed Gaussian has no closed-form entropy; fall back to
+                # the Monte-Carlo estimate -mean(log_prob) used by SB3.
+                if entropy is None:
+                    entropy_loss = -th.mean(log_prob)
+                else:
+                    entropy_loss = -th.mean(entropy)
                 entropy_losses.append(entropy_loss.detach())
 
                 # Combined loss with annealed evidential regularisation
