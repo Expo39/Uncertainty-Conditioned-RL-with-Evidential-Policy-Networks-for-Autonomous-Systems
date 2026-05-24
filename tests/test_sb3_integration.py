@@ -56,12 +56,12 @@ def obs_space() -> spaces.Box:
 @pytest.fixture
 def act_space() -> spaces.Box:
     """
-    @brief 3-dim continuous action space matching parking env
-           [steering, throttle, brake]. steering in [-1, 1]; throttle and
-           brake in [0, 1].
+    @brief 3-dim continuous action space matching parking env. All axes are
+           uniformly [-1, 1]: the env applies a tanh squash in the policy and
+           remaps throttle / brake to [0, 1] inside step().
     """
     return spaces.Box(
-        low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+        low=np.array([-1.0, -1.0, -1.0], dtype=np.float32),
         high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
         dtype=np.float32,
     )
@@ -149,15 +149,15 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief log_prob returns shape (batch_size,).
+        @brief log_prob returns shape (batch_size,). Actions must be in (-1, 1).
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = evidential_dist.sample()
         log_prob = evidential_dist.log_prob(actions)
         assert log_prob.shape == (BATCH_SIZE,)
 
-    def test_entropy_shape(
+    def test_entropy_returns_none(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -168,15 +168,13 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief entropy returns shape (batch_size,).
+        @brief entropy() returns None - squashed Gaussian has no closed form.
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        entropy = evidential_dist.entropy()
-        assert entropy is not None
-        assert entropy.shape == (BATCH_SIZE,)
+        assert evidential_dist.entropy() is None
 
-    def test_sample_shape(
+    def test_sample_shape_and_squashed(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -187,14 +185,16 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief sample returns shape (batch_size, action_dim).
+        @brief sample returns shape (batch_size, action_dim) and values in (-1, 1).
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
         sample = evidential_dist.sample()
         assert sample.shape == (BATCH_SIZE, ACTION_DIM)
+        assert torch.all(sample > -1.0)
+        assert torch.all(sample < 1.0)
 
-    def test_mode_equals_gamma(
+    def test_mode_equals_tanh_gamma(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -205,12 +205,44 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief mode() returns gamma (the NIG mean).
+        @brief mode() returns tanh(gamma) - squashed deterministic action.
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
         mode = evidential_dist.mode()
-        assert torch.allclose(mode, gamma)
+        assert torch.allclose(mode, torch.tanh(gamma))
+
+    def test_log_prob_includes_tanh_jacobian(
+        self,
+        evidential_dist: EvidentialDistribution,
+        nig_params: Tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ],
+    ) -> None:
+        """
+        @brief log_prob applies the tanh change-of-variables correction.
+        """
+        from torch.distributions import Normal
+
+        gamma, nu, alpha, beta = nig_params
+        evidential_dist.proba_distribution(gamma, nu, alpha, beta)
+        gaussian_actions = evidential_dist.sample()
+        # Reuse the cached pre-squash sample to avoid the atanh fallback.
+        pre_squash = evidential_dist._gaussian_actions
+        assert pre_squash is not None
+        log_prob = evidential_dist.log_prob(
+            gaussian_actions, gaussian_actions=pre_squash
+        )
+
+        # Manual reference: Normal log_prob minus the Jacobian term.
+        std = torch.sqrt(torch.clamp(beta / (alpha - 1), min=1e-6, max=1.0))
+        normal_lp = Normal(gamma, std).log_prob(pre_squash).sum(dim=-1)
+        jacobian = torch.log(1.0 - torch.tanh(pre_squash) ** 2 + 1e-6).sum(dim=-1)
+        expected = normal_lp - jacobian
+        assert torch.allclose(log_prob, expected, atol=1e-5)
 
     def test_nig_params_cached(
         self,
@@ -248,7 +280,7 @@ class TestEvidentialDistribution:
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = evidential_dist.sample()
         log_prob = evidential_dist.log_prob(actions)
         assert torch.all(torch.isfinite(log_prob))
 
@@ -305,15 +337,16 @@ class TestEvidentialActorCriticPolicy:
         self, policy: EvidentialActorCriticPolicy
     ) -> None:
         """
-        @brief evaluate_actions() returns correct shapes.
+        @brief evaluate_actions() returns correct shapes. Entropy is None for
+               the squashed Gaussian (no closed form).
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        # Squashed actions in (-1, 1); torch.tanh of randn keeps them off the boundary.
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         values, log_prob, entropy = policy.evaluate_actions(obs, actions)
         assert values.shape == (BATCH_SIZE, 1)
         assert log_prob.shape == (BATCH_SIZE,)
-        assert entropy is not None
-        assert entropy.shape == (BATCH_SIZE,)
+        assert entropy is None
 
     def test_evaluate_actions_caches_nig_params(
         self, policy: EvidentialActorCriticPolicy
@@ -322,7 +355,7 @@ class TestEvidentialActorCriticPolicy:
         @brief evaluate_actions() caches NIG params for evidential loss.
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         policy.evaluate_actions(obs, actions)
         assert policy._cached_nig_params is not None
         gamma, nu, alpha, beta = policy._cached_nig_params
@@ -338,7 +371,7 @@ class TestEvidentialActorCriticPolicy:
         @brief NIG constraints hold: nu > 0, alpha > 1, beta > 0.
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         policy.evaluate_actions(obs, actions)
         assert policy._cached_nig_params is not None
         _, nu, alpha, beta = policy._cached_nig_params
@@ -382,7 +415,7 @@ class TestEvidentialActorCriticPolicy:
         @brief Gradients reach the EvidentialLayer parameters.
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         values, log_prob, _ = policy.evaluate_actions(obs, actions)
         loss = log_prob.mean() + values.mean()
         loss.backward()

@@ -287,12 +287,12 @@ class TestObservationSpaceShape:
 
     def test_action_space_bounds(self) -> None:
         """
-        @brief steering in [-1,1], throttle in [0,1], brake in [0,1].
+        @brief All axes uniformly [-1, 1]. step() remaps throttle / brake to [0, 1].
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
-        np.testing.assert_array_equal(env.action_space.low, [-1.0, 0.0, 0.0])
+        np.testing.assert_array_equal(env.action_space.low, [-1.0, -1.0, -1.0])
         np.testing.assert_array_equal(env.action_space.high, [1.0, 1.0, 1.0])
         env.close()
 

@@ -97,6 +97,9 @@ _TRACE_COLUMNS = [
     "approach_reward",
     "parked_bonus",
     "uncertainty_scale",
+    "steer_cmd",
+    "throttle_cmd",
+    "brake_cmd",
 ]
 
 
@@ -170,8 +173,10 @@ def _write_run_info(trace_dir: Path, checkpoint: str, demo_stamp: str) -> None:
         f"demo_run: {demo_stamp}",
     ]
     (trace_dir / "run_info.txt").write_text("\n".join(lines) + "\n")
-    print(f"Run info written: {trace_dir}/run_info.txt (seed={seed}, "
-          f"trained {run_start})")
+    print(
+        f"Run info written: {trace_dir}/run_info.txt (seed={seed}, "
+        f"trained {run_start})"
+    )
 
 
 def main() -> None:
@@ -303,6 +308,9 @@ def main() -> None:
                             f"{info0.get('approach_reward', 0.0):.4f}",
                             f"{info0.get('parked_bonus', 0.0):.4f}",
                             f"{info0.get('uncertainty_scale', 0.0):.4f}",
+                            f"{info0.get('steer_cmd', 0.0):.4f}",
+                            f"{info0.get('throttle_cmd', 0.0):.4f}",
+                            f"{info0.get('brake_cmd', 0.0):.4f}",
                         ]
                     )
 

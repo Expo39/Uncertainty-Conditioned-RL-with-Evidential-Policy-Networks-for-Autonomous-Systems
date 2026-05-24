@@ -5,7 +5,7 @@
 debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
 inspect:
-  dryrun_action: [0.0, 0.5, 0.0]  # [steer, throttle, brake] applied each step in dryrun mode.
+  dryrun_action: [0.0, 0.5, 0.0]  # Policy-space [steer, throttle, brake]. Env clips throttle/brake to [0, 1]; negative values are pedal-off.
 
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
