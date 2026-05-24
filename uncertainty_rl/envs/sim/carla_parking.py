@@ -222,7 +222,6 @@ class CARLAParkingEnv(gym.Env):
 
         self._uncertainty_std_max: float = max(uncertainty_std_max, 1e-6)
         self._success_approach_radius: float = max(success_approach_radius, 1e-6)
-        self._inv_approach_radius: float = 1.0 / self._success_approach_radius
 
         self._inv_uncertainty_std_max: float = 1.0 / self._uncertainty_std_max
         self._inv_oob_threshold: float = 1.0 / OUT_OF_BOUNDS_THRESHOLD
@@ -934,25 +933,23 @@ class CARLAParkingEnv(gym.Env):
         # ego-crash penalty, otherwise crashing on purpose beats timing out.
         position_term = -0.001 * position_error
 
-        # Outer-annulus directional pull. The slowness component teaches the
-        # policy to decelerate before entering the success window, so it can
-        # actually dwell once inside; without it the agent reaches the bay at
-        # speed and overshoots. Coefficients stay well below the +50 success
-        # bonus so the optimum remains "park", not "loiter slowly near bay".
+        # Inner-annulus proximity + slowness pull, active inside the approach
+        # radius and outside the success window. Plugs the reward dead zone
+        # between SUCCESS_THRESHOLD_POSITION and success_approach_radius
+        # where distance_term has telescoped to ~zero and position_term is
+        # too small to provide useful gradient. Beyond the approach radius
+        # distance_term and position_term already pull the agent toward the
+        # bay. Coefficients stay below the +50 success terminal so the
+        # optimum remains "park", not "loiter near bay".
         approach_term = 0.0
-        if (
-            self._success_approach_radius
-            <= position_error
-            < 2.0 * self._success_approach_radius
-        ):
-            outer_proximity = (
-                1.0
-                - (position_error - self._success_approach_radius)
-                * self._inv_approach_radius
+        if SUCCESS_THRESHOLD_POSITION <= position_error < self._success_approach_radius:
+            inner_span = self._success_approach_radius - SUCCESS_THRESHOLD_POSITION
+            inner_proximity = (
+                1.0 - (position_error - SUCCESS_THRESHOLD_POSITION) / inner_span
             )
             approach_slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
             approach_term = (
-                0.02 * outer_proximity + 0.05 * outer_proximity * approach_slowness
+                0.05 * inner_proximity + 0.10 * inner_proximity * approach_slowness
             )
 
         # Slowness is paid only inside the success window, so it teaches braking
