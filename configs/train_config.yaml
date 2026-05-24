@@ -12,8 +12,8 @@ gamma: 0.99  # Discount factor.
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.004  # Entropy bonus at the start of training. Wired as a linear decay schedule (ent_coef -> ent_coef_final) in train_ppo.py.
-ent_coef_final: 0.003  # Entropy bonus at the end of training. Non-zero floor so the action std does not collapse before the policy mean has committed.
+ent_coef: 0.02  # Entropy bonus at the start of training. Wired as a linear decay schedule (ent_coef -> ent_coef_final) in train_ppo.py.
+ent_coef_final: 0.01  # Entropy bonus at the end of training. Non-zero floor so the action std does not collapse before the policy mean has committed.
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
