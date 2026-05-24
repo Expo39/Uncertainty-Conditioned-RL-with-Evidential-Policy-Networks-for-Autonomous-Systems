@@ -29,3 +29,4 @@ preserving the full reasoning for future reference.
 | `real_world_deployment.md` | `envs/real/deployment_utils.py`, `envs/real/inference_loop.py` | Sensor data flow, EKF frame calibration, surveyed datum, actuation calibration, GNSS/IMU driver notes |
 | `hyperparameter_search.md` | `training/tune_hyperparams.py` | Optuna search space design, sampler/pruner rationale, literature references |
 | `sensor_noise_models.md` | `envs/sim/helpers/_sensor_manager.py`, `ros2/uncertainty_rl_ros2/imu_noise_relay.py` | SICK TiM571 LiDAR noise derivation (systematic/statistical/angular) and VN-100 IMU noise derivation (covariance stamping, Gaussian injection, ZUPT) |
+| `actuator_model.md` | `envs/sim/carla_parking.py` `step()`, `configs/deployment/agent_config.yaml` | Per-axis rate limits and brake-overrides-throttle constraint, derivation from production DBW / EPS / hydraulic literature, and rationale for moving these constraints out of the reward function |

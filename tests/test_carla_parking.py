@@ -585,21 +585,26 @@ class TestVisStateWriter:
 class TestCovarianceObservation:
     """
     @class TestCovarianceObservation
-    @brief Verify EKF covariance features are written to obs[1:1+COVARIANCE_FEATURES_DIM].
+    @brief Verify EKF covariance features are written to
+           obs[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM].
 
     The EKF produces COVARIANCE_FEATURES_DIM (3) uncertainty features
     (std_x, std_y, std_yaw). _get_state() writes them verbatim into the
-    observation at indices 1-3, immediately after the vyaw scalar.
+    observation immediately after the vehicle-state block (speed, vyaw).
     """
 
     def test_covariance_features_written_to_obs(self) -> None:
         """
-        @brief Covariance features appear unchanged in obs[1:1+COVARIANCE_FEATURES_DIM].
+        @brief Covariance features appear unchanged in the covariance block of
+               the observation vector.
         """
         from unittest.mock import MagicMock
 
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
-        from uncertainty_rl.utils.constants import COVARIANCE_FEATURES_DIM
+        from uncertainty_rl.utils.constants import (
+            COVARIANCE_FEATURES_DIM,
+            VEHICLE_STATE_DIM,
+        )
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
 
@@ -626,11 +631,15 @@ class TestCovarianceObservation:
 
         obs = env._get_state()
 
+        cov_start = VEHICLE_STATE_DIM
         np.testing.assert_allclose(
-            obs[1 : 1 + COVARIANCE_FEATURES_DIM],
+            obs[cov_start : cov_start + COVARIANCE_FEATURES_DIM],
             raw,
             rtol=1e-5,
-            err_msg="Covariance features must be written verbatim to obs[1:4]",
+            err_msg=(
+                "Covariance features must be written verbatim to "
+                "obs[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]"
+            ),
         )
 
     def test_zero_uncertainty_stays_zero(self) -> None:
@@ -957,7 +966,7 @@ class TestComputeReward:
     def test_position_penalty_always_applied(self) -> None:
         """
         @brief Even when making zero progress, reward includes the position_term
-               proximity penalty (-0.005 * position_error).
+               proximity penalty (-0.001 * position_error).
         """
         env = _make_env_for_reward()
         dist = 5.0
@@ -968,10 +977,11 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        # progress = 0 and yaw aligned, so distance_term = orientation_term = 0.
-        # dist = 5.0 m is outside the 2 m approach_term radius, so approach_term
-        # = 0. Only position_term remains: -0.005 * 5.0 = -0.025.
-        assert reward == pytest.approx(-0.025, abs=1e-4)
+        # progress = 0 and yaw aligned, so distance_term = 0. The default
+        # success_approach_radius is 2 m, putting the approach annulus at
+        # [2, 4] m; dist = 5 m is outside so approach_term = 0. Only
+        # position_term remains: -0.001 * 5.0 = -0.005.
+        assert reward == pytest.approx(-0.005, abs=1e-4)
 
     def test_prev_distance_updated_after_step(self) -> None:
         """

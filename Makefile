@@ -354,28 +354,14 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
-	@# Tear down any pre-existing stack first. A stale ros2-bridge left running
-	@# from an earlier session does not pick up the new episode_config.json, so
-	@# it never writes ekf_state.json and the demo's reset() times out after
-	@# 120s on "EKF inputs not ready". --remove-orphans clears orphan workers.
-	@echo "Clearing any stale containers and EKF state..."
+	@# Tear down any pre-existing stack first. 
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) down --remove-orphans
 	@# Also clear the visualisation history so the viewer starts on this
 	@# run's frames, not stale ones left over from a previous session.
-	@rm -f outputs/ekf_state*.json outputs/.vis_active outputs/vis_history*.jsonl
-	@# Bring up the main stack BEFORE the workers: docker-compose.yml owns the
-	@# uncertainty-rl-network, which docker-compose.env_workers.yml consumes as
-	@# external. Starting workers first fails with "network ... could not be
-	@# found" once the down step above has removed it.
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
 	@# Start the demo container detached, then run the viewer in the foreground.
-	@# The demo container's lifetime is tied to the viewer via a trap: closing
-	@# the viewer or Ctrl+C stops AND removes the demo container, so it cannot
-	@# be left orphaned (an orphan demo container fights the next run for CARLA
-	@# and forces a manual `make docker-down`). All in one shell so the trap,
-	@# the captured container id, and the viewer share scope.
 	@set -e; \
 	demo_cid=$$($(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \

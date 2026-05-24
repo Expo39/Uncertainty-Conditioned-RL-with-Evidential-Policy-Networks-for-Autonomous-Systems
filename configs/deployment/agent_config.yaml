@@ -10,6 +10,20 @@
 # ---------------------------------------------------------------------------
 max_ego_speed_ms: 8.0  # Speed limit (m/s).
 
+# ---------------------------------------------------------------------------
+# Actuator model
+#
+# Rate limits and a brake-overrides-throttle constraint applied to the policy
+# action before it is forwarded to CARLA or the real vehicle. Units are
+# normalised action units per policy decision (0.2 s with action_repeat=4 and
+# carla_timestep=0.05). See docs/detailed_notes/actuator_model.md.
+# ---------------------------------------------------------------------------
+actuator_model:
+  steer_max_delta_per_decision: 0.15  # Steer rate limit. ~50 deg/s at the road wheel (CARLA max_steer_angle=70 deg).
+  throttle_max_delta_per_decision: 0.5  # Throttle rate limit. 0 -> full in 0.4 s. Matches drive-by-wire response.
+  brake_max_delta_per_decision: 0.5  # Brake rate limit. 0 -> full in 0.4 s. Matches hydraulic pressure rise.
+  brake_override_throttle_threshold: 0.1  # Throttle is zeroed whenever brake exceeds this fraction.
+
 # SafetyWrapper parameters.
 # aleatoric_scaling: higher = more aggressive longitudinal cap under outcome noise.
 # handoff_threshold: epistemic uncertainty above this triggers full stop + handoff.
