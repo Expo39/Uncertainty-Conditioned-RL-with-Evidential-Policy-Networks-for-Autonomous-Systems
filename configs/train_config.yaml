@@ -4,8 +4,7 @@
 # See detailed_notes/ekf_pipeline.md, reward_function.md, evidential_nig_initialisation.md.
 
 # PPO hyperparameters
-learning_rate: 0.0003  # Initial value. Linear decay to learning_rate_final applied in train_ppo.py.
-learning_rate_final: 0.00005  # Floor for the linear LR schedule. Non-zero so late training can still update if reward signal arrives late.
+learning_rate: 0.0003  # Linear decay to 0 applied in train_ppo.py.
 n_steps: 2048  # Steps per PPO update.
 batch_size: 256
 n_epochs: 5
