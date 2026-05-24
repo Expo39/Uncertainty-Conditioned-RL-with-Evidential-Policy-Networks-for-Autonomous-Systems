@@ -431,9 +431,9 @@ def train(
     )
 
     # Shared PPO hyperparameters. learning_rate decays linearly to
-    # learning_rate_final (default 0.0 preserves the legacy "decay to zero"
-    # behaviour). A non-zero floor keeps the policy able to update for the full
-    # run, so a late reward discovery is not stranded by a vanished LR.
+    # learning_rate_final (default 0.0). The optional floor exists for
+    # experiments that need late-stage updates, but the recommended schedule
+    # is decay-to-zero so a converged policy stops being perturbed by noise.
     lr_initial = config.get("learning_rate", 3e-4)
     lr_final = config.get("learning_rate_final", 0.0)
     lr_schedule = linear_schedule(lr_initial, lr_final)
