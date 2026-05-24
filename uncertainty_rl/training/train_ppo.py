@@ -182,6 +182,7 @@ def make_env(
             uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
             success_dwell_steps=config.get("success_dwell_steps", 5),
             success_approach_radius=config.get("success_approach_radius", 2.0),
+            actuator_model=config.get("actuator_model", None),
         )
         return env
 
@@ -429,9 +430,13 @@ def train(
         activation_fn=activation_fn,
     )
 
-    # Shared PPO hyperparameters
+    # Shared PPO hyperparameters. learning_rate decays linearly to
+    # learning_rate_final (default 0.0 preserves the legacy "decay to zero"
+    # behaviour). A non-zero floor keeps the policy able to update for the full
+    # run, so a late reward discovery is not stranded by a vanished LR.
     lr_initial = config.get("learning_rate", 3e-4)
-    lr_schedule = linear_schedule(lr_initial)
+    lr_final = config.get("learning_rate_final", 0.0)
+    lr_schedule = linear_schedule(lr_initial, lr_final)
 
     # ent_coef is a linear DECAY schedule, not a constant. In the evidential
     # policy the action sampling std IS sqrt(aleatoric), so the entropy bonus

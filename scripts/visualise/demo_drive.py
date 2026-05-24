@@ -95,7 +95,7 @@ _TRACE_COLUMNS = [
     "reward",
     "progress_reward",
     "approach_reward",
-    "idle_steer_penalty",
+    "parked_bonus",
     "uncertainty_scale",
 ]
 
@@ -301,7 +301,7 @@ def main() -> None:
                             f"{float(rewards[0]):.4f}",
                             f"{info0.get('progress_reward', 0.0):.4f}",
                             f"{info0.get('approach_reward', 0.0):.4f}",
-                            f"{info0.get('idle_steer_penalty', 0.0):.4f}",
+                            f"{info0.get('parked_bonus', 0.0):.4f}",
                             f"{info0.get('uncertainty_scale', 0.0):.4f}",
                         ]
                     )
