@@ -293,7 +293,7 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
             make_env(self._BASE_CONFIG, rank=0)()
 
@@ -310,7 +310,7 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
             make_env(self._BASE_CONFIG, rank=1)()
 
@@ -327,7 +327,7 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
             make_env(self._BASE_CONFIG, rank=2)()
 
@@ -347,7 +347,7 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
             make_env(self._BASE_CONFIG, rank=0)()
 
@@ -364,7 +364,7 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
             make_env(self._BASE_CONFIG, rank=1)()
 
@@ -384,7 +384,7 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
             make_env(self._BASE_CONFIG, rank=2)()
 
