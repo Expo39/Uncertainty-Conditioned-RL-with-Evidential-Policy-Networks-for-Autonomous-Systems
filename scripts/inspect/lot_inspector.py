@@ -254,10 +254,10 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
-        # build the env via train_ppo.make_env() so
-        # dryrun is, by construction, identical to a training rollout (same
-        # constructor kwargs, same defaults).
-        from uncertainty_rl.training.train_ppo import make_env
+        # Build the env via the shared factory so dryrun is, by construction,
+        # identical to a training rollout (same constructor kwargs, same
+        # defaults).
+        from uncertainty_rl.envs import make_env
 
         dryrun_cfg = dict(train_cfg)
         dryrun_cfg["no_rendering_mode"] = False

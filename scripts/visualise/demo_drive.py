@@ -18,7 +18,7 @@ import yaml
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from uncertainty_rl.envs import CARLAParkingEnv
+from uncertainty_rl.envs import make_env
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 
 
@@ -109,29 +109,21 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
     @param env_config: Parsed environment configuration dictionary.
     @return Vectorised environment.
     """
-
-    def _init() -> CARLAParkingEnv:
-        # Env vars override config (e.g. CARLA_HOST=carla-server-demo for 3D view)
-        carla_host = os.environ.get(
-            "CARLA_HOST", env_config.get("carla_host", "carla-server")
-        )
-        carla_port = int(
-            os.environ.get("CARLA_PORT", env_config.get("carla_port", 2000))
-        )
-        return CARLAParkingEnv(
-            carla_host=carla_host,
-            carla_port=carla_port,
-            town=env_config.get("town", "FlatPlane"),
-            max_steps=env_config.get("max_steps", 500),
-            ros2_config=env_config.get("ros2", {}),
-            carla_sensors_config=env_config.get("carla_sensors", {}),
-            parking_scenarios_config=env_config.get("parking_scenarios", {}),
-            include_covariance=bool(env_config.get("include_covariance", True)),
-            include_obstacle_obs=bool(env_config.get("include_obstacle_obs", True)),
-            gnss_noise_profiles_path=env_config.get("gnss_noise_profiles", None),
-        )
-
-    return DummyVecEnv([_init])
+    # Env vars override config (e.g. CARLA_HOST=carla-server-demo for 3D view).
+    host_override = os.environ.get("CARLA_HOST")
+    port_override = (
+        int(os.environ["CARLA_PORT"]) if "CARLA_PORT" in os.environ else None
+    )
+    return DummyVecEnv(
+        [
+            make_env(
+                env_config,
+                rank=0,
+                host_override=host_override,
+                port_override=port_override,
+            )
+        ]
+    )
 
 
 def _write_run_info(trace_dir: Path, checkpoint: str, demo_stamp: str) -> None:
