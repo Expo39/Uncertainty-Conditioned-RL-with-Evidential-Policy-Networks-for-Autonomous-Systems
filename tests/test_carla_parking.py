@@ -966,7 +966,7 @@ class TestComputeReward:
     def test_position_penalty_always_applied(self) -> None:
         """
         @brief Even when making zero progress, reward includes the position_term
-               proximity penalty (-0.001 * position_error).
+               proximity penalty (-0.003 * position_error).
         """
         env = _make_env_for_reward()
         dist = 5.0
@@ -979,9 +979,9 @@ class TestComputeReward:
 
         # progress = 0 and yaw aligned, so distance_term = 0. The default
         # success_approach_radius is 2 m, putting the approach annulus at
-        # [2, 4] m; dist = 5 m is outside so approach_term = 0. Only
-        # position_term remains: -0.001 * 5.0 = -0.005.
-        assert reward == pytest.approx(-0.005, abs=1e-4)
+        # [1.5, 2] m; dist = 5 m is outside so approach_term = 0. Only
+        # position_term remains: -0.003 * 5.0 = -0.015.
+        assert reward == pytest.approx(-0.015, abs=1e-4)
 
     def test_prev_distance_updated_after_step(self) -> None:
         """

@@ -929,18 +929,17 @@ class CARLAParkingEnv(gym.Env):
         self._prev_distance = position_error
 
         distance_term = progress
-        # Coefficient kept small so worst-case "sit at spawn" stays above the
-        # ego-crash penalty, otherwise crashing on purpose beats timing out.
-        position_term = -0.001 * position_error
+        # Continuous "closer is better" penalty. Strong enough that freezing
+        # mid-approach is strictly worse than crashing (~-118 vs -25 over a
+        # full episode at 18 m), so the agent cannot find a local optimum at
+        # standstill. Still small enough that crashing on purpose is worse
+        # than approaching and timing out (~-18 crash vs +10 timeout at 3 m).
+        position_term = -0.003 * position_error
 
-        # Inner-annulus proximity + slowness pull, active inside the approach
-        # radius and outside the success window. Plugs the reward dead zone
-        # between SUCCESS_THRESHOLD_POSITION and success_approach_radius
-        # where distance_term has telescoped to ~zero and position_term is
-        # too small to provide useful gradient. Beyond the approach radius
-        # distance_term and position_term already pull the agent toward the
-        # bay. Coefficients stay below the +50 success terminal so the
-        # optimum remains "park", not "loiter near bay".
+        # Inner-annulus shaping. Additive (not product) so each factor
+        # contributes a dense gradient even when the others are near zero.
+        # Peak per-step 0.015 keeps cumulative <= +26, below the +50
+        # success terminal so parking beats loitering.
         approach_term = 0.0
         if SUCCESS_THRESHOLD_POSITION <= position_error < self._success_approach_radius:
             inner_span = self._success_approach_radius - SUCCESS_THRESHOLD_POSITION
@@ -948,8 +947,13 @@ class CARLAParkingEnv(gym.Env):
                 1.0 - (position_error - SUCCESS_THRESHOLD_POSITION) / inner_span
             )
             approach_slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
+            # 45 deg alignment cutoff; tighter is too sparse outside the 25 deg
+            # success window to teach the agent to point at the bay.
+            approach_alignment = max(0.0, 1.0 - orientation_error / (math.pi / 4))
             approach_term = (
-                0.05 * inner_proximity + 0.10 * inner_proximity * approach_slowness
+                0.005 * inner_proximity
+                + 0.005 * inner_proximity * approach_slowness
+                + 0.005 * inner_proximity * approach_alignment
             )
 
         # Slowness is paid only inside the success window, so it teaches braking
