@@ -35,7 +35,10 @@ class EvidentialLayer(nn.Module):
         """
         @brief Constructor for EvidentialLayer.
         @param input_dim: Dimension of input features.
-        @param output_dim: Dimension of output (action space).
+        @param output_dim: Action dimension. The parking env uses 3
+                ([steer, throttle, brake]) and gets a per-axis gamma bias;
+                any other size falls back to a symmetric gamma=0 default
+                (smoke tests, e.g. Pendulum).
         """
         super().__init__()
         self.input_dim = input_dim
@@ -50,7 +53,19 @@ class EvidentialLayer(nn.Module):
         with torch.no_grad():
             self.linear.weight.mul_(0.01)
             n = self.output_dim
-            self.linear.bias[0 * n : 1 * n].fill_(0.0)  # gamma: zero mean
+            if output_dim == 3:
+                # Per-axis gamma bias matches the parking env actuator model.
+                # Steer is bipolar so gamma=0 is symmetric. Throttle and brake
+                # are folded to [0, 1] in the env, so gamma=0 wastes ~50% of
+                # samples on a clipped-to-zero pedal. Bias throttle positive
+                # (default-on during approach) and brake negative (exceptional
+                # action, default-off) to match the task.
+                self.linear.bias[0] = 0.0   # gamma steer (bipolar)
+                self.linear.bias[1] = 0.5   # gamma throttle (default-on)
+                self.linear.bias[2] = -1.0  # gamma brake (default-off)
+            else:
+                # Generic fallback for non-parking action spaces (test harness).
+                self.linear.bias[0 * n : 1 * n].fill_(0.0)
             self.linear.bias[1 * n : 2 * n].fill_(0.9)  # nu
             self.linear.bias[2 * n : 3 * n].fill_(0.9)  # alpha
             self.linear.bias[3 * n : 4 * n].fill_(0.0)  # beta

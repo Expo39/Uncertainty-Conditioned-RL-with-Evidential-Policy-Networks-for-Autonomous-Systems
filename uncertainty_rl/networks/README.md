@@ -31,7 +31,7 @@ flowchart TB
     end
 
     subgraph dual["Dual-encoder mode  (use_uncertainty_conditioning = True)"]
-        SE["state encoder\nVEHICLE_STATE_DIM block"] --> CAT["concat + fusion MLP"]
+        SE["state encoder\nobs minus covariance block"] --> CAT["concat + fusion MLP"]
         UE["uncertainty encoder\nCOVARIANCE_FEATURES_DIM block"] --> CAT
         CAT --> EL2["EvidentialLayer"]
     end
@@ -45,9 +45,12 @@ flowchart TB
     OBS --> CRIT["critic MLP  (full obs)  ->  value"]
 ```
 
-> In dual-encoder mode the actor sees the `VEHICLE_STATE_DIM` and
-> `COVARIANCE_FEATURES_DIM` blocks of the observation only. Later blocks
-> (target pose, LiDAR) feed the critic but not the actor.
+> In dual-encoder mode the observation is split into two blocks. The
+> covariance block (`obs[:, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM +
+> COVARIANCE_FEATURES_DIM]`) flows into the uncertainty encoder; the rest
+> of the observation (speed, yaw rate, relative target pose, LiDAR
+> clearances) flows into the state encoder. Both encoders feed a shared
+> fusion MLP before the `EvidentialLayer` head.
 
 ## NIG uncertainty decomposition
 
@@ -136,10 +139,10 @@ bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiri
 
 ## Actor modes
 
-| `use_uncertainty_conditioning` | Actor class | Observation blocks seen by actor |
-|-------------------------------|-------------|----------------------------------|
-| `False` | Flat MLP + `EvidentialLayer` | All blocks |
-| `True` | `UncertaintyConditionedActor` | Vehicle-state and covariance blocks only |
+| `use_uncertainty_conditioning` | Actor class | Observation routed to actor |
+|-------------------------------|-------------|------------------------------|
+| `False` | Flat MLP + `EvidentialLayer` | All blocks via shared MLP latent |
+| `True` | `UncertaintyConditionedActor` | All blocks, but split: covariance block to the uncertainty encoder; remaining blocks (speed, yaw rate, relative target pose, LiDAR clearances) to the state encoder |
 
 ## TensorBoard logs (evidential-specific)
 

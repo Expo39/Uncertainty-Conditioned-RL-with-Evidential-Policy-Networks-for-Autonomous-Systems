@@ -97,9 +97,9 @@ See [`networks/README.md`](../networks/README.md) for $\mathcal{L}_{\text{reg}}$
 
 ## Policy type switching
 
-| `policy_type` | Agent | Policy | Observation blocks seen by actor |
-|---------------|-------|--------|----------------------------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Vehicle-state + covariance blocks in dual-encoder mode; full obs in flat mode |
+| `policy_type` | Agent | Policy | Observation routed to actor |
+|---------------|-------|--------|------------------------------|
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full obs in flat mode; full obs split into a navigation block (everything bar the covariance) and the covariance block in dual-encoder mode |
 | `"standard"` | `PPO` | `MlpPolicy` | Full obs |
 
 `include_covariance` and `include_obstacle_obs` flags (set per baseline) control

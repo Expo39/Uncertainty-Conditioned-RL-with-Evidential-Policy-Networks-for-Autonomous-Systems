@@ -327,11 +327,15 @@ def train(
         # return std so the critic predicts a unit-variance target. The reward
         # range is near-bimodal (large terminal bonuses dominate the per-step
         # shaping), so an unnormalised critic struggles to track it.
+        # clip_reward raised from SB3's default 10.0 to 20.0 so the +50
+        # success terminal is not clipped during the early-training window
+        # where the reward-normalisation running_std is still small.
         env = VecNormalize(
             train_vec_env,
             norm_obs=True,
             norm_reward=True,
             clip_obs=10.0,
+            clip_reward=20.0,
         )
     else:
         logger.info("Reusing existing training environment (caller-owned).")
