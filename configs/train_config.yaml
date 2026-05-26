@@ -5,7 +5,7 @@
 
 # PPO hyperparameters
 learning_rate: 0.0003  # Linear decay to 0 applied in train_ppo.py.
-n_steps: 2048  # Steps per PPO update.
+n_steps: 4096  # Steps per PPO update. Doubled from 2048 so each rollout contains ~2.3 episodes (max_steps=1750) instead of ~1.2 - halves the per-update gradient noise that previously made the PPO objective wander.
 batch_size: 256
 n_epochs: 5
 gamma: 0.99  # Discount factor.
@@ -16,7 +16,7 @@ ent_coef: 0.02  # Entropy bonus at the start of training. Wired as a linear deca
 ent_coef_final: 0.001  # Entropy bonus at the end of training. Non-zero floor so the action std does not fully collapse before the policy mean has committed. A 20x decay (vs the earlier 2x) lets the policy actually commit to a deterministic-leaning action in the late phase.
 vf_coef: 0.5
 max_grad_norm: 0.5
-target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
+target_kl: 0.04  # Early-stop epochs when KL divergence exceeds this threshold. Doubled from 0.02 because the previous value triggered early-stop on almost every late-stage minibatch (approx_kl observed at ~1e-6 by end of training) and froze the policy with 10-15% of the budget still on the clock. clip_range=0.2 remains the primary safety; target_kl is a backup.
 
 # Network architecture
 net_arch: [256, 256]  # Actor and critic hidden layers.
