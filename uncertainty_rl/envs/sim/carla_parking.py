@@ -938,8 +938,9 @@ class CARLAParkingEnv(gym.Env):
 
         # Inner-annulus shaping. Additive (not product) so each factor
         # contributes a dense gradient even when the others are near zero.
-        # Peak per-step 0.015 keeps cumulative <= +26, below the +50
-        # success terminal so parking beats loitering.
+        # Coefficient lowered from 0.005 to 0.002 (peak 0.006/step, cumulative
+        # <= ~10) so a car that loiters the full episode at peak still earns
+        # far less than the +50 success terminal - parking dominates loitering.
         approach_term = 0.0
         if SUCCESS_THRESHOLD_POSITION <= position_error < self._success_approach_radius:
             inner_span = self._success_approach_radius - SUCCESS_THRESHOLD_POSITION
@@ -951,14 +952,30 @@ class CARLAParkingEnv(gym.Env):
             # success window to teach the agent to point at the bay.
             approach_alignment = max(0.0, 1.0 - orientation_error / (math.pi / 4))
             approach_term = (
-                0.005 * inner_proximity
-                + 0.005 * inner_proximity * approach_slowness
-                + 0.005 * inner_proximity * approach_alignment
+                0.002 * inner_proximity
+                + 0.002 * inner_proximity * approach_slowness
+                + 0.002 * inner_proximity * approach_alignment
             )
 
-        # Slowness is paid only inside the success window, so it teaches braking
-        # at the goal state without becoming a global "be slow" subsidy.
+        # Slowness-proximity bonus across the full approach radius. Pays
+        # slowness anywhere inside success_approach_radius, scaled by how
+        # close the car is to the bay. Teaches deceleration DURING the
+        # approach, not only at the goal state - without this the policy
+        # learns "drive flat-out at the bay" then overshoots because it has
+        # no incentive to brake before reaching the success window. Peak is
+        # 0.1 at the bay centre and decays linearly to 0 at the approach
+        # radius; the in-bay parked_bonus below remains higher (0.3) so the
+        # success state is still the strict global optimum.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
+        decel_bonus = 0.0
+        if position_error < self._success_approach_radius:
+            proximity = 1.0 - position_error / self._success_approach_radius
+            decel_slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
+            decel_bonus = 0.1 * decel_slowness * proximity
+
+        # In-bay slowness bonus. Strongest inside the success window; combined
+        # with decel_bonus above this gives a monotone slowness gradient from
+        # the approach radius to the success terminal.
         parked_bonus = 0.0
         if in_bay:
             slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
@@ -970,13 +987,14 @@ class CARLAParkingEnv(gym.Env):
         # reward function is therefore outcome-only.
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
-            approach_term + parked_bonus
+            approach_term + decel_bonus + parked_bonus
         )
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
         diag["position_penalty"] = float(position_term)
         diag["approach_reward"] = float(approach_term)
+        diag["decel_bonus"] = float(decel_bonus)
         diag["parked_bonus"] = float(parked_bonus)
         return float(reward), False, False, diag
 
@@ -1880,6 +1898,7 @@ class CARLAParkingEnv(gym.Env):
             "progress_reward": reward_diag["progress_reward"],
             "uncertainty_scale": reward_diag.get("uncertainty_scale", 0.0),
             "approach_reward": reward_diag.get("approach_reward", 0.0),
+            "decel_bonus": reward_diag.get("decel_bonus", 0.0),
             "parked_bonus": reward_diag.get("parked_bonus", 0.0),
             # Post-clamp commands actually delivered to CARLA. Distinct from
             # the policy's raw output so diagnostics can verify the actuator
