@@ -254,11 +254,14 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param lr_schedule: Learning rate schedule.
         @param lambda_reg: Evidential regularisation weight.
         @param use_uncertainty_conditioning: If True, replace the flat MLP actor
-               with UncertaintyConditionedActor (dual-encoder). The observation
-               is split at VEHICLE_STATE_DIM (indices 0-1 = speed, vyaw) and
-               COVARIANCE_FEATURES_DIM (indices 2-4 = std_x/y/yaw) and processed
-               through separate encoder branches before fusion.
-               Requires include_covariance=True in the env config.
+               with UncertaintyConditionedActor (dual-encoder). The covariance
+               block (obs indices VEHICLE_STATE_DIM through VEHICLE_STATE_DIM +
+               COVARIANCE_FEATURES_DIM - 1) is routed through a dedicated
+               uncertainty encoder; the rest of the observation (speed, yaw
+               rate, relative target pose, LiDAR clearances) is routed through
+               the state encoder. The two encoded representations are fused
+               before the EvidentialLayer head. Requires include_covariance=True
+               in the env config.
         """
         self.lambda_reg = lambda_reg
         self.use_uncertainty_conditioning = use_uncertainty_conditioning
@@ -292,8 +295,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
         When use_uncertainty_conditioning=True, wires UncertaintyConditionedActor
         as the action network. The MLP extractor's policy_net is bypassed; the
-        dual-encoder receives the raw observation split into vehicle state and
-        covariance features. When False, uses the standard flat MLP + EvidentialLayer.
+        dual-encoder receives the raw observation split into a navigation-state
+        block (everything except the covariance dims) and the covariance block.
+        When False, uses the standard flat MLP + EvidentialLayer.
 
         @param lr_schedule: Learning rate schedule.
         """
@@ -303,12 +307,23 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         self.action_dist = EvidentialDistribution(action_dim)
 
         if self.use_uncertainty_conditioning:
-            # Dual-encoder actor: separate pathways for state and covariance.
-            # net_arch hidden dims are taken from the MLP extractor latent dim as
-            # a proxy for the configured hidden size.
+            # Dual-encoder actor. The state encoder receives the full
+            # observation MINUS the covariance block, so the actor sees
+            # speed, yaw rate, the relative target bay pose (dx, dy, dyaw)
+            # and the LiDAR clearances. The covariance block (std_x, std_y,
+            # std_yaw) flows into the uncertainty encoder only. An actor
+            # that cannot see dx / dy / dyaw has no goal-direction signal
+            # and cannot learn to drive to the bay; the covariance is a
+            # confidence input that modulates the action, not a replacement
+            # for the navigation features. The hidden width is taken from
+            # the MLP extractor's latent_dim_pi so net_arch in the YAML
+            # controls both encoders symmetrically.
+            obs_shape = cast(Tuple[int, ...], self.observation_space.shape)
+            obs_dim = obs_shape[0]
+            state_dim = obs_dim - COVARIANCE_FEATURES_DIM
             hidden_dim = self.mlp_extractor.latent_dim_pi
             self.action_net: nn.Module = UncertaintyConditionedActor(
-                state_dim=VEHICLE_STATE_DIM,
+                state_dim=state_dim,
                 uncertainty_dim=COVARIANCE_FEATURES_DIM,
                 action_dim=action_dim,
                 hidden_dims=[hidden_dim, hidden_dim],
@@ -327,7 +342,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             logger.info(
                 "EvidentialActorCriticPolicy: dual-encoder actor "
                 "(state_dim=%d, uncertainty_dim=%d, action_dim=%d, hidden_dim=%d)",
-                VEHICLE_STATE_DIM,
+                state_dim,
                 COVARIANCE_FEATURES_DIM,
                 action_dim,
                 hidden_dim,
@@ -360,20 +375,26 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             # overwriting the values set in EvidentialLayer.__init__.
             # Must come AFTER the init_weights loop above.
             # For dual-encoder, the EvidentialLayer lives inside action_net.
+            # Per-axis gamma bias must match EvidentialLayer.__init__ (steer
+            # bipolar, throttle default-on, brake default-off) when
+            # action_dim=3; symmetric gamma=0 fallback otherwise.
             with th.no_grad():
                 n = action_dim
                 if self.use_uncertainty_conditioning:
                     evid = cast(UncertaintyConditionedActor, self.action_net)
-                    evid.evidential_layer.linear.bias[0 * n : 1 * n].fill_(0.0)
-                    evid.evidential_layer.linear.bias[1 * n : 2 * n].fill_(0.9)
-                    evid.evidential_layer.linear.bias[2 * n : 3 * n].fill_(0.9)
-                    evid.evidential_layer.linear.bias[3 * n : 4 * n].fill_(0.0)
+                    bias = evid.evidential_layer.linear.bias
                 else:
                     flat = cast(EvidentialLayer, self.action_net)
-                    flat.linear.bias[0 * n : 1 * n].fill_(0.0)
-                    flat.linear.bias[1 * n : 2 * n].fill_(0.9)
-                    flat.linear.bias[2 * n : 3 * n].fill_(0.9)
-                    flat.linear.bias[3 * n : 4 * n].fill_(0.0)
+                    bias = flat.linear.bias
+                if action_dim == 3:
+                    bias[0] = 0.0   # gamma steer (bipolar)
+                    bias[1] = 0.5   # gamma throttle (default-on)
+                    bias[2] = -1.0  # gamma brake (default-off)
+                else:
+                    bias[0 * n : 1 * n].fill_(0.0)
+                bias[1 * n : 2 * n].fill_(0.9)  # nu
+                bias[2 * n : 3 * n].fill_(0.9)  # alpha
+                bias[3 * n : 4 * n].fill_(0.0)  # beta
 
         # Set up optimiser
         optimizer_kwargs = dict(lr=cast(float, lr_schedule(1)), **self.optimizer_kwargs)
@@ -389,19 +410,26 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         """
         @brief Run the dual-encoder actor on raw observations.
 
-        Splits the observation into vehicle state (indices 0 to VEHICLE_STATE_DIM-1)
-        and covariance features (indices VEHICLE_STATE_DIM to
-        VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM-1) and passes them through
-        the UncertaintyConditionedActor.
+        Splits the observation into a navigation-state block and a covariance
+        block. The covariance block sits at obs[:, VEHICLE_STATE_DIM:
+        VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM]; everything else (speed,
+        yaw rate, relative target pose, LiDAR clearances) is concatenated
+        and forwarded to the state encoder. The covariance block is sent to
+        the uncertainty encoder. Both pathways feed into the
+        UncertaintyConditionedActor.
 
         @param obs: Observation tensor of shape (batch, obs_dim).
         @return Tuple (gamma, nu, alpha, beta) of NIG parameters.
-        @warning Only valid when use_uncertainty_conditioning=True.
+        @warning Only valid when use_uncertainty_conditioning=True. Requires
+                 include_covariance=True in the env config so the covariance
+                 block is actually present at the expected indices.
         """
-        state = obs[:, :VEHICLE_STATE_DIM]
-        uncertainty = obs[
-            :, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM
-        ]
+        cov_start = VEHICLE_STATE_DIM
+        cov_end = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM
+        # Navigation block: speed and yaw rate before the covariance, plus
+        # target pose and LiDAR clearances after it.
+        state = th.cat([obs[:, :cov_start], obs[:, cov_end:]], dim=-1)
+        uncertainty = obs[:, cov_start:cov_end]
         dual = cast(UncertaintyConditionedActor, self.action_net)
         result = dual(state, uncertainty)
         return cast(Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor], result)
@@ -512,8 +540,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
         For the dual-encoder path (use_uncertainty_conditioning=True), the
         UncertaintyConditionedActor receives the raw observation split into
-        vehicle state and covariance features, bypassing the MLP extractor's
-        policy_net. The critic path is unchanged regardless of mode.
+        the navigation-state block (everything except the covariance dims)
+        and the covariance block, bypassing the MLP extractor's policy_net.
+        The critic path is unchanged regardless of mode.
 
         @param obs: Observations.
         @param actions: Actions to evaluate.
