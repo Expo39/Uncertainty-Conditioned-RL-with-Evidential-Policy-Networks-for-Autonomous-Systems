@@ -960,15 +960,21 @@ class CARLAParkingEnv(gym.Env):
         # Slowness-proximity bonus across the full approach radius. Pays
         # slowness anywhere inside success_approach_radius, scaled by how
         # close the car is to the bay. Teaches deceleration DURING the
-        # approach, not only at the goal state - without this the policy
-        # learns "drive flat-out at the bay" then overshoots because it has
-        # no incentive to brake before reaching the success window. Peak is
-        # 0.1 at the bay centre and decays linearly to 0 at the approach
-        # radius; the in-bay parked_bonus below remains higher (0.3) so the
-        # success state is still the strict global optimum.
+        # approach, not only at the goal state - without it the policy
+        # approaches at speed then orbits the bay because it has no incentive
+        # to brake before the success window.
+        #
+        # Gated on progress > 0 (the car must be CLOSING distance this step).
+        # A stationary car earns nothing, which removes the loiter farm: at
+        # the full 0.1 coefficient without this gate a car parked just outside
+        # the bay collected the per-step bonus indefinitely (~78 cumulative,
+        # more than the +50 success terminal), making "stop at 2 m and idle"
+        # the optimal policy. Because progress is a potential difference that
+        # telescopes to zero over any loop, the only way to keep earning it is
+        # to keep genuinely approaching - which ends at the bay, not outside it.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         decel_bonus = 0.0
-        if position_error < self._success_approach_radius:
+        if position_error < self._success_approach_radius and progress > 0.0:
             proximity = 1.0 - position_error / self._success_approach_radius
             decel_slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
             decel_bonus = 0.1 * decel_slowness * proximity
