@@ -15,14 +15,26 @@ import numpy as np
 # Success Criteria for Parking Manoeuvres
 # ---------------------------------------------------------------------------
 
-# Position error threshold for successful parking (metres).
-SUCCESS_THRESHOLD_POSITION = 1.5
+# Velocity threshold for successful parking (m/s). Combined with the
+# geometric in-bay check (car_fully_inside_bay) to define a parked vehicle.
+SUCCESS_THRESHOLD_VELOCITY = 0.1
 
-# Orientation error threshold for successful parking (radians).
-SUCCESS_THRESHOLD_ORIENTATION = np.deg2rad(25)
+# Inward bay margin applied to the polygon-fit success check (metres).
+# Zero = "inside or on the line"; positive shrinks the bay; negative inflates
+# it to allow corners to overhang the bay edge by `-margin` metres.
+SUCCESS_BAY_MARGIN = 0.0
 
-# Velocity threshold for successful parking (m/s).
-SUCCESS_THRESHOLD_VELOCITY = 0.3
+# ---------------------------------------------------------------------------
+# Approach Reward Shaping (not success criteria)
+# ---------------------------------------------------------------------------
+
+# Position error (metres) below which the inner-annulus approach shaping
+# fires. Decoupled from the success gate so this ring can be tuned
+# independently of what counts as a park.
+APPROACH_INNER_RADIUS = 1.5
+
+# Orientation error (radians) at which the inner alignment factor saturates.
+APPROACH_INNER_ALIGNMENT_CUTOFF = np.pi / 4
 
 # ---------------------------------------------------------------------------
 # State Space Dimensions

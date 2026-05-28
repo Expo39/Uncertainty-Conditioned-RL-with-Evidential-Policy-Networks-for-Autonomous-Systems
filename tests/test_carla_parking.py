@@ -34,6 +34,7 @@ from uncertainty_rl.utils.constants import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    car_fully_inside_bay,
     point_in_polygon,
     wrap_angle_symmetric,
     yaw_from_quaternion,
@@ -774,8 +775,13 @@ def _make_env_for_reward() -> Any:
     mock_sm.consume_collision.return_value = (False, False)
     env._sensor_manager = mock_sm
 
-    # Default target bay at origin
-    env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+    # Default target bay at origin. Width/depth match the rectangle layout's
+    # angled bays so the geometric in-bay check has sensible polygon
+    # dimensions. Ego half-extents are CARLA's reported bounding box for
+    # vehicle.bmw.grandtourer (length 4.612 m, width 2.242 m).
+    env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
+    env._ego_half_length = 2.306
+    env._ego_half_width = 1.121
     env._prev_distance = 5.0
 
     # Layout with generous corners so OOB check doesn't fire unless intended
@@ -864,26 +870,23 @@ class TestComputeReward:
 
     def test_success_returns_plus_fifty_after_dwell(self) -> None:
         """
-        @brief Success requires all thresholds to hold for success_dwell_steps
-               consecutive steps. Before the dwell is complete, the episode
-               does not terminate.
+        @brief Success requires the geometric in-bay check and the velocity
+               gate to hold for success_dwell_steps consecutive steps. Before
+               the dwell is complete, the episode does not terminate.
         """
-        from uncertainty_rl.utils.constants import (
-            SUCCESS_THRESHOLD_POSITION,
-            SUCCESS_THRESHOLD_VELOCITY,
-        )
+        from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         dwell = 3
         env = _make_env_for_reward()
         env._success_dwell_steps = dwell
+        # Ego centred in the bay; speed below the success velocity threshold.
         _set_vehicle(
             env,
-            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            x=0.0,
             y=0.0,
             yaw_deg=0.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
         )
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
         # Steps 1 and 2: in-bay but dwell not yet satisfied
         for step in range(1, dwell):
@@ -899,22 +902,18 @@ class TestComputeReward:
 
     def test_drive_through_does_not_count_as_success(self) -> None:
         """
-        @brief A single step inside the bay thresholds (drive-through) must not
-               trigger success. The dwell counter resets when the vehicle leaves.
+        @brief A single step inside the bay (drive-through) must not trigger
+               success. The dwell counter resets when the vehicle leaves.
         """
-        from uncertainty_rl.utils.constants import (
-            SUCCESS_THRESHOLD_POSITION,
-            SUCCESS_THRESHOLD_VELOCITY,
-        )
+        from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         env = _make_env_for_reward()
         env._success_dwell_steps = 5
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
-        # One step inside thresholds (simulates fast drive-through)
+        # One step inside the bay (simulates fast drive-through)
         _set_vehicle(
             env,
-            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            x=0.0,
             y=0.0,
             yaw_deg=0.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
@@ -937,7 +936,7 @@ class TestComputeReward:
         """
         env = _make_env_for_reward()
         env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         # Current distance is ~5m (vehicle at (5,0))
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
@@ -954,7 +953,7 @@ class TestComputeReward:
         """
         env = _make_env_for_reward()
         env._prev_distance = 2.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         # Current distance ~10m (vehicle moved away)
         _set_vehicle(env, x=10.0, y=0.0, yaw_deg=0.0)
 
@@ -971,7 +970,7 @@ class TestComputeReward:
         env = _make_env_for_reward()
         dist = 5.0
         env._prev_distance = dist
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         # Vehicle stays at exactly the same distance (no progress)
         _set_vehicle(env, x=dist, y=0.0, yaw_deg=0.0)
 
@@ -989,7 +988,7 @@ class TestComputeReward:
         """
         env = _make_env_for_reward()
         env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
 
         env._compute_reward()
@@ -998,22 +997,19 @@ class TestComputeReward:
 
     def test_yaw_180_offset_not_valid_no_reverse(self) -> None:
         """
-        @brief With no reverse gear, a 180-deg yaw offset is a full orientation
-        error, not a valid nose-out. It must not trigger success even when the
-        position and speed thresholds are met.
+        @brief With no reverse gear, a 180-deg yaw offset is a rear-first
+        park, not a valid forward manoeuvre. The success gate rejects it via
+        the facing-forward check even though the geometric polygon-fit alone
+        would accept it (rectangles are symmetric under 180-deg rotation).
         """
-        from uncertainty_rl.utils.constants import (
-            SUCCESS_THRESHOLD_POSITION,
-            SUCCESS_THRESHOLD_VELOCITY,
-        )
+        from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
         # Vehicle yaw = 180 deg: opposite to the bay's target yaw.
         _set_vehicle(
             env,
-            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            x=0.0,
             y=0.0,
             yaw_deg=180.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
@@ -1027,7 +1023,7 @@ class TestComputeReward:
         @brief diag dict must contain all five expected keys on every code path.
         """
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         _, _, _, diag = env._compute_reward()
@@ -1046,7 +1042,7 @@ class TestComputeReward:
         @brief diag['pos_error'] equals the Euclidean distance to the target.
         """
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
 
         _, _, _, diag = env._compute_reward()
@@ -1082,7 +1078,7 @@ class TestComputeReward:
         """
         env = _make_env_for_reward()
         env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         _, _, _, diag = env._compute_reward()
@@ -1221,6 +1217,170 @@ class TestPointInPolygon:
         corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]
         assert point_in_polygon(0.0, 0.0, corners) is True
         assert point_in_polygon(3.0, 0.0, corners) is False
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: car_fully_inside_bay
+# ---------------------------------------------------------------------------
+
+
+class TestCarFullyInsideBay:
+    """
+    @class TestCarFullyInsideBay
+    @brief Tests for the polygon-containment success check.
+    """
+
+    # CARLA-reported extents for vehicle.bmw.grandtourer.
+    CAR_HL = 2.306
+    CAR_HW = 1.121
+    # Rectangle layout angled bay dims. Lateral slack:
+    # (BAY_W - 2*CAR_HW) / 2 = (2.5 - 2.242) / 2 = 0.129 m.
+    # Longitudinal slack: (BAY_D - 2*CAR_HL) / 2 = (5.4 - 4.612) / 2 = 0.394 m.
+    BAY_W = 2.5
+    BAY_D = 5.4
+
+    def test_centred_car_fits(self) -> None:
+        """
+        @brief Car perfectly centred and aligned with the bay must fit.
+        """
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.0,
+            car_yaw=0.0,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is True
+
+    def test_car_offset_within_lateral_slack_fits(self) -> None:
+        """
+        @brief A lateral offset smaller than the lateral slack must still fit.
+        """
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.1,
+            car_yaw=0.0,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is True
+
+    def test_car_offset_beyond_lateral_slack_fails(self) -> None:
+        """
+        @brief A lateral offset larger than the slack must push a corner out.
+        """
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.2,
+            car_yaw=0.0,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is False
+
+    def test_car_offset_within_longitudinal_slack_fits(self) -> None:
+        """
+        @brief A longitudinal offset smaller than the longitudinal slack must
+               still fit (slack is larger in this axis than laterally).
+        """
+        assert car_fully_inside_bay(
+            car_x=0.3,
+            car_y=0.0,
+            car_yaw=0.0,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is True
+
+    def test_yawed_car_pokes_out(self) -> None:
+        """
+        @brief A 15-deg yaw sweeps the corners well beyond the lateral slack.
+        """
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.0,
+            car_yaw=math.radians(15.0),
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is False
+
+    def test_180_yaw_still_fits_polygon(self) -> None:
+        """
+        @brief Rectangle symmetry under 180-deg rotation: the polygon check
+               alone cannot reject a rear-first park. The facing-forward gate
+               in _compute_reward is what catches it.
+        """
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.0,
+            car_yaw=math.pi,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is True
+
+    def test_rotated_bay_with_aligned_car_fits(self) -> None:
+        """
+        @brief Containment is invariant under the same rigid rotation applied
+               to bay and car.
+        """
+        yaw = math.radians(45.0)
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.0,
+            car_yaw=yaw,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=yaw,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+        ) is True
+
+    def test_positive_margin_shrinks_bay(self) -> None:
+        """
+        @brief A car that fits with margin=0 should be rejected when the
+               margin shrinks the bay below the car's footprint.
+        """
+        assert car_fully_inside_bay(
+            car_x=0.0,
+            car_y=0.0,
+            car_yaw=0.0,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+            margin=0.5,
+        ) is False
 
 
 # ---------------------------------------------------------------------------
