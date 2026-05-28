@@ -995,18 +995,16 @@ class TestComputeReward:
 
         assert env._prev_distance == pytest.approx(5.0)
 
-    def test_yaw_180_offset_not_valid_no_reverse(self) -> None:
+    def test_yaw_180_offset_valid_any_orientation(self) -> None:
         """
-        @brief With no reverse gear, a 180-deg yaw offset is a rear-first
-        park, not a valid forward manoeuvre. The success gate rejects it via
-        the facing-forward check even though the geometric polygon-fit alone
-        would accept it (rectangles are symmetric under 180-deg rotation).
+        @brief A car inside the bay at 180-deg yaw offset still counts as
+        success. Any orientation is accepted provided the car physically fits.
         """
         from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         env = _make_env_for_reward()
 
-        # Vehicle yaw = 180 deg: opposite to the bay's target yaw.
+        # Vehicle yaw = 180 deg: opposite to the bay's target yaw but inside.
         _set_vehicle(
             env,
             x=0.0,
@@ -1014,9 +1012,10 @@ class TestComputeReward:
             yaw_deg=180.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
         )
+        env._success_counter = env._success_dwell_steps - 1
         reward, terminated, success, diag = env._compute_reward()
 
-        assert success is False, "180-deg yaw offset must not count as success"
+        assert success is True, "180-deg yaw offset inside bay must count as success"
 
     def test_diag_keys_present(self) -> None:
         """

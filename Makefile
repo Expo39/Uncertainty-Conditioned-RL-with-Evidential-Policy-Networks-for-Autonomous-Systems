@@ -354,15 +354,25 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
 	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
-	@# Tear down any pre-existing stack first. 
+	@# Tear down any pre-existing stack first (including orphans from a
+	@# previous broken eval-visualise-2d run that left the training /
+	@# tensorboard containers up but disconnected).
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) down --remove-orphans
 	@# Also clear the visualisation history so the viewer starts on this
-	@# run's frames, not stale ones left over from a previous session.
+	@# run's frames, not stale ones left over from a previous session. The
+	@# old file may be root-owned (demo container writes as root when UID
+	@# is unset), hence sudo.
+	sudo rm -f $(_VIS_FILE) outputs/.vis_active
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
-	@# Start the demo container detached, then run the viewer in the foreground.
+	@# Start the demo container detached, stream its logs in the background
+	@# so failures (checkpoint load errors, CARLA connection issues, etc.)
+	@# are visible, then run the viewer in the foreground. UID/GID are
+	@# exported so the demo container does not fall back to root and leave
+	@# root-owned files in outputs/.
 	@set -e; \
+	export UID=$$(id -u); export GID=$$(id -g); \
 	demo_cid=$$($(DOCKER_COMPOSE) --profile demo run --rm -d demo \
 		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
@@ -370,7 +380,9 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		$(if $(filter false,$(REALTIME)),--no-realtime,) | tail -n1); \
 	echo "Demo container: $$demo_cid"; \
-	trap 'echo "Stopping demo container..."; docker rm -f $$demo_cid >/dev/null 2>&1 || true' EXIT INT TERM; \
+	docker logs -f $$demo_cid 2>&1 | sed 's/^/[demo] /' & \
+	logs_pid=$$!; \
+	trap 'echo "Stopping demo container..."; kill $$logs_pid 2>/dev/null || true; docker rm -f $$demo_cid >/dev/null 2>&1 || true' EXIT INT TERM; \
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 

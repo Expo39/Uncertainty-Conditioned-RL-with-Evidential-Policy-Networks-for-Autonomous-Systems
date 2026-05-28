@@ -62,6 +62,12 @@ services:
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
+      # HOME points at the writable outputs/ mount so the CARLA Python client
+      # (and matplotlib, etc.) can create their per-user caches. Without this,
+      # HOME defaults to "/" for non-root UIDs and CARLA tries to write
+      # "//carlaCache/0.9.16/..." which fails.
+      - HOME=/workspace/outputs
+      - MPLCONFIGDIR=/workspace/outputs/.matplotlib
       # CARLA_HOST is intentionally not set here: demo_drive.py falls back to
       # carla_host in env_config.yaml ("uncertainty-rl-carla-0"), which is the
       # actual worker 0 container alias. Hardcoding "carla-server-0" here would
