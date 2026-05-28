@@ -919,15 +919,10 @@ class CARLAParkingEnv(gym.Env):
             return reward, True, False, diag
 
         # Success: every corner of the ego bounding box lies inside the bay
-        # polygon, the car is facing forward into the bay (not parked
-        # backwards), and the vehicle is essentially stopped. The forward
-        # check rejects the 180-deg yaw solution that the symmetric polygon
-        # check otherwise accepts; the agent has no reverse gear so a
-        # rear-first park is not a valid manoeuvre.
-        facing_forward = math.cos(yaw - self._target_yaw) > 0.0
+        # polygon and the vehicle is essentially stopped. Any orientation is
+        # accepted provided the car physically fits inside the bay.
         in_bay = (
-            facing_forward
-            and car_fully_inside_bay(
+            car_fully_inside_bay(
                 car_x=x,
                 car_y=y,
                 car_yaw=yaw,
