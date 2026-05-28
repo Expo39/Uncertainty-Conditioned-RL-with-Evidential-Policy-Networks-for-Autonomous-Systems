@@ -91,10 +91,10 @@ def generate() -> Dict[str, Any]:
     end_clearance = angled_corner_clearance(lot)
     diag_ang = lot.row_along_perimeter(
         bay_type="angled",
-        n=11,
+        n=10,
         wall=WALL_TOP_DIAGONAL,
         bay_angle_deg=45.0,
-        start_along=diag_wall_len - end_clearance - 11 * ang_spacing,
+        start_along=diag_wall_len - end_clearance - 10 * ang_spacing,
     )
 
     # ---------- Top-flat back-to-back perp rows ------------------------
@@ -122,7 +122,7 @@ def generate() -> Dict[str, Any]:
         n=8,
         wall=WALL_RIGHT,
         bay_angle_deg=45.0,
-        start_along=8.0,
+        start_along=4.888,
     )
 
     # ---------- Spawns -------------------------------------------------

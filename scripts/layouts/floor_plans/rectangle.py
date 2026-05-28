@@ -41,10 +41,10 @@ def generate() -> Dict[str, Any]:
 
     # ---------- Bays ---------------------------------------------------
     centre_perp, centre_ang = _centre_rows(lot, dims_perp, dims_ang)
-    bottom_perp = lot.row_along_perimeter("perpendicular", n=12, wall=WALL_BOTTOM)
+    bottom_perp = lot.row_along_perimeter("perpendicular", n=11, wall=WALL_BOTTOM)
     bottom_ang = lot.row_along_perimeter(
         "angled",
-        n=7,
+        n=6,
         wall=WALL_BOTTOM,
         bay_angle_deg=45.0,
         pack_from="end",

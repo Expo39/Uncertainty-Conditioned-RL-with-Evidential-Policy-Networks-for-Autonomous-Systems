@@ -184,7 +184,8 @@ class DryRunInspector(_Inspector):
         @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
                steer in [-1, 1]; throttle and brake in [0, 1].
                None = action_space.sample(). Ignored when manual=True.
-        @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
+        @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free',
+               'birds_eye'.
         @param termination_pause: Seconds to hold scene after episode ends.
         @param manual: If True, use keyboard arrow keys instead of random/fixed action.
         """
@@ -197,7 +198,8 @@ class DryRunInspector(_Inspector):
         )
         self._view: str = (
             initial_view
-            if initial_view in ("third_person", "side", "back", "front", "free")
+            if initial_view
+            in ("third_person", "side", "back", "front", "free", "birds_eye")
             else "third_person"
         )
         self._termination_pause = termination_pause
@@ -274,6 +276,17 @@ class DryRunInspector(_Inspector):
                         pitch=0.0,
                         yaw=math.degrees(math.atan2(vy - sy, vx - sx)),
                     ),
+                )
+            )
+        elif self._view == "birds_eye":
+            # Top-down chase cam. Pitch is -89 (not -90) to avoid the gimbal-lock
+            # singularity where yaw becomes degenerate and the image spins on
+            # every tiny vehicle-yaw oscillation. Matching yaw to the vehicle
+            # keeps the car's forward direction aligned with screen up.
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=vx, y=vy, z=vz + 30.0),
+                    carla.Rotation(pitch=-89.0, yaw=vyaw),
                 )
             )
         elif self._view == "back":

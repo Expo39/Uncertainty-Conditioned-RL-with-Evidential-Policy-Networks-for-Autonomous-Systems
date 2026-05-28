@@ -17,9 +17,9 @@ Point = Tuple[float, float]
 
 
 BAY_DIMS: Dict[str, Dict[str, float]] = {
-    "perpendicular": {"width": 2.5, "depth": 5.0, "aisle": 6.0},
-    "angled": {"width": 2.5, "depth": 5.4, "aisle": 3.6},
-    "parallel": {"width": 2.5, "depth": 6.0, "aisle": 4.0},
+    "perpendicular": {"width": 2.75, "depth": 5.25, "aisle": 6.0},
+    "angled": {"width": 2.75, "depth": 5.65, "aisle": 3.6},
+    "parallel": {"width": 2.75, "depth": 6.25, "aisle": 4.0},
 }
 
 # Reference target for bay counts (5 per type per layout where geometry permits).

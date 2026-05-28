@@ -154,12 +154,14 @@ def main() -> None:
     parser.add_argument(
         "--inspect-view",
         default="third_person",
-        choices=["third_person", "side", "back", "front", "free"],
+        choices=["third_person", "side", "back", "front", "free", "birds_eye"],
         dest="inspect_view",
         help=(
             "Spectator view for dryrun mode (default: third_person).  "
             "'free' places the spectator overhead once and then does not move "
             "it, so you can fly around with CARLA's own controls.  "
+            "'birds_eye' is a top-down camera that follows the ego vehicle "
+            "with the vehicle's heading aligned to screen up.  "
             "Ignored in all other modes."
         ),
     )
