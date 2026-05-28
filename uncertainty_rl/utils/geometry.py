@@ -118,6 +118,71 @@ def _interpolate_cone_positions(
     return positions
 
 
+def car_fully_inside_bay(
+    car_x: float,
+    car_y: float,
+    car_yaw: float,
+    car_half_length: float,
+    car_half_width: float,
+    bay_x: float,
+    bay_y: float,
+    bay_yaw: float,
+    bay_width: float,
+    bay_depth: float,
+    margin: float = 0.0,
+) -> bool:
+    """
+    @brief Test whether all four corners of the car lie inside the bay rectangle.
+
+    Transforms the car corners into the bay's local axis-aligned frame and
+    checks |x_local| <= depth/2 and |y_local| <= width/2 against an
+    optionally-shrunk bay. The bay yaw points along the bay's depth (entry)
+    axis, matching the layout YAML convention.
+
+    @param car_x: Car centre x in world frame (metres).
+    @param car_y: Car centre y in world frame (metres).
+    @param car_yaw: Car heading in world frame (radians).
+    @param car_half_length: Half the car's longitudinal extent (m).
+    @param car_half_width:  Half the car's lateral extent (m).
+    @param bay_x: Bay centre x in world frame (metres).
+    @param bay_y: Bay centre y in world frame (metres).
+    @param bay_yaw: Bay heading in world frame (radians).
+    @param bay_width: Lateral extent of the bay (m, perpendicular to bay axis).
+    @param bay_depth: Longitudinal extent of the bay (m, along bay axis).
+    @param margin: Positive value shrinks the bay inward by `margin` metres
+                   on every side (strict fit); zero accepts "inside or on
+                   the line"; negative inflates the bay (slack).
+    @return True when every car corner lies inside the (margin-adjusted) bay.
+    """
+    half_depth = bay_depth / 2.0 - margin
+    half_width = bay_width / 2.0 - margin
+    if half_depth <= 0.0 or half_width <= 0.0:
+        return False
+
+    cos_c, sin_c = math.cos(car_yaw), math.sin(car_yaw)
+    cos_b, sin_b = math.cos(bay_yaw), math.sin(bay_yaw)
+
+    car_corners_local = (
+        (car_half_length, car_half_width),
+        (car_half_length, -car_half_width),
+        (-car_half_length, -car_half_width),
+        (-car_half_length, car_half_width),
+    )
+
+    for lx, ly in car_corners_local:
+        # Corner in world frame
+        wx = car_x + cos_c * lx - sin_c * ly
+        wy = car_y + sin_c * lx + cos_c * ly
+        # Corner in bay frame (inverse rotation)
+        dx = wx - bay_x
+        dy = wy - bay_y
+        bx = cos_b * dx + sin_b * dy
+        by = -sin_b * dx + cos_b * dy
+        if abs(bx) > half_depth or abs(by) > half_width:
+            return False
+    return True
+
+
 def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> bool:
     """
     @brief Ray-casting point-in-polygon test.

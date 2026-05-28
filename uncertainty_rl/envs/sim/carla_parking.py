@@ -42,15 +42,17 @@ from uncertainty_rl.envs.covariance_subscriber import _CovarianceSubscriber
 from uncertainty_rl.envs.sim.helpers import LotSpawner, NPCController, SensorManager
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
+    APPROACH_INNER_ALIGNMENT_CUTOFF,
+    APPROACH_INNER_RADIUS,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
-    SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_POSITION,
+    SUCCESS_BAY_MARGIN,
     SUCCESS_THRESHOLD_VELOCITY,
     VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
+    car_fully_inside_bay,
     wrap_angle_symmetric,
 )
 from uncertainty_rl.utils.logging import DebugLogger
@@ -289,6 +291,12 @@ class CARLAParkingEnv(gym.Env):
         # and passed to all static spawners so props and vehicles land on the same
         # ground surface instead of using the hardcoded YAML origin_z.
         self._floor_z: float = 0.3
+
+        # Ego bounding-box half-extents (metres) read from CARLA at spawn time.
+        # Used by the polygon-fit success check in _compute_reward to test
+        # whether every corner of the car lies inside the target bay polygon.
+        self._ego_half_length: float = 0.0
+        self._ego_half_width: float = 0.0
 
         # Per-step debug diagnostics.
         # Instantiated here so NPCController / SensorManager can share the reference.
@@ -910,9 +918,28 @@ class CARLAParkingEnv(gym.Env):
             reward = -25.0 if collision_ego_fault else -10.0
             return reward, True, False, diag
 
+        # Success: every corner of the ego bounding box lies inside the bay
+        # polygon, the car is facing forward into the bay (not parked
+        # backwards), and the vehicle is essentially stopped. The forward
+        # check rejects the 180-deg yaw solution that the symmetric polygon
+        # check otherwise accepts; the agent has no reverse gear so a
+        # rear-first park is not a valid manoeuvre.
+        facing_forward = math.cos(yaw - self._target_yaw) > 0.0
         in_bay = (
-            position_error < SUCCESS_THRESHOLD_POSITION
-            and orientation_error < SUCCESS_THRESHOLD_ORIENTATION
+            facing_forward
+            and car_fully_inside_bay(
+                car_x=x,
+                car_y=y,
+                car_yaw=yaw,
+                car_half_length=self._ego_half_length,
+                car_half_width=self._ego_half_width,
+                bay_x=self._target_x,
+                bay_y=self._target_y,
+                bay_yaw=self._target_yaw,
+                bay_width=float(self._target_bay["width"]),
+                bay_depth=float(self._target_bay["depth"]),
+                margin=SUCCESS_BAY_MARGIN,
+            )
             and speed < SUCCESS_THRESHOLD_VELOCITY
         )
         if in_bay:
@@ -938,19 +965,19 @@ class CARLAParkingEnv(gym.Env):
 
         # Inner-annulus shaping. Additive (not product) so each factor
         # contributes a dense gradient even when the others are near zero.
-        # Coefficient lowered from 0.005 to 0.002 (peak 0.006/step, cumulative
-        # <= ~10) so a car that loiters the full episode at peak still earns
-        # far less than the +50 success terminal - parking dominates loitering.
+        # APPROACH_INNER_RADIUS bounds the inner ring; outside it the
+        # progress + position terms carry the gradient, inside it this term
+        # adds proximity/slowness/alignment shaping to teach the end-game.
         approach_term = 0.0
-        if SUCCESS_THRESHOLD_POSITION <= position_error < self._success_approach_radius:
-            inner_span = self._success_approach_radius - SUCCESS_THRESHOLD_POSITION
+        if APPROACH_INNER_RADIUS <= position_error < self._success_approach_radius:
+            inner_span = self._success_approach_radius - APPROACH_INNER_RADIUS
             inner_proximity = (
-                1.0 - (position_error - SUCCESS_THRESHOLD_POSITION) / inner_span
+                1.0 - (position_error - APPROACH_INNER_RADIUS) / inner_span
             )
             approach_slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
-            # 45 deg alignment cutoff; tighter is too sparse outside the 25 deg
-            # success window to teach the agent to point at the bay.
-            approach_alignment = max(0.0, 1.0 - orientation_error / (math.pi / 4))
+            approach_alignment = max(
+                0.0, 1.0 - orientation_error / APPROACH_INNER_ALIGNMENT_CUTOFF
+            )
             approach_term = (
                 0.002 * inner_proximity
                 + 0.002 * inner_proximity * approach_slowness
@@ -1301,6 +1328,13 @@ class CARLAParkingEnv(gym.Env):
         self.vehicle = self.world.try_spawn_actor(vehicle_bp, spawn_transform)
         if self.vehicle is None:
             logger.error("Ego vehicle could not be spawned at lot spawn point.")
+
+        if self.vehicle is not None:
+            # CARLA's bounding_box.extent is half-lengths along the body axes:
+            # x = forward (length/2), y = lateral (width/2).
+            bb_extent = self.vehicle.bounding_box.extent
+            self._ego_half_length = float(bb_extent.x)
+            self._ego_half_width = float(bb_extent.y)
 
         if self.vehicle is not None and self.world is not None:
             # Tick until the vehicle settles onto the ground plane.
