@@ -106,7 +106,7 @@ Keyboard controls (dryrun, `MANUAL=true`): Up = throttle, Down = brake, Left/Rig
 | `--layout` | `rectangle`, `trapezoid`, `irregular_a` | `rectangle` | Floor plan to spawn |
 | `--view` | `birds_eye`, `side`, `front` | `birds_eye` | Camera view (sensors mode only) |
 | `--zoom` | `close`, `wide` | `close` | Camera height (birds-eye only) |
-| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free` | `third_person` | Spectator view (dryrun only) |
+| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free`, `birds_eye` | `third_person` | Spectator view (dryrun only) |
 | `--termination-pause` | float (seconds) | `3.0` | Hold scene after episode end (dryrun only) |
 | `--episodes` | int | unlimited | Max episodes (dryrun only) |
 | `--duration` | int (seconds) | `86400` | Max run time (24 h) |

@@ -57,7 +57,7 @@ def generate() -> Dict[str, Any]:
     centre_mid_low, centre_mid_high = lot.row_pair_back_to_back(
         bay_type="perpendicular",
         n=7,
-        centre=(DEPTH / 2.0 - 1.5 - 5.0 + 3.0, WIDTH_FRONT / 2.0),
+        centre=(DEPTH / 2.0 - 1.5 - 5.0 + 1.0, WIDTH_FRONT / 2.0),
         direction="east",
         gap=PERP_AISLE,
     )
@@ -71,7 +71,7 @@ def generate() -> Dict[str, Any]:
     )
     top_ang = lot.row_along_perimeter(
         "angled",
-        n=7,
+        n=6,
         wall=WALL_TOP,
         bay_angle_deg=225.0,
         start_along=angled_corner_clearance(lot) + 15.0,
@@ -111,14 +111,6 @@ def generate() -> Dict[str, Any]:
     lot.set_patrol(patrol)
 
     # ---------- Pedestrian zones ---------------------------------------
-    lot.add_zone(
-        PedestrianZone(
-            x_min=left_ang.bbox[1] + 0.5,
-            x_max=left_ang.bbox[1] + 3.5,
-            y_min=left_ang.bbox[2] + 1.5,
-            y_max=left_ang.bbox[3] - 3.5,
-        )
-    )
     lot.add_zone(PedestrianZone.along_row(centre_low, side="south"))
     lot.add_zone(PedestrianZone.along_row(centre_high, side="north"))
     lot.add_zone(PedestrianZone.along_row(centre_mid_low, side="south"))
