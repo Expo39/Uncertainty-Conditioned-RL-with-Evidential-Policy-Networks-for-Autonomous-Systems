@@ -29,10 +29,16 @@ from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 from uncertainty_rl.utils.constants import (
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
-    SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_POSITION,
     SUCCESS_THRESHOLD_VELOCITY,
 )
+
+# Scalar success thresholds used only by the real-world inference loop as a
+# placeholder until a measured vehicle bounding box and bay polygon are wired
+# in to mirror the sim's polygon-fit check (car_fully_inside_bay).
+# @todo(AG) replace with car_fully_inside_bay once deployment vehicle extents
+# are surveyed and added to the deployment config.
+_REAL_WORLD_POS_THRESHOLD_M = 0.5
+_REAL_WORLD_YAW_THRESHOLD_RAD = math.radians(15.0)
 
 logger = logging.getLogger("uncertainty_rl.envs.real.inference_loop")
 
@@ -373,10 +379,12 @@ class RealWorldInferenceLoop:
             )
             return True, False
 
-        # Success: all three criteria met simultaneously.
+        # Success: all three criteria met simultaneously. Scalar placeholder
+        # for the polygon-fit check used in sim - replace once deployment
+        # vehicle extents are surveyed and the bay polygon is loaded.
         success = (
-            pos_error < SUCCESS_THRESHOLD_POSITION
-            and yaw_error < SUCCESS_THRESHOLD_ORIENTATION
+            pos_error < _REAL_WORLD_POS_THRESHOLD_M
+            and yaw_error < _REAL_WORLD_YAW_THRESHOLD_RAD
             and abs(vx_body) < SUCCESS_THRESHOLD_VELOCITY
         )
         if success:

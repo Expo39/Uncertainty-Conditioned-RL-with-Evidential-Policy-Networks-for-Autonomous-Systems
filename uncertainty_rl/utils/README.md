@@ -27,27 +27,34 @@ Structural constants fixed by system architecture. Changing any of these require
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `VEHICLE_STATE_DIM` | $1$ | Yaw rate only: $[\dot\psi]$. $v_x$/$v_y$ excluded - no EKF correction source. |
+| `VEHICLE_STATE_DIM` | $2$ | Signed body-frame longitudinal speed and yaw rate: $[v_x, \dot\psi]$. |
 | `COVARIANCE_FEATURES_DIM` | $3$ | EKF uncertainty features: $[\sigma_x, \sigma_y, \sigma_\psi]$. Off-diagonal terms dropped as redundant. |
 | `TARGET_POSE_DIM` | $3$ | Relative target bay pose: $[dx, dy, d\psi]$ in ego body frame. |
 | `OBSTACLE_FEATURES_DIM` | $5$ | Hemispheric clearance: $[d_\text{left}, \theta_\text{left}, d_\text{right}, \theta_\text{right}, d_\text{fwd}]$. |
-| `TOTAL_OBS_DIM` | $12$ | Full observation: $1 + 3 + 3 + 5$ (both ablation flags true). |
-| `ACTION_DIM` | $2$ | Steering $\in [-1, 1]$, drive $\in [-1, 1]$. drive is bipolar: positive = throttle, negative = brake. No reverse gear. |
-| `SUCCESS_THRESHOLD_POSITION` | $0.5$ m | Parking success position threshold. |
-| `SUCCESS_THRESHOLD_ORIENTATION` | $\approx 0.175$ rad | Parking success orientation threshold ($10$ deg). |
-| `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. |
+| `TOTAL_OBS_DIM` | $13$ | Full observation: $2 + 3 + 3 + 5$ (both ablation flags true). |
+| `ACTION_DIM` | $3$ | Steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$. Throttle and brake are separate non-negative axes. No reverse gear. |
+| `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. Combined with the geometric in-bay check to define a parked vehicle. |
+| `SUCCESS_BAY_MARGIN` | $0.0$ m | Inward bay-polygon shrink for the success check; $0.0$ means "inside or on the line", positive shrinks the bay, negative inflates it. |
+| `APPROACH_INNER_RADIUS` | $1.5$ m | Inner-annulus boundary for the `approach_term` reward shaping (not a success criterion). |
+| `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff inside `approach_term` ($45$ deg). |
 | `CLEARANCE_THRESHOLD` | $0.8$ m | Reserved; CARLA collision sensor used in practice. |
 | `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Distance from target above which episode terminates. |
 | `MAX_PARKING_SPEED` | $15.0$ m/s | Speed cap for parking manoeuvres. |
+
+Success position and orientation are no longer scalar constants. The success
+gate combines a geometric polygon-fit check (every corner of the ego
+bounding box must lie inside the target bay rectangle, via
+`car_fully_inside_bay()`), a facing-forward check (the car cannot count as
+parked while pointing out of the bay), and the velocity threshold above.
 
 Observation dimension as a function of ablation flags:
 
 | `include_covariance` | `include_obstacle_obs` | Obs dim |
 |---------------------|----------------------|---------|
-| True | True | $12$ (default) |
-| False | True | $9$ |
-| True | False | $7$ |
-| False | False | $4$ |
+| True | True | $13$ (default) |
+| False | True | $10$ |
+| True | False | $8$ |
+| False | False | $5$ |
 
 Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime rather than branching on these constants directly.
 
@@ -66,6 +73,7 @@ Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime r
 |----------|---------|
 | `zone_bbox` | Convert a pedestrian zone dict to $(x_\min, x_\max, y_\min, y_\max)$; handles explicit-extents and centre + half-extents YAML formats |
 | `point_in_polygon` | Ray-casting out-of-bounds test against the lot boundary polygon (with $10^{-12}$ division guard for horizontal edges) |
+| `car_fully_inside_bay` | Rectangle-in-rectangle containment: every corner of the ego bounding box must lie inside the bay rectangle (optional inward `margin`). Used by the geometric success gate |
 | `yaw_from_quaternion` | Extract yaw from a quaternion using ZYX Euler decomposition, wrapped to $[-\pi, \pi]$ |
 | `wrap_angle_symmetric` | Wrap heading error to $(-\pi, \pi]$ with 180-deg parking symmetry |
 | `_compute_relative_target_pose` | Target bay pose in ego body frame: returns $(dx, dy, d\psi)$ |
@@ -110,12 +118,13 @@ from uncertainty_rl.utils import (
     # Constants
     ACTION_DIM, TOTAL_OBS_DIM, VEHICLE_STATE_DIM,
     COVARIANCE_FEATURES_DIM, TARGET_POSE_DIM, OBSTACLE_FEATURES_DIM,
-    SUCCESS_THRESHOLD_POSITION, SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_VELOCITY, OUT_OF_BOUNDS_THRESHOLD,
+    SUCCESS_THRESHOLD_VELOCITY, SUCCESS_BAY_MARGIN,
+    APPROACH_INNER_RADIUS, APPROACH_INNER_ALIGNMENT_CUTOFF,
+    OUT_OF_BOUNDS_THRESHOLD,
     # Covariance
     extract_2d_covariance_features, validate_covariance_matrix,
     # Geometry
-    zone_bbox, point_in_polygon, wrap_angle_symmetric,
+    zone_bbox, point_in_polygon, car_fully_inside_bay, wrap_angle_symmetric,
     # Logging
     DebugLogger,
     # Visualisation
