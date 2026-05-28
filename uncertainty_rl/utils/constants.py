@@ -22,7 +22,7 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # Inward bay margin applied to the polygon-fit success check (metres).
 # Zero = "inside or on the line"; positive shrinks the bay; negative inflates
 # it to allow corners to overhang the bay edge by `-margin` metres.
-SUCCESS_BAY_MARGIN = 0.0
+SUCCESS_BAY_MARGIN = -0.175
 
 # ---------------------------------------------------------------------------
 # Approach Reward Shaping (not success criteria)
