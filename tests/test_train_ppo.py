@@ -295,7 +295,7 @@ class TestMakeEnvParallel:
         with patch(
             "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=0)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=0)()
 
         assert captured["carla_port"] == 2000
 
@@ -312,7 +312,7 @@ class TestMakeEnvParallel:
         with patch(
             "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=1)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=1)()
 
         assert captured["carla_port"] == 3000
 
@@ -329,7 +329,7 @@ class TestMakeEnvParallel:
         with patch(
             "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=2)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=2)()
 
         assert captured["carla_port"] == 4000
 
@@ -349,7 +349,7 @@ class TestMakeEnvParallel:
         with patch(
             "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=0)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=0)()
 
         assert "ekf_state_file" not in captured["ros2_config"]
 
@@ -366,7 +366,7 @@ class TestMakeEnvParallel:
         with patch(
             "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=1)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=1)()
 
         assert (
             captured["ros2_config"]["ekf_state_file"]
@@ -386,7 +386,7 @@ class TestMakeEnvParallel:
         with patch(
             "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=2)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=2)()
 
         assert (
             captured["ros2_config"]["ekf_state_file"]

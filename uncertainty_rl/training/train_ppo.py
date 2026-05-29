@@ -53,6 +53,8 @@ except ImportError:
     PPO = None  # type: ignore[assignment,misc]
     EvalCallback = None  # type: ignore[assignment,misc]
 
+from uncertainty_rl.utils.constants import TRAINING_BAY_MARGIN
+
 try:
     # make_env is re-exported here so existing imports
     # (`from uncertainty_rl.training.train_ppo import make_env`) keep
@@ -320,7 +322,10 @@ def train(
         n_workers: int = config.get("parallel_workers", 1)
         logger.info(f"Creating training environment ({n_workers} worker(s))...")
         train_vec_env = DummyVecEnv(
-            [make_env(config, rank=i) for i in range(n_workers)]
+            [
+                make_env(config, bay_margin=TRAINING_BAY_MARGIN, rank=i)
+                for i in range(n_workers)
+            ]
         )
 
         # norm_reward divides rewards by a running estimate of the discounted-

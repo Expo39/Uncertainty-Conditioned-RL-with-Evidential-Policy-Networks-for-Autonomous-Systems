@@ -18,6 +18,7 @@ from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
 def make_env(
     config: Dict[str, Any],
+    bay_margin: float,
     rank: int = 0,
     carla_sensors_override: Optional[Dict[str, Any]] = None,
     host_override: Optional[str] = None,
@@ -26,6 +27,10 @@ def make_env(
     """
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
+    @param bay_margin: Geometric success margin (metres) to use for this env.
+           Required and explicit: training callers pass TRAINING_BAY_MARGIN,
+           evaluation callers pass EVAL_BAY_MARGIN. No default to prevent
+           silent training-vs-eval contamination.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
     @param host_override: Override the per-worker CARLA host (e.g. for the
@@ -83,6 +88,7 @@ def make_env(
             uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
             success_dwell_steps=config.get("success_dwell_steps", 5),
             success_approach_radius=config.get("success_approach_radius", 2.0),
+            bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),
         )
         return env

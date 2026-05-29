@@ -20,6 +20,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import make_env
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
+from uncertainty_rl.utils.constants import EVAL_BAY_MARGIN
 
 
 def _parse_args() -> argparse.Namespace:
@@ -118,6 +119,7 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
         [
             make_env(
                 env_config,
+                bay_margin=EVAL_BAY_MARGIN,
                 rank=0,
                 host_override=host_override,
                 port_override=port_override,

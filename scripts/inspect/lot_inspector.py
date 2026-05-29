@@ -260,6 +260,7 @@ def main() -> None:
         # identical to a training rollout (same constructor kwargs, same
         # defaults).
         from uncertainty_rl.envs import make_env
+        from uncertainty_rl.utils.constants import EVAL_BAY_MARGIN
 
         dryrun_cfg = dict(train_cfg)
         dryrun_cfg["no_rendering_mode"] = False
@@ -299,6 +300,7 @@ def main() -> None:
 
         env = make_env(
             dryrun_cfg,
+            bay_margin=EVAL_BAY_MARGIN,
             rank=0,
             host_override=args.host,
             port_override=args.port,

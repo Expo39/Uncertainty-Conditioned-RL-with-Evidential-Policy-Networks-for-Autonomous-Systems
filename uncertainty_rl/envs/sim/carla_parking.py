@@ -45,7 +45,6 @@ from uncertainty_rl.utils.constants import (
     APPROACH_INNER_ALIGNMENT_CUTOFF,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
-    SUCCESS_BAY_MARGIN,
     SUCCESS_THRESHOLD_VELOCITY,
     VEHICLE_STATE_DIM,
 )
@@ -120,6 +119,7 @@ class CARLAParkingEnv(gym.Env):
         uncertainty_std_max: float = 2.0,
         success_dwell_steps: int = 5,
         success_approach_radius: float = 2.0,
+        bay_margin: float = 0.0,
         actuator_model: Optional[Dict[str, float]] = None,
     ) -> None:
         """
@@ -223,6 +223,7 @@ class CARLAParkingEnv(gym.Env):
 
         self._uncertainty_std_max: float = max(uncertainty_std_max, 1e-6)
         self._success_approach_radius: float = max(success_approach_radius, 1e-6)
+        self._bay_margin: float = float(bay_margin)
 
         self._inv_uncertainty_std_max: float = 1.0 / self._uncertainty_std_max
         self._inv_oob_threshold: float = 1.0 / OUT_OF_BOUNDS_THRESHOLD
@@ -929,7 +930,7 @@ class CARLAParkingEnv(gym.Env):
                 bay_yaw=self._target_yaw,
                 bay_width=float(self._target_bay["width"]),
                 bay_depth=float(self._target_bay["depth"]),
-                margin=SUCCESS_BAY_MARGIN,
+                margin=self._bay_margin,
             )
             and speed < SUCCESS_THRESHOLD_VELOCITY
         )
