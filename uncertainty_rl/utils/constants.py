@@ -19,10 +19,14 @@ import numpy as np
 # geometric in-bay check (car_fully_inside_bay) to define a parked vehicle.
 SUCCESS_THRESHOLD_VELOCITY = 0.1
 
-# Inward bay margin applied to the polygon-fit success check (metres).
+# Inward bay margins applied to the polygon-fit success check (metres).
 # Zero = "inside or on the line"; positive shrinks the bay; negative inflates
 # it to allow corners to overhang the bay edge by `-margin` metres.
-SUCCESS_BAY_MARGIN = -0.175
+# Two values: training uses a relaxed margin to densify terminal +50 events
+# so PPO has enough success samples to learn from; evaluation uses the strict
+# margin which is the published parking criterion.
+TRAINING_BAY_MARGIN = -0.5
+EVAL_BAY_MARGIN = -0.175
 
 # ---------------------------------------------------------------------------
 # Approach Reward Shaping (not success criteria)

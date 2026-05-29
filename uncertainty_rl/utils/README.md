@@ -34,7 +34,8 @@ Structural constants fixed by system architecture. Changing any of these require
 | `TOTAL_OBS_DIM` | $13$ | Full observation: $2 + 3 + 3 + 5$ (both ablation flags true). |
 | `ACTION_DIM` | $3$ | Steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$. Throttle and brake are separate non-negative axes. No reverse gear. |
 | `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. Combined with the geometric in-bay check to define a parked vehicle. |
-| `SUCCESS_BAY_MARGIN` | $0.0$ m | Inward bay-polygon shrink for the success check; $0.0$ means "inside or on the line", positive shrinks the bay, negative inflates it. |
+| `TRAINING_BAY_MARGIN` | $-0.5$ m | Inward bay-polygon shrink applied during training (negative inflates the bay by $0.5$ m on each side). Looser than evaluation so that PPO sees enough $+50$ terminal events to learn from. |
+| `EVAL_BAY_MARGIN` | $-0.175$ m | Inward bay-polygon shrink applied during evaluation. The strict criterion the policy is judged against. |
 | `APPROACH_INNER_RADIUS` | $1.5$ m | Inner-annulus boundary for the `approach_term` reward shaping (not a success criterion). |
 | `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff inside `approach_term` ($45$ deg). |
 | `CLEARANCE_THRESHOLD` | $0.8$ m | Reserved; CARLA collision sensor used in practice. |
@@ -42,10 +43,15 @@ Structural constants fixed by system architecture. Changing any of these require
 | `MAX_PARKING_SPEED` | $15.0$ m/s | Speed cap for parking manoeuvres. |
 
 Success position and orientation are no longer scalar constants. The success
-gate combines a geometric polygon-fit check (every corner of the ego
-bounding box must lie inside the target bay rectangle, via
-`car_fully_inside_bay()`), a facing-forward check (the car cannot count as
-parked while pointing out of the bay), and the velocity threshold above.
+gate is the geometric polygon-fit check (every corner of the ego bounding
+box must lie inside the target bay rectangle, via `car_fully_inside_bay()`)
+combined with the velocity threshold above. Any orientation that physically
+fits is accepted; the bay's rectangular geometry combined with the car's
+dimensions restricts feasible orientations to small yaw errors in practice.
+The margin used by the check is supplied at env construction time
+(`TRAINING_BAY_MARGIN` from the factory at training, `EVAL_BAY_MARGIN` from
+the demo / inspector at evaluation) - the env itself has no concept of
+"training vs eval" mode.
 
 Observation dimension as a function of ablation flags:
 
@@ -118,7 +124,8 @@ from uncertainty_rl.utils import (
     # Constants
     ACTION_DIM, TOTAL_OBS_DIM, VEHICLE_STATE_DIM,
     COVARIANCE_FEATURES_DIM, TARGET_POSE_DIM, OBSTACLE_FEATURES_DIM,
-    SUCCESS_THRESHOLD_VELOCITY, SUCCESS_BAY_MARGIN,
+    SUCCESS_THRESHOLD_VELOCITY,
+    TRAINING_BAY_MARGIN, EVAL_BAY_MARGIN,
     APPROACH_INNER_RADIUS, APPROACH_INNER_ALIGNMENT_CUTOFF,
     OUT_OF_BOUNDS_THRESHOLD,
     # Covariance
