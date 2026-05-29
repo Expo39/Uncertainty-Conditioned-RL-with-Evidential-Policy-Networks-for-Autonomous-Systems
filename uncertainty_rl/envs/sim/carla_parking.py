@@ -43,7 +43,6 @@ from uncertainty_rl.envs.sim.helpers import LotSpawner, NPCController, SensorMan
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     APPROACH_INNER_ALIGNMENT_CUTOFF,
-    APPROACH_INNER_RADIUS,
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_BAY_MARGIN,
@@ -958,17 +957,16 @@ class CARLAParkingEnv(gym.Env):
         # than approaching and timing out (~-18 crash vs +10 timeout at 3 m).
         position_term = -0.003 * position_error
 
-        # Inner-annulus shaping. Additive (not product) so each factor
-        # contributes a dense gradient even when the others are near zero.
-        # APPROACH_INNER_RADIUS bounds the inner ring; outside it the
-        # progress + position terms carry the gradient, inside it this term
-        # adds proximity/slowness/alignment shaping to teach the end-game.
+        # Approach shaping inside success_approach_radius. Additive factors
+        # (proximity + proximity*slowness + proximity*alignment) so the
+        # gradient is dense in each even when the others are near zero. The
+        # ring extends all the way to the bay centre so the policy has a
+        # signal pointing deeper even once it has stopped just short of the
+        # success window. Peak 0.006/step keeps the cumulative loiter ceiling
+        # an order of magnitude below the +50 success terminal.
         approach_term = 0.0
-        if APPROACH_INNER_RADIUS <= position_error < self._success_approach_radius:
-            inner_span = self._success_approach_radius - APPROACH_INNER_RADIUS
-            inner_proximity = (
-                1.0 - (position_error - APPROACH_INNER_RADIUS) / inner_span
-            )
+        if position_error < self._success_approach_radius:
+            inner_proximity = 1.0 - position_error / self._success_approach_radius
             approach_slowness = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
             approach_alignment = max(
                 0.0, 1.0 - orientation_error / APPROACH_INNER_ALIGNMENT_CUTOFF
