@@ -910,16 +910,13 @@ class CARLAParkingEnv(gym.Env):
         if collision_detected:
             self._prev_distance = position_error
             diag["collision"] = 1.0
-            # Terminal collision penalty. Ego-fault is penalised harder than a
-            # non-fault contact. Magnitudes preserve the ordering
-            # success(+50) > timeout(~0) > collision so a successful park
-            # remains the best outcome.
+            # Ego-fault penalised harder than non-fault. Magnitudes preserve
+            # success(+50) > timeout(~0) > collision.
             reward = -25.0 if collision_ego_fault else -10.0
             return reward, True, False, diag
 
-        # Success: every corner of the ego bounding box lies inside the bay
-        # polygon and the vehicle is essentially stopped. Any orientation is
-        # accepted provided the car physically fits inside the bay.
+        # Success: every corner of the ego bounding box inside the bay
+        # polygon and the vehicle essentially stopped.
         in_bay = (
             car_fully_inside_bay(
                 car_x=x,
@@ -945,25 +942,16 @@ class CARLAParkingEnv(gym.Env):
             self._prev_distance = position_error
             return 50.0, True, True, diag
 
-        # Potential difference; telescopes to zero so it cannot be farmed by loops.
+        # Potential-based progress; telescopes to zero over any closed loop.
         progress = self._prev_distance - position_error
         self._prev_distance = position_error
 
         distance_term = progress
-        # Continuous "closer is better" penalty. Strong enough that freezing
-        # mid-approach is strictly worse than crashing (~-118 vs -25 over a
-        # full episode at 18 m), so the agent cannot find a local optimum at
-        # standstill. Still small enough that crashing on purpose is worse
-        # than approaching and timing out (~-18 crash vs +10 timeout at 3 m).
         position_term = -0.003 * position_error
 
-        # Approach shaping inside success_approach_radius. Additive factors
-        # (proximity + proximity*slowness + proximity*alignment) so the
-        # gradient is dense in each even when the others are near zero. The
-        # ring extends all the way to the bay centre so the policy has a
-        # signal pointing deeper even once it has stopped just short of the
-        # success window. Peak 0.006/step keeps the cumulative loiter ceiling
-        # an order of magnitude below the +50 success terminal.
+        # Approach shaping inside the success radius. Three additive factors
+        # (proximity, proximity*slowness, proximity*alignment), each scaled by
+        # inner_proximity so they fade to zero at the ring edge.
         approach_term = 0.0
         if position_error < self._success_approach_radius:
             inner_proximity = 1.0 - position_error / self._success_approach_radius
@@ -977,21 +965,8 @@ class CARLAParkingEnv(gym.Env):
                 + 0.002 * inner_proximity * approach_alignment
             )
 
-        # Slowness-proximity bonus across the full approach radius. Pays
-        # slowness anywhere inside success_approach_radius, scaled by how
-        # close the car is to the bay. Teaches deceleration DURING the
-        # approach, not only at the goal state - without it the policy
-        # approaches at speed then orbits the bay because it has no incentive
-        # to brake before the success window.
-        #
-        # Gated on progress > 0 (the car must be CLOSING distance this step).
-        # A stationary car earns nothing, which removes the loiter farm: at
-        # the full 0.1 coefficient without this gate a car parked just outside
-        # the bay collected the per-step bonus indefinitely (~78 cumulative,
-        # more than the +50 success terminal), making "stop at 2 m and idle"
-        # the optimal policy. Because progress is a potential difference that
-        # telescopes to zero over any loop, the only way to keep earning it is
-        # to keep genuinely approaching - which ends at the bay, not outside it.
+        # Deceleration-during-approach bonus. Gated on progress > 0 so a
+        # stationary car earns nothing, blocking the loiter equilibrium.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         decel_bonus = 0.0
         if position_error < self._success_approach_radius and progress > 0.0:
@@ -999,18 +974,13 @@ class CARLAParkingEnv(gym.Env):
             decel_slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
             decel_bonus = 0.1 * decel_slowness * proximity
 
-        # In-bay slowness bonus. Strongest inside the success window; combined
-        # with decel_bonus above this gives a monotone slowness gradient from
-        # the approach radius to the success terminal.
+        # Slowness bonus at the success state; teaches braking specifically
+        # in the bay.
         parked_bonus = 0.0
         if in_bay:
             slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
             parked_bonus = 0.3 * slowness
 
-        # Action-shape penalties (smoothness, co-activation, idle steering) are
-        # not in the reward: they are enforced as hard constraints by the
-        # actuator model in step() before the command reaches CARLA. The
-        # reward function is therefore outcome-only.
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
             approach_term + decel_bonus + parked_bonus
