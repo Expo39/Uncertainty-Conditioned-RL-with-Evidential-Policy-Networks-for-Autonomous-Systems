@@ -1327,8 +1327,10 @@ class TestCarFullyInsideBay:
     def test_180_yaw_still_fits_polygon(self) -> None:
         """
         @brief Rectangle symmetry under 180-deg rotation: the polygon check
-               alone cannot reject a rear-first park. The facing-forward gate
-               in _compute_reward is what catches it.
+               accepts a rear-first park as geometrically valid. The env's
+               action space forbids reverse, so the policy cannot actually
+               achieve this state - the polygon check itself does not have to
+               reject it.
         """
         assert car_fully_inside_bay(
             car_x=0.0,

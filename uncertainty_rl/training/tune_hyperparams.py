@@ -52,6 +52,7 @@ from uncertainty_rl.training.train_ppo import (
     merge_configs,
     train,
 )
+from uncertainty_rl.utils.constants import TRAINING_BAY_MARGIN
 
 logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
@@ -471,7 +472,10 @@ def run_study(
         n_workers,
     )
     shared_vec_env = DummyVecEnv(
-        [make_env(base_config, rank=i) for i in range(n_workers)]
+        [
+            make_env(base_config, bay_margin=TRAINING_BAY_MARGIN, rank=i)
+            for i in range(n_workers)
+        ]
     )
     shared_env = VecNormalize(
         shared_vec_env,
