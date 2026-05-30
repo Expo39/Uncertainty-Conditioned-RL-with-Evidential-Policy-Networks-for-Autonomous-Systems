@@ -951,8 +951,11 @@ class CARLAParkingEnv(gym.Env):
         position_term = -0.003 * position_error
 
         # Approach shaping inside the success radius. Three additive factors
-        # (proximity, proximity*slowness, proximity*alignment), each scaled by
-        # inner_proximity so they fade to zero at the ring edge.
+        # (proximity, proximity*slowness, proximity*alignment*slowness), each
+        # scaled by inner_proximity so they fade to zero at the ring edge. The
+        # alignment factor is the strongest and is gated on slowness so the
+        # dominant endgame gradient is "slow down AND straighten", not "keep
+        # nudging position" - the latter rotated the car out of alignment.
         approach_term = 0.0
         if position_error < self._success_approach_radius:
             inner_proximity = 1.0 - position_error / self._success_approach_radius
@@ -963,7 +966,7 @@ class CARLAParkingEnv(gym.Env):
             approach_term = (
                 0.002 * inner_proximity
                 + 0.002 * inner_proximity * approach_slowness
-                + 0.002 * inner_proximity * approach_alignment
+                + 0.006 * inner_proximity * approach_slowness * approach_alignment
             )
 
         # Deceleration-during-approach bonus. Gated on progress > 0 so a
@@ -982,9 +985,25 @@ class CARLAParkingEnv(gym.Env):
             slowness = max(0.0, 1.0 - speed / slowness_reference_speed)
             parked_bonus = 0.3 * slowness
 
+        # Hold-still bonus: pays for being stopped while close and roughly
+        # aligned, WITHOUT requiring the full corners-in-bay geometric fit.
+        # Bridges the gap between "stopped at a yaw the bay cannot accept" and
+        # the success window, giving the policy a gradient toward committing to
+        # a straight stop rather than dithering until the clock runs out. The
+        # 0.008 coefficient bounds the worst-case cumulative shaping (approach +
+        # hold, sustained over an episode) below the +50 success terminal.
+        hold_bonus = 0.0
+        if position_error < self._success_approach_radius:
+            close_factor = 1.0 - position_error / self._success_approach_radius
+            aligned_factor = max(
+                0.0, 1.0 - orientation_error / APPROACH_INNER_ALIGNMENT_CUTOFF
+            )
+            stopped_factor = max(0.0, 1.0 - speed / slowness_reference_speed)
+            hold_bonus = 0.008 * close_factor * aligned_factor * stopped_factor
+
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
-            approach_term + decel_bonus + parked_bonus
+            approach_term + decel_bonus + parked_bonus + hold_bonus
         )
 
         diag["progress_reward"] = float(progress)
@@ -993,6 +1012,7 @@ class CARLAParkingEnv(gym.Env):
         diag["approach_reward"] = float(approach_term)
         diag["decel_bonus"] = float(decel_bonus)
         diag["parked_bonus"] = float(parked_bonus)
+        diag["hold_bonus"] = float(hold_bonus)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -1904,6 +1924,7 @@ class CARLAParkingEnv(gym.Env):
             "approach_reward": reward_diag.get("approach_reward", 0.0),
             "decel_bonus": reward_diag.get("decel_bonus", 0.0),
             "parked_bonus": reward_diag.get("parked_bonus", 0.0),
+            "hold_bonus": reward_diag.get("hold_bonus", 0.0),
             # Post-clamp commands actually delivered to CARLA. Distinct from
             # the policy's raw output so diagnostics can verify the actuator
             # model is doing its job.

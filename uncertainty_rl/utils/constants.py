@@ -26,7 +26,7 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # so PPO has enough success samples to learn from; evaluation uses the strict
 # margin which is the published parking criterion.
 TRAINING_BAY_MARGIN = -0.5
-EVAL_BAY_MARGIN = -0.175
+EVAL_BAY_MARGIN = -0.5
 
 # ---------------------------------------------------------------------------
 # Approach Reward Shaping (not success criteria)
