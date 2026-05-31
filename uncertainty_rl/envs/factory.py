@@ -86,8 +86,6 @@ def make_env(
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             vis_output_path=vis_path,
             uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
-            success_dwell_steps=config.get("success_dwell_steps", 5),
-            success_approach_radius=config.get("success_approach_radius", 2.0),
             bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),
         )

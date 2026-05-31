@@ -19,6 +19,19 @@ import numpy as np
 # geometric in-bay check (car_fully_inside_bay) to define a parked vehicle.
 SUCCESS_THRESHOLD_VELOCITY = 0.1
 
+# Consecutive steps the success conditions (in-bay polygon fit + velocity below
+# threshold) must hold before the episode terminates as a park. Prevents a
+# fly-through from counting as a success.
+SUCCESS_DWELL_STEPS = 5
+
+# Radius (metres) within which the outer approach reward term (`approach_term`,
+# the proximity-gated coarse-pull) fires. Sized larger than APPROACH_INNER_RADIUS
+# so the policy still has a continuous inward gradient between the inner sharp
+# zone and the outer coast-in zone. Lives here, not in YAML, because it shapes
+# the reward function and reward changes are code, not data - changing it
+# changes what the policy is learning to optimise.
+SUCCESS_APPROACH_RADIUS = 5.0
+
 # Inward bay margins applied to the polygon-fit success check (metres).
 # Zero = "inside or on the line"; positive shrinks the bay; negative inflates
 # it to allow corners to overhang the bay edge by `-margin` metres.
@@ -33,9 +46,13 @@ EVAL_BAY_MARGIN = -0.5
 # ---------------------------------------------------------------------------
 
 # Position error (metres) below which the inner-annulus approach shaping
-# fires. Decoupled from the success gate so this ring can be tuned
-# independently of what counts as a park.
-APPROACH_INNER_RADIUS = 1.5
+# (precision_term and hold_term, the centred-gated endgame terms) fires.
+# Decoupled from the success gate so this ring can be tuned independently
+# of what counts as a park. Wider than the success geometry so the sharp
+# inward gradient is alive across the entire approach zone where the policy
+# might stall, not just the last metre - earlier 1.5 m left a near-zero
+# gradient zone at ~2-3 m where stalled policies got no centring signal.
+APPROACH_INNER_RADIUS = 3.0
 
 # Orientation error (radians) at which the inner alignment factor saturates.
 APPROACH_INNER_ALIGNMENT_CUTOFF = np.pi / 4
