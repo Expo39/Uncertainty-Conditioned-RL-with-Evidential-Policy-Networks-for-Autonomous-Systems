@@ -171,7 +171,7 @@ obs, reward, terminated, truncated, info = env.step(action)
 
 | Config file | Keys |
 |-------------|------|
-| [`configs/deployment/sim/env_config.yaml`](../../configs/deployment/sim/env_config.yaml) | `carla_host`, `carla_port`, `max_steps`, `success_dwell_steps`, `success_approach_radius`, `action_repeat`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
+| [`configs/deployment/sim/env_config.yaml`](../../configs/deployment/sim/env_config.yaml) | `carla_host`, `carla_port`, `max_steps`, `action_repeat`, `include_covariance`, `include_obstacle_obs`, `carla_sensors.*`, `parking_scenarios.*` |
 | [`configs/deployment/sim/gnss_noise_profiles.yaml`](../../configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers and per-episode sampling weights |
 | [`configs/layouts/*.yaml`](../../configs/layouts/) | Floor plan geometry (corners, bays, spawn, patrol, zones) |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | Structural dimensions and success thresholds |

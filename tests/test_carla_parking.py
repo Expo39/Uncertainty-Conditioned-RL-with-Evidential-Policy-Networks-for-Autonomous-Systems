@@ -976,10 +976,10 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        # progress = 0 and yaw aligned, so distance_term = 0. The default
-        # success_approach_radius is 2 m, putting the approach annulus at
-        # [1.5, 2] m; dist = 5 m is outside so approach_term = 0. Only
-        # position_term remains: -0.003 * 5.0 = -0.015.
+        # progress = 0 and yaw aligned, so distance_term = 0. With
+        # SUCCESS_APPROACH_RADIUS = 5.0 m and dist = 5.0 m, proximity =
+        # 1 - 5/5 = 0, so approach_term = 0. centred = 0 outside the inner
+        # radius too. Only position_term remains: -0.003 * 5.0 = -0.015.
         assert reward == pytest.approx(-0.015, abs=1e-4)
 
     def test_prev_distance_updated_after_step(self) -> None:

@@ -11,8 +11,6 @@ carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost"
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
 max_steps: 1750  # Episode length (steps).
-success_dwell_steps: 5  # Consecutive steps the success thresholds must hold before terminating; prevents a fly-through from counting as a park.
-success_approach_radius: 5.0  # Radius (m) of the bounded approach reward peak around the bay.
 action_repeat: 4  # Sim ticks per policy action. Policy runs at carla_timestep * action_repeat seconds per decision.
 use_extra_spawns: false  # When true, sample from extra_spawn_transforms in the layout YAML; false locks to the primary spawn.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.

@@ -42,7 +42,6 @@ come and go.
 |-------|------------------|
 | `carla_host`, `carla_port`, `town` | CARLA connection |
 | `carla_timestep`, `max_steps`, `action_repeat` | Simulation timing |
-| `success_dwell_steps`, `success_approach_radius` | Reward / termination geometry |
 | `no_rendering_mode`, `map_load_sleep` | CARLA runtime behaviour |
 | `carla_sensors.imu`, `carla_sensors.gnss`, `carla_sensors.lidar` | Sensor specs (noise injected by relay nodes for IMU and GNSS) |
 | `parking_scenarios.fixed_*` | When set, force a named floor plan / bay / GNSS tier every episode (curriculum overrides). Comment out for random sampling. |
