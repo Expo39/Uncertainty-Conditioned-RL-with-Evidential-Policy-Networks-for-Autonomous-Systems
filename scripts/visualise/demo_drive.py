@@ -72,36 +72,36 @@ def _parse_args() -> argparse.Namespace:
         "--no-trace",
         dest="trace",
         action="store_false",
-        help="Disable per-step CSV trace logging. By default each episode is "
-        "traced to logs/demo_runs/<timestamp>/episode_<N>.csv (step, speed, "
-        "applied + raw throttle/brake/steer, pos error, reward) for offline "
-        "behaviour analysis.",
+        help="Disable per-step CSV trace logging. By default each policy "
+        "decision is traced to outputs/demo_traces/<timestamp>/episode_<N>.csv "
+        "(step, speed, pos / orientation error, delivered commands, reward, "
+        "success, and the evidential policy uncertainty) for offline "
+        "behaviour and calibration analysis.",
     )
     parser.set_defaults(realtime=True, trace=True)
     return parser.parse_args()
 
 
-# Trace CSV column order. Logged once per environment step.
+# Trace CSV column order. One row per POLICY DECISION (not per sim tick): with
+# action_repeat > 1 the env returns an empty info dict on the intermediate
+# repeat ticks, and those are skipped (see the step loop) so every logged row
+# carries real state. Columns cover parking quality (speed, position and
+# orientation error), the post-clamp commands actually delivered to CARLA, the
+# total reward, the episode outcome, and the evidential policy uncertainty
+# (epistemic and aleatoric, mean over action axes) - the calibration signal
+# that is the point of the project.
 _TRACE_COLUMNS = [
     "step",
     "speed_ms",
     "pos_error_m",
     "orientation_error_rad",
-    "steer_applied",
-    "throttle_applied",
-    "brake_applied",
-    "steer_raw",
-    "throttle_raw",
-    "brake_raw",
-    "reward",
-    "progress_reward",
-    "approach_reward",
-    "precision_reward",
-    "hold_bonus",
-    "uncertainty_scale",
     "steer_cmd",
     "throttle_cmd",
     "brake_cmd",
+    "reward",
+    "success",
+    "epistemic",
+    "aleatoric",
 ]
 
 
@@ -256,13 +256,21 @@ def main() -> None:
                 # the loop to real-time when --realtime is set (the default).
                 step_start = time.monotonic()
 
+                # Per-decision evidential uncertainty (mean over action axes).
+                # NaN for a non-evidential policy, which exposes no uncertainty.
+                epistemic = float("nan")
+                aleatoric = float("nan")
                 if is_evidential and _get_action is not None:
                     # Move the observation onto the model's device: the model
                     # may load onto CUDA while th.as_tensor(obs) defaults to
                     # CPU, which crashes the dual-encoder actor's first matmul.
                     obs_tensor = th.as_tensor(obs).to(model.device)
-                    action_tensor, _ = _get_action(obs_tensor, deterministic=True)
+                    action_tensor, unc = _get_action(obs_tensor, deterministic=True)
                     action = action_tensor.cpu().numpy()
+                    # unc["epistemic"] / ["aleatoric"] are (1, ACTION_DIM); the
+                    # mean over axes is the single per-step calibration scalar.
+                    epistemic = float(unc["epistemic"].mean().item())
+                    aleatoric = float(unc["aleatoric"].mean().item())
                 else:
                     action, _ = model.predict(obs, deterministic=True)
 
@@ -274,39 +282,35 @@ def main() -> None:
                 infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
-                if trace_writer is not None:
-                    # action is shape (1, 3) from the vec env: [steer, throttle,
-                    # brake]. raw = the policy's pre-clip output; applied = what
-                    # the env actually sends to CARLA (steer clipped to [-1, 1],
-                    # throttle and brake clipped to [0, 1]).
-                    raw = np.asarray(action, dtype=np.float32).reshape(-1)
-                    s_raw, t_raw, b_raw = (
-                        float(raw[0]),
-                        float(raw[1]),
-                        float(raw[2]),
-                    )
-                    info0 = infos[0]
+                # With action_repeat > 1 the env returns its empty info dict on
+                # the intermediate repeat ticks (no observation is built and no
+                # reward is computed there); only the final tick of each repeat
+                # carries real state. The VecEnv wrapper can inject its own keys
+                # (terminal_observation, TimeLimit.truncated) into that dict, so
+                # an emptiness test is unreliable - key on "pos_error", which the
+                # env writes only on real steps. This logs one row per policy
+                # decision and drops the all-zero filler rows that made earlier
+                # traces 75% noise at action_repeat=4.
+                info0 = infos[0]
+                if trace_writer is not None and "pos_error" in info0:
+                    # action is shape (1, 3): [steer, throttle, brake]. The env
+                    # exposes the post-clamp commands actually delivered to
+                    # CARLA (rate-limited and brake-overrides-throttle applied)
+                    # as steer_cmd / throttle_cmd / brake_cmd - those, not the
+                    # policy's raw pre-clamp output, describe what the car did.
                     trace_writer.writerow(
                         [
                             steps,
                             f"{info0.get('speed', 0.0):.4f}",
                             f"{info0.get('pos_error', 0.0):.4f}",
                             f"{info0.get('orientation_error', 0.0):.4f}",
-                            f"{float(np.clip(s_raw, -1.0, 1.0)):.4f}",
-                            f"{float(np.clip(t_raw, 0.0, 1.0)):.4f}",
-                            f"{float(np.clip(b_raw, 0.0, 1.0)):.4f}",
-                            f"{s_raw:.4f}",
-                            f"{t_raw:.4f}",
-                            f"{b_raw:.4f}",
-                            f"{float(rewards[0]):.4f}",
-                            f"{info0.get('progress_reward', 0.0):.4f}",
-                            f"{info0.get('approach_reward', 0.0):.4f}",
-                            f"{info0.get('precision_reward', 0.0):.4f}",
-                            f"{info0.get('hold_bonus', 0.0):.4f}",
-                            f"{info0.get('uncertainty_scale', 0.0):.4f}",
                             f"{info0.get('steer_cmd', 0.0):.4f}",
                             f"{info0.get('throttle_cmd', 0.0):.4f}",
                             f"{info0.get('brake_cmd', 0.0):.4f}",
+                            f"{float(rewards[0]):.4f}",
+                            int(bool(info0.get("success", False))),
+                            f"{epistemic:.6f}",
+                            f"{aleatoric:.6f}",
                         ]
                     )
 
