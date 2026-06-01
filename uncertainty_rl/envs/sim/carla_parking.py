@@ -354,6 +354,15 @@ class CARLAParkingEnv(gym.Env):
         # signed body-frame longitudinal velocity (m/s).
         self._world_pose_buf: np.ndarray = np.empty(5, dtype=np.float32)
 
+        # Snapshot of the EKF-derived world pose from the most recent
+        # _get_state() call, surfaced into step() info for trace logging and
+        # EKF-vs-ground-truth accuracy checks. Layout matches _world_pose_buf:
+        # [x, y, yaw, vyaw, vx_body]. _last_ekf_is_real is False on the CI/test
+        # fallback path (no EKF available), so consumers can mark EKF columns
+        # as not-a-number rather than logging ground truth as if it were EKF.
+        self._last_ekf_world: np.ndarray = np.full(5, np.nan, dtype=np.float32)
+        self._last_ekf_is_real: bool = False
+
         # Identity odom-to-world transform (tx, ty, cos_r, sin_r, r).
         # The GNSS datum is latched to spawn position each episode reset, so
         # the odom frame coincides with the world frame by construction.
@@ -1032,6 +1041,9 @@ class CARLAParkingEnv(gym.Env):
             # vx is body-frame; invariant under the odom-to-world rigid transform.
             self._world_pose_buf[4] = raw_ekf_pose[4]
             world_pose = self._world_pose_buf
+            # Snapshot the genuine EKF world pose for step() info / trace CSV.
+            self._last_ekf_world[:] = self._world_pose_buf
+            self._last_ekf_is_real = True
         else:
             # CI / tests fallback: use CARLA GT (no EKF available)
             self._debug_logger._logger.debug(
@@ -1050,6 +1062,11 @@ class CARLAParkingEnv(gym.Env):
             self._world_pose_buf[3] = math.radians(av.z)
             self._world_pose_buf[4] = vx_body
             world_pose = self._world_pose_buf
+            # GT fallback path: no genuine EKF estimate this step. Mark the
+            # snapshot as not-real so trace consumers log EKF columns as NaN
+            # rather than as a copy of ground truth.
+            self._last_ekf_world[:] = np.nan
+            self._last_ekf_is_real = False
 
         obstacle_features = extract_obstacle_features(
             self._get_lidar_scan(),
@@ -1894,6 +1911,26 @@ class CARLAParkingEnv(gym.Env):
             velocity=_post_velocity,
         )
 
+        # Ground-truth world pose for trace logging and EKF accuracy checks.
+        # vx is the signed body-frame longitudinal velocity (matches the EKF
+        # vx convention); vyaw is in REP-103 (left turn positive), matching the
+        # EKF vyaw at obs[1] and the GT vyaw written by _write_vis_state().
+        if _post_transform is not None and self.vehicle is not None:
+            gt_yaw = math.radians(_post_transform.rotation.yaw)
+            gt_vx = (
+                _post_velocity.x * math.cos(gt_yaw)
+                + _post_velocity.y * math.sin(gt_yaw)
+            )
+            gt_vyaw = -math.radians(self.vehicle.get_angular_velocity().z)
+            gt_x = _post_transform.location.x
+            gt_y = _post_transform.location.y
+        else:
+            gt_x = gt_y = gt_yaw = gt_vx = gt_vyaw = float("nan")
+
+        # EKF world pose snapshotted by the most recent _get_state(). NaN on the
+        # CI/test GT-fallback path so the CSV never reports GT as if it were EKF.
+        ekf = self._last_ekf_world
+
         info: Dict[str, Any] = {
             "steps": self.steps,
             "success": success,
@@ -1914,6 +1951,23 @@ class CARLAParkingEnv(gym.Env):
             "steer_cmd": float(self._last_action[0]),
             "throttle_cmd": float(self._last_action[1]),
             "brake_cmd": float(self._last_action[2]),
+            # Ground-truth world pose (CARLA). Reward uses GT; these expose it.
+            "gt_x": float(gt_x),
+            "gt_y": float(gt_y),
+            "gt_yaw": float(gt_yaw),
+            "gt_vx": float(gt_vx),
+            "gt_vyaw": float(gt_vyaw),
+            # EKF world pose (what the policy actually sees via _get_state).
+            # NaN when no genuine EKF estimate was available this step.
+            "ekf_x": float(ekf[0]),
+            "ekf_y": float(ekf[1]),
+            "ekf_yaw": float(ekf[2]),
+            "ekf_vx": float(ekf[4]),
+            "ekf_vyaw": float(ekf[3]),
+            # Target bay this episode (id, world pose, dimensions). Constant
+            # within an episode; surfaced so trace tooling can record which bay
+            # the run targeted without reaching into the env internals.
+            "target_bay": dict(self._target_bay),
         }
 
         return state, reward, terminated, truncated, info

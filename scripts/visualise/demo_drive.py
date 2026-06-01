@@ -102,6 +102,20 @@ _TRACE_COLUMNS = [
     "success",
     "epistemic",
     "aleatoric",
+    # Ground-truth world pose (CARLA) and EKF world pose (what the policy
+    # sees). Logged side by side so a trace can be checked for EKF accuracy:
+    # ekf_* should track gt_* within the EKF error budget. ekf_* are NaN on
+    # steps where no genuine EKF estimate was available (CI/test fallback).
+    "gt_x",
+    "gt_y",
+    "gt_yaw",
+    "gt_vx",
+    "gt_vyaw",
+    "ekf_x",
+    "ekf_y",
+    "ekf_yaw",
+    "ekf_vx",
+    "ekf_vyaw",
 ]
 
 
@@ -174,6 +188,35 @@ def _write_run_info(trace_dir: Path, checkpoint: str, demo_stamp: str) -> None:
     )
 
 
+def _append_target_bay_info(trace_dir: Path, bay: Dict[str, Any]) -> None:
+    """
+    @brief Append the target bay (id, world pose, dimensions) to run_info.txt.
+
+    The target bay is only known after the first env step (it is sampled on
+    reset), so this is written separately from _write_run_info. With a fixed
+    target bay (Stage 1) every episode targets the same bay; when bays are
+    sampled per episode this records the first episode's bay, labelled as such.
+
+    @param trace_dir: Directory holding run_info.txt.
+    @param bay: Target bay dict from the env step info ("target_bay").
+    @return None.
+    """
+    lines = [
+        "",
+        "# Target bay (first episode; constant per episode):",
+        f"target_bay_id: {bay.get('bay_id', 'unknown')}",
+        f"target_bay_type: {bay.get('bay_type', 'unknown')}",
+        f"target_bay_x: {float(bay.get('x', float('nan'))):.4f}",
+        f"target_bay_y: {float(bay.get('y', float('nan'))):.4f}",
+        f"target_bay_yaw_rad: {float(bay.get('yaw', float('nan'))):.4f}",
+        f"target_bay_width: {float(bay.get('width', float('nan'))):.4f}",
+        f"target_bay_depth: {float(bay.get('depth', float('nan'))):.4f}",
+    ]
+    with open(trace_dir / "run_info.txt", "a") as f:
+        f.write("\n".join(lines) + "\n")
+    print(f"Target bay appended to run_info.txt: {bay.get('bay_id', 'unknown')}")
+
+
 def main() -> None:
     """
     @brief Load checkpoint and run deterministic episodes in a loop.
@@ -216,6 +259,9 @@ def main() -> None:
     _get_action = model.policy.get_action_with_uncertainty if is_evidential else None
 
     episode = 0
+    # The target bay is sampled on reset, so it is appended to run_info.txt once
+    # the first real step exposes it (guarded by this flag).
+    bay_info_written = False
 
     # Per-step trace logging. One timestamped folder per demo run, one CSV
     # per episode. Written under outputs/ (the rw-mounted volume) so the
@@ -292,6 +338,14 @@ def main() -> None:
                 # decision and drops the all-zero filler rows that made earlier
                 # traces 75% noise at action_repeat=4.
                 info0 = infos[0]
+                # On the first real step, record the target bay in run_info.txt.
+                if (
+                    not bay_info_written
+                    and trace_dir is not None
+                    and "target_bay" in info0
+                ):
+                    _append_target_bay_info(trace_dir, info0["target_bay"])
+                    bay_info_written = True
                 if trace_writer is not None and "pos_error" in info0:
                     # action is shape (1, 3): [steer, throttle, brake]. The env
                     # exposes the post-clamp commands actually delivered to
@@ -311,6 +365,17 @@ def main() -> None:
                             int(bool(info0.get("success", False))),
                             f"{epistemic:.6f}",
                             f"{aleatoric:.6f}",
+                            # GT then EKF world pose (NaN-safe formatting).
+                            f"{info0.get('gt_x', float('nan')):.4f}",
+                            f"{info0.get('gt_y', float('nan')):.4f}",
+                            f"{info0.get('gt_yaw', float('nan')):.4f}",
+                            f"{info0.get('gt_vx', float('nan')):.4f}",
+                            f"{info0.get('gt_vyaw', float('nan')):.4f}",
+                            f"{info0.get('ekf_x', float('nan')):.4f}",
+                            f"{info0.get('ekf_y', float('nan')):.4f}",
+                            f"{info0.get('ekf_yaw', float('nan')):.4f}",
+                            f"{info0.get('ekf_vx', float('nan')):.4f}",
+                            f"{info0.get('ekf_vyaw', float('nan')):.4f}",
                         ]
                     )
 
