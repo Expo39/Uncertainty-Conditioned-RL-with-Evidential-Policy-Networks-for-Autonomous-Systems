@@ -715,10 +715,19 @@ class CARLAParkingEnv(gym.Env):
 
     def _sample_target_bay(self) -> None:
         """
-        @brief Stratified sample of target bay: 1/3 per type, then uniform within type.
+        @brief Stratified sample of target bay: uniform over type, then uniform
+               within type.
 
-        Bay types: perpendicular, angled, parallel.
-        Always-empty bays are excluded from target selection.
+        In-scope target bay types are perpendicular and angled (forward-only
+        parking). When `fixed_target_bay_id` is set the sampler returns that
+        single bay and the type stratification is bypassed. Always-empty bays
+        are excluded from target selection.
+
+        @warning When the bay is NOT fixed, this samples uniformly over every
+                 bay type present in the layout, which may include out-of-scope
+                 types (e.g. motorcycle, parallel) if the layout contains them.
+                 Filter `self._bay_type_keys` to the in-scope set before
+                 unfixing the target bay for multi-bay training.
         """
         if not self._bay_type_keys:
             raise RuntimeError("No eligible bays found in floor plan layout.")

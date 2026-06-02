@@ -11,9 +11,10 @@ import dataclasses
 import logging
 import os
 import warnings
+from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Deque, List, Optional
 
 import numpy as np
 
@@ -186,20 +187,36 @@ class EnvDiagnosticsCallback(BaseCallback):
     """
     @class EnvDiagnosticsCallback
     @brief SB3 callback that logs per-episode environment diagnostics to TensorBoard.
+
+    The per-step means (pos/orientation/speed/progress) are averaged over every
+    step in a rollout, so they are already smooth. The terminal rates (success,
+    collision, timeout) are sparse - one PPO rollout holds only a handful of
+    terminal episodes (~n_steps / max_steps), so a per-rollout rate has a noise
+    band of tens of percentage points and cannot be read as policy quality. To
+    make the rates legible, terminal outcomes are kept in a rolling window of the
+    last `outcome_window` episodes and the logged rate is the mean over that
+    window. This is a logging change only - it does not touch training dynamics.
     """
 
-    def __init__(self) -> None:
-        """@brief Initialise accumulators."""
+    def __init__(self, outcome_window: int = 50) -> None:
+        """
+        @brief Initialise accumulators.
+        @param outcome_window: Number of most-recent terminal episodes the
+               success/collision/timeout rates are averaged over. Larger values
+               trade reporting latency for a tighter noise band on the rate.
+        """
         super().__init__(verbose=0)
         self._pos_sum = 0.0
         self._ori_sum = 0.0
         self._spd_sum = 0.0
         self._prog_sum = 0.0
         self._step_count = 0
-        self._success_sum = 0.0
-        self._collision_sum = 0.0
-        self._timeout_sum = 0.0
-        self._terminal_count = 0
+        # Rolling per-episode terminal outcomes (1.0 / 0.0 flags) over the last
+        # `outcome_window` episodes, so the logged rate reflects policy quality
+        # rather than the handful of episodes that happened to end this rollout.
+        self._success_hist: Deque[float] = deque(maxlen=outcome_window)
+        self._collision_hist: Deque[float] = deque(maxlen=outcome_window)
+        self._timeout_hist: Deque[float] = deque(maxlen=outcome_window)
 
     def _on_step(self) -> bool:
         """
@@ -217,10 +234,9 @@ class EnvDiagnosticsCallback(BaseCallback):
             collision = info.get("collision", False)
             timeout = info.get("timeout", False)
             if success or collision or timeout:
-                self._success_sum += success
-                self._collision_sum += collision
-                self._timeout_sum += timeout
-                self._terminal_count += 1
+                self._success_hist.append(float(success))
+                self._collision_hist.append(float(collision))
+                self._timeout_hist.append(float(timeout))
         return True
 
     def _on_rollout_end(self) -> None:
@@ -234,22 +250,21 @@ class EnvDiagnosticsCallback(BaseCallback):
             self.logger.record("env/mean_speed_ms", self._spd_sum * inv)
             self.logger.record("env/mean_progress_reward", self._prog_sum * inv)
 
-        if self._terminal_count:
-            inv_t = 1.0 / self._terminal_count
-            self.logger.record("env/success_rate", self._success_sum * inv_t)
-            self.logger.record("env/collision_rate", self._collision_sum * inv_t)
-            self.logger.record("env/timeout_rate", self._timeout_sum * inv_t)
+        # Terminal rates are averaged over the rolling window (the deques retain
+        # the last `outcome_window` episodes across rollouts), so they are not
+        # reset here - only the per-step sums below are.
+        if self._success_hist:
+            inv_t = 1.0 / len(self._success_hist)
+            self.logger.record("env/success_rate", sum(self._success_hist) * inv_t)
+            self.logger.record("env/collision_rate", sum(self._collision_hist) * inv_t)
+            self.logger.record("env/timeout_rate", sum(self._timeout_hist) * inv_t)
 
-        # Reset accumulators for the next rollout window.
+        # Reset per-step accumulators for the next rollout window.
         self._pos_sum = 0.0
         self._ori_sum = 0.0
         self._spd_sum = 0.0
         self._prog_sum = 0.0
         self._step_count = 0
-        self._success_sum = 0.0
-        self._collision_sum = 0.0
-        self._timeout_sum = 0.0
-        self._terminal_count = 0
 
 
 def train(
@@ -540,7 +555,12 @@ def train(
         save_vecnormalize=True,
     )
 
-    callbacks = [checkpoint_callback, EnvDiagnosticsCallback()]
+    callbacks = [
+        checkpoint_callback,
+        EnvDiagnosticsCallback(
+            outcome_window=config.get("success_rate_window", 50)
+        ),
+    ]
     if eval_env is not None:
         eval_callback = EvalCallback(
             eval_env,
