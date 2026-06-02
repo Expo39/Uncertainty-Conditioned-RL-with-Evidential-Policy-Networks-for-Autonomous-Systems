@@ -966,50 +966,49 @@ class CARLAParkingEnv(gym.Env):
         position_term = -0.003 * position_error
 
         # Endgame shaping factors. Each scalar lives in [0, 1] and captures one
-        # axis of "how parked is the car right now". All are proximity-gated, so
-        # the endgame terms vanish away from the bay and only shape the final
-        # approach - they do not constrain the open-lot trajectory.
+        # axis of "how parked is the car right now":
         #   proximity - coarse closeness, fades to zero at the approach radius
         #   centred   - sharp closeness, fades to zero at the (tighter) inner
         #               radius; supplies the inward pull for the last half-metre
         #               once `progress` has telescoped to zero
         #   aligned   - yaw straightness, saturates at the alignment cutoff
-        #   slow      - slowness against the success velocity; the deceleration
-        #               signal that lets a forward-only car (no reverse) stop on
-        #               its single pass into the bay rather than overshooting
+        #   slow      - gentle slowness against the speed cap (approach speed)
+        #   stopped   - sharp slowness against the success velocity (held stop)
+        slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
         proximity = max(0.0, 1.0 - position_error / self._success_approach_radius)
         centred = max(0.0, 1.0 - position_error / APPROACH_INNER_RADIUS)
         aligned = max(0.0, 1.0 - orientation_error / APPROACH_INNER_ALIGNMENT_CUTOFF)
-        slow = max(0.0, 1.0 - speed / (5.0 * SUCCESS_THRESHOLD_VELOCITY))
+        slow = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
+        stopped = max(0.0, 1.0 - speed / slowness_reference_speed)
 
-        # Two accumulating endgame terms, each with a single role:
-        #   approach - "come in slow": rewards being slow on the coarse approach,
-        #              so the car sheds speed before the bay (anti-overshoot for a
-        #              forward-only car). proximity-gated, so it is silent in the
-        #              open lot.
-        #   seat     - "centre AND straighten AND be slow": the dominant endgame
-        #              gradient, pulling the car to the bay centre (centred),
-        #              square-on (aligned) and decelerating (slow) once close.
-        #              Supplies the inward position and yaw pull that the bare
-        #              progress term loses the moment the car stops, and the
-        #              "commit to a held stop" signal - one term, not the former
-        #              overlapping precision + hold pair.
-        # Coefficients sized so the worst-case sustained endgame (all factors near
-        # peak, held for a full episode) stays comfortably below the +50 park
-        # terminal, so no near-bay loiter can out-earn an actual park.
+        # Three accumulating shaping terms, each with a single role:
+        #   approach  - "come in slow": rewards closing distance at low speed.
+        #   precision - "centre AND straighten as you slow": the dominant
+        #               endgame gradient, pulling the car to the bay centre and
+        #               square-on once it is close. Supplies the inward position
+        #               pull (centred) and the yaw pull (aligned) that the bare
+        #               progress term loses once the car stops.
+        #   hold      - "commit to a stop, centred and straight": rewards being
+        #               stationary at the centre WITHOUT requiring the full
+        #               corners-in-bay fit, so the policy commits to a held stop
+        #               rather than dithering until the clock runs out.
+        # Coefficients are sized so the worst-case cumulative (all three at peak,
+        # sustained over an episode) stays comfortably below the +50 terminal.
         approach_term = 0.008 * proximity * slow
-        seat_term = 0.008 * centred * aligned * slow
+        precision_term = 0.008 * centred * aligned * slow
+        hold_term = 0.006 * centred * aligned * stopped
 
         uncertainty_scale = self._uncertainty_scale_fn()
         reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
-            approach_term + seat_term
+            approach_term + precision_term + hold_term
         )
 
         diag["progress_reward"] = float(progress)
         diag["uncertainty_scale"] = uncertainty_scale
         diag["position_penalty"] = float(position_term)
         diag["approach_reward"] = float(approach_term)
-        diag["seat_reward"] = float(seat_term)
+        diag["precision_reward"] = float(precision_term)
+        diag["hold_bonus"] = float(hold_term)
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -1947,7 +1946,8 @@ class CARLAParkingEnv(gym.Env):
             "progress_reward": reward_diag["progress_reward"],
             "uncertainty_scale": reward_diag.get("uncertainty_scale", 0.0),
             "approach_reward": reward_diag.get("approach_reward", 0.0),
-            "seat_reward": reward_diag.get("seat_reward", 0.0),
+            "precision_reward": reward_diag.get("precision_reward", 0.0),
+            "hold_bonus": reward_diag.get("hold_bonus", 0.0),
             # Post-clamp commands actually delivered to CARLA. Distinct from
             # the policy's raw output so diagnostics can verify the actuator
             # model is doing its job.
