@@ -45,9 +45,8 @@ EVAL_BAY_MARGIN = -0.5
 # Approach Reward Shaping (not success criteria)
 # ---------------------------------------------------------------------------
 
-# Position error (metres) below which the inner-annulus approach shaping
-# (precision_term and hold_term, the centred-gated endgame terms) fires.
-# Decoupled from the success gate so this ring can be tuned independently
+# Position error (metres) below which the centred-gated endgame seat term
+# fires. Decoupled from the success gate so this ring can be tuned independently
 # of what counts as a park. Wider than the success geometry so the sharp
 # inward gradient is alive across the entire approach zone where the policy
 # might stall, not just the last metre - earlier 1.5 m left a near-zero
