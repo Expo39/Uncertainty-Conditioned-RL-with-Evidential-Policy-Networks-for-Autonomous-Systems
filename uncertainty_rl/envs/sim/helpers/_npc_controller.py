@@ -608,6 +608,28 @@ class NPCController:
         self._pedestrian_zones.clear()
         self._all_vehicle_actors.clear()
 
+    def forget_actors(self) -> None:
+        """
+        @brief Drop all NPC handles and per-episode state WITHOUT CARLA RPC.
+
+        Used after a CARLA server crash, when destroy() over RPC would time out
+        against a dead engine. Clears the same per-episode state as cleanup but
+        skips the actor.destroy() calls; the fresh server has no NPCs to remove.
+        @see NPCController.cleanup.
+        """
+        self.patrol_npcs.clear()
+        self.pedestrian_actors.clear()
+        self.patrol_npc_ids.clear()
+        self._patrol_waypoint_indices.clear()
+        self._patrol_waypoint_directions.clear()
+        self._patrol_waypoints_cache = []
+        self._patrol_pinned.clear()
+        self._pedestrian_headings.clear()
+        self._pedestrian_heading_steps.clear()
+        self._pedestrian_lifetime_steps.clear()
+        self._pedestrian_zones.clear()
+        self._all_vehicle_actors.clear()
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
