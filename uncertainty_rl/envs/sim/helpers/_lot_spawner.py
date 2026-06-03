@@ -291,6 +291,18 @@ class LotSpawner:
         self.spawned_static_vehicles.clear()
         self._cached_cones_layout = ""
 
+    def forget_actors(self) -> None:
+        """
+        @brief Drop all static-actor handles WITHOUT issuing CARLA RPC calls.
+
+        Used after a CARLA server crash, when destroy() over RPC would time out
+        against a dead engine. Clears the cone cache so the next episode
+        respawns into the fresh world. @see LotSpawner.cleanup_all.
+        """
+        self.spawned_cones.clear()
+        self.spawned_static_vehicles.clear()
+        self._cached_cones_layout = ""
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

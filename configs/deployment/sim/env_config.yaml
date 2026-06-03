@@ -17,6 +17,17 @@ carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
 no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active).
 
+# Simulation-only CARLA crash recovery. Deep-merged onto the ros2 block in
+# agent_config.yaml (covariance_timeout etc. are preserved). CARLA 0.9.16
+# segfaults on long headless runs; with restart: on-failure on the carla-server
+# service Docker relaunches the engine and the env reconnects, dropping only the
+# in-flight episode instead of killing a multi-hour run. Real deployment has no
+# CARLA server, so this lives here, not in the shared agent_config.
+ros2:
+  carla_recovery:
+    max_reconnect_attempts: 30  # Reconnect tries before giving up (fails loud).
+    reconnect_poll_interval_s: 5.0  # Seconds between RPC-port readiness probes.
+
 gnss_noise_profiles: configs/deployment/sim/gnss_noise_profiles.yaml
 
 gnss_datum_lat: 0.0  # degrees north. 0.0 = auto-latch from first GNSS reading.

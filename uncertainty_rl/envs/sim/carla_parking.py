@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import random
+import socket
 import time
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple, cast
@@ -425,6 +426,24 @@ class CARLAParkingEnv(gym.Env):
         self._vis_episodes_since_rotation: int = 0
         self._vis_rotation_interval: int = 10
         self._carla_timestep: float = carla_timestep
+
+        # CARLA 0.9.16 segfaults (SIGSEGV, container exit 139) on long headless
+        # runs. With `restart: on-failure` on the carla-server service Docker
+        # relaunches the engine within seconds, so the failure surfaces here as
+        # a world.tick() RuntimeError. Rather than killing a multi-hour run, the
+        # env reconnects to the fresh server and drops the in-flight episode.
+        # max_reconnect_attempts caps the wait so a genuinely dead server (no
+        # restart policy, crashed host) still fails loudly instead of hanging.
+        recovery = self._ros2_config.get("carla_recovery", {})
+        self._max_reconnect_attempts: int = int(
+            recovery.get("max_reconnect_attempts", 30)
+        )
+        self._reconnect_poll_interval: float = float(
+            recovery.get("reconnect_poll_interval_s", 5.0)
+        )
+        # Set when a tick fails mid-episode; consumed by the next reset() to
+        # force a reconnect before it touches the (now stale) client handle.
+        self._needs_reconnect: bool = False
 
         self._action_repeat: int = action_repeat
         self._no_rendering_mode: bool = no_rendering_mode
@@ -1289,6 +1308,71 @@ class CARLAParkingEnv(gym.Env):
             self.client = None
             self.world = None
 
+    def _carla_port_open(self) -> bool:
+        """
+        @brief Probe whether the CARLA RPC port is accepting connections.
+        @return True if a TCP connection to (carla_host, carla_port) succeeds.
+
+        Used to wait for a restarted CARLA server to finish booting before a
+        reconnect attempt, so we do not race the engine's RPC startup.
+        """
+        try:
+            with socket.create_connection(
+                (self.carla_host, self.carla_port), timeout=2.0
+            ):
+                return True
+        except OSError:
+            return False
+
+    def _reconnect_to_carla(self) -> bool:
+        """
+        @brief Tear down the stale CARLA client and reconnect to a fresh server.
+        @return True if a fresh world handle was obtained, False otherwise.
+
+        @note CARLA 0.9.16 segfaults on long headless runs; `restart: on-failure`
+              on the carla-server service relaunches the engine. This polls for
+              the RPC port to reopen, then rebuilds the client and reloads the
+              FlatPlane world. Episode actors are NOT respawned here - the caller
+              (reset) does that on the next episode. @see _connect_to_carla.
+        """
+        # Drop every handle into the dead server. The vehicle / sensor / NPC
+        # actors live in the crashed engine and cannot be destroyed over RPC, so
+        # forget them rather than calling _cleanup_actors (which would itself
+        # time out). The fresh world starts empty; reset() repopulates it.
+        self.client = None
+        self.world = None
+        self.vehicle = None
+        self._vehicle_bp = None
+        self._all_vehicle_actors = []
+        self._sensor_manager.forget_actors()
+        self._lot_spawner.forget_actors()
+        self._npc_controller.forget_actors()
+
+        for attempt in range(1, self._max_reconnect_attempts + 1):
+            if self._carla_port_open():
+                logger.info(
+                    "CARLA RPC port reopened on attempt %d; reconnecting ...",
+                    attempt,
+                )
+                self._connect_to_carla()
+                if self.world is not None:
+                    logger.info("Reconnected to CARLA after server restart.")
+                    return True
+            logger.warning(
+                "Waiting for CARLA server to come back (attempt %d/%d) ...",
+                attempt,
+                self._max_reconnect_attempts,
+            )
+            time.sleep(self._reconnect_poll_interval)
+
+        logger.error(
+            "CARLA did not come back after %d attempts (%.0fs). Is the "
+            "carla-server container restarting?",
+            self._max_reconnect_attempts,
+            self._max_reconnect_attempts * self._reconnect_poll_interval,
+        )
+        return False
+
     def _spawn_vehicle(self) -> None:
         """
         @brief Spawn the ego vehicle at a randomly selected spawn transform.
@@ -1531,6 +1615,20 @@ class CARLAParkingEnv(gym.Env):
         # Draw TiM571 systematic range bias once per training run (NaN sentinel
         # in SensorManager makes subsequent calls no-ops).
         self._sensor_manager.sample_lidar_noise_bias(self.np_random)
+
+        # Recover from a CARLA server crash flagged by the previous step().
+        # Must run before _cleanup_actors() below, whose destroy() RPCs would
+        # time out against the dead engine. _reconnect_to_carla forgets all
+        # stale actor handles and waits for the restarted server, so the reset
+        # then proceeds as a fresh full spawn into the new world.
+        if self._needs_reconnect:
+            reconnected = self._reconnect_to_carla()
+            self._needs_reconnect = False
+            # Actors were never destroyed over RPC (server was dead), so no
+            # destroy commands are pending - skip the flush tick below.
+            self._actors_frozen = True
+            if not reconnected:
+                return np.zeros(self._obs_dim, dtype=np.float32), {}
 
         # Connect to CARLA on first reset
         if self.client is None:
@@ -1838,8 +1936,28 @@ class CARLAParkingEnv(gym.Env):
                 self._update_patrol_npcs()
                 self._update_pedestrians()
                 # 10s timeout surfaces a frozen CARLA server as an error rather
-                # than hanging the process indefinitely.
-                self.world.tick(10.0)
+                # than hanging the process indefinitely. CARLA 0.9.16 segfaults
+                # on long headless runs; a crash here is recoverable - flag the
+                # env for reconnect on the next reset() and abort the episode as
+                # a truncation so SB3 ends it cleanly rather than the whole
+                # multi-hour run dying on the exception. @see _reconnect_to_carla.
+                try:
+                    self.world.tick(10.0)
+                except RuntimeError as exc:
+                    logger.error(
+                        "CARLA tick failed (server crash?): %s. Aborting episode "
+                        "and scheduling reconnect on next reset.",
+                        exc,
+                    )
+                    self._needs_reconnect = True
+                    self._actors_frozen = True
+                    return (
+                        self._obs_buffer,
+                        0.0,
+                        False,
+                        True,
+                        {"carla_reconnect": True},
+                    )
 
                 # Fetch transform + velocity once post-tick; reused by
                 # _compute_reward and _write_vis_state below.

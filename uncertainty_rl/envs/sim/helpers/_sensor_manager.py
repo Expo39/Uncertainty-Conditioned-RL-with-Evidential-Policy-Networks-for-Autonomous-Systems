@@ -232,6 +232,19 @@ class SensorManager:
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
 
+    def forget_actors(self) -> None:
+        """
+        @brief Drop all sensor handles WITHOUT issuing CARLA RPC destroy calls.
+
+        Used after a CARLA server crash, when the actors live in a dead engine
+        and any destroy() RPC would itself time out. The fresh server starts
+        with no sensors, so the stale handles are simply abandoned. @see
+        SensorManager.cleanup for the normal RPC teardown.
+        """
+        self._spawned_sensors.clear()
+        self._ego_vehicle = None
+        self.reset_state()
+
     # ------------------------------------------------------------------
     # Sensor spawn helpers
     # ------------------------------------------------------------------
