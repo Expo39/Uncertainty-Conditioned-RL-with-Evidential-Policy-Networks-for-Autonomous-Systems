@@ -13,7 +13,7 @@ gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
 ent_coef: 0.02  # Entropy bonus at the start of training. Wired as a linear decay schedule (ent_coef -> ent_coef_final) in train_ppo.py.
-ent_coef_final: 0.006  # Entropy bonus at the end of training. Raised 0.005 -> 0.006: minimum lift to put the floor above the collapse zone (the previous run collapsed as ent_coef slid from 0.008 to 0.005 over the last 800k steps). Keeps the schedule near-identical to what produced the 47% peak (at step 3.2M: ent_coef = 0.0088, vs 0.008 in the old run) while blocking the post-peak slide into the collapse band. Smaller change than 0.008 (which would have shifted the whole schedule upward and not preserved peak conditions).
+ent_coef_final: 0.006  # Entropy bonus at the end of training. Decays linearly from ent_coef. In the evidential policy the action std IS sqrt(aleatoric), so the entropy bonus is a direct pressure on the action std: too high a floor keeps the policy exploring and prevents it committing to a held park, too low lets it over-sharpen into a deterministic collapse. This floor sits in the band that lets the policy both explore early and commit late.
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.04  # Early-stop epochs when KL divergence exceeds this threshold. Doubled from 0.02 because the previous value triggered early-stop on almost every late-stage minibatch (approx_kl observed at ~1e-6 by end of training) and froze the policy with 10-15% of the budget still on the clock. clip_range=0.2 remains the primary safety; target_kl is a backup.
