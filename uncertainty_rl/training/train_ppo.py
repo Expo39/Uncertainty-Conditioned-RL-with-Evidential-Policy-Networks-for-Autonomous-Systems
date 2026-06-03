@@ -133,6 +133,34 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
+def _deep_merge(
+    base: Dict[str, Any], override: Dict[str, Any]
+) -> Dict[str, Any]:
+    """
+    @brief Recursively merge override into base; override wins on scalar keys.
+    @param base: Lower-precedence dict (mutated in place and returned).
+    @param override: Higher-precedence dict whose values take priority.
+    @return The merged dict.
+
+    @note A nested dict on both sides is merged key-by-key rather than replaced
+          wholesale. This lets a higher-precedence config add or override
+          individual keys inside a shared block (e.g. env_config adding
+          ros2.carla_recovery without dropping ros2.covariance_timeout defined
+          in agent_config). A plain {**base, **override} would discard every
+          base key under any block the override also defines.
+    """
+    for key, value in override.items():
+        if (
+            key in base
+            and isinstance(base[key], dict)
+            and isinstance(value, dict)
+        ):
+            _deep_merge(base[key], value)
+        else:
+            base[key] = value
+    return base
+
+
 def merge_configs(
     train_config: Dict[str, Any], env_config: Dict[str, Any]
 ) -> Dict[str, Any]:
@@ -173,7 +201,14 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
             agent_cfg = yaml.load(f, Loader=_YamlLoader) or {}
 
     # Merge: sensor_config < agent_config < env_config (env wins on conflict).
-    merged: Dict[str, Any] = {**sensor_cfg, **agent_cfg, **env_config}
+    # Deep merge so a higher-precedence file can override individual keys inside
+    # a shared nested block (e.g. env_config's ros2.carla_recovery layered onto
+    # agent_config's ros2.covariance_timeout) instead of replacing the whole
+    # block. A shallow {**a, **b} would silently drop the agent_config ros2 keys.
+    merged: Dict[str, Any] = {}
+    _deep_merge(merged, sensor_cfg)
+    _deep_merge(merged, agent_cfg)
+    _deep_merge(merged, env_config)
 
     # Inject sensor mounts into carla_sensors so the CARLA spawner gets them.
     for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
