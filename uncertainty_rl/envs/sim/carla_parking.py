@@ -14,7 +14,6 @@ import collections
 import json
 import logging
 import math
-import random
 import socket
 import time
 from pathlib import Path
@@ -711,6 +710,7 @@ class CARLAParkingEnv(gym.Env):
             self._eval_mode,
             _shared_layout_cache,
             fixed_name=self._fixed_floor_plan,
+            rng=self.np_random,
         )
         self._current_floor_plan_name = name
         self._current_layout = layout
@@ -774,8 +774,15 @@ class CARLAParkingEnv(gym.Env):
                     f"(first 20): {available_ids[:20]}"
                 )
         else:
-            bay_type = random.choice(self._bay_type_keys)
-            target = random.choice(self._bays_by_type[bay_type])
+            # Drive task selection from the Gymnasium per-env RNG (seeded via
+            # super().reset(seed=)) so the (target bay, spawn) sequence is
+            # reproducible at a fixed training seed. np_random.choice cannot
+            # index a list of dicts directly, so choose by integer index.
+            type_idx = int(self.np_random.integers(len(self._bay_type_keys)))
+            bay_type = self._bay_type_keys[type_idx]
+            bays = self._bays_by_type[bay_type]
+            bay_idx = int(self.np_random.integers(len(bays)))
+            target = bays[bay_idx]
 
         tx: float = float(target["x"])
         ty: float = float(target["y"])
@@ -815,8 +822,12 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Choose a spawn transform for this episode from the pre-built pool.
         @return Chosen spawn dict with keys x, y, z, yaw_deg.
+
+        Drawn from the Gymnasium per-env RNG so the spawn sequence is
+        reproducible at a fixed training seed.
         """
-        return random.choice(self._spawn_pool)
+        idx = int(self.np_random.integers(len(self._spawn_pool)))
+        return self._spawn_pool[idx]
 
     def _cache_blueprints(self) -> None:
         """
@@ -1590,6 +1601,12 @@ class CARLAParkingEnv(gym.Env):
         bay, spawns cones/static vehicles/patrol NPCs/pedestrians.
         """
         super().reset(seed=seed)
+
+        # Push the Gymnasium per-env RNG (seeded above) into the spawner and NPC
+        # controller so all per-episode placement draws (static cars, patrol
+        # vehicles, pedestrians) share one reproducible stream at a fixed seed.
+        self._lot_spawner.set_rng(self.np_random)
+        self._npc_controller.set_rng(self.np_random)
 
         self._episode_id += 1
         self.steps = 0

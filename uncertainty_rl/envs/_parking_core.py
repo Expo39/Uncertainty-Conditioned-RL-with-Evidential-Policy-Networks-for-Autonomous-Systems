@@ -232,6 +232,7 @@ def load_floor_plan(
     eval_mode: bool,
     layout_cache: Dict[str, Any],
     fixed_name: Optional[str] = None,
+    rng: Optional[np.random.Generator] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     @brief Select and load a floor plan layout YAML for one episode.
@@ -246,6 +247,8 @@ def load_floor_plan(
     @param fixed_name: If set, force selection of this plan (curriculum stages).
                        Must exist in floor_plans_config; eligibility checks
                        are bypassed for explicit selection.
+    @param rng: Seeded NumPy Generator for plan selection (the env's np_random).
+                When None, falls back to the unseeded stdlib random module.
     @return Tuple (plan_name, layout_dict).
     @raises RuntimeError if no eligible plans are configured.
     @raises FileNotFoundError if the chosen layout YAML does not exist.
@@ -271,7 +274,11 @@ def load_floor_plan(
             "Check parking_scenarios.floor_plans in train_config.yaml."
         )
 
-    name = random.choice(list(eligible.keys()))
+    eligible_names = list(eligible.keys())
+    if rng is not None:
+        name = eligible_names[int(rng.integers(len(eligible_names)))]
+    else:
+        name = random.choice(eligible_names)
     layout_file = eligible[name].get("layout_file", "")
     layout_path = Path(layout_file)
 
