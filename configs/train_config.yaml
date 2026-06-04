@@ -42,7 +42,7 @@ log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 4000000  # LR and ent_coef linear schedules stretch over this whole budget, so the policy keeps exploration headroom long enough to learn the precise terminal alignment, not just the approach.
+total_timesteps: 8000000  # LR and ent_coef linear schedules stretch over this whole budget, so the policy keeps exploration headroom long enough to learn the precise terminal alignment, not just the approach.
 seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
