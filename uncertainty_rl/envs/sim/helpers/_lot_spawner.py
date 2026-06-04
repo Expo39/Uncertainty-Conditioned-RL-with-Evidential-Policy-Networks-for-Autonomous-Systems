@@ -10,7 +10,6 @@ delegates static spawning and cleanup to it.
 import itertools
 import logging
 import math
-import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -139,6 +138,11 @@ class LotSpawner:
         self._bay_occupancy_min = bay_occupancy_min
         self._bay_occupancy_max = bay_occupancy_max
 
+        # Per-episode RNG. Defaults to an unseeded generator for standalone /
+        # test use; the env injects its seeded Gymnasium np_random via set_rng()
+        # so static-actor placement is reproducible at a fixed training seed.
+        self._rng: np.random.Generator = np.random.default_rng()
+
         # Per-episode occupancy rate; resampled each episode in spawn_all().
         self._bay_occupancy_rate: float = bay_occupancy_max
 
@@ -160,6 +164,17 @@ class LotSpawner:
     # ------------------------------------------------------------------
     # Per-reset setup
     # ------------------------------------------------------------------
+
+    def set_rng(self, rng: "np.random.Generator") -> None:
+        """
+        @brief Inject the seeded RNG used for all per-episode placement draws.
+        @param rng: NumPy Generator (the env's Gymnasium np_random).
+
+        Called by the env each reset so static-actor placement (occupancy
+        rate, blueprint and colour choice, flipped orientation) is reproducible
+        at a fixed training seed.
+        """
+        self._rng = rng
 
     def refresh_blueprints(self, world: Any) -> None:
         """
@@ -216,8 +231,8 @@ class LotSpawner:
         if world is None:
             return
 
-        self._bay_occupancy_rate = random.uniform(
-            self._bay_occupancy_min, self._bay_occupancy_max
+        self._bay_occupancy_rate = float(
+            self._rng.uniform(self._bay_occupancy_min, self._bay_occupancy_max)
         )
 
         cones_already_spawned = (
@@ -511,16 +526,19 @@ class LotSpawner:
                     continue
                 if bay.get("always_empty", False):
                     continue
-                if random.random() > self._bay_occupancy_rate:
+                if self._rng.random() > self._bay_occupancy_rate:
                     continue
-                bp = random.choice(self._car_blueprints)
+                bp = self._car_blueprints[
+                    int(self._rng.integers(len(self._car_blueprints)))
+                ]
                 if bp.has_attribute("color"):
+                    colours = bp.get_attribute("color").recommended_values
                     bp.set_attribute(
                         "color",
-                        random.choice(bp.get_attribute("color").recommended_values),
+                        colours[int(self._rng.integers(len(colours)))],
                     )
                 yaw = _bay_yaw_deg(bay)
-                if random.random() < 0.5:
+                if self._rng.random() < 0.5:
                     yaw = (yaw + 180.0) % 360.0
 
             actor = world.try_spawn_actor(

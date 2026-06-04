@@ -113,6 +113,14 @@ class SensorManager:
         # sample_lidar_noise_bias() called from CARLAParkingEnv.reset().
         self._lidar_range_bias_m: float = 0.0
 
+        # Dedicated RNG for per-point LiDAR range noise. _apply_lidar_noise()
+        # runs in the CARLA sensor-callback thread, so it must NOT touch the
+        # env's np_random directly (that would race the main reset/step thread).
+        # Instead, sample_lidar_noise_bias() reseeds this generator each episode
+        # from a child seed drawn off np_random, keeping the per-point noise
+        # reproducible at a fixed training seed without cross-thread contention.
+        self._lidar_rng: np.random.Generator = np.random.default_rng()
+
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
@@ -427,6 +435,12 @@ class SensorManager:
         @param rng: numpy Generator (np_random from CARLAParkingEnv) for reproducibility.
         @see documentation/detailed_notes/sensor_noise_models.md
         """
+        # Reseed the per-point noise generator from a child seed drawn off the
+        # env RNG. This ties the sensor-thread noise stream to the training seed
+        # while keeping it independent of np_random's main-thread state.
+        child_seed = int(rng.integers(0, 2**32))
+        self._lidar_rng = np.random.default_rng(child_seed)
+
         if not self._lidar_noise_enabled or self._lidar_range_bias_limit == 0.0:
             self._lidar_range_bias_m = 0.0
         else:
@@ -461,7 +475,7 @@ class SensorManager:
         r = np.hypot(x, y)
         theta = np.arctan2(y, x)
 
-        rng = np.random.default_rng()
+        rng = self._lidar_rng
 
         # 1. Range noise: fixed per-episode bias + zero-mean Gaussian random per point.
         r_noisy = r + self._lidar_range_bias_m

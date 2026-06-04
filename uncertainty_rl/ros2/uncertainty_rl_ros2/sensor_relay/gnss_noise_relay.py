@@ -148,6 +148,11 @@ class GnssNoiseRelayNode(Node):
                 "GNSS_NOISE_PROFILES_PATH", self._DEFAULT_NOISE_PROFILES_PATH
             ),
         )
+        # Seed for the noise RNG. This node runs in the ros2-bridge container,
+        # a separate process from training, so it cannot inherit the training
+        # seed; it must be seeded independently. Matches the training seed (42)
+        # by default so a fixed-seed training run sees reproducible GNSS noise.
+        self.declare_parameter("seed", 42)
 
         input_topic = str(
             self.get_parameter("input_topic").get_parameter_value().string_value
@@ -242,7 +247,8 @@ class GnssNoiseRelayNode(Node):
         self._auto_datum: bool = self._datum_lat == 0.0 and self._datum_lon == 0.0
         self._datum_latched: bool = not self._auto_datum
 
-        self._rng = np.random.default_rng()
+        seed = int(self.get_parameter("seed").get_parameter_value().integer_value)
+        self._rng = np.random.default_rng(seed)
 
         # Pre-allocated 36-element zeroed lists reused at each callback.
         self._odom_cov_template: List[float] = [0.0] * 36

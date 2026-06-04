@@ -206,6 +206,11 @@ def generate_launch_description() -> LaunchDescription:
                 "imu_accel_scale_factor_limit": imu_relay_cfg.get(
                     "imu_accel_scale_factor_limit", 0.005
                 ),
+                # Both co-spun relay nodes declare a "seed" parameter; this one
+                # value seeds each node's independent noise RNG. Defaults to the
+                # training seed so a fixed-seed run gets reproducible sensor
+                # noise from this separate-process container.
+                "seed": gnss_relay_cfg.get("seed", imu_relay_cfg.get("seed", 42)),
             }
         ],
     )

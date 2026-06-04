@@ -10,6 +10,7 @@ import argparse
 import dataclasses
 import logging
 import os
+import random
 import warnings
 from collections import deque
 from datetime import datetime
@@ -357,9 +358,14 @@ def train(
     eval_freq = config.get("eval_freq", 10000)
     n_eval_episodes = config.get("n_eval_episodes", 10)
 
-    # Set random seeds
+    # Set random seeds. All three global RNGs are seeded: torch (network
+    # init + action sampling), numpy (module-level np.random), and the stdlib
+    # random module. SB3's PPO(seed=seed) additionally seeds each vectorised
+    # env's Gymnasium np_random (with a per-rank offset), which drives the
+    # per-episode task selection (spawn point, target bay, NPC placement).
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
 
     # Create directories
     os.makedirs(log_dir, exist_ok=True)
