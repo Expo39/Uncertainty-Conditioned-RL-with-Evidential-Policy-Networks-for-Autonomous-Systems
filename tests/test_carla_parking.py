@@ -1152,7 +1152,9 @@ class TestComputeReward:
         _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
         env._prev_distance = 2.0
         # Prime the accumulator just below the limit so one more OOB step crosses it.
-        env._oob_accumulated_penalty = env._oob_termination_limit + env._oob_step_penalty
+        env._oob_accumulated_penalty = (
+            env._oob_termination_limit + env._oob_step_penalty
+        )
 
         reward, terminated, success, diag = env._compute_reward()
 
@@ -1301,14 +1303,14 @@ class TestPointInPolygon:
 
 
 # ---------------------------------------------------------------------------
-# Pure geometry: inflate_polygon_centroid
+# Pure geometry: inflate_polygon
 # ---------------------------------------------------------------------------
 
 
 class TestInflatePolygon:
     """
     @class TestInflatePolygon
-    @brief Tests for the bounding-box polygon inflation used by the soft OOB
+    @brief Tests for the uniform outward polygon offset used by the soft OOB
            boundary.
     """
 
@@ -1319,7 +1321,7 @@ class TestInflatePolygon:
         corners = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
         inflated = inflate_polygon(corners, margin=1.0)
         # Each corner moves out to +/- 1.5 (0.5 original + 1.0 margin).
-        for (x, y) in inflated:
+        for x, y in inflated:
             assert abs(abs(x) - 1.5) < 1e-9
             assert abs(abs(y) - 1.5) < 1e-9
 
@@ -1329,34 +1331,43 @@ class TestInflatePolygon:
         """
         corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 8.0), (0.0, 8.0)]
         inflated = inflate_polygon(corners, margin=2.0)
-        for (x, y) in corners:
+        for x, y in corners:
             assert point_in_polygon(x, y, inflated) is True
 
-    def test_bounding_box_grows_by_exactly_margin_per_side(self) -> None:
+    def test_axis_aligned_rectangle_offsets_uniformly(self) -> None:
         """
-        @brief The bounding box grows by exactly `margin` on each side, for an
-               asymmetric (concave) polygon. Strict vertex containment is NOT
-               guaranteed for reflex corners - only the bounding-box growth is.
+        @brief Every edge of an axis-aligned rectangle moves out by exactly
+               `margin`, so the offset box is the original grown by `margin`
+               on all four sides (a true uniform skirt, not a per-axis scale).
         """
-        # L-shaped (concave) polygon - centroid is offset from the bbox centre.
-        corners = [
-            (0.0, 0.0),
-            (6.0, 0.0),
-            (6.0, 2.0),
-            (2.0, 2.0),
-            (2.0, 6.0),
-            (0.0, 6.0),
-        ]
-        margin = 1.5
+        corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 8.0), (0.0, 8.0)]
+        margin = 5.0
         inflated = inflate_polygon(corners, margin=margin)
-        xs_in = [c[0] for c in corners]
-        ys_in = [c[1] for c in corners]
+        expected = [
+            (-margin, -margin),
+            (10.0 + margin, -margin),
+            (10.0 + margin, 8.0 + margin),
+            (-margin, 8.0 + margin),
+        ]
+        for (ex, ey), (ax, ay) in zip(expected, inflated):
+            assert abs(ax - ex) < 1e-9
+            assert abs(ay - ey) < 1e-9
+
+    def test_clockwise_winding_also_offsets_outward(self) -> None:
+        """
+        @brief Outward direction is detected from winding, so a CW polygon
+               (as produced after the CARLA Y-negation) still grows outward.
+        """
+        # Same rectangle wound clockwise.
+        corners = [(0.0, 0.0), (0.0, 8.0), (10.0, 8.0), (10.0, 0.0)]
+        margin = 3.0
+        inflated = inflate_polygon(corners, margin=margin)
         xs_out = [c[0] for c in inflated]
         ys_out = [c[1] for c in inflated]
-        assert abs(min(xs_out) - (min(xs_in) - margin)) < 1e-9
-        assert abs(max(xs_out) - (max(xs_in) + margin)) < 1e-9
-        assert abs(min(ys_out) - (min(ys_in) - margin)) < 1e-9
-        assert abs(max(ys_out) - (max(ys_in) + margin)) < 1e-9
+        assert abs(min(xs_out) - (-margin)) < 1e-9
+        assert abs(max(xs_out) - (10.0 + margin)) < 1e-9
+        assert abs(min(ys_out) - (-margin)) < 1e-9
+        assert abs(max(ys_out) - (8.0 + margin)) < 1e-9
 
     def test_degenerate_polygon_returned_unchanged(self) -> None:
         """
@@ -1427,87 +1438,102 @@ class TestCarFullyInsideBay:
         """
         @brief Car perfectly centred and aligned with the bay must fit.
         """
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.0,
-            car_yaw=0.0,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is True
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
 
     def test_car_offset_within_lateral_slack_fits(self) -> None:
         """
         @brief A lateral offset smaller than the lateral slack must still fit.
         """
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.1,
-            car_yaw=0.0,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is True
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.1,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
 
     def test_car_offset_beyond_lateral_slack_fails(self) -> None:
         """
         @brief A lateral offset larger than the slack must push a corner out.
         """
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.2,
-            car_yaw=0.0,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is False
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.2,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is False
+        )
 
     def test_car_offset_within_longitudinal_slack_fits(self) -> None:
         """
         @brief A longitudinal offset smaller than the longitudinal slack must
                still fit (slack is larger in this axis than laterally).
         """
-        assert car_fully_inside_bay(
-            car_x=0.3,
-            car_y=0.0,
-            car_yaw=0.0,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is True
+        assert (
+            car_fully_inside_bay(
+                car_x=0.3,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
 
     def test_yawed_car_pokes_out(self) -> None:
         """
         @brief A 15-deg yaw sweeps the corners well beyond the lateral slack.
         """
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.0,
-            car_yaw=math.radians(15.0),
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is False
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=math.radians(15.0),
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is False
+        )
 
     def test_180_yaw_still_fits_polygon(self) -> None:
         """
@@ -1517,18 +1543,21 @@ class TestCarFullyInsideBay:
                achieve this state - the polygon check itself does not have to
                reject it.
         """
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.0,
-            car_yaw=math.pi,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is True
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=math.pi,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
 
     def test_rotated_bay_with_aligned_car_fits(self) -> None:
         """
@@ -1536,37 +1565,43 @@ class TestCarFullyInsideBay:
                to bay and car.
         """
         yaw = math.radians(45.0)
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.0,
-            car_yaw=yaw,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=yaw,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-        ) is True
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=yaw,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=yaw,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
 
     def test_positive_margin_shrinks_bay(self) -> None:
         """
         @brief A car that fits with margin=0 should be rejected when the
                margin shrinks the bay below the car's footprint.
         """
-        assert car_fully_inside_bay(
-            car_x=0.0,
-            car_y=0.0,
-            car_yaw=0.0,
-            car_half_length=self.CAR_HL,
-            car_half_width=self.CAR_HW,
-            bay_x=0.0,
-            bay_y=0.0,
-            bay_yaw=0.0,
-            bay_width=self.BAY_W,
-            bay_depth=self.BAY_D,
-            margin=0.5,
-        ) is False
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+                margin=0.5,
+            )
+            is False
+        )
 
 
 # ---------------------------------------------------------------------------

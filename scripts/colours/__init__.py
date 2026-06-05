@@ -26,6 +26,7 @@ HEX_PEDESTRIAN_ZONE = "#00CED1"  # Dark turquoise
 HEX_PEDESTRIAN_ZONE_EDGE = "#008B8B"  # Dark cyan
 HEX_PATROL_PATH = "#DC0000"  # Red
 HEX_LOT = "#DDDDDD"  # Light grey
+HEX_OOB_BOUNDARY = "#FF1493"  # Deep pink (soft out-of-bounds boundary)
 
 # Visualiser actor colours (used by visualise_training.py)
 HEX_EGO = "#00CFFF"  # Cyan (ego vehicle + trajectory trail)
