@@ -35,15 +35,13 @@ Structural constants fixed by system architecture. Changing any of these require
 | `ACTION_DIM` | $3$ | Steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$. Throttle and brake are separate non-negative axes. No reverse gear. |
 | `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. Combined with the geometric in-bay check to define a parked vehicle. |
 | `TRAINING_BAY_MARGIN` | $-0.5$ m | Inward bay-polygon shrink applied during training (negative inflates the bay by $0.5$ m on each side). Looser than evaluation so that PPO sees enough $+50$ terminal events to learn from. |
-| `EVAL_BAY_MARGIN` | $-0.175$ m | Inward bay-polygon shrink applied during evaluation. The strict criterion the policy is judged against. |
-| `APPROACH_INNER_RADIUS` | $1.5$ m | Inner-annulus boundary for the `approach_term` reward shaping (not a success criterion). |
+| `EVAL_BAY_MARGIN` | $-0.5$ m | Inward bay-polygon shrink applied during evaluation. The strict criterion the policy is judged against. |
+| `APPROACH_INNER_RADIUS` | $3.0$ m | Inner-annulus boundary for the centred-gated endgame shaping terms (not a success criterion). |
 | `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff inside `approach_term` ($45$ deg). |
-| `CLEARANCE_THRESHOLD` | $0.8$ m | Reserved; CARLA collision sensor used in practice. |
 | `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Radial distance from the target above which the real-world inference loop aborts. The sim path uses the soft polygon boundary below instead. |
-| `OOB_INFLATION_MARGIN` | $3.0$ m | Metres the lot polygon is inflated outward to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
+| `OOB_INFLATION_MARGIN` | $5.0$ m | Metres the lot polygon is offset outward (uniformly, on every edge) to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
 | `OOB_STEP_PENALTY` | $-0.5$ | Reward applied each policy decision the ego centre is outside the inflated polygon. |
 | `OOB_TERMINATION_PENALTY_LIMIT` | $10.0$ | Accumulated out-of-bounds cost at which the episode terminates (no extra crash-magnitude penalty). |
-| `MAX_PARKING_SPEED` | $15.0$ m/s | Speed cap for parking manoeuvres. |
 
 Success position and orientation are no longer scalar constants. The success
 gate is the geometric polygon-fit check (every corner of the ego bounding

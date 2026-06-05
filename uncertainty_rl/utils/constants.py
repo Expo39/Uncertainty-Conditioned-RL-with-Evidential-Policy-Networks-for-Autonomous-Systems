@@ -104,12 +104,6 @@ ACTION_DIM = 3
 # Environment Safety and Termination Thresholds
 # ---------------------------------------------------------------------------
 
-# Maximum physically plausible vehicle speed in a parking lot (m/s).
-MAX_PARKING_SPEED = 15.0
-
-# Minimum clearance to any obstacle before episode terminates (metres)
-CLEARANCE_THRESHOLD = 0.8
-
 # Radial distance from target bay before out-of-bounds termination (metres).
 # Used on the real-world inference path only; the sim path uses the soft
 # polygon boundary below.
@@ -123,7 +117,7 @@ OUT_OF_BOUNDS_THRESHOLD = 20.0
 # lost episode for a forward-only vehicle, so the skirt is sized to soften the
 # penalty near the operational boundary during early learning, not to enable
 # recovery.
-OOB_INFLATION_MARGIN = 3.0
+OOB_INFLATION_MARGIN = 5.0
 
 # Reward applied each policy decision the ego centre is outside the inflated
 # polygon. Small and negative so a brief excursion is cheap; it accumulates so

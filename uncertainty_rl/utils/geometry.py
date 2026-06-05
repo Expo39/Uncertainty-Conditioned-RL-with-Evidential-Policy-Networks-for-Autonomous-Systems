@@ -211,42 +211,73 @@ def inflate_polygon(
     corners: List[Tuple[float, float]], margin: float
 ) -> List[Tuple[float, float]]:
     """
-    @brief Inflate a polygon outward by `margin` metres on every bounding-box side.
+    @brief Offset a polygon outward by a uniform `margin` metres on every edge.
 
-    Each vertex is scaled away from the bounding-box centre by a per-axis factor
-    chosen so the bounding box grows by exactly `margin` on each of its four
-    sides, for any polygon (convex or concave). For a convex polygon (rectangle,
-    trapezoid - the training layouts) the whole shape grows outward, so the
-    original polygon stays inside the result. For a concave polygon a reflex
-    vertex can still move inward relative to the inflated boundary, so strict
-    vertex containment is not guaranteed; the bounding box always grows. This is
-    acceptable because the only concave layout (irregular_a) is held out for
-    evaluation, and the inflated polygon is a soft out-of-bounds skirt, not a
-    hard wall.
+    Each edge is pushed out along its outward normal by exactly `margin`; each
+    vertex moves to the intersection of its two offset edges, i.e. along the
+    edge-normal bisector by `margin / sin(half-interior-angle)`. For a convex
+    polygon (rectangle, trapezoid - the training layouts) this yields a true
+    uniform skirt: every boundary point sits `margin` metres outside the
+    original, and the original polygon stays strictly inside the result.
+
+    Winding is detected from the signed area so "outward" is correct for either
+    orientation (layouts arrive here in CARLA's left-handed frame, so their
+    winding is the mirror of the right-handed source). Reflex vertices on a
+    concave polygon can overshoot, but the only concave layout (irregular_a) is
+    held out for evaluation and the skirt is a soft out-of-bounds boundary, not
+    a hard wall.
 
     @param corners: Ordered polygon vertices as (x, y) pairs.
-    @param margin: Outward inflation in metres (applied on each bounding-box side).
-    @return Inflated polygon vertices in the same winding as the input. Inputs
+    @param margin: Outward offset distance in metres.
+    @return Offset polygon vertices in the same winding as the input. Inputs
             with fewer than three vertices are returned unchanged.
     """
-    if len(corners) < 3:
+    n = len(corners)
+    if n < 3:
         return list(corners)
-    xs = [c[0] for c in corners]
-    ys = [c[1] for c in corners]
-    x_min, x_max = min(xs), max(xs)
-    y_min, y_max = min(ys), max(ys)
-    # Scale about the bounding-box centre so growth is exactly `margin` per side
-    # regardless of vertex distribution; guard zero-extent axes.
-    centre_x = 0.5 * (x_min + x_max)
-    centre_y = 0.5 * (y_min + y_max)
-    width = x_max - x_min
-    height = y_max - y_min
-    scale_x = 1.0 + 2.0 * margin / width if width > 1e-9 else 1.0
-    scale_y = 1.0 + 2.0 * margin / height if height > 1e-9 else 1.0
-    return [
-        (centre_x + (x - centre_x) * scale_x, centre_y + (y - centre_y) * scale_y)
-        for x, y in corners
-    ]
+
+    # Signed area (shoelace): positive => CCW. The outward edge normal is the
+    # edge direction rotated -90 deg for CCW winding, +90 deg for CW.
+    signed_area = 0.5 * sum(
+        corners[i][0] * corners[(i + 1) % n][1]
+        - corners[(i + 1) % n][0] * corners[i][1]
+        for i in range(n)
+    )
+    outward_sign = 1.0 if signed_area > 0.0 else -1.0
+
+    def _edge_normal(
+        p0: Tuple[float, float], p1: Tuple[float, float]
+    ) -> Tuple[float, float]:
+        """Unit outward normal of the directed edge p0 -> p1."""
+        ex, ey = p1[0] - p0[0], p1[1] - p0[1]
+        length = math.hypot(ex, ey)
+        if length < 1e-12:
+            return (0.0, 0.0)
+        # Rotate edge direction by -/+90 deg (winding-dependent) for outward.
+        return (outward_sign * ey / length, -outward_sign * ex / length)
+
+    offset: List[Tuple[float, float]] = []
+    for i in range(n):
+        prev_pt = corners[(i - 1) % n]
+        curr_pt = corners[i]
+        next_pt = corners[(i + 1) % n]
+        n_in = _edge_normal(prev_pt, curr_pt)  # normal of incoming edge
+        n_out = _edge_normal(curr_pt, next_pt)  # normal of outgoing edge
+        bx, by = n_in[0] + n_out[0], n_in[1] + n_out[1]
+        bisector_len = math.hypot(bx, by)
+        if bisector_len < 1e-9:
+            # Degenerate (180 deg) vertex: push straight out along one normal.
+            offset.append(
+                (curr_pt[0] + margin * n_out[0], curr_pt[1] + margin * n_out[1])
+            )
+            continue
+        # Distance along the unit bisector so both offset edges sit `margin`
+        # out: margin / cos(angle between bisector and either edge normal).
+        bux, buy = bx / bisector_len, by / bisector_len
+        cos_half = bux * n_out[0] + buy * n_out[1]
+        scale = margin / cos_half if abs(cos_half) > 1e-9 else margin
+        offset.append((curr_pt[0] + scale * bux, curr_pt[1] + scale * buy))
+    return offset
 
 
 def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float:
