@@ -2,11 +2,12 @@
 # Optuna study settings and search space bounds for PPO + evidential policy networks.
 # See documentation/detailed_notes/hyperparameter_search.md for search space rationale.
 
-study_name: "uncertainty_rl_tuning"
-storage_path: "logs/tuning/optuna_study.db"  # SQLite for trial persistence and resume.
+study_name: "uncertainty_rl_tuning"  # Per-baseline runs suffix this with the baseline name.
+storage_path: "logs/tuning/optuna_study.db"  # SQLite for trial persistence and resume. Per-baseline runs suffix the filename.
 n_trials: 40   # Budget for 10-parameter space. See detailed_notes/hyperparameter_search.md.
 timesteps_per_trial: 100000  # ~49 PPO updates; enough to rank configs without full convergence.
-seed: 42
+seed: 42  # Legacy fallback sampler seed (used only when tuning_seed is absent).
+tuning_seed: 777  # TPE sampler seed for tuning. Held DISJOINT from train_config random_seeds [0-9] (used for final training + evaluation) so the tuning and evaluation splits do not share seeds.
 
 sampler:
   multivariate: true  # Captures parameter interactions (e.g. learning_rate vs batch_size).
