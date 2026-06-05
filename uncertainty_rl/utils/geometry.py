@@ -207,6 +207,48 @@ def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> 
     return bool(np.count_nonzero(cond1 & cond2) % 2)
 
 
+def inflate_polygon(
+    corners: List[Tuple[float, float]], margin: float
+) -> List[Tuple[float, float]]:
+    """
+    @brief Inflate a polygon outward by `margin` metres on every bounding-box side.
+
+    Each vertex is scaled away from the bounding-box centre by a per-axis factor
+    chosen so the bounding box grows by exactly `margin` on each of its four
+    sides, for any polygon (convex or concave). For a convex polygon (rectangle,
+    trapezoid - the training layouts) the whole shape grows outward, so the
+    original polygon stays inside the result. For a concave polygon a reflex
+    vertex can still move inward relative to the inflated boundary, so strict
+    vertex containment is not guaranteed; the bounding box always grows. This is
+    acceptable because the only concave layout (irregular_a) is held out for
+    evaluation, and the inflated polygon is a soft out-of-bounds skirt, not a
+    hard wall.
+
+    @param corners: Ordered polygon vertices as (x, y) pairs.
+    @param margin: Outward inflation in metres (applied on each bounding-box side).
+    @return Inflated polygon vertices in the same winding as the input. Inputs
+            with fewer than three vertices are returned unchanged.
+    """
+    if len(corners) < 3:
+        return list(corners)
+    xs = [c[0] for c in corners]
+    ys = [c[1] for c in corners]
+    x_min, x_max = min(xs), max(xs)
+    y_min, y_max = min(ys), max(ys)
+    # Scale about the bounding-box centre so growth is exactly `margin` per side
+    # regardless of vertex distribution; guard zero-extent axes.
+    centre_x = 0.5 * (x_min + x_max)
+    centre_y = 0.5 * (y_min + y_max)
+    width = x_max - x_min
+    height = y_max - y_min
+    scale_x = 1.0 + 2.0 * margin / width if width > 1e-9 else 1.0
+    scale_y = 1.0 + 2.0 * margin / height if height > 1e-9 else 1.0
+    return [
+        (centre_x + (x - centre_x) * scale_x, centre_y + (y - centre_y) * scale_y)
+        for x, y in corners
+    ]
+
+
 def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float:
     """
     @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
