@@ -68,8 +68,10 @@ parking_scenarios:
   perimeter_marker_blueprint: "static.prop.constructioncone"
   perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
   spawn_perimeter_cones: false  # false = soft OOB penalty enforces the lot edge.
-  bay_occupancy_min: 0.0  # Per-episode bay occupancy lower bound.
-  bay_occupancy_max: 0.0  # Per-episode bay occupancy upper bound.
+  # Fraction of non-target bays filled with parked cars each episode (the target
+  # bay is always excluded). Set min == max for a fixed rate.
+  bay_occupancy_min: 0.2  # Per-episode bay occupancy lower bound.
+  bay_occupancy_max: 0.8  # Per-episode bay occupancy upper bound.
   num_patrol_vehicles_max: 0  # NPC patrol vehicles per episode.
   patrol_obstacle_stop_distance: 5.0  # Metres - patrol brakes for vehicles in forward cone.
   patrol_pedestrian_stop_distance: 4.0  # Metres - patrol brakes for pedestrians in range.
