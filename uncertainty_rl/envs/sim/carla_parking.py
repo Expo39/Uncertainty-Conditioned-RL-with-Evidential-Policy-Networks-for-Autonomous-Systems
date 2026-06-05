@@ -313,6 +313,7 @@ class CARLAParkingEnv(gym.Env):
             ),
             bay_occupancy_min=scenarios.get("bay_occupancy_min", 0.3),
             bay_occupancy_max=scenarios.get("bay_occupancy_max", 0.8),
+            spawn_perimeter_cones=scenarios.get("spawn_perimeter_cones", True),
         )
 
         # NPC controller - owns patrol vehicles and pedestrians.

@@ -121,6 +121,7 @@ class LotSpawner:
         marker_blueprint: str,
         bay_occupancy_min: float,
         bay_occupancy_max: float,
+        spawn_perimeter_cones: bool = True,
     ) -> None:
         """
         @brief Construct LotSpawner with fixed config parameters.
@@ -132,11 +133,15 @@ class LotSpawner:
                with parked cars [0, 1]. Resampled each episode.
         @param bay_occupancy_max: Maximum fraction of non-target bays to fill
                with parked cars [0, 1]. Resampled each episode.
+        @param spawn_perimeter_cones: When False, the perimeter cone ring is not
+               spawned - the lot boundary is enforced by the soft out-of-bounds
+               penalty instead. Interior obstacle cones are unaffected.
         """
         self._cone_spacing = cone_spacing
         self._marker_blueprint = marker_blueprint
         self._bay_occupancy_min = bay_occupancy_min
         self._bay_occupancy_max = bay_occupancy_max
+        self._spawn_perimeter_cones_enabled = spawn_perimeter_cones
 
         # Per-episode RNG. Defaults to an unseeded generator for standalone /
         # test use; the env injects its seeded Gymnasium np_random via set_rng()
@@ -253,9 +258,17 @@ class LotSpawner:
                     cone.destroy()
             self.spawned_cones.clear()
 
+            # The perimeter ring is optional: when disabled the lot edge is
+            # enforced by the soft out-of-bounds penalty, not a wall of cones.
+            # Interior obstacle cones are always spawned.
+            perimeter = (
+                self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
+                if self._spawn_perimeter_cones_enabled
+                else ()
+            )
             cone_pending = list(
                 itertools.chain(
-                    self._spawn_perimeter_cones(world, current_layout, floor_contact_z),
+                    perimeter,
                     self._spawn_obstacle_cones(world, current_layout, floor_contact_z),
                 )
             )

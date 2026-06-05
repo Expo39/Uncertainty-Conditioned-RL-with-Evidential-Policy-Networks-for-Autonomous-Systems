@@ -23,6 +23,7 @@ from uncertainty_rl.envs._parking_core import (
     load_floor_plan,
     wait_for_ekf,
 )
+from uncertainty_rl.envs.sim.helpers._lot_spawner import LotSpawner
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     COVARIANCE_FEATURES_DIM,
@@ -1283,6 +1284,43 @@ class TestInflatePolygon:
         """
         corners = [(0.0, 0.0), (1.0, 1.0)]
         assert inflate_polygon(corners, margin=3.0) == corners
+
+
+# ---------------------------------------------------------------------------
+# LotSpawner: perimeter-cone toggle
+# ---------------------------------------------------------------------------
+
+
+class TestLotSpawnerConeFlag:
+    """
+    @class TestLotSpawnerConeFlag
+    @brief Tests that the spawn_perimeter_cones flag is honoured by the spawner.
+    """
+
+    def test_flag_defaults_to_true(self) -> None:
+        """
+        @brief Omitting the flag preserves the legacy perimeter-cone behaviour.
+        """
+        spawner = LotSpawner(
+            cone_spacing=2.0,
+            marker_blueprint="static.prop.constructioncone",
+            bay_occupancy_min=0.0,
+            bay_occupancy_max=0.0,
+        )
+        assert spawner._spawn_perimeter_cones_enabled is True
+
+    def test_flag_stored_when_disabled(self) -> None:
+        """
+        @brief Passing False disables the perimeter-cone ring.
+        """
+        spawner = LotSpawner(
+            cone_spacing=2.0,
+            marker_blueprint="static.prop.constructioncone",
+            bay_occupancy_min=0.0,
+            bay_occupancy_max=0.0,
+            spawn_perimeter_cones=False,
+        )
+        assert spawner._spawn_perimeter_cones_enabled is False
 
 
 # ---------------------------------------------------------------------------
