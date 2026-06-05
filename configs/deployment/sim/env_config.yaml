@@ -12,7 +12,7 @@ carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
 max_steps: 1750  # Episode length (steps).
 action_repeat: 4  # Sim ticks per policy action. Policy runs at carla_timestep * action_repeat seconds per decision.
-use_extra_spawns: false  # When true, sample from extra_spawn_transforms in the layout YAML; false locks to the primary spawn.
+use_extra_spawns: true  # When true, sample from extra_spawn_transforms in the layout YAML; false locks to the primary spawn.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
 no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active).

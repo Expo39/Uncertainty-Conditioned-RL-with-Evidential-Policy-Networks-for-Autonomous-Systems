@@ -89,6 +89,26 @@ eval_conditions:
     bay_occupancy_rate: 0.6
     floor_plan: "irregular_a"
 
+  # Held-out layout evaluation - trapezoid is excluded from training (rectangle
+  # only), so success here measures generalisation to an unseen geometry.
+  - name: "heldout_trapezoid"
+    description: "Held-out floor plan (trapezoid), RTK fixed"
+    gnss_noise_multiplier: 1.0
+    imu_noise_multiplier: 1.0
+    num_patrol_vehicles: 0
+    pedestrian_spawn_probability: 0.0
+    bay_occupancy_rate: 0.6
+    floor_plan: "trapezoid"
+
+  - name: "heldout_trapezoid_degraded"
+    description: "Held-out floor plan (trapezoid), RTK float"
+    gnss_noise_multiplier: 15.0
+    imu_noise_multiplier: 1.5
+    num_patrol_vehicles: 0
+    pedestrian_spawn_probability: 0.0
+    bay_occupancy_rate: 0.6
+    floor_plan: "trapezoid"
+
   # Safety handoff demonstration - beyond training distribution
   - name: "worst_case"
     description: "Degraded GNSS + max IMU noise - safety handoff demo"
