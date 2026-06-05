@@ -90,12 +90,18 @@ GNSS noise escalation (base stddev = 0.02 m at 1x):
 | `rtk_standalone` | $100.0\times$ | $1.0\times$ | 1 | 0.8 | 0.6 | Policy should decline |
 | `rtk_lost` | $250.0\times$ | $2.0\times$ | 1 | 1.0 | 0.8 | Safety handoff expected |
 
-### OOD calibration (epistemic uncertainty check)
+### Held-out layout generalisation (unseen geometries)
 
-Tests whether epistemic uncertainty rises on the `irregular_a` floor plan (56 bays, nine-sided irregular polygon), which is never seen during training.
+Training uses the `rectangle` floor plan only, so the `trapezoid` (moderate OOD)
+and `irregular_a` (strong OOD, nine-sided irregular polygon) layouts are never
+seen during training. Success here measures generalisation; the `irregular_a`
+conditions additionally test whether epistemic uncertainty rises on the strongly
+out-of-distribution geometry.
 
 | Condition | Floor plan | GNSS mult | IMU mult | Patrol | Ped. prob | Bay occ. |
 |-----------|-----------|-----------|----------|--------|-----------|----------|
+| `heldout_trapezoid` | `trapezoid` | $1.0\times$ | $1.0\times$ | 0 | 0.0 | 0.6 |
+| `heldout_trapezoid_degraded` | `trapezoid` | $15.0\times$ | $1.5\times$ | 0 | 0.0 | 0.6 |
 | `ood_layout` | `irregular_a` | $1.0\times$ | $1.0\times$ | 1 | 1.0 | 0.6 |
 | `ood_layout_degraded` | `irregular_a` | $15.0\times$ | $1.5\times$ | 1 | 1.0 | 0.6 |
 

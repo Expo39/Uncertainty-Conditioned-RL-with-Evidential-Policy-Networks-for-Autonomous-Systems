@@ -33,7 +33,7 @@ Behaviour settings that must match the trained policy. Check these before every 
 |-----|---------|-------|
 | `include_covariance` | `true` | Must match the flag used at training time. |
 | `include_obstacle_obs` | `true` | Must match the flag used at training time. |
-| `max_ego_speed_ms` | `5.0` | Hard speed cap (m/s). |
+| `max_ego_speed_ms` | `8.0` | Hard speed cap (m/s). |
 | `safety_handoff_threshold` | `5.0` | Epistemic uncertainty above this triggers full stop. |
 | `real_world_deployment` | `false` | Set `true` to activate datum-based EKF calibration on the real vehicle. |
 

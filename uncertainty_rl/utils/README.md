@@ -39,7 +39,10 @@ Structural constants fixed by system architecture. Changing any of these require
 | `APPROACH_INNER_RADIUS` | $1.5$ m | Inner-annulus boundary for the `approach_term` reward shaping (not a success criterion). |
 | `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff inside `approach_term` ($45$ deg). |
 | `CLEARANCE_THRESHOLD` | $0.8$ m | Reserved; CARLA collision sensor used in practice. |
-| `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Distance from target above which episode terminates. |
+| `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Radial distance from the target above which the real-world inference loop aborts. The sim path uses the soft polygon boundary below instead. |
+| `OOB_INFLATION_MARGIN` | $3.0$ m | Metres the lot polygon is inflated outward to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
+| `OOB_STEP_PENALTY` | $-0.5$ | Reward applied each policy decision the ego centre is outside the inflated polygon. |
+| `OOB_TERMINATION_PENALTY_LIMIT` | $10.0$ | Accumulated out-of-bounds cost at which the episode terminates (no extra crash-magnitude penalty). |
 | `MAX_PARKING_SPEED` | $15.0$ m/s | Speed cap for parking manoeuvres. |
 
 Success position and orientation are no longer scalar constants. The success
@@ -79,6 +82,7 @@ Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime r
 |----------|---------|
 | `zone_bbox` | Convert a pedestrian zone dict to $(x_\min, x_\max, y_\min, y_\max)$; handles explicit-extents and centre + half-extents YAML formats |
 | `point_in_polygon` | Ray-casting out-of-bounds test against the lot boundary polygon (with $10^{-12}$ division guard for horizontal edges) |
+| `inflate_polygon` | Inflate a polygon outward by `margin` metres per bounding-box side (bounding-box-centre scaling). Used to build the soft out-of-bounds boundary from the lot corners |
 | `car_fully_inside_bay` | Rectangle-in-rectangle containment: every corner of the ego bounding box must lie inside the bay rectangle (optional inward `margin`). Used by the geometric success gate |
 | `yaw_from_quaternion` | Extract yaw from a quaternion using ZYX Euler decomposition, wrapped to $[-\pi, \pi]$ |
 | `wrap_angle_symmetric` | Wrap heading error to $(-\pi, \pi]$ with 180-deg parking symmetry |
@@ -128,10 +132,12 @@ from uncertainty_rl.utils import (
     TRAINING_BAY_MARGIN, EVAL_BAY_MARGIN,
     APPROACH_INNER_RADIUS, APPROACH_INNER_ALIGNMENT_CUTOFF,
     OUT_OF_BOUNDS_THRESHOLD,
+    OOB_INFLATION_MARGIN, OOB_STEP_PENALTY, OOB_TERMINATION_PENALTY_LIMIT,
     # Covariance
     extract_2d_covariance_features, validate_covariance_matrix,
     # Geometry
-    zone_bbox, point_in_polygon, car_fully_inside_bay, wrap_angle_symmetric,
+    zone_bbox, point_in_polygon, inflate_polygon, car_fully_inside_bay,
+    wrap_angle_symmetric,
     # Logging
     DebugLogger,
     # Visualisation
