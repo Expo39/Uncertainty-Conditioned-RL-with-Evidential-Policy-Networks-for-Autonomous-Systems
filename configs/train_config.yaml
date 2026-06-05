@@ -47,7 +47,7 @@ seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
 n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).
-success_rate_window: 50  # Episodes the logged success/collision/timeout rates are averaged over. One PPO rollout holds only a few terminal episodes (~n_steps/max_steps), so a per-rollout rate is dominated by sampling noise; averaging over the last N episodes makes the logged rate track policy quality.
+success_rate_window: 50  # Episodes the logged success/collision/oob/timeout rates are averaged over. One PPO rollout holds only a few terminal episodes (~n_steps/max_steps), so a per-rollout rate is dominated by sampling noise; averaging over the last N episodes makes the logged rate track policy quality.
 
 # Parallel workers. Each worker connects to a separate CARLA server on base_port + rank*1000.
 parallel_workers: 1

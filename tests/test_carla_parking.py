@@ -786,7 +786,7 @@ def _make_env_for_reward() -> Any:
     env._ego_half_width = 1.121
     env._prev_distance = 5.0
 
-    # Layout with generous corners so OOB check doesn't fire unless intended
+    # Layout with generous corners so OOB check doesn't fire unless intended.
     env._current_layout = {
         "corners": [
             {"x": -50.0, "y": -50.0},
@@ -795,6 +795,14 @@ def _make_env_for_reward() -> Any:
             {"x": -50.0, "y": 50.0},
         ]
     }
+    # reset() normally populates the inflated OOB boundary; set it directly here
+    # (the generous +/-50 box keeps the OOB check inert for non-OOB tests).
+    env._oob_inflated_corners = [
+        (-53.0, -53.0),
+        (53.0, -53.0),
+        (53.0, 53.0),
+        (-53.0, 53.0),
+    ]
     return env
 
 
@@ -1097,6 +1105,78 @@ class TestComputeReward:
         _, _, _, diag = env._compute_reward()
 
         assert all(v == 0.0 for v in diag.values())
+
+    def test_oob_no_op_when_inside_boundary(self) -> None:
+        """
+        @brief A vehicle inside the inflated boundary incurs no OOB penalty and
+               the accumulator stays at zero.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["oob"] == 0.0
+        assert env._oob_accumulated_penalty == 0.0
+
+    def test_oob_step_penalty_and_accumulation_when_outside(self) -> None:
+        """
+        @brief Outside the inflated boundary, the per-step penalty is applied and
+               accumulated, but the episode does not terminate on the first step.
+        """
+        env = _make_env_for_reward()
+        # Target just inside the boundary; ego a metre outside it (x = 54 > 53),
+        # so the progress term is small and the OOB term dominates the reward.
+        env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
+        _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
+        env._prev_distance = 2.0
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert diag["oob"] == 1.0
+        assert terminated is False
+        assert success is False
+        assert env._oob_accumulated_penalty == pytest.approx(-env._oob_step_penalty)
+        # The OOB step penalty dominates the reward (small shaping aside), so the
+        # reward sits close to the step penalty and is clearly negative.
+        assert reward < 0.0
+        assert reward == pytest.approx(env._oob_step_penalty, abs=0.05)
+
+    def test_oob_terminates_when_accumulator_crosses_limit(self) -> None:
+        """
+        @brief When the accumulated OOB cost crosses the limit the episode
+               terminates with no extra crash-magnitude penalty.
+        """
+        env = _make_env_for_reward()
+        env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
+        _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
+        env._prev_distance = 2.0
+        # Prime the accumulator just below the limit so one more OOB step crosses it.
+        env._oob_accumulated_penalty = env._oob_termination_limit + env._oob_step_penalty
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert terminated is True
+        assert success is False
+        # No -25 crash term: the OOB-terminate reward is far milder than a crash.
+        assert reward > -25.0
+
+    def test_collision_takes_precedence_over_oob(self) -> None:
+        """
+        @brief A collision is resolved before the OOB check, so an out-of-bounds
+               vehicle that also collides returns the collision penalty and never
+               sets the oob flag.
+        """
+        env = _make_env_for_reward()
+        env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
+        _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
+        env._sensor_manager.consume_collision.return_value = (True, True)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert reward == pytest.approx(-25.0)
+        assert terminated is True
+        assert diag.get("oob", 0.0) == 0.0
 
 
 # ---------------------------------------------------------------------------
