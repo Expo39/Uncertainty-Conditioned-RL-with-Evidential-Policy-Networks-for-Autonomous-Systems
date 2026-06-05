@@ -110,5 +110,28 @@ MAX_PARKING_SPEED = 15.0
 # Minimum clearance to any obstacle before episode terminates (metres)
 CLEARANCE_THRESHOLD = 0.8
 
-# Maximum distance from target bay before out-of-bounds termination (metres)
+# Radial distance from target bay before out-of-bounds termination (metres).
+# Used on the real-world inference path only; the sim path uses the soft
+# polygon boundary below.
 OUT_OF_BOUNDS_THRESHOLD = 20.0
+
+# ---------------------------------------------------------------------------
+# Soft Out-of-Bounds Boundary (sim training)
+# ---------------------------------------------------------------------------
+# The drivable boundary is the lot polygon inflated outward by this margin
+# (metres), forming a run-off skirt beyond the lot edge. Leaving the lot is a
+# lost episode for a forward-only vehicle, so the skirt is sized to soften the
+# penalty near the operational boundary during early learning, not to enable
+# recovery.
+OOB_INFLATION_MARGIN = 3.0
+
+# Reward applied each policy decision the ego centre is outside the inflated
+# polygon. Small and negative so a brief excursion is cheap; it accumulates so
+# a sustained run-out terminates the episode (see OOB_TERMINATION_PENALTY_LIMIT).
+OOB_STEP_PENALTY = -0.5
+
+# Accumulated out-of-bounds cost (sum of |OOB_STEP_PENALTY| over outside steps)
+# at which the episode terminates with no extra crash-magnitude penalty - the
+# accrued per-step penalties are the cost. Sized below the ego collision
+# penalty so leaving the lot is never punished harder than a real collision.
+OOB_TERMINATION_PENALTY_LIMIT = 10.0

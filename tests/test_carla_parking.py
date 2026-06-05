@@ -35,6 +35,7 @@ from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
     car_fully_inside_bay,
+    inflate_polygon,
     point_in_polygon,
     wrap_angle_symmetric,
     yaw_from_quaternion,
@@ -1216,6 +1217,72 @@ class TestPointInPolygon:
         corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]
         assert point_in_polygon(0.0, 0.0, corners) is True
         assert point_in_polygon(3.0, 0.0, corners) is False
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: inflate_polygon_centroid
+# ---------------------------------------------------------------------------
+
+
+class TestInflatePolygon:
+    """
+    @class TestInflatePolygon
+    @brief Tests for the bounding-box polygon inflation used by the soft OOB
+           boundary.
+    """
+
+    def test_unit_square_inflates_outward(self) -> None:
+        """
+        @brief A unit square centred on the origin grows by `margin` per side.
+        """
+        corners = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+        inflated = inflate_polygon(corners, margin=1.0)
+        # Each corner moves out to +/- 1.5 (0.5 original + 1.0 margin).
+        for (x, y) in inflated:
+            assert abs(abs(x) - 1.5) < 1e-9
+            assert abs(abs(y) - 1.5) < 1e-9
+
+    def test_original_polygon_stays_inside_inflated(self) -> None:
+        """
+        @brief Every original vertex lies inside the inflated polygon (convex).
+        """
+        corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 8.0), (0.0, 8.0)]
+        inflated = inflate_polygon(corners, margin=2.0)
+        for (x, y) in corners:
+            assert point_in_polygon(x, y, inflated) is True
+
+    def test_bounding_box_grows_by_exactly_margin_per_side(self) -> None:
+        """
+        @brief The bounding box grows by exactly `margin` on each side, for an
+               asymmetric (concave) polygon. Strict vertex containment is NOT
+               guaranteed for reflex corners - only the bounding-box growth is.
+        """
+        # L-shaped (concave) polygon - centroid is offset from the bbox centre.
+        corners = [
+            (0.0, 0.0),
+            (6.0, 0.0),
+            (6.0, 2.0),
+            (2.0, 2.0),
+            (2.0, 6.0),
+            (0.0, 6.0),
+        ]
+        margin = 1.5
+        inflated = inflate_polygon(corners, margin=margin)
+        xs_in = [c[0] for c in corners]
+        ys_in = [c[1] for c in corners]
+        xs_out = [c[0] for c in inflated]
+        ys_out = [c[1] for c in inflated]
+        assert abs(min(xs_out) - (min(xs_in) - margin)) < 1e-9
+        assert abs(max(xs_out) - (max(xs_in) + margin)) < 1e-9
+        assert abs(min(ys_out) - (min(ys_in) - margin)) < 1e-9
+        assert abs(max(ys_out) - (max(ys_in) + margin)) < 1e-9
+
+    def test_degenerate_polygon_returned_unchanged(self) -> None:
+        """
+        @brief Inputs with fewer than three vertices are returned unchanged.
+        """
+        corners = [(0.0, 0.0), (1.0, 1.0)]
+        assert inflate_polygon(corners, margin=3.0) == corners
 
 
 # ---------------------------------------------------------------------------
