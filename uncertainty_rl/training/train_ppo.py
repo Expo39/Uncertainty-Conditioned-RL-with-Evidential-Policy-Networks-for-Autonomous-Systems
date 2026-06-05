@@ -227,20 +227,21 @@ class EnvDiagnosticsCallback(BaseCallback):
 
     The per-step means (pos/orientation/speed/progress) are averaged over every
     step in a rollout, so they are already smooth. The terminal rates (success,
-    collision, timeout) are sparse - one PPO rollout holds only a handful of
-    terminal episodes (~n_steps / max_steps), so a per-rollout rate has a noise
-    band of tens of percentage points and cannot be read as policy quality. To
-    make the rates legible, terminal outcomes are kept in a rolling window of the
-    last `outcome_window` episodes and the logged rate is the mean over that
-    window. This is a logging change only - it does not touch training dynamics.
+    collision, out-of-bounds, timeout) are sparse - one PPO rollout holds only a
+    handful of terminal episodes (~n_steps / max_steps), so a per-rollout rate
+    has a noise band of tens of percentage points and cannot be read as policy
+    quality. To make the rates legible, terminal outcomes are kept in a rolling
+    window of the last `outcome_window` episodes and the logged rate is the mean
+    over that window. This is a logging change only - it does not touch training
+    dynamics.
     """
 
     def __init__(self, outcome_window: int = 50) -> None:
         """
         @brief Initialise accumulators.
         @param outcome_window: Number of most-recent terminal episodes the
-               success/collision/timeout rates are averaged over. Larger values
-               trade reporting latency for a tighter noise band on the rate.
+               success/collision/oob/timeout rates are averaged over. Larger
+               values trade reporting latency for a tighter noise band on the rate.
         """
         super().__init__(verbose=0)
         self._pos_sum = 0.0
@@ -253,6 +254,7 @@ class EnvDiagnosticsCallback(BaseCallback):
         # rather than the handful of episodes that happened to end this rollout.
         self._success_hist: Deque[float] = deque(maxlen=outcome_window)
         self._collision_hist: Deque[float] = deque(maxlen=outcome_window)
+        self._oob_hist: Deque[float] = deque(maxlen=outcome_window)
         self._timeout_hist: Deque[float] = deque(maxlen=outcome_window)
 
     def _on_step(self) -> bool:
@@ -269,10 +271,12 @@ class EnvDiagnosticsCallback(BaseCallback):
             # Read each flag once and reuse for both is_terminal and individual recording.
             success = info.get("success", False)
             collision = info.get("collision", False)
+            oob = info.get("oob", False)
             timeout = info.get("timeout", False)
-            if success or collision or timeout:
+            if success or collision or oob or timeout:
                 self._success_hist.append(float(success))
                 self._collision_hist.append(float(collision))
+                self._oob_hist.append(float(oob))
                 self._timeout_hist.append(float(timeout))
         return True
 
@@ -294,6 +298,7 @@ class EnvDiagnosticsCallback(BaseCallback):
             inv_t = 1.0 / len(self._success_hist)
             self.logger.record("env/success_rate", sum(self._success_hist) * inv_t)
             self.logger.record("env/collision_rate", sum(self._collision_hist) * inv_t)
+            self.logger.record("env/oob_rate", sum(self._oob_hist) * inv_t)
             self.logger.record("env/timeout_rate", sum(self._timeout_hist) * inv_t)
 
         # Reset per-step accumulators for the next rollout window.

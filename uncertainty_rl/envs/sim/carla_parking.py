@@ -45,7 +45,9 @@ from uncertainty_rl.utils.constants import (
     APPROACH_INNER_ALIGNMENT_CUTOFF,
     APPROACH_INNER_RADIUS,
     OBSTACLE_FEATURES_DIM,
-    OUT_OF_BOUNDS_THRESHOLD,
+    OOB_INFLATION_MARGIN,
+    OOB_STEP_PENALTY,
+    OOB_TERMINATION_PENALTY_LIMIT,
     SUCCESS_APPROACH_RADIUS,
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
@@ -54,6 +56,8 @@ from uncertainty_rl.utils.constants import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     car_fully_inside_bay,
+    inflate_polygon,
+    point_in_polygon,
     wrap_angle_symmetric,
 )
 from uncertainty_rl.utils.logging import DebugLogger
@@ -229,7 +233,6 @@ class CARLAParkingEnv(gym.Env):
         self._bay_margin: float = float(bay_margin)
 
         self._inv_uncertainty_std_max: float = 1.0 / self._uncertainty_std_max
-        self._inv_oob_threshold: float = 1.0 / OUT_OF_BOUNDS_THRESHOLD
 
         # Load GNSS noise profiles for per-episode RTK fix-state sampling.
         self._gnss_noise_tiers: List[Dict[str, Any]] = []
@@ -280,6 +283,23 @@ class CARLAParkingEnv(gym.Env):
             "fixed_target_bay_id", None
         )
         self._fixed_gnss_tier: Optional[str] = scenarios.get("fixed_gnss_tier", None)
+
+        # Soft out-of-bounds boundary: the lot polygon inflated by a margin forms
+        # a run-off skirt; leaving it costs a small per-decision penalty that
+        # accumulates until the episode terminates. Config overrides the
+        # structural defaults in constants.py.
+        self._oob_step_penalty: float = scenarios.get(
+            "oob_step_penalty", OOB_STEP_PENALTY
+        )
+        self._oob_termination_limit: float = scenarios.get(
+            "oob_termination_limit", OOB_TERMINATION_PENALTY_LIMIT
+        )
+        self._oob_inflation_margin: float = scenarios.get(
+            "oob_inflation_margin", OOB_INFLATION_MARGIN
+        )
+        # Inflated boundary polygon and accumulated cost - both reset per episode.
+        self._oob_inflated_corners: List[Tuple[float, float]] = []
+        self._oob_accumulated_penalty: float = 0.0
 
         # CARLA handles
         self.client: Optional[Any] = None
@@ -1049,6 +1069,25 @@ class CARLAParkingEnv(gym.Env):
         diag["approach_reward"] = float(approach_term)
         diag["precision_reward"] = float(precision_term)
         diag["hold_bonus"] = float(hold_term)
+
+        # Soft out-of-bounds boundary. Evaluated last, so collision and success
+        # always take precedence. Applied RAW (not scaled by 1 - uncertainty)
+        # because leaving the lot is a safety boundary, not progress shaping -
+        # high EKF uncertainty must never make it cheap. The penalty accumulates
+        # until it crosses the limit, then terminates with no extra crash cost
+        # (the accrued penalties are the cost). The test uses CARLA ground-truth
+        # (x, y), so it is exact regardless of EKF noise.
+        if self._oob_inflated_corners and not point_in_polygon(
+            x, y, self._oob_inflated_corners
+        ):
+            reward += self._oob_step_penalty
+            self._oob_accumulated_penalty += -self._oob_step_penalty
+            diag["oob"] = 1.0
+            if self._oob_accumulated_penalty >= self._oob_termination_limit:
+                return float(reward), True, False, diag
+        else:
+            diag["oob"] = 0.0
+
         return float(reward), False, False, diag
 
     # ------------------------------------------------------------------
@@ -1145,8 +1184,8 @@ class CARLAParkingEnv(gym.Env):
 
         @param end_reason: If set, written into the frame as "end_reason" so
                            the visualiser can log why the episode terminated.
-                           One of: "collision", "success", "timeout".
-                           None for mid-episode frames.
+                           One of: "collision", "out_of_bounds", "success",
+                           "timeout". None for mid-episode frames.
         @param transform: Pre-fetched vehicle transform. Fetched internally when None.
         @param velocity: Pre-fetched vehicle velocity. Fetched internally when None.
         """
@@ -1801,6 +1840,16 @@ class CARLAParkingEnv(gym.Env):
 
         # Initialise prev_distance for potential-based reward shaping
         self._success_counter = 0
+        # Reset the soft out-of-bounds accumulator and recompute the inflated
+        # boundary once per episode (lot corners are fixed for a floor plan).
+        self._oob_accumulated_penalty = 0.0
+        lot_corners = [
+            (float(c["x"]), float(c["y"]))
+            for c in self._current_layout.get("corners", [])
+        ]
+        self._oob_inflated_corners = inflate_polygon(
+            lot_corners, self._oob_inflation_margin
+        )
         self._last_action[:] = 0.0
         # Actuator-side previous commands reset to the zero rest state each
         # episode so the first decision starts from zero throttle / brake /
@@ -2042,10 +2091,13 @@ class CARLAParkingEnv(gym.Env):
             self._freeze_all_actors()
             self._actors_frozen = True
 
-        # Distinguish termination cause for vis state writer.
-        # Both collision and OOB set terminated=True; success is the third path.
+        # Distinguish termination cause for vis state writer. A terminated
+        # episode is either an out-of-bounds run-off (oob flag set) or a
+        # collision; success and timeout are the other two paths.
         if success:
             end_reason: Optional[str] = "success"
+        elif terminated and reward_diag.get("oob", 0.0) > 0.0:
+            end_reason = "out_of_bounds"
         elif terminated:
             end_reason = "collision"
         elif truncated:
@@ -2084,6 +2136,7 @@ class CARLAParkingEnv(gym.Env):
             "success": success,
             "collision": bool(reward_diag["collision"]),
             "timeout": truncated,
+            "oob": bool(reward_diag.get("oob", 0.0)),
             "floor_plan": self._current_floor_plan_name,
             "pos_error": reward_diag["pos_error"],
             "orientation_error": reward_diag["orientation_error"],
