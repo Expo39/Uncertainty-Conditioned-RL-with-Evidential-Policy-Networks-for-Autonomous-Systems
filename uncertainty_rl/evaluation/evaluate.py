@@ -11,6 +11,8 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -40,6 +42,8 @@ except ImportError:
     CARLAParkingEnv = None  # type: ignore[assignment,misc]
     SafetyWrapper = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
+
+from uncertainty_rl.utils.bay_success import BaySuccessTracker
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
 
@@ -218,6 +222,7 @@ def evaluate_agent(
     n_episodes: int = 100,
     deterministic: bool = True,
     render: bool = False,
+    bay_tracker: Optional[BaySuccessTracker] = None,
 ) -> EvaluationMetrics:
     """
     @brief Evaluate agent performance.
@@ -226,6 +231,9 @@ def evaluate_agent(
     @param n_episodes: Number of evaluation episodes.
     @param deterministic: Use deterministic actions.
     @param render: Render episodes.
+    @param bay_tracker: Optional per-bay success tracker. When supplied, each
+           terminated episode is recorded against its target bay so the caller
+           can dump a per-bay success CSV across the whole condition sweep.
     @return EvaluationMetrics object with results.
 
     @note For EvidentialPPO models, uses get_action_with_uncertainty() to
@@ -287,7 +295,15 @@ def evaluate_agent(
             steps += 1
             if done[0]:
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
-                success_flags[episode] = infos[0].get("success", False)
+                episode_success = bool(infos[0].get("success", False))
+                success_flags[episode] = episode_success
+                if bay_tracker is not None:
+                    target_bay = infos[0].get("target_bay", {})
+                    bay_tracker.record(
+                        bay_id=str(target_bay.get("bay_id", "")),
+                        success=episode_success,
+                        bay_type=str(target_bay.get("bay_type", "")),
+                    )
                 if render:
                     env.render()
 
@@ -361,10 +377,19 @@ def evaluate_across_conditions(
         )
     deterministic: bool = eval_config.get("deterministic", True)
 
+    # Per-bay success accounting. Each condition gets its own tracker dumped to
+    # outputs/bay_successes/eval/<run>/<condition>/ because a bay's success at
+    # RTK-fixed and RTK-lost are distinct questions and must not be conflated.
+    _eval_run_name = Path(model_path).parent.name or datetime.now().strftime(
+        "%d-%m-%Y-%H%M%S"
+    )
+    _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_run_name
+
     for condition in conditions:
         name = condition.get("name", "unknown")
         description = condition.get("description", "")
         logger.info("Evaluating condition: %s - %s", name, description)
+        bay_tracker = BaySuccessTracker()
 
         # Create environment for this condition
         base_env = make_eval_env(condition, eval_config, base_sensors, env_config)
@@ -382,6 +407,21 @@ def evaluate_across_conditions(
             env=eval_env,
             n_episodes=n_episodes,
             deterministic=deterministic,
+            bay_tracker=bay_tracker,
+        )
+
+        # Dump this condition's per-bay success counts.
+        bay_tracker.dump(
+            _bay_eval_root / name,
+            run_info={
+                "run_name": _eval_run_name,
+                "model_path": model_path,
+                "condition": name,
+                "description": description,
+                "n_episodes": n_episodes,
+                "gnss_noise_multiplier": condition.get("gnss_noise_multiplier", 1.0),
+                "evaluated": datetime.now().strftime("%d-%m-%Y %H:%M"),
+            },
         )
 
         # Store results: merge metrics dict with condition metadata in one pass

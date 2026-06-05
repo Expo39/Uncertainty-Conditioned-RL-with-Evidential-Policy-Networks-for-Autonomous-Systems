@@ -55,6 +55,7 @@ except ImportError:
     PPO = None  # type: ignore[assignment,misc]
     EvalCallback = None  # type: ignore[assignment,misc]
 
+from uncertainty_rl.utils.bay_success import BaySuccessTracker
 from uncertainty_rl.utils.constants import TRAINING_BAY_MARGIN
 
 try:
@@ -303,6 +304,78 @@ class EnvDiagnosticsCallback(BaseCallback):
         self._step_count = 0
 
 
+class BaySuccessCallback(BaseCallback):
+    """
+    @class BaySuccessCallback
+    @brief Accumulates per-bay success counts over training and dumps to CSV.
+
+    Unlike the rolling-window rates in EnvDiagnosticsCallback, this tracks
+    cumulative attempts and successes per target bay across the whole run, so a
+    run on the random-bay curriculum (Stage 2 onwards) can be inspected for
+    which specific bays the policy can and cannot park in. Output goes to
+    outputs/bay_successes/training/<run_name>/ as bay_successes.csv plus a
+    run_info.txt header. This is a logging change only - it does not touch
+    training dynamics.
+    """
+
+    def __init__(
+        self,
+        output_dir: Path,
+        run_info: Dict[str, Any],
+        dump_freq_steps: int = 50000,
+    ) -> None:
+        """
+        @brief Initialise the per-bay tracker.
+        @param output_dir: Directory to write bay_successes.csv + run_info.txt.
+        @param run_info: Key/value pairs written to run_info.txt.
+        @param dump_freq_steps: Flush the CSV to disk every N env steps so a
+               run can be inspected mid-training; a final dump also runs on end.
+        """
+        super().__init__(verbose=0)
+        self._tracker = BaySuccessTracker()
+        self._output_dir = output_dir
+        self._run_info = run_info
+        self._dump_freq_steps = dump_freq_steps
+        self._next_dump = dump_freq_steps
+
+    def _on_step(self) -> bool:
+        """
+        @brief Record terminal episodes against their target bay.
+        @return Always True (training continues).
+        """
+        for info in self.locals.get("infos", []):
+            success = info.get("success", False)
+            collision = info.get("collision", False)
+            timeout = info.get("timeout", False)
+            if not (success or collision or timeout):
+                continue
+            target_bay = info.get("target_bay", {})
+            self._tracker.record(
+                bay_id=str(target_bay.get("bay_id", "")),
+                success=bool(success),
+                bay_type=str(target_bay.get("bay_type", "")),
+            )
+        if self.num_timesteps >= self._next_dump:
+            self._dump()
+            self._next_dump += self._dump_freq_steps
+        return True
+
+    def _on_training_end(self) -> None:
+        """
+        @brief Final flush of per-bay counts at the end of training.
+        """
+        self._dump()
+
+    def _dump(self) -> None:
+        """
+        @brief Write the running per-bay counts and run_info to disk.
+        """
+        info = dict(self._run_info)
+        info["total_attempts"] = self._tracker.total_attempts
+        info["timesteps_at_dump"] = self.num_timesteps
+        self._tracker.dump(self._output_dir, run_info=info)
+
+
 def train(
     config: Dict[str, Any],
     extra_callbacks: Optional[List[BaseCallback]] = None,
@@ -480,21 +553,34 @@ def train(
         final_model = os.path.join(resume_from, "final_model")
         final_vec_norm = os.path.join(resume_from, "vec_normalize.pkl")
 
-        if os.path.exists(final_model):
+        # SB3 saves models as <name>.zip, so the on-disk file is
+        # final_model.zip even though SB3's load() takes the extension-less
+        # path. Test for the .zip explicitly: os.path.exists("final_model")
+        # is False when only "final_model.zip" is present, which would
+        # otherwise silently skip the final model and fall through to a
+        # (lexically mis-sorted) periodic checkpoint.
+        if os.path.exists(final_model + ".zip") or os.path.exists(final_model):
             checkpoint_model_path = final_model
             checkpoint_vec_norm_path = (
                 final_vec_norm if os.path.exists(final_vec_norm) else None
             )
             logger.info("Found final_model checkpoint")
         else:
-            # Look for the latest periodic checkpoint (highest step count)
+            # Look for the latest periodic checkpoint by step count. Sort
+            # numerically on the embedded step integer, NOT lexically: a
+            # lexical sort ranks "950000" above "4000000" (because "9" > "4")
+            # and would resume from a far earlier checkpoint than intended.
             import glob
 
             pattern = os.path.join(resume_from, "ppo_uncertainty_rl_*_steps.zip")
-            checkpoints = sorted(glob.glob(pattern))
+
+            def _step_of(path: str) -> int:
+                return int(path.split("_steps.zip")[0].split("_")[-1])
+
+            checkpoints = sorted(glob.glob(pattern), key=_step_of)
             if checkpoints:
                 checkpoint_model_path = checkpoints[-1]
-                step_count = checkpoint_model_path.split("_steps.zip")[0].split("_")[-1]
+                step_count = str(_step_of(checkpoint_model_path))
                 vec_norm_path = os.path.join(
                     resume_from,
                     f"ppo_uncertainty_rl_vecnormalize_{step_count}_steps.pkl",
@@ -596,10 +682,27 @@ def train(
         save_vecnormalize=True,
     )
 
+    # Per-bay success accounting. Cumulative attempts/successes per target bay
+    # over the whole run, dumped to outputs/bay_successes/training/<run_name>/
+    # so a random-bay run can be inspected for which bays the policy can park.
+    _bay_output_dir = Path("./outputs/bay_successes/training") / run_name
+    _bay_run_info: Dict[str, Any] = {
+        "run_name": run_name,
+        "seed": seed,
+        "total_timesteps": total_timesteps,
+        "resumed_from": resume_from if resume_from is not None else "(fresh)",
+        "started": datetime.now().strftime("%d-%m-%Y %H:%M"),
+    }
+
     callbacks = [
         checkpoint_callback,
         EnvDiagnosticsCallback(
             outcome_window=config.get("success_rate_window", 50)
+        ),
+        BaySuccessCallback(
+            output_dir=_bay_output_dir,
+            run_info=_bay_run_info,
+            dump_freq_steps=config.get("checkpoint_freq", 50000),
         ),
     ]
     if eval_env is not None:
