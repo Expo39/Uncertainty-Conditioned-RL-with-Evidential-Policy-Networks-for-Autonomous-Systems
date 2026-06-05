@@ -89,6 +89,27 @@ _EXCLUDED_BP_RE: re.Pattern = re.compile(
     re.IGNORECASE,
 )
 
+# CARLA tags taxis and emergency vehicles via the 'special_type' blueprint
+# attribute, not the blueprint id (e.g. the taxi is vehicle.ford.crown). The id
+# regex above cannot catch those, so the attribute is checked as well.
+_EXCLUDED_SPECIAL_TYPES: frozenset = frozenset({"taxi", "emergency"})
+
+
+def _is_special_type(bp: Any) -> bool:
+    """
+    @brief Whether a vehicle blueprint is a taxi or emergency vehicle.
+
+    Reads CARLA's 'special_type' attribute (absent on most blueprints), so taxis
+    such as vehicle.ford.crown are excluded even though their id carries no
+    'taxi' substring.
+
+    @param bp: CARLA vehicle blueprint.
+    @return True if the blueprint's special_type is excluded.
+    """
+    if not bp.has_attribute("special_type"):
+        return False
+    return bp.get_attribute("special_type").as_str() in _EXCLUDED_SPECIAL_TYPES
+
 
 class LotSpawner:
     """
@@ -202,6 +223,7 @@ class LotSpawner:
             for bp in vehicle_bps
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
             and not _EXCLUDED_BP_RE.search(bp.id)
+            and not _is_special_type(bp)
         ]
 
         self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
