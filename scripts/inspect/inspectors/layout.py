@@ -88,9 +88,15 @@ class LayoutInspector(_Inspector):
         """
         if self._env.world is None or not self._env._current_layout:
             return
+        # Mirror the env's own scenario settings so the overlay shows only what
+        # the agent actually trains with: patrol path and pedestrian zones only
+        # when enabled, plus the soft out-of-bounds boundary.
         _draw_layout_overlays(
             self._env.world,
             self._env._current_layout,
             self._env._target_bay.get("bay_id", ""),
             life_time,
+            show_patrol=self._env._num_patrol_max > 0,
+            show_pedestrians=self._env._pedestrian_spawn_prob > 0.0,
+            oob_inflation_margin=self._env._oob_inflation_margin,
         )

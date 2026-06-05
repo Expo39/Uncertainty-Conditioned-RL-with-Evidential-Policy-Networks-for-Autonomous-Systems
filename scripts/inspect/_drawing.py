@@ -5,7 +5,7 @@
 
 import math
 import sys
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     import carla
@@ -16,6 +16,7 @@ except ImportError:
 from scripts.colours import (
     BAY_HEX,
     HEX_LOT,
+    HEX_OOB_BOUNDARY,
     HEX_PATROL_PATH,
     HEX_PEDESTRIAN_ZONE,
     HEX_SENSOR_CAMERA,
@@ -29,7 +30,7 @@ from scripts.colours import (
     hex_to_carla_color,
 )
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
-from uncertainty_rl.utils.geometry import zone_bbox
+from uncertainty_rl.utils.geometry import inflate_polygon, zone_bbox
 
 # ---------------------------------------------------------------------------
 # Dot-drawing constants
@@ -53,6 +54,7 @@ _COL_TARGET = hex_to_carla_color(HEX_TARGET_BAY)
 _COL_PED = hex_to_carla_color(HEX_PEDESTRIAN_ZONE)
 _COL_PATROL = hex_to_carla_color(HEX_PATROL_PATH)
 _COL_LOT = hex_to_carla_color(HEX_LOT)
+_COL_OOB = hex_to_carla_color(HEX_OOB_BOUNDARY)
 _COL_SPAWN = carla.Color(r=255, g=255, b=0)
 _COL_EXTRA_SPAWN = carla.Color(r=255, g=140, b=0)
 _COL_WHITE = carla.Color(r=255, g=255, b=255)
@@ -119,14 +121,25 @@ def _draw_layout_overlays(
     layout: Dict[str, Any],
     target_bay_id: str,
     life_time: float,
+    show_patrol: bool = True,
+    show_pedestrians: bool = True,
+    oob_inflation_margin: Optional[float] = None,
 ) -> None:
     """
     @brief Draw all lot geometry overlays (bays, spawn, patrol, pedestrian zones).
+
+    The patrol path and pedestrian zones are drawn only when the corresponding
+    flags are set, so the overlay reflects the environment the agent actually
+    trains in. The soft out-of-bounds boundary is drawn when a margin is given.
 
     @param world: Active carla.World.
     @param layout: Loaded layout dict from the YAML file.
     @param target_bay_id: ID of the current target bay (highlighted bright green).
     @param life_time: Primitive lifetime in seconds.
+    @param show_patrol: Draw the patrol waypoints and path.
+    @param show_pedestrians: Draw the pedestrian zones.
+    @param oob_inflation_margin: When not None, draw the lot polygon inflated by
+           this many metres as the soft out-of-bounds boundary.
     """
     debug = world.debug
     draw_point = debug.draw_point
@@ -192,6 +205,17 @@ def _draw_layout_overlays(
                 debug, ax, ay, bxc, byc, z + 0.1, _COL_LOT, 0.06, life_time
             )
 
+        # --- Soft out-of-bounds boundary (lot polygon inflated by the margin) ---
+        if oob_inflation_margin is not None:
+            oob_corners = inflate_polygon(lot_corners, oob_inflation_margin)
+            n_oob = len(oob_corners)
+            for j in range(n_oob):
+                ax, ay = oob_corners[j]
+                bxc, byc = oob_corners[(j + 1) % n_oob]
+                _draw_dotted_segment(
+                    debug, ax, ay, bxc, byc, z + 0.1, _COL_OOB, 0.06, life_time
+                )
+
     # --- Spawn point ---
     spawn = layout.get("spawn_transform", {})
     sx = float(spawn.get("x", 0.0))
@@ -227,44 +251,49 @@ def _draw_layout_overlays(
         )
 
     # --- Pedestrian zones ---
-    for zone_idx, zone_raw in enumerate(layout.get("pedestrian_zones", [])):
-        x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
-        zc = [
-            (x_min, y_min),
-            (x_max, y_min),
-            (x_max, y_max),
-            (x_min, y_max),
-        ]
-        for j in range(4):
-            ax, ay = zc[j]
-            bxc, byc = zc[(j + 1) % 4]
-            _draw_dotted_segment(debug, ax, ay, bxc, byc, z, _COL_PED, 0.05, life_time)
-        zone_cx = (x_min + x_max) * 0.5
-        zone_cy = (y_min + y_max) * 0.5
-        draw_string(
-            Location(x=zone_cx, y=zone_cy, z=z + 1.5),
-            f"PED {zone_idx}",
-            color=_COL_PED,
-            life_time=life_time,
-        )
+    if show_pedestrians:
+        for zone_idx, zone_raw in enumerate(layout.get("pedestrian_zones", [])):
+            x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
+            zc = [
+                (x_min, y_min),
+                (x_max, y_min),
+                (x_max, y_max),
+                (x_min, y_max),
+            ]
+            for j in range(4):
+                ax, ay = zc[j]
+                bxc, byc = zc[(j + 1) % 4]
+                _draw_dotted_segment(
+                    debug, ax, ay, bxc, byc, z, _COL_PED, 0.05, life_time
+                )
+            zone_cx = (x_min + x_max) * 0.5
+            zone_cy = (y_min + y_max) * 0.5
+            draw_string(
+                Location(x=zone_cx, y=zone_cy, z=z + 1.5),
+                f"PED {zone_idx}",
+                color=_COL_PED,
+                life_time=life_time,
+            )
 
     # --- Patrol waypoints ---
-    waypoints: List[Tuple[float, float]] = [
-        (float(wp["x"]), float(wp["y"])) for wp in layout.get("patrol_waypoints", [])
-    ]
-    n_wp = len(waypoints)
-    for i, (wx, wy) in enumerate(waypoints):
-        draw_point(
-            Location(x=wx, y=wy, z=z + 0.2),
-            size=0.12,
-            color=_COL_PATROL,
-            life_time=life_time,
-        )
-        if n_wp > 1:
-            nx, ny = waypoints[(i + 1) % n_wp]
-            _draw_dotted_segment(
-                debug, wx, wy, nx, ny, z + 0.2, _COL_PATROL, 0.04, life_time
+    if show_patrol:
+        waypoints: List[Tuple[float, float]] = [
+            (float(wp["x"]), float(wp["y"]))
+            for wp in layout.get("patrol_waypoints", [])
+        ]
+        n_wp = len(waypoints)
+        for i, (wx, wy) in enumerate(waypoints):
+            draw_point(
+                Location(x=wx, y=wy, z=z + 0.2),
+                size=0.12,
+                color=_COL_PATROL,
+                life_time=life_time,
             )
+            if n_wp > 1:
+                nx, ny = waypoints[(i + 1) % n_wp]
+                _draw_dotted_segment(
+                    debug, wx, wy, nx, ny, z + 0.2, _COL_PATROL, 0.04, life_time
+                )
 
 
 # ---------------------------------------------------------------------------
