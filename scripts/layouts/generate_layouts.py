@@ -10,7 +10,7 @@ consumed by CARLAParkingEnv. Optionally produces bird's-eye PNG plots.
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 # Allow importing scripts/layouts as a package when run directly.
 # __file__ is generate_layouts.py -> .parent.parent.parent = project root.
@@ -28,6 +28,39 @@ _LAYOUTS = {
     "trapezoid": trapezoid,
     "irregular_a": irregular_a,
 }
+
+_ENV_CONFIG_PATH = Path("configs/deployment/sim/env_config.yaml")
+
+
+def _read_plot_settings() -> "Tuple[bool, bool, bool, Optional[float]]":
+    """
+    @brief Read the env config so the PNG reflects the active training environment.
+
+    Derives whether the patrol path, pedestrian zones, and extra spawns should be
+    drawn (from the patrol-vehicle count, pedestrian spawn probability, and the
+    top-level use_extra_spawns flag) and the soft out-of-bounds inflation margin.
+    Falls back to drawing everything with the default margin if the config or its
+    keys are absent, so the script never hard-fails on a missing file.
+
+    @return Tuple of (show_patrol, show_pedestrians, show_extra_spawns,
+            oob_inflation_margin).
+    """
+    from uncertainty_rl.utils.constants import OOB_INFLATION_MARGIN
+
+    try:
+        import yaml
+
+        with open(_ENV_CONFIG_PATH, "r") as fh:
+            config = yaml.safe_load(fh) or {}
+    except (OSError, yaml.YAMLError):
+        return True, True, True, OOB_INFLATION_MARGIN
+
+    scenarios = config.get("parking_scenarios", {})
+    show_patrol = scenarios.get("num_patrol_vehicles_max", 1) > 0
+    show_pedestrians = scenarios.get("pedestrian_spawn_probability", 1.0) > 0.0
+    show_extra_spawns = bool(config.get("use_extra_spawns", True))
+    margin = float(scenarios.get("oob_inflation_margin", OOB_INFLATION_MARGIN))
+    return show_patrol, show_pedestrians, show_extra_spawns, margin
 
 
 def _parse_args() -> argparse.Namespace:
@@ -121,7 +154,22 @@ def _generate_one(
     )
     if plot_path is not None:
         legend_loc = "lower left" if name == "rectangle" else "upper right"
-        plot_layout(name, world_layout, plot_path, legend_loc=legend_loc)
+        (
+            show_patrol,
+            show_pedestrians,
+            show_extra_spawns,
+            oob_margin,
+        ) = _read_plot_settings()
+        plot_layout(
+            name,
+            world_layout,
+            plot_path,
+            legend_loc=legend_loc,
+            show_patrol=show_patrol,
+            show_pedestrians=show_pedestrians,
+            show_extra_spawns=show_extra_spawns,
+            oob_inflation_margin=oob_margin,
+        )
 
 
 def main() -> None:
