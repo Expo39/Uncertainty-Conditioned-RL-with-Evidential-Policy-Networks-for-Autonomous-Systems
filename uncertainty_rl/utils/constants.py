@@ -38,8 +38,8 @@ SUCCESS_APPROACH_RADIUS = 5.0
 # Two values: training uses a relaxed margin to densify terminal +50 events
 # so PPO has enough success samples to learn from; evaluation uses the strict
 # margin which is the published parking criterion.
-TRAINING_BAY_MARGIN = -0.5
-EVAL_BAY_MARGIN = -0.5
+TRAINING_BAY_MARGIN = -0.25
+EVAL_BAY_MARGIN = -0.25
 
 # ---------------------------------------------------------------------------
 # Approach Reward Shaping (not success criteria)
@@ -108,6 +108,15 @@ ACTION_DIM = 3
 # Used on the real-world inference path only; the sim path uses the soft
 # polygon boundary below.
 OUT_OF_BOUNDS_THRESHOLD = 20.0
+
+# Lower bound on the graded timeout penalty. The timeout penalty scales with
+# final position and orientation error, and the lot diagonal exceeds 16 m with
+# the target bay sampled per episode, so the unclamped penalty can exceed the
+# ego-fault collision magnitude (25) for far-target timeouts. Floored here
+# strictly above -25 so timing out is always less costly than crashing - the
+# policy must never have an incentive to crash deliberately to escape a worse
+# timeout. Keeps the terminal ordering success(+50) > timeout > collision(-25).
+TIMEOUT_PENALTY_FLOOR = -24.0
 
 # ---------------------------------------------------------------------------
 # Soft Out-of-Bounds Boundary (sim training)

@@ -183,6 +183,70 @@ def car_fully_inside_bay(
     return True
 
 
+def bay_containment_fraction(
+    car_x: float,
+    car_y: float,
+    car_yaw: float,
+    car_half_length: float,
+    car_half_width: float,
+    bay_x: float,
+    bay_y: float,
+    bay_yaw: float,
+    bay_width: float,
+    bay_depth: float,
+    reference: float,
+    margin: float = 0.0,
+) -> float:
+    """
+    @brief Smooth [0, 1] measure of how far the car is inside the bay.
+
+    Returns 1.0 when every car corner lies inside the (margin-adjusted) bay
+    rectangle, ramping linearly to 0.0 as the worst-overhanging corner moves
+    `reference` metres outside the boundary. Used as a continuous in-bay gate
+    on the endgame shaping terms so the reward gains a gradient that points
+    INTO the bay, instead of a flat plateau that lets a centred-but-short stop
+    earn the same shaping as a true park (a stop-short local optimum).
+
+    The overhang is the corner's signed distance outside the nearest bay edge,
+    taken as the maximum over all four corners along both bay axes. The bay
+    frame and margin convention match `car_fully_inside_bay`.
+
+    @param reference: Overhang distance (m) at which the factor reaches 0.0.
+                      Sized to the order of one car half-extent so the gradient
+                      is alive across the last metre of the approach.
+    @return Containment factor in [0, 1]; 1.0 iff all corners are inside.
+    """
+    half_depth = bay_depth / 2.0 - margin
+    half_width = bay_width / 2.0 - margin
+    if half_depth <= 0.0 or half_width <= 0.0 or reference <= 0.0:
+        return 0.0
+
+    cos_c, sin_c = math.cos(car_yaw), math.sin(car_yaw)
+    cos_b, sin_b = math.cos(bay_yaw), math.sin(bay_yaw)
+
+    car_corners_local = (
+        (car_half_length, car_half_width),
+        (car_half_length, -car_half_width),
+        (-car_half_length, -car_half_width),
+        (-car_half_length, car_half_width),
+    )
+
+    # Worst (largest) overhang of any corner beyond the nearest bay edge.
+    max_overhang = 0.0
+    for lx, ly in car_corners_local:
+        wx = car_x + cos_c * lx - sin_c * ly
+        wy = car_y + sin_c * lx + cos_c * ly
+        dx = wx - bay_x
+        dy = wy - bay_y
+        bx = cos_b * dx + sin_b * dy
+        by = -sin_b * dx + cos_b * dy
+        overhang = max(abs(bx) - half_depth, abs(by) - half_width, 0.0)
+        if overhang > max_overhang:
+            max_overhang = overhang
+
+    return max(0.0, 1.0 - max_overhang / reference)
+
+
 def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> bool:
     """
     @brief Ray-casting point-in-polygon test.

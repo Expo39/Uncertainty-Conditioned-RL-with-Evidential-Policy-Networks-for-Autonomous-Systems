@@ -4,11 +4,12 @@
 # See detailed_notes/ekf_pipeline.md, reward_function.md, evidential_nig_initialisation.md.
 
 # PPO hyperparameters
-learning_rate: 0.0003  # Linear decay to 0 applied in train_ppo.py.
-n_steps: 4096  # Steps per PPO update. Doubled from 2048 so each rollout contains ~2.3 episodes (max_steps=1750) instead of ~1.2 - halves the per-update gradient noise that previously made the PPO objective wander.
+learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over total_timesteps in train_ppo.py.
+learning_rate_final: 0.00001  # Small non-zero LR floor (not 0). With a generous total_timesteps, a run that converges early still has a live LR, so a plateau in success_rate is a real plateau and not learning-rate starvation. Lets the schedule be stretched long for headroom without freezing a fast run.
+n_steps: 2048  # Steps per PPO update. An episode is max_steps=1750 sim ticks / action_repeat=4 = ~437 policy decisions, so a 2048-step rollout holds ~4.7 episodes - enough terminal diversity to keep advantage estimation stable while updating often.
 batch_size: 256
 n_epochs: 5
-gamma: 0.99  # Discount factor.
+gamma: 0.997  # Discount factor. Effective horizon 1/(1-gamma) ~= 333 steps, matched to the ~437-step episode so the sparse +50 success terminal still propagates to the approach phase (50 * 0.997^437 ~= 13.5). At gamma=0.99 the horizon is only 100 steps and the terminal discounts to ~0.6, leaving the policy to optimise dense shaping alone. gae_lambda=0.95 and the multi-episode rollout absorb the added return variance.
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
@@ -42,7 +43,7 @@ log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 4000000  # LR and ent_coef linear schedules stretch over this whole budget, so the policy keeps exploration headroom long enough to learn the precise terminal alignment, not just the approach.
+total_timesteps: 8000000  # First Phase A run: budget set generously (~18000 episodes at ~437 policy steps each) so the LR and ent_coef decay schedules stretch over a long horizon and never starve a slow-converging run. The LR floor (learning_rate_final) and ent_coef floor keep a fast run alive, so stop when the success_rate curve plateaus rather than when a schedule hits zero. Resuming past total_timesteps pins both schedules at their floors, so prefer a long budget here over extend-by-resume.
 seed: 42
 random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).

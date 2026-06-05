@@ -469,12 +469,16 @@ def train(
         # clip_reward raised from SB3's default 10.0 to 20.0 so the +50
         # success terminal is not clipped during the early-training window
         # where the reward-normalisation running_std is still small.
+        # gamma must match the PPO discount so the discounted-return running std
+        # is estimated at the same horizon the critic actually bootstraps at;
+        # the SB3 default (0.99) would otherwise mis-scale the normalised target.
         env = VecNormalize(
             train_vec_env,
             norm_obs=True,
             norm_reward=True,
             clip_obs=10.0,
             clip_reward=20.0,
+            gamma=config.get("gamma", 0.99),
         )
     else:
         logger.info("Reusing existing training environment (caller-owned).")
