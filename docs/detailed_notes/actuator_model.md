@@ -66,10 +66,10 @@ All values are in the normalised action space CARLA exposes:
 passenger vehicle `max_steer_angle` is 70 deg at the road wheel, so a unit of
 normalised steer corresponds to 70 deg of road-wheel angle.
 
-### 3.1 Steering rate: 0.15 per decision
+### 3.1 Steering rate: 0.20 per decision
 
-Mapped to physical units: 0.15 normalised / 0.2 s = 0.75 normalised per
-second = 0.75 x 70 = 52.5 deg/s at the road wheel.
+Mapped to physical units: 0.20 normalised / 0.2 s = 1.0 normalised per
+second = 1.0 x 70 = 70 deg/s at the road wheel.
 
 Reference points:
 
@@ -77,15 +77,18 @@ Reference points:
 |---|---|---|
 | CarSim "Sine with Dwell" standard test | 13.5 deg/s | Steady-state steering input for ESC evaluation. Lower than our limit because the test is for highway dynamics, not parking. |
 | Production MPC parking controllers | ~ 15 deg/s | Self-developed MPC controller for parking maneuvers (arXiv 2109.10075). Conservative for comfort. |
-| EPS hardware limit, stationary | 15-30 deg/s at the road wheel | Production EPS slows the rack below ~ 3-5 km/h because the actuator draws too much current. Reported informally by EPS suppliers (Nexteer, ZF). |
+| Driverless EPS, lock-to-lock target | ~ 140 deg/s at the road wheel | Manca et al. 2021 (Actuators 10:165, doi 10.3390/act10070165) report a full lock-to-lock design target of ~ 1 s. With CARLA max_steer_angle = 70 deg, lock-to-lock (140 deg) in 1 s = 140 deg/s. This is the actuator capability ceiling. |
+| MPC path-tracking rate constraint | ~ 115 deg/s at the steering wheel | Domina and Tihanyi 2023 (Sensors 23:6862, doi 10.3390/s23156862) constrain the steering rate to ~ 2 rad/s as the comfort/control envelope. |
 | Human panic input | ~ 800-1000 deg/s at the steering wheel | Extreme test conditions. At a typical 14:1 wheel-to-rack ratio this is ~ 60-70 deg/s at the road wheel. |
 
-Our 52.5 deg/s sits between the typical MPC limit (smooth) and the human
-panic limit (extreme). It is fast enough that the policy can complete a
-full lock-to-lock manoeuvre in ~ 2.7 s, slow enough that step changes of
-180 deg in one decision are impossible. Full lock-to-lock at 52.5 deg/s
-takes 140 / 52.5 = ~ 2.7 s; this matches the feel of a brisk parking-lot
-manoeuvre.
+Our 70 deg/s sits below both the actuator capability ceiling (~ 140 deg/s,
+Manca et al.) and the MPC comfort/control envelope (~ 115 deg/s, Domina and
+Tihanyi), so the rate is physically realisable and still transfers to
+hardware. It is fast enough that the policy can complete a full lock-to-lock
+manoeuvre in 140 / 70 = ~ 2.0 s, slow enough that step changes of 180 deg in
+one decision are impossible. The earlier 0.15 (52.5 deg/s) was conservative
+relative to both published bounds; 0.20 gives a brisker parking-lot manoeuvre
+while remaining defensible against the cited limits.
 
 We do not separately model EPS slowdown at standstill. It is a second-order
 effect; modelling it adds complexity without affecting the outcome metric

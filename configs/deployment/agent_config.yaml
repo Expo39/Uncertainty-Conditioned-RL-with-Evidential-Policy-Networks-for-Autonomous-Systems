@@ -19,7 +19,7 @@ max_ego_speed_ms: 8.0  # Speed limit (m/s).
 # carla_timestep=0.05). See docs/detailed_notes/actuator_model.md.
 # ---------------------------------------------------------------------------
 actuator_model:
-  steer_max_delta_per_decision: 0.15  # Steer rate limit. ~50 deg/s at the road wheel (CARLA max_steer_angle=70 deg).
+  steer_max_delta_per_decision: 0.20  # Steer rate limit. ~70 deg/s at the road wheel (CARLA max_steer_angle=70 deg); below the ~140 deg/s actuator ceiling and ~115 deg/s MPC comfort envelope. See docs/detailed_notes/actuator_model.md.
   throttle_max_delta_per_decision: 0.5  # Throttle rate limit. 0 -> full in 0.4 s. Matches drive-by-wire response.
   brake_max_delta_per_decision: 0.5  # Brake rate limit. 0 -> full in 0.4 s. Matches hydraulic pressure rise.
   brake_override_throttle_threshold: 0.3  # Throttle is zeroed whenever brake exceeds this fraction. Raised from 0.1 to 0.3 so soft-brake samples (common while the policy is uncertain) do not silently cut throttle and corrupt the late-stage credit assignment between the two axes.
