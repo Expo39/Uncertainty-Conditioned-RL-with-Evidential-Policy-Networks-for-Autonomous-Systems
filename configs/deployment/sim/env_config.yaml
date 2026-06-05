@@ -67,6 +67,7 @@ parking_scenarios:
   # CARLA blueprint for perimeter markers.
   perimeter_marker_blueprint: "static.prop.constructioncone"
   perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
+  spawn_perimeter_cones: false  # false = soft OOB penalty enforces the lot edge.
   bay_occupancy_min: 0.0  # Per-episode bay occupancy lower bound.
   bay_occupancy_max: 0.0  # Per-episode bay occupancy upper bound.
   num_patrol_vehicles_max: 0  # NPC patrol vehicles per episode.
