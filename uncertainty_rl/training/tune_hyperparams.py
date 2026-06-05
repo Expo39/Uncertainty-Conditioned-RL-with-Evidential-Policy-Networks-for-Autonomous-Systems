@@ -404,37 +404,59 @@ def run_study(
     base_config: Dict[str, Any],
     train_config_path: str,
     env_config_path: str,
+    baseline_name: Optional[str] = None,
 ) -> None:
     """
     @brief Run the Optuna hyperparameter tuning study.
 
     Uses TPESampler (multivariate) + MedianPruner. Results are stored in
-    SQLite for persistence and resume capability. Best params are written
-    back to train_config.yaml after the study completes.
+    SQLite for persistence and resume capability.
+
+    When `baseline_name` is set, the study name, storage DB, and best-params
+    output are all suffixed with the baseline name, so the four ablation
+    baselines each get an INDEPENDENT study and an independent best-params file
+    (logs/tuning/results/best_params_<baseline>.yaml) - the per-baseline tuning
+    the ablation methodology requires. The shared train_config.yaml is left
+    untouched in that case. When `baseline_name` is None, the single study tunes
+    the train_config defaults and writes best params back into train_config.yaml
+    (the legacy single-study path).
 
     @param tuning_config: Tuning configuration with study settings.
-    @param base_config: Base training config (merged train + env configs).
+    @param base_config: Base training config (merged train + env [+ baseline]).
     @param train_config_path: Path to train_config.yaml.
     @param env_config_path: Path to env_config.yaml.
+    @param baseline_name: Ablation baseline this study tunes, or None for the
+                          shared-defaults single study.
     """
     # Create tuning results directory (in logs/ which is writable in Docker)
     results_dir = Path("logs/tuning/results")
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-baseline study name, storage DB, and best-params filename so the four
+    # ablation studies never collide in one Optuna DB.
+    suffix = f"_{baseline_name}" if baseline_name else ""
+
     # SQLite storage path
     storage_path = Path(
         tuning_config.get("storage_path", "logs/tuning/optuna_study.db")
     )
+    if baseline_name:
+        storage_path = storage_path.with_name(
+            f"{storage_path.stem}{suffix}{storage_path.suffix}"
+        )
     storage_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Sampler and pruner settings from tuning_config.yaml
     sampler_cfg = tuning_config.get("sampler", {})
     pruner_cfg = tuning_config.get("pruner", {})
 
-    # Create study
-    study_name = tuning_config.get("study_name", "uncertainty_rl_tuning")
+    # Create study. The sampler seed comes from `tuning_seed` (distinct from the
+    # `random_seeds` used for final training and evaluation) so the tuning split
+    # is disjoint from the evaluation split, as the ablation methodology
+    # requires. Falls back to the legacy `seed` only if `tuning_seed` is absent.
+    study_name = tuning_config.get("study_name", "uncertainty_rl_tuning") + suffix
     sampler = optuna.samplers.TPESampler(
-        seed=tuning_config.get("seed", 42),
+        seed=tuning_config.get("tuning_seed", tuning_config.get("seed", 42)),
         multivariate=sampler_cfg.get("multivariate", True),
         n_startup_trials=sampler_cfg.get("n_startup_trials", 10),
     )
@@ -457,7 +479,8 @@ def run_study(
     # Run optimisation
     n_trials = tuning_config.get("n_trials", 40)
     logger.info(
-        "Starting Optuna study: %d trials, %dk steps/trial, 10 params",
+        "Starting Optuna study '%s': %d trials, %dk steps/trial",
+        study_name,
         n_trials,
         tuning_config.get("timesteps_per_trial", 100000) // 1000,
     )
@@ -477,11 +500,16 @@ def run_study(
             for i in range(n_workers)
         ]
     )
+    # norm_reward=False here, so VecNormalize's gamma (which only scales the
+    # reward-normalisation running std) is inert; passed for parity with the
+    # train_ppo construction. The per-trial PPO gamma is sampled by Optuna, so
+    # the base default is the right value for this shared, reward-unnormalised env.
     shared_env = VecNormalize(
         shared_vec_env,
         norm_obs=True,
         norm_reward=False,
         clip_obs=10.0,
+        gamma=base_config.get("gamma", 0.99),
     )
 
     try:
@@ -529,12 +557,24 @@ def run_study(
     for key, value in best_trial.params.items():
         logger.info("    %s: %s", key, value)
 
-    # Write best params back to train_config.yaml
     best_params = best_trial.params
-    apply_best_params(best_params, train_config_path)
 
-    # Also save standalone copy to logs/tuning/results/best_params.yaml
-    best_params_path = results_dir / "best_params.yaml"
+    # For a per-baseline study, write the best params to a per-baseline file and
+    # leave the shared train_config.yaml untouched - otherwise four baselines
+    # would overwrite each other's hyperparameters in one file, defeating the
+    # point of per-baseline tuning. The single-study (no-baseline) path keeps the
+    # legacy behaviour of writing back into train_config.yaml.
+    if baseline_name:
+        logger.info(
+            "Per-baseline study: leaving %s untouched; writing best params to a "
+            "baseline-specific file.",
+            train_config_path,
+        )
+    else:
+        apply_best_params(best_params, train_config_path)
+
+    # Save standalone copy (per-baseline filename when tuning a baseline).
+    best_params_path = results_dir / f"best_params{suffix}.yaml"
     with open(best_params_path, "w") as f:
         yaml.dump(best_params, f, default_flow_style=False)
     logger.info("Saved best params to %s", best_params_path)
@@ -571,6 +611,19 @@ def main() -> None:
         default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config",
     )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Path to a baseline override config (configs/baselines/*.yaml). When "
+            "set, the study tunes that baseline's observation/policy configuration "
+            "and writes its best params to a per-baseline file, giving the 2x2 "
+            "ablation one independent study each. When omitted, tunes the "
+            "train_config defaults (the full_method baseline) and writes back to "
+            "train_config.yaml."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -591,8 +644,33 @@ def main() -> None:
     # Merge train + env configs
     base_config = merge_configs(train_config, env_config)
 
+    # Overlay the baseline override (if any) so the study tunes that baseline's
+    # observation/policy configuration, not the train_config defaults. Baseline
+    # configs hold only the keys that differ (include_covariance,
+    # include_obstacle_obs, policy_type, baseline_name); baseline wins on
+    # conflict so the tuned config matches what that baseline trains with.
+    baseline_name: Optional[str] = None
+    if args.baseline is not None:
+        baseline_override = load_config(args.baseline)
+        base_config = {**base_config, **baseline_override}
+        baseline_name = baseline_override.get(
+            "baseline_name", Path(args.baseline).stem
+        )
+        logger.info(
+            "Tuning baseline '%s' (include_covariance=%s, policy_type=%s)",
+            baseline_name,
+            base_config.get("include_covariance"),
+            base_config.get("policy_type"),
+        )
+
     # Run study
-    run_study(tuning_config, base_config, args.train_config, args.env_config)
+    run_study(
+        tuning_config,
+        base_config,
+        args.train_config,
+        args.env_config,
+        baseline_name=baseline_name,
+    )
 
 
 if __name__ == "__main__":

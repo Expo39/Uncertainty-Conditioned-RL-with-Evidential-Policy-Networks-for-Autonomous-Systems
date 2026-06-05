@@ -17,6 +17,7 @@ from uncertainty_rl.utils.constants import (
     OUT_OF_BOUNDS_THRESHOLD,
     SUCCESS_THRESHOLD_VELOCITY,
     TARGET_POSE_DIM,
+    TIMEOUT_PENALTY_FLOOR,
     TOTAL_OBS_DIM,
     TRAINING_BAY_MARGIN,
     VEHICLE_STATE_DIM,
@@ -29,6 +30,7 @@ from uncertainty_rl.utils.covariance_utils import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    bay_containment_fraction,
     car_fully_inside_bay,
     inflate_polygon,
     point_in_polygon,
@@ -58,6 +60,7 @@ __all__ = [
     "OUT_OF_BOUNDS_THRESHOLD",
     "SUCCESS_THRESHOLD_VELOCITY",
     "TARGET_POSE_DIM",
+    "TIMEOUT_PENALTY_FLOOR",
     "TOTAL_OBS_DIM",
     "TRAINING_BAY_MARGIN",
     "VEHICLE_STATE_DIM",
@@ -66,6 +69,7 @@ __all__ = [
     "get_covariance_dimension",
     "validate_covariance_matrix",
     # Geometry utilities (private helpers re-exported for internal package use)
+    "bay_containment_fraction",
     "car_fully_inside_bay",
     "inflate_polygon",
     "zone_bbox",

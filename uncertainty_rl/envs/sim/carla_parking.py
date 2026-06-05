@@ -51,10 +51,12 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_APPROACH_RADIUS,
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
+    TIMEOUT_PENALTY_FLOOR,
     VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
+    bay_containment_fraction,
     car_fully_inside_bay,
     inflate_polygon,
     point_in_polygon,
@@ -1041,26 +1043,53 @@ class CARLAParkingEnv(gym.Env):
         slow = max(0.0, 1.0 - speed / self._max_ego_speed_ms)
         stopped = max(0.0, 1.0 - speed / slowness_reference_speed)
 
+        # Continuous in-bay containment factor in [0, 1]: 1.0 when every car
+        # corner is inside the bay, ramping to 0 as the worst corner overhangs
+        # by one ego half-length. Gates the two endgame terms so their gradient
+        # points INTO the bay; without it the centred/aligned plateau lets a
+        # stop-short-of-the-line position earn the same shaping as a true park,
+        # a stable local optimum the bare success terminal is too discounted to
+        # break out of over a long episode.
+        containment = bay_containment_fraction(
+            car_x=x,
+            car_y=y,
+            car_yaw=yaw,
+            car_half_length=self._ego_half_length,
+            car_half_width=self._ego_half_width,
+            bay_x=self._target_x,
+            bay_y=self._target_y,
+            bay_yaw=self._target_yaw,
+            bay_width=float(self._target_bay["width"]),
+            bay_depth=float(self._target_bay["depth"]),
+            reference=max(self._ego_half_length, 1e-6),
+            margin=self._bay_margin,
+        )
+
         # Three accumulating shaping terms, each with a single role:
         #   approach  - "come in slow": rewards closing distance at low speed.
         #   precision - "centre AND straighten as you slow": the dominant
         #               endgame gradient, pulling the car to the bay centre and
-        #               square-on once it is close. Supplies the inward position
-        #               pull (centred) and the yaw pull (aligned) that the bare
-        #               progress term loses once the car stops.
-        #   hold      - "commit to a stop, centred and straight": rewards being
-        #               stationary at the centre WITHOUT requiring the full
-        #               corners-in-bay fit, so the policy commits to a held stop
-        #               rather than dithering until the clock runs out.
+        #               square-on once it is close. Gated by `containment` so the
+        #               pull only pays out once the corners are entering the bay,
+        #               not at any centred-but-short stop.
+        #   hold      - "commit to a stop, centred and straight": rewards holding
+        #               a stop with the corners inside the bay (containment-gated),
+        #               so the policy commits to a held park rather than dithering
+        #               or stopping short until the clock runs out.
         # Coefficients are sized so the worst-case cumulative (all three at peak,
         # sustained over an episode) stays comfortably below the +50 terminal.
         approach_term = 0.008 * proximity * slow
-        precision_term = 0.008 * centred * aligned * slow
-        hold_term = 0.006 * centred * aligned * stopped
+        precision_term = 0.008 * centred * aligned * slow * containment
+        hold_term = 0.006 * centred * aligned * stopped * containment
 
+        # Both the navigation pull (progress + position) and the held-stop bonus
+        # are scaled by (1 - uncertainty_scale). Under high EKF uncertainty this
+        # damps the whole "park now" gradient symmetrically, so freezing is never
+        # the un-gated reward channel that survives when navigation is suppressed.
         uncertainty_scale = self._uncertainty_scale_fn()
-        reward = (distance_term + position_term) * (1.0 - uncertainty_scale) + (
-            approach_term + precision_term + hold_term
+        certainty = 1.0 - uncertainty_scale
+        reward = (distance_term + position_term) * certainty + (
+            approach_term + precision_term + hold_term * certainty
         )
 
         diag["progress_reward"] = float(progress)
@@ -2076,15 +2105,21 @@ class CARLAParkingEnv(gym.Env):
 
         # Graded timeout penalty: judge the final state when the clock runs out
         # without a park. Scaled by how far and how misaligned the car ended, so
-        # ending closer and straighter is always better than stopping short.
-        # Coefficients sized so "freeze short at ~3 m" stops being a stable
-        # attractor against the +50 success terminal: at final_pos ~3 m the
-        # penalty is ~-4.5, at ~8 m it is ~-12. Worst realistic case (pos ~12 m,
-        # yaw ~0.5 rad) is ~-20, comfortably above the ego-crash threshold (-25)
-        # so the policy never crashes on purpose to escape a worse timeout.
+        # ending closer and straighter is always better than stopping short. At
+        # final_pos ~3 m the penalty is ~-4.5, at ~8 m it is ~-12.
+        # Clamped to TIMEOUT_PENALTY_FLOOR so it can never drop below the
+        # ego-fault collision penalty (-25): the lot diagonal exceeds 16 m and
+        # the target bay is sampled per episode, so an unclamped graded penalty
+        # (1.5 * pos + ...) would exceed 25 for far-target timeouts and make a
+        # deliberate crash strictly cheaper than timing out. The clamp keeps the
+        # ordering success(+50) > timeout > collision(-25) for every geometry.
         if truncated and not terminated:
-            reward += -(
-                1.5 * reward_diag["pos_error"] + 2.5 * reward_diag["orientation_error"]
+            reward += max(
+                -(
+                    1.5 * reward_diag["pos_error"]
+                    + 2.5 * reward_diag["orientation_error"]
+                ),
+                TIMEOUT_PENALTY_FLOOR,
             )
 
         if (terminated or truncated) and self.world is not None:

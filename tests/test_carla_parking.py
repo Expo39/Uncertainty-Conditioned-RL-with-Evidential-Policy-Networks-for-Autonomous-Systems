@@ -35,6 +35,7 @@ from uncertainty_rl.utils.constants import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    bay_containment_fraction,
     car_fully_inside_bay,
     inflate_polygon,
     point_in_polygon,
@@ -1601,6 +1602,120 @@ class TestCarFullyInsideBay:
                 margin=0.5,
             )
             is False
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: bay_containment_fraction
+# ---------------------------------------------------------------------------
+
+
+class TestBayContainmentFraction:
+    """
+    @class TestBayContainmentFraction
+    @brief Tests for the continuous in-bay containment factor used to gate the
+           endgame shaping terms.
+    """
+
+    CAR_HL = 2.306
+    CAR_HW = 1.121
+    BAY_W = 2.5
+    BAY_D = 5.4
+
+    def _frac(
+        self, car_x: float, car_y: float, car_yaw: float = 0.0, margin: float = 0.0
+    ) -> float:
+        """@brief Helper: containment fraction with reference = one half-length."""
+        return bay_containment_fraction(
+            car_x=car_x,
+            car_y=car_y,
+            car_yaw=car_yaw,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+            reference=self.CAR_HL,
+            margin=margin,
+        )
+
+    def test_fully_inside_returns_one(self) -> None:
+        """
+        @brief A centred, aligned car whose corners are all inside the bay must
+               return exactly 1.0, agreeing with car_fully_inside_bay.
+        """
+        assert self._frac(0.0, 0.0) == pytest.approx(1.0)
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_fraction_decreases_monotonically_with_overhang(self) -> None:
+        """
+        @brief As the car moves out along the depth axis the fraction must
+               decrease strictly - this is the gradient that pulls the car INTO
+               the bay rather than leaving a flat stop-short plateau.
+        """
+        # Longitudinal slack = (BAY_D/2 - CAR_HL) = 2.7 - 2.306 = 0.394 m.
+        # x beyond 0.394 pushes the leading corner past the bay edge.
+        f_in = self._frac(0.3, 0.0)  # still inside -> 1.0
+        f_edge = self._frac(0.6, 0.0)  # 0.206 m overhang
+        f_more = self._frac(1.2, 0.0)  # 0.806 m overhang
+        assert f_in == pytest.approx(1.0)
+        assert f_in > f_edge > f_more
+        assert 0.0 < f_more < f_edge < 1.0
+
+    def test_reaches_zero_one_reference_outside(self) -> None:
+        """
+        @brief Once the worst corner overhangs by a full reference distance the
+               factor must clamp to 0.0 (no negative reward leakage).
+        """
+        # Leading corner at x + CAR_HL; bay half-depth 2.7. Overhang reaches the
+        # reference (CAR_HL = 2.306) when x = 2.7 - 2.306 + 2.306 = 2.7 + slack.
+        # x = 3.5 gives overhang 3.5 + 2.306 - 2.7 = 3.106 > reference -> 0.0.
+        assert self._frac(3.5, 0.0) == pytest.approx(0.0)
+
+    def test_negative_margin_inflates_bay(self) -> None:
+        """
+        @brief A negative margin (bay inflated, the training convention) must
+               raise the fraction versus margin=0 for the same overhanging pose.
+        """
+        pose = (0.7, 0.0)
+        assert self._frac(*pose, margin=-0.25) > self._frac(*pose, margin=0.0)
+
+    def test_degenerate_reference_returns_zero(self) -> None:
+        """
+        @brief A non-positive reference distance must return 0.0, not divide by
+               zero.
+        """
+        assert (
+            bay_containment_fraction(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+                reference=0.0,
+            )
+            == 0.0
         )
 
 
