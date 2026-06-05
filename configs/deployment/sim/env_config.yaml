@@ -61,7 +61,7 @@ parking_scenarios:
   # When set, the three fixed_* keys force a specific floor plan / bay / GNSS
   # tier every episode. Comment them out to return to random selection.
   fixed_floor_plan: rectangle
-  fixed_target_bay_id: angled_13
+  # fixed_target_bay_id: angled_13
   fixed_gnss_tier: rtk_fixed
 
   # CARLA blueprint for perimeter markers.
