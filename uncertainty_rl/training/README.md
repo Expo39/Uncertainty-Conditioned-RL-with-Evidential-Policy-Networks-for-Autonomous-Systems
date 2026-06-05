@@ -179,4 +179,3 @@ Active observation dimensions are derived at runtime.
 - [evaluation/README.md](../evaluation/README.md) - evaluation after training completes
 - [docs/detailed_notes/hyperparameter_search.md](../../docs/detailed_notes/hyperparameter_search.md) - search space design rationale
 - [docs/detailed_notes/evidential_nig_initialisation.md](../../docs/detailed_notes/evidential_nig_initialisation.md) - NIG init and regularisation derivation
-- [Curriculum Plan](../../documentation/CURRICULUM_PLAN.md) - strategic staged training plan
