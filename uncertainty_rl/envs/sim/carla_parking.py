@@ -127,7 +127,7 @@ class CARLAParkingEnv(gym.Env):
         map_load_sleep: float = 5.0,
         action_repeat: int = 1,
         no_rendering_mode: bool = False,
-        max_ego_speed_ms: float = 6.0,
+        max_ego_speed_ms: float = 8.0,
         use_extra_spawns: bool = False,
         gnss_noise_profiles_path: Optional[str] = None,
         gnss_noise_multiplier_override: Optional[float] = None,
@@ -164,8 +164,10 @@ class CARLAParkingEnv(gym.Env):
         @param map_load_sleep: Seconds to wait after loading the FlatPlane OpenDRIVE
                world before continuing. Increase on slow servers (default 5.0).
         @param max_ego_speed_ms: Maximum ego vehicle speed in m/s. Throttle is cut
-               when this speed is exceeded. Default 6.0 m/s (~22 km/h),
-               appropriate for parking lot manoeuvres.
+               when this speed is exceeded. Default 8.0 m/s (~29 km/h),
+               appropriate for parking lot manoeuvres. The live value comes from
+               max_ego_speed_ms in agent_config.yaml; this default is the guard
+               used only when that key is absent.
         @param use_extra_spawns: If True, extra spawn transforms from the layout
                YAML are included in the spawn pool. If False (default), only the
                primary spawn is used. With RTK-GNSS the odom frame is UTM-aligned
@@ -278,6 +280,18 @@ class CARLAParkingEnv(gym.Env):
             "fixed_target_bay_id", None
         )
         self._fixed_gnss_tier: Optional[str] = scenarios.get("fixed_gnss_tier", None)
+
+        # Optional whitelist restricting which bays the per-episode sampler may
+        # target. None (default) samples from every eligible bay in the layout.
+        # A non-empty list restricts the target pool to those bay ids, used by
+        # the curriculum to introduce bay variety on a SUBSET (e.g. one row at a
+        # single approach orientation) before opening up to the whole lot. It is
+        # ignored when fixed_target_bay_id is set (a single fixed bay already
+        # pins the target). Bay ids absent from the layout raise at pool build.
+        _allowed = scenarios.get("allowed_bay_ids", None)
+        self._allowed_bay_ids: Optional[List[str]] = (
+            [str(b) for b in _allowed] if _allowed else None
+        )
 
         # Soft out-of-bounds boundary: the lot polygon inflated by a margin forms
         # a run-off skirt; leaving it costs a small per-decision penalty that
@@ -733,6 +747,23 @@ class CARLAParkingEnv(gym.Env):
         eligible = [
             b for b in layout.get("bays", []) if not b.get("always_empty", False)
         ]
+
+        # Restrict the target pool to the whitelist when one is set (and no
+        # single bay is pinned). Validate every requested id resolves to an
+        # eligible bay so a typo in a curriculum stage fails loud rather than
+        # silently shrinking the pool.
+        if self._allowed_bay_ids is not None and self._fixed_target_bay_id is None:
+            allowed = set(self._allowed_bay_ids)
+            eligible_ids = {b.get("id") for b in eligible}
+            missing = allowed - eligible_ids
+            if missing:
+                raise RuntimeError(
+                    f"allowed_bay_ids contains ids absent from floor plan "
+                    f"'{name}' (or always-empty): {sorted(missing)}. "
+                    f"Eligible ids (first 20): {sorted(eligible_ids)[:20]}"
+                )
+            eligible = [b for b in eligible if b.get("id") in allowed]
+
         bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
         for bay in eligible:
             bay_type_key = bay.get("bay_type", "perpendicular")

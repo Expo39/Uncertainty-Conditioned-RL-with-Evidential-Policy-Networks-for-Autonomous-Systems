@@ -621,9 +621,9 @@ def main() -> None:
             "Curriculum stage (1..N). Deep-merges "
             "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
             "so tuning runs at that stage's difficulty (bay, spawns, occupancy, "
-            "margin). Tuning happens at the Stage 3->4 checkpoint per the "
-            "curriculum plan, so set --stage accordingly. Omit for the base "
-            "env_config difficulty."
+            "margin). Tuning happens once at the clean Phase A -> B boundary "
+            "(the stage-6 checkpoint) per the curriculum plan, so set --stage "
+            "accordingly. Omit for the base env_config difficulty."
         ),
     )
     parser.add_argument(

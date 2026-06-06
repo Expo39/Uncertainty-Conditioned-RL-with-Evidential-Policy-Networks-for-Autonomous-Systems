@@ -64,11 +64,13 @@ try:
     # working; the canonical owner is uncertainty_rl.envs.factory.
     from uncertainty_rl.envs import CARLAParkingEnv, make_env  # noqa: F401
     from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+    from uncertainty_rl.networks.sb3_integration import ScheduledEntCoefPPO
 except ImportError:
     CARLAParkingEnv = None  # type: ignore[assignment,misc]
     make_env = None  # type: ignore[assignment,misc]
     EvidentialActorCriticPolicy = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
+    ScheduledEntCoefPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 
@@ -698,11 +700,14 @@ def train(
                     f"Expected either final_model or ppo_uncertainty_rl_*_steps.zip"
                 )
 
-        # Determine which model class to load based on policy_type
+        # Determine which model class to load based on policy_type. The standard
+        # path loads ScheduledEntCoefPPO (not bare PPO) so the ent_coef schedule
+        # re-bound below stays a resolvable callable on the resumed run - bare
+        # PPO.train() would crash multiplying a callable ent_coef by the loss.
         if policy_type == "evidential":
             model = EvidentialPPO.load(checkpoint_model_path)
         elif policy_type == "standard":
-            model = PPO.load(checkpoint_model_path)
+            model = ScheduledEntCoefPPO.load(checkpoint_model_path)
         else:
             raise ValueError(
                 f"Unknown policy_type '{policy_type}'. "
@@ -774,7 +779,12 @@ def train(
                 **ppo_kwargs,
             )
         elif policy_type == "standard":
-            model = PPO(
+            # ScheduledEntCoefPPO (not bare PPO): the shared ppo_kwargs pass a
+            # CALLABLE ent_coef decay schedule, which stock PPO.train() cannot
+            # multiply (it stores ent_coef verbatim). The subclass resolves the
+            # callable per update, so the standard baselines share the identical
+            # ent_coef schedule as the evidential ones.
+            model = ScheduledEntCoefPPO(
                 policy="MlpPolicy",
                 **ppo_kwargs,
             )
@@ -966,6 +976,18 @@ def main() -> None:
         default=None,
         help="Resume training from checkpoint directory (contains final_model.zip and vec_normalize.pkl)",
     )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Path to a baseline override config (configs/baselines/*.yaml). When "
+            "set, its keys (baseline_name, include_covariance, include_obstacle_obs, "
+            "policy_type, log_dir, checkpoint_dir) are overlaid on the merged config "
+            "so the run trains that ablation baseline rather than the train_config "
+            "defaults (which are the full method). Omit to train the defaults."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -976,6 +998,15 @@ def main() -> None:
         load_config(args.train_config),
         load_env_config(args.env_config, stage=args.stage),
     )
+    # Overlay the baseline override (if any) so the run trains that baseline's
+    # observation/policy configuration, not the train_config defaults. Baseline
+    # configs hold only the keys that differ (baseline_name, include_covariance,
+    # include_obstacle_obs, policy_type, log/checkpoint dirs); baseline wins on
+    # conflict. Mirrors the --baseline overlay in tune_hyperparams.py so a tuned
+    # baseline and its training run share the same configuration.
+    if args.baseline is not None:
+        baseline_override = load_config(args.baseline)
+        config = {**config, **baseline_override}
     # Apply per-stage training-hyperparameter overrides (stage_timesteps,
     # learning_rate, ent_coef, ...). These live in a `training_overrides` block in
     # the stage file and are applied AFTER merge_configs (which otherwise lets
@@ -1004,6 +1035,14 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    if args.baseline is not None:
+        logger.info(
+            "Training baseline '%s' (include_covariance=%s, policy_type=%s)",
+            config.get("baseline_name", Path(args.baseline).stem),
+            config.get("include_covariance"),
+            config.get("policy_type"),
+        )
 
     # Pass resume checkpoint path if provided.
     train(config, resume_from=args.resume_from)

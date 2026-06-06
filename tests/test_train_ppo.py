@@ -587,3 +587,60 @@ class TestStageTrainingOverrides:
 
         assert "training_overrides" not in env_cfg
         assert env_cfg["bay_margin"] == -0.75
+
+
+class TestBaselineOverlay:
+    """
+    @class TestBaselineOverlay
+    @brief The --baseline overlay flips the train_config defaults to the named
+           ablation baseline.
+
+    main() merges train_config (whose defaults ARE the full method) then overlays
+    the baseline file with {**config, **baseline} so the run trains that baseline.
+    These tests pin the overlay semantics against the real config files - notably
+    that the vanilla pathfinder baseline switches the policy to standard PPO and
+    drops the covariance observation.
+    """
+
+    _REPO = Path(__file__).parent.parent
+    _TRAIN_CONFIG = _REPO / "configs" / "train_config.yaml"
+    _BASELINES = _REPO / "configs" / "baselines"
+
+    def _overlay(self, baseline_file: str) -> dict:
+        """
+        @brief Reproduce main()'s {**train_config, **baseline} overlay.
+        """
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        baseline = yaml.safe_load((self._BASELINES / baseline_file).read_text())
+        return {**train_cfg, **baseline}
+
+    def test_train_config_default_is_full_method(self) -> None:
+        """
+        @brief The bare train_config defaults are the full method (evidential +
+               covariance) - which is exactly why a baseline overlay is needed to
+               run vanilla.
+        """
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        assert train_cfg["policy_type"] == "evidential"
+        assert train_cfg["evidential"]["use_uncertainty_conditioning"] is True
+
+    def test_vanilla_overlay_selects_standard_no_covariance(self) -> None:
+        """
+        @brief vanilla_ppo.yaml flips policy_type to standard and covariance off.
+        """
+        cfg = self._overlay("vanilla_ppo.yaml")
+        assert cfg["policy_type"] == "standard"
+        assert cfg["include_covariance"] is False
+        assert cfg["include_obstacle_obs"] is True
+        assert cfg["baseline_name"] == "vanilla_ppo"
+
+    def test_baseline_inherits_ppo_hyperparams(self) -> None:
+        """
+        @brief The baseline overlay leaves the shared PPO hyperparameters from
+               train_config intact (the baseline files override only obs/policy).
+        """
+        cfg = self._overlay("vanilla_ppo.yaml")
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        assert cfg["learning_rate"] == train_cfg["learning_rate"]
+        assert cfg["n_steps"] == train_cfg["n_steps"]
+        assert cfg["gamma"] == train_cfg["gamma"]
