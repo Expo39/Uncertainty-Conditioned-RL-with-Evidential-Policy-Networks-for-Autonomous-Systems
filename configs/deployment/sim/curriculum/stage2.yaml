@@ -1,25 +1,14 @@
-# Curriculum Stage 2 - bay variety on ONE row, single orientation (one new axis)
-#
-# Resume from Stage 1's final checkpoint. Stage 1 parks one fixed bay from the
-# fixed primary spawn; now the target bay is RANDOM but restricted to the north
-# row (perpendicular_0..11, all facing yaw 270). The spawn is still locked to the
-# primary point. This isolates "generalise across bays at a SINGLE approach
-# orientation" before the harder "generalise across all 4 orientations" jump in
-# Stage 3.
-#
-# Why this intermediate exists: going straight from one bay to all 47 bays at
-# once mixes two distinct generalisations - across-bays and across-orientations
-# (the lot has banks facing 270/90/0/180). Splitting them keeps each transition
-# to a single axis, the curriculum's core invariant, and de-risks the single
-# biggest stall point in the clean phase.
+# Curriculum Stage 2 - bay variety on one row, single orientation.
+# Resume from Stage 1. Target bay random but restricted to the north row
+# (perpendicular_0..11, all yaw 270); spawn still locked. One new axis vs Stage 1.
 
-use_extra_spawns: false  # STILL locked to the primary spawn - only the bay varies.
+use_extra_spawns: false  # Still locked to the primary spawn - only the bay varies.
+bay_margin: -0.65  # Looser while bay variety lands.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  # fixed_target_bay_id removed -> random target bay each episode, but...
-  # ...restricted to the north row (all yaw 270) so only ONE orientation varies.
-  allowed_bay_ids:
+  fixed_gnss_tier: rtk_fixed
+  allowed_bay_ids:  # Random target restricted to the north row (one orientation).
     - perpendicular_0
     - perpendicular_1
     - perpendicular_2
@@ -32,13 +21,13 @@ parking_scenarios:
     - perpendicular_9
     - perpendicular_10
     - perpendicular_11
-  fixed_gnss_tier: rtk_fixed
   bay_occupancy_min: 0.0  # Still no parked cars.
   bay_occupancy_max: 0.0
-  num_patrol_vehicles_max: 0
-  pedestrian_spawn_probability: 0.0
 
-bay_margin: -0.65  # Slightly tighter than Stage 1; still loose while bay variety lands.
+carla_sensors:
+  lidar:
+    noise:
+      enabled: false  # Phase A: clean sensors.
 
 training_overrides:
   stage_timesteps: 2000000

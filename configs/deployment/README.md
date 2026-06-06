@@ -31,11 +31,10 @@ Behaviour settings that must match the trained policy. Check these before every 
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `include_covariance` | `true` | Must match the flag used at training time. |
-| `include_obstacle_obs` | `true` | Must match the flag used at training time. |
+| `baseline` | `configs/baselines/full_method.yaml` | Names the baseline the deployed checkpoint was trained as; its `include_covariance` / `include_obstacle_obs` / `policy_type` (the obs shape and policy class) are read from there. Must match the checkpoint. |
 | `max_ego_speed_ms` | `8.0` | Hard speed cap (m/s). |
 | `safety_handoff_threshold` | `5.0` | Epistemic uncertainty above this triggers full stop. |
-| `real_world_deployment` | `false` | Set `true` to activate datum-based EKF calibration on the real vehicle. |
+| `real_world_datum` / `actuation_calibration` | paths | Real-vehicle datum and calibration files loaded by the deployment path. |
 
 ## Config loading chain
 

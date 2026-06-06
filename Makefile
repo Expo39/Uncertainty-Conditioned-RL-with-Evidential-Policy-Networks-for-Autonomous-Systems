@@ -120,7 +120,7 @@ docker-top: ## Show running processes in containers
 # ----------------------------------------------------------------------
 
 docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [CHECKPOINT=path] [BASELINE=configs/baselines/vanilla_ppo.yaml]
-	@echo "Training: layout=$(LAYOUT) stage=$(STAGE) checkpoint=$(CHECKPOINT) baseline=$(or $(BASELINE),<train_config defaults>)"
+	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT) baseline=$(or $(BASELINE),<full_method>)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
@@ -128,7 +128,7 @@ docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rect
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),) $(if $(BASELINE),--baseline $(BASELINE),)
 
 docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [CHECKPOINT=path] [BASELINE=configs/baselines/vanilla_ppo.yaml]
-	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(STAGE) checkpoint=$(CHECKPOINT) baseline=$(or $(BASELINE),<train_config defaults>)"
+	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT) baseline=$(or $(BASELINE),<full_method>)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
@@ -136,15 +136,15 @@ docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docke
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),) $(if $(BASELINE),--baseline $(BASELINE),)
 
 docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=4] [BASELINE=configs/baselines/full_method.yaml]
-	@echo "Tuning: layout=$(LAYOUT) stage=$(STAGE) baseline=$(or $(BASELINE),<train_config defaults>)"
+	@echo "Tuning: layout=$(LAYOUT) stage=$(or $(STAGE),1) baseline=$(or $(BASELINE),<full_method>)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [CHECKPOINT=path]
-	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [CHECKPOINT=path] [BASELINE=configs/baselines/vanilla_ppo.yaml]
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(or $(CHECKPOINT),checkpoints/final_model) baseline=$(or $(BASELINE),<full_method>)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
@@ -154,6 +154,7 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
+		$(if $(BASELINE),--baseline $(BASELINE),) \
 		--output-dir evaluation_results
 
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [CHECKPOINT=path]
@@ -260,7 +261,8 @@ INSPECT_EPISODES ?=
 INSPECT_VIEW     ?= third_person
 INSPECT_PAUSE    ?= 3.0
 INSPECT_OOD      ?= false
-docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: constant forward drive. Usage: make docker-inspect-dryrun [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free|birds_eye] [INSPECT_PAUSE=3.0] [INSPECT_OOD=true|false]
+docker-inspect-dryrun: ## Full training pipeline in windowed CARLA, built identically to training. Usage: make docker-inspect-dryrun [STAGE=1] [BASELINE=configs/baselines/vanilla_ppo.yaml] [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free|birds_eye] [INSPECT_PAUSE=3.0] [INSPECT_OOD=true|false]
+	@echo "Dryrun: stage=$(or $(STAGE),1) baseline=$(or $(BASELINE),<full_method>) manual=$(MANUAL) ood=$(INSPECT_OOD)"
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
@@ -272,6 +274,7 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA. Default: con
 	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
 		INSPECT_MANUAL=$(MANUAL) INSPECT_OOD=$(INSPECT_OOD) \
+		INSPECT_STAGE=$(STAGE) INSPECT_BASELINE=$(BASELINE) \
 		bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]

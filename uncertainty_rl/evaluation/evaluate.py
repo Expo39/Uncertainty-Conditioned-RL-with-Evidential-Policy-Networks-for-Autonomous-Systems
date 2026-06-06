@@ -187,17 +187,20 @@ def make_eval_env(
     # debug: per-step DebugLogger diagnostics - off by default, same as training.
     debug: bool = config.get("debug", False)
 
-    # SafetyWrapper parameters from agent_config.yaml
-    aleatoric_scaling: float = float(config.get("safety_aleatoric_scaling", 0.5))
-    handoff_threshold: float = float(config.get("safety_handoff_threshold", 5.0))
+    # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
+    aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 0.5))
+    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 5.0))
 
+    # Connection / timing / ROS 2 come from env_config so evaluation runs the same
+    # environment the policy was trained in (single source of truth - eval_config
+    # holds only the condition sweep, not env settings).
     def _init() -> Any:
         base_env: Any = CARLAParkingEnv(
-            carla_host=config.get("carla_host", "localhost"),
-            carla_port=config.get("carla_port", 2000),
-            town=config.get("town", "FlatPlane"),
-            max_steps=config.get("max_steps", 500),
-            ros2_config=config.get("ros2", {}),
+            carla_host=_ec.get("carla_host", "localhost"),
+            carla_port=_ec.get("carla_port", 2000),
+            town=_ec.get("town", "FlatPlane"),
+            max_steps=_ec.get("max_steps", 500),
+            ros2_config=_ec.get("ros2", {}),
             carla_sensors_config=scaled_sensors,
             parking_scenarios_config=parking_config,
             include_covariance=include_covariance,
@@ -328,19 +331,28 @@ def evaluate_across_conditions(
     train_config_path: str,
     n_episodes: int = 0,
     output_dir: str = "./evaluation_results",
+    baseline_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     @brief Evaluate agent across different physical conditions.
     @param model_path: Path to trained model.
     @param eval_config_path: Path to evaluation configuration file.
     @param env_config_path: Path to environment config (sensors, parking scenarios).
-    @param train_config_path: Path to training config (policy_type for model loading).
+    @param train_config_path: Path to training config (shared hyperparameters).
     @param n_episodes: Episodes per condition. 0 means read from eval_config
         (n_episodes key), falling back to 100.
     @param output_dir: Directory to save results.
+    @param baseline_path: Baseline config naming the evaluated ablation cell. Its
+        include_covariance / include_obstacle_obs / policy_type drive the obs shape
+        and model class. None defaults to the full method (DEFAULT_BASELINE).
     @return DataFrame with evaluation results.
     """
-    from uncertainty_rl.training.train_ppo import load_env_config
+    from uncertainty_rl.training.train_ppo import (
+        DEFAULT_BASELINE,
+        load_config,
+        load_env_config,
+    )
+    from uncertainty_rl.utils.config_merge import apply_baseline
 
     # Load configurations
     with open(eval_config_path, "r") as f:
@@ -350,8 +362,11 @@ def evaluate_across_conditions(
     # (CARLA-specific keys) so env_config is the single unified config for the env.
     env_config: Dict[str, Any] = load_env_config(env_config_path)
 
-    with open(train_config_path, "r") as f:
-        train_config: Dict[str, Any] = yaml.safe_load(f)
+    # Obs flags and policy_type live only in the baseline files. Overlay the
+    # evaluated baseline (full method by default) so the eval env builds the obs
+    # shape and loads the policy class the checkpoint was trained as.
+    baseline_cfg = load_config(baseline_path or DEFAULT_BASELINE)
+    apply_baseline(env_config, baseline_cfg)
 
     base_sensors = env_config.get("carla_sensors", {})
     conditions = eval_config.get("eval_conditions", [])
@@ -360,9 +375,9 @@ def evaluate_across_conditions(
 
     # Load model
     logger.info("Loading model from %s...", model_path)
-    # Load model: use EvidentialPPO when train_config specifies policy_type=evidential
+    # Load model: use EvidentialPPO when the baseline specifies policy_type=evidential
     # so that isinstance(model, EvidentialPPO) is True and uncertainty is collected.
-    policy_type = train_config.get("policy_type", "evidential")
+    policy_type = baseline_cfg.get("policy_type", "evidential")
     if policy_type == "evidential":
         model: PPO = EvidentialPPO.load(model_path)
     else:
@@ -580,7 +595,18 @@ def main() -> None:
         "--train-config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to training config (for policy_type used in model loading)",
+        help="Path to training config (shared hyperparameters)",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Baseline config naming the evaluated ablation cell "
+            "(configs/baselines/*.yaml). Its include_covariance / "
+            "include_obstacle_obs / policy_type drive the obs shape and model "
+            "class. Omit to evaluate the full method."
+        ),
     )
     parser.add_argument(
         "--n-episodes",
@@ -616,6 +642,7 @@ def main() -> None:
         train_config_path=args.train_config,
         n_episodes=args.n_episodes,
         output_dir=args.output_dir,
+        baseline_path=args.baseline,
     )
 
     # Create plots

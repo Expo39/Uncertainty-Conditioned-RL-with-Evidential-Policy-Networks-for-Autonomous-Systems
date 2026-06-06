@@ -8,6 +8,5 @@ baseline_name: "full_method"
 include_covariance: true
 include_obstacle_obs: true
 policy_type: "evidential"
-
-log_dir: "./logs/full_method"
-checkpoint_dir: "./checkpoints/full_method"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.

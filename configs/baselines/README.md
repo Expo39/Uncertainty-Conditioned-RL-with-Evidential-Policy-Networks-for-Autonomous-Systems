@@ -38,8 +38,9 @@ make docker-experiment       # Full 4-baseline x N-seed sweep
 make docker-experiment-dry   # Dry-run: print what would run without training
 ```
 
-Results are written to `logs/<baseline_name>/seed_<N>/` and checkpoints to
-`checkpoints/<baseline_name>/seed_<N>/`.
+Results are written to `logs/<baseline_name>_seed<N>_<timestamp>/` and checkpoints
+to `checkpoints/<baseline_name>_seed<N>_<timestamp>/` (derived from `baseline_name`
+plus the base dirs in `train_config.yaml`).
 
 ## See also
 

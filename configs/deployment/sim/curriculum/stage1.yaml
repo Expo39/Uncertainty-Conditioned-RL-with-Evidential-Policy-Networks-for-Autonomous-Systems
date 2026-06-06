@@ -1,57 +1,25 @@
-# Curriculum Stage 1 - "make success common" (escape success starvation)
-#
-# Partial env_config override, deep-merged onto deployment/sim/env_config.yaml by
-# train_ppo.py when --stage 1 (make docker-train STAGE=1) is given. Only the keys
-# that differ from the base env_config appear here.
-#
-# Goal: remove every failure mode except the core park so the +50 terminal fires
-# often enough for PPO to learn from. One fixed bay, one fixed spawn, no parked
-# cars, and the loosest bay margin. Success should climb into double digits here;
-# if it does not, the reward/observation/control pipeline is the problem, not task
-# difficulty (see CURRICULUM_PLAN.md). Stage 2 adds bay variety from the SAME
-# spawn, stage 3 adds spawn variety - each transition changes ONE axis.
+# Curriculum Stage 1 - single fixed bay, fixed spawn, no parked cars.
+# Maximally easy so the +50 terminal fires often enough for PPO. See CURRICULUM_PLAN.md.
+# Difficulty knobs are spelled out in full here (they live only in stage files).
 
-use_extra_spawns: false  # Lock to the single primary spawn for a constant start.
+use_extra_spawns: false  # Lock to the single primary spawn.
+bay_margin: -0.75  # Strict acceptance box.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_target_bay_id: perpendicular_0  # One fixed bay.
-  fixed_gnss_tier: rtk_fixed
-  bay_occupancy_min: 0.0  # No parked cars - removes the neighbour-collision failure mode.
+  fixed_gnss_tier: rtk_fixed  # Clean localisation (Phase A).
+  fixed_target_bay_id: perpendicular_0  # One fixed target bay.
+  bay_occupancy_min: 0.0  # No parked cars.
   bay_occupancy_max: 0.0
-  num_patrol_vehicles_max: 0
-  pedestrian_spawn_probability: 0.0
 
-# Loosest success acceptance box (metres). Negative inflates the bay outward, so
-# more near-aligned stops count as a park, densifying the +50 events PPO needs.
-# Tightened toward the strict STRICT_BAY_MARGIN across later stages.
-bay_margin: -0.25
+carla_sensors:
+  lidar:
+    noise:
+      enabled: false  # Phase A: clean sensors.
 
-# Per-stage training budget and schedules (applied via --stage, allowlisted - see
-# _apply_stage_training_overrides). Each stage restarts its LR / ent_coef decay
-# from these initials over stage_timesteps; weights + VecNormalize still carry over
-# on resume.
-#
-# ent_coef and the action-std init are co-tuned. The dense reward is small per step
-# and the +50 terminal is rare from random init, so the exploration/exploitation
-# balance is delicate. Two failure modes were observed and fixed:
-#   - Too much entropy (0.02 -> 0.008, and even 0.003 -> 0.0005 at the SB3 default
-#     std 1.0): the Gaussian action std RAN AWAY (1.0 -> 1.67 fast, or 1.0 -> 1.15
-#     slowly), the policy could not commit, early successes decayed to 0. Fixed by
-#     log_std_init = -0.6 (train_config): start std ~0.55 so the entropy bonus has
-#     little room to inflate it - this CONTROLS the std (observed flat ~0.55).
-#   - Too little entropy (0.003 -> 0.0001 with the low std): over-committed early,
-#     under-explored, locked onto a mistimed turn that OVERSHOOTS the bay (a one-way
-#     trap for a forward-only car), 0 success.
-# The balance is set by the ratio of the entropy term (ent_coef * entropy) to the
-# policy-gradient loss: the entropy bonus applies a constant upward force on log_std
-# every update (dH/d log_std = 1), so the std drifts up whenever that ratio exceeds
-# ~1. 0.003 -> 0.0005 places the ratio near 1.5 early (explore) and ~0.8 late, so
-# log_std gently contracts onto a held park instead of running away; the low
-# log_std_init keeps the early exploration from becoming a std runaway. Read
-# train/std against success_rate: a monotonic std rise with a decaying success peak
-# means the floor is still too high; a fast std drop with success stuck at 0 means
-# it is too low.
+# Per-stage training budget and schedules (allowlisted, applied via --stage). Each
+# stage restarts its LR / ent_coef decay over stage_timesteps; weights + VecNormalize
+# carry over on resume.
 training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.0003

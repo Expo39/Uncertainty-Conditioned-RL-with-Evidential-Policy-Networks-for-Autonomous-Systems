@@ -7,6 +7,5 @@ baseline_name: "input_uncertainty"
 include_covariance: true
 include_obstacle_obs: true
 policy_type: "standard"
-
-log_dir: "./logs/input_uncertainty"
-checkpoint_dir: "./checkpoints/input_uncertainty"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.

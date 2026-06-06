@@ -1,27 +1,19 @@
-# Curriculum Stage 4 - add spawn variety (one new axis, still no parked cars)
-#
-# Resume from Stage 3's final checkpoint. Stage 3 parks any bay (all orientations)
-# from the single primary spawn; now the spawn is RANDOM too (primary + the extra
-# spawn points, both at the far east end of the lot). The policy must now park any
-# bay from any spawn, in clean conditions, with no parked cars yet. Parked cars
-# (the avoidance task) arrive in Stage 5.
-#
-# Spawn variety roughly triples the reachable-state count (x3 spawns x 47 bays),
-# so this stage gets a 3M budget to match - the same magnitude as the Stage 3
-# orientation jump, rather than the 2M of the later stages that only refine an
-# already-solved geometry.
+# Curriculum Stage 4 - add spawn variety (still no parked cars).
+# Resume from Stage 3. Spawn is now random (primary + extras).
 
 use_extra_spawns: true  # Random spawn each episode (primary + extras).
+bay_margin: -0.5  # Looser while spawn variety lands.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed
   bay_occupancy_min: 0.0  # Still no parked cars.
   bay_occupancy_max: 0.0
-  num_patrol_vehicles_max: 0
-  pedestrian_spawn_probability: 0.0
 
-bay_margin: -0.5  # Tighter again; still looser than the strict criterion.
+carla_sensors:
+  lidar:
+    noise:
+      enabled: false  # Phase A: clean sensors.
 
 training_overrides:
   stage_timesteps: 3000000

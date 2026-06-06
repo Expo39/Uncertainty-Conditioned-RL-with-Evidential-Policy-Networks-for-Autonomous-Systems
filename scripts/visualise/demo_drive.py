@@ -230,38 +230,40 @@ def main() -> None:
     """
     args = _parse_args()
 
-    # Load configs. load_env_config merges sensor_config.yaml (shared keys)
-    # with env_config.yaml (CARLA-specific keys) into one unified dict.
-    from uncertainty_rl.training.train_ppo import load_env_config
+    # Load configs. load_env_config merges sensor/agent/env + the stage difficulty.
+    # Difficulty lives only in the stage files and obs/policy flags only in the
+    # baseline files, so the demo resolves the same defaults as training: stage 1
+    # and full_method when the flags are omitted. The demo must match the geometry
+    # AND obs shape the checkpoint was trained at - a mismatch is a hard shape error.
+    from uncertainty_rl.training.train_ppo import (
+        DEFAULT_BASELINE,
+        DEFAULT_STAGE,
+        load_env_config,
+    )
+    from uncertainty_rl.utils.config_merge import apply_baseline
 
-    env_config: Dict[str, Any] = load_env_config(args.env_config, stage=args.stage)
+    stage = args.stage if args.stage is not None else DEFAULT_STAGE
+    baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+
+    env_config: Dict[str, Any] = load_env_config(args.env_config, stage=stage)
     with open(args.train_config, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
 
-    # Overlay the baseline override (if any) so the demo loads the policy class
-    # and builds the observation space the checkpoint was TRAINED with, not the
-    # train_config/agent_config defaults (which describe the full method). The
-    # baseline's policy_type drives loader-class selection below; its
-    # include_covariance / include_obstacle_obs drive the obs dimensionality
-    # make_env builds (read from env_config) - the obs dim is baked into the
-    # checkpoint weights, so a mismatch is a hard shape error, not a difficulty
-    # choice. Baseline wins on conflict. Mirrors the --baseline overlay in
-    # train_ppo.py.
-    if args.baseline is not None:
-        with open(args.baseline, "r") as f:
-            baseline_override: Dict[str, Any] = yaml.safe_load(f)
-        for key in ("policy_type",):
-            if key in baseline_override:
-                train_config[key] = baseline_override[key]
-        for key in ("include_covariance", "include_obstacle_obs"):
-            if key in baseline_override:
-                env_config[key] = baseline_override[key]
-        print(
-            f"Baseline overlay '{baseline_override.get('baseline_name', args.baseline)}': "
-            f"policy_type={train_config.get('policy_type')}, "
-            f"include_covariance={env_config.get('include_covariance')}, "
-            f"include_obstacle_obs={env_config.get('include_obstacle_obs')}"
-        )
+    # apply_baseline is the single overlay shared with train_ppo.py /
+    # tune_hyperparams.py; policy_type drives loader-class selection below,
+    # include_covariance / include_obstacle_obs drive what make_env builds, so the
+    # baseline is applied to both dicts.
+    with open(baseline_path, "r") as f:
+        baseline_override: Dict[str, Any] = yaml.safe_load(f)
+    apply_baseline(train_config, baseline_override)
+    apply_baseline(env_config, baseline_override)
+    print(
+        f"Stage {stage}, baseline "
+        f"'{baseline_override.get('baseline_name', baseline_path)}': "
+        f"policy_type={train_config.get('policy_type')}, "
+        f"include_covariance={env_config.get('include_covariance')}, "
+        f"include_obstacle_obs={env_config.get('include_obstacle_obs')}"
+    )
 
     # Load model: match the class used during training so the policy type is correct.
     print(f"Loading model from {args.checkpoint}...")

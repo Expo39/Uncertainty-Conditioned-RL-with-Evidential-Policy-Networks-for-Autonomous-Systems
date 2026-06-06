@@ -57,6 +57,12 @@ except ImportError:
     EvalCallback = None  # type: ignore[assignment,misc]
 
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
+from uncertainty_rl.utils.config_merge import apply_baseline, deep_merge
+
+# Re-exported under the historical private name so existing imports
+# (`from ...train_ppo import _deep_merge`) keep working; the canonical owner is
+# uncertainty_rl.utils.config_merge.
+_deep_merge = deep_merge
 
 try:
     # make_env is re-exported here so existing imports
@@ -77,6 +83,12 @@ except ImportError:
     ScheduledEntCoefPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
+
+# Defaults used when --stage / --baseline are omitted. Difficulty knobs live only
+# in the stage files and obs/policy flags only in the baseline files, so a run with
+# neither flag still needs one of each: start at the curriculum head, full method.
+DEFAULT_STAGE = 1
+DEFAULT_BASELINE = "configs/baselines/full_method.yaml"
 
 # Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
 # spaces.Box with low/high=±inf always triggers this; it is harmless.
@@ -139,28 +151,6 @@ def load_config(config_path: str) -> Dict[str, Any]:
     with open(config_path, "r") as f:
         config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader)
     return config
-
-
-def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    @brief Recursively merge override into base; override wins on scalar keys.
-    @param base: Lower-precedence dict (mutated in place and returned).
-    @param override: Higher-precedence dict whose values take priority.
-    @return The merged dict.
-
-    @note A nested dict on both sides is merged key-by-key rather than replaced
-          wholesale. This lets a higher-precedence config add or override
-          individual keys inside a shared block (e.g. env_config adding
-          ros2.carla_recovery without dropping ros2.covariance_timeout defined
-          in agent_config). A plain {**base, **override} would discard every
-          base key under any block the override also defines.
-    """
-    for key, value in override.items():
-        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
-            _deep_merge(base[key], value)
-        else:
-            base[key] = value
-    return base
 
 
 def merge_configs(
@@ -232,10 +222,18 @@ def load_env_config(
     _deep_merge(merged, agent_cfg)
     _deep_merge(merged, env_config)
 
-    # Inject sensor mounts into carla_sensors so the CARLA spawner gets them.
+    # Inject the physical sensor spec from sensor_config.yaml (the single source of
+    # the physical sensor suite) into carla_sensors, which the CARLA spawner reads.
+    # `mount` for every sensor, plus the shared physical LiDAR spec (range, channels)
+    # so those values live ONLY in sensor_config - env_config's carla_sensors holds
+    # the CARLA-only spawn keys (points_per_second, sensor_tick, fov, noise).
+    _SENSOR_SPEC_KEYS = ("mount", "range", "channels")
     for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
-        if "mount" in sensor_data and sensor_name in merged.get("carla_sensors", {}):
-            merged["carla_sensors"][sensor_name]["mount"] = sensor_data["mount"]
+        if sensor_name not in merged.get("carla_sensors", {}):
+            continue
+        for spec_key in _SENSOR_SPEC_KEYS:
+            if spec_key in sensor_data:
+                merged["carla_sensors"][sensor_name][spec_key] = sensor_data[spec_key]
 
     # `training_overrides` is a stage-file-only block of TRAINING hyperparameters
     # (stage_timesteps, learning_rate, ent_coef, ...). It is not an environment
@@ -947,7 +945,8 @@ def main() -> None:
             "Curriculum stage (1..N). Deep-merges "
             "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
             "to set the per-stage difficulty (bay, spawns, occupancy, margin). "
-            "Omit for the base env_config difficulty."
+            "Difficulty lives only in the stage files - omit to default to stage 1 "
+            "(the curriculum head)."
         ),
     )
     parser.add_argument(
@@ -997,40 +996,42 @@ def main() -> None:
         type=str,
         default=None,
         help=(
-            "Path to a baseline override config (configs/baselines/*.yaml). When "
-            "set, its keys (baseline_name, include_covariance, include_obstacle_obs, "
-            "policy_type, log_dir, checkpoint_dir) are overlaid on the merged config "
-            "so the run trains that ablation baseline rather than the train_config "
-            "defaults (which are the full method). Omit to train the defaults."
+            "Path to a baseline override config (configs/baselines/*.yaml). Its keys "
+            "(baseline_name, include_covariance, include_obstacle_obs, policy_type, "
+            "log_dir, checkpoint_dir) set the ablation cell. These flags live only in "
+            "the baseline files - omit to default to the full method "
+            "(configs/baselines/full_method.yaml)."
         ),
     )
 
     args = parser.parse_args()
 
+    # Resolve the effective stage and baseline. Difficulty knobs live ONLY in the
+    # curriculum stage files and the observation/policy flags ONLY in the baseline
+    # files - neither has a default in env_config / train_config - so every run must
+    # pick one of each. Omitting --stage starts at the curriculum head (stage 1);
+    # omitting --baseline runs the full method. This keeps each value in exactly one
+    # place (no base defaults shadowing the stage/baseline) with no hidden code
+    # fallback.
+    stage = args.stage if args.stage is not None else DEFAULT_STAGE
+    baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+
     # Load and merge configs, then apply CLI overrides.
-    # load_env_config() merges sensor_config.yaml (shared keys) with env_config.yaml
-    # (CARLA-specific keys) so all consumers see a single unified dict.
+    # load_env_config() merges sensor_config.yaml + agent_config.yaml + env_config.yaml
+    # and deep-merges the stage difficulty over them, so all consumers see one dict.
     config = merge_configs(
         load_config(args.train_config),
-        load_env_config(args.env_config, stage=args.stage),
+        load_env_config(args.env_config, stage=stage),
     )
-    # Overlay the baseline override (if any) so the run trains that baseline's
-    # observation/policy configuration, not the train_config defaults. Baseline
-    # configs hold only the keys that differ (baseline_name, include_covariance,
-    # include_obstacle_obs, policy_type, log/checkpoint dirs); baseline wins on
-    # conflict. Mirrors the --baseline overlay in tune_hyperparams.py so a tuned
-    # baseline and its training run share the same configuration.
-    if args.baseline is not None:
-        baseline_override = load_config(args.baseline)
-        config = {**config, **baseline_override}
-    # Apply per-stage training-hyperparameter overrides (stage_timesteps,
-    # learning_rate, ent_coef, ...). These live in a `training_overrides` block in
-    # the stage file and are applied AFTER merge_configs (which otherwise lets
-    # train_config win), restricted to an allowlist so a stage can never change an
-    # architecture key (net_arch / policy_type / obs flags) and break weight
-    # loading across the curriculum.
-    if args.stage is not None:
-        _apply_stage_training_overrides(config, args.env_config, args.stage)
+    # Overlay the baseline so the run trains that baseline's observation/policy
+    # configuration. apply_baseline is the single overlay shared with
+    # tune_hyperparams.py and demo_drive.py; it accepts only BASELINE_KEYS so a
+    # baseline can never reshape a hyperparameter.
+    apply_baseline(config, load_config(baseline_path))
+    # Apply the stage's `training_overrides` block (stage_timesteps, learning_rate,
+    # ent_coef, ...) AFTER merge_configs, restricted to an allowlist so a stage can
+    # never change an architecture key and break weight loading across the curriculum.
+    _apply_stage_training_overrides(config, args.env_config, stage)
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:
@@ -1052,13 +1053,13 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    if args.baseline is not None:
-        logger.info(
-            "Training baseline '%s' (include_covariance=%s, policy_type=%s)",
-            config.get("baseline_name", Path(args.baseline).stem),
-            config.get("include_covariance"),
-            config.get("policy_type"),
-        )
+    logger.info(
+        "Training stage %d, baseline '%s' (include_covariance=%s, policy_type=%s)",
+        stage,
+        config.get("baseline_name", Path(baseline_path).stem),
+        config.get("include_covariance"),
+        config.get("policy_type"),
+    )
 
     # Pass resume checkpoint path if provided.
     train(config, resume_from=args.resume_from)

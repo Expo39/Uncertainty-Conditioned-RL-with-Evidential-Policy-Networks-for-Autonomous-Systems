@@ -21,6 +21,12 @@ except ImportError:
 from scripts.inspect._drawing import _draw_layout_overlays
 from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+from uncertainty_rl.utils.constants import (
+    COVARIANCE_FEATURES_DIM,
+    OBSTACLE_FEATURES_DIM,
+    TARGET_POSE_DIM,
+    VEHICLE_STATE_DIM,
+)
 from uncertainty_rl.utils.geometry import wrap_angle_symmetric
 
 # ---------------------------------------------------------------------------
@@ -178,7 +184,8 @@ class DryRunInspector(_Inspector):
     ) -> None:
         """
         @brief Construct the dry-run inspector.
-        @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
+        @param env: Pre-reset CARLAParkingEnv. Its include_covariance /
+               include_obstacle_obs flags set the obs layout the console prints.
         @param duration: Maximum wall-clock seconds to run (across all episodes).
         @param n_episodes: Stop after this many episodes; None = run until duration.
         @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
@@ -329,20 +336,29 @@ class DryRunInspector(_Inspector):
 
         WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic.
 
-        Observation index map (13-dim default):
-            0     = signed body-frame speed (m/s)
-            1     = yaw rate vyaw (rad/s)
-            2..4  = covariance features (std_x, std_y, std_yaw)
-            5..7  = target relative pose (dx, dy, dyaw)
-            8..12 = hemispheric obstacle features
+        The obs layout depends on the env's ablation flags, so indices are computed
+        from include_covariance / include_obstacle_obs rather than hardcoded - the
+        dryrun shows exactly what the policy receives at train time. With covariance
+        off (vanilla_ppo / output_uncertainty baselines) the obs carries no std_*
+        block, so the cov line and the EKF-std diagnostic are suppressed.
+
+        Layout: [speed, vyaw] (+[std_x, std_y, std_yaw] if include_covariance)
+        + [dx, dy, dyaw] (+5 hemispheric obstacle dims if include_obstacle_obs).
 
         @param obs: Observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
         @param info: Optional info dict from env.step().
         """
-        if obs is None or len(obs) < 3:
+        if obs is None or len(obs) < 2:
             return
+
+        # Resolve obs slice offsets from the env's actual flags (what trains).
+        inc_cov = bool(getattr(self._env, "_include_covariance", True))
+        inc_obs = bool(getattr(self._env, "_include_obstacle_obs", True))
+        cov_start = VEHICLE_STATE_DIM
+        tgt_start = cov_start + (COVARIANCE_FEATURES_DIM if inc_cov else 0)
+        obstacle_start = tgt_start + TARGET_POSE_DIM
 
         W = _ANSI_WHITE
         Y = _ANSI_YELLOW
@@ -409,40 +425,50 @@ class DryRunInspector(_Inspector):
                     f"  vyaw={math.degrees(ekf_vyaw - gt_vyaw_rad):+.2f}deg/s" + X
                 )
 
-        if len(obs) >= 5:
+        # Covariance block is in the obs ONLY when include_covariance is set; for
+        # vanilla_ppo / output_uncertainty it is absent, so do not print it.
+        if inc_cov and len(obs) >= cov_start + COVARIANCE_FEATURES_DIM:
             lines.append(
-                W + f"cov  std=({float(obs[2]):.3f},{float(obs[3]):.3f},"
-                f"{float(obs[4]):.3f})" + X
+                W + f"cov  std=({float(obs[cov_start]):.3f},"
+                f"{float(obs[cov_start + 1]):.3f},"
+                f"{float(obs[cov_start + 2]):.3f})" + X
             )
 
-        if len(obs) >= 8:
+        if len(obs) >= tgt_start + TARGET_POSE_DIM:
             lines.append(
-                W + f"tgt  dx={float(obs[5]):+.2f}m  dy={float(obs[6]):+.2f}m"
-                f"  dyaw={math.degrees(float(obs[7])):+.1f}deg" + X
+                W + f"tgt  dx={float(obs[tgt_start]):+.2f}m"
+                f"  dy={float(obs[tgt_start + 1]):+.2f}m"
+                f"  dyaw={math.degrees(float(obs[tgt_start + 2])):+.1f}deg" + X
             )
 
         gt = self._env._target_bay
         _, _, _, _, r = self._env._ekf_odom_offset
 
-        ekf_std = 0.0
-        if self._env._cov_subscriber is not None:
-            _, unc = self._env._cov_subscriber.get_latest_state()
-            if unc is not None:
-                ekf_std = float(max(unc[0], unc[1]))
-
-        lines.append(
+        # ekf_std is the raw EKF covariance diagnostic. Only meaningful when the
+        # policy actually consumes covariance, so suppress it (like the cov line)
+        # for baselines with include_covariance off - the dryrun then shows only
+        # what the trained policy sees.
+        bay_line = (
             Y + f"bay  world=({gt['x']:.2f},{gt['y']:.2f})"
             f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
-            f"  ekf_std={ekf_std:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
+        if inc_cov:
+            ekf_std = 0.0
+            if self._env._cov_subscriber is not None:
+                _, unc = self._env._cov_subscriber.get_latest_state()
+                if unc is not None:
+                    ekf_std = float(max(unc[0], unc[1]))
+            bay_line += f"  ekf_std={ekf_std:.3f}m"
+        bay_line += f"  r={math.degrees(r):+.1f}deg" + X
+        lines.append(bay_line)
 
-        if len(obs) >= 13:
+        if inc_obs and len(obs) >= obstacle_start + OBSTACLE_FEATURES_DIM:
             lines.append(
-                W + f"obs  L={float(obs[8]):.2f}m"
-                f"({math.degrees(float(obs[9])):+.1f}deg)"
-                f"  R={float(obs[10]):.2f}m"
-                f"({math.degrees(float(obs[11])):+.1f}deg)"
-                f"  F={float(obs[12]):.2f}m" + X
+                W + f"obs  L={float(obs[obstacle_start]):.2f}m"
+                f"({math.degrees(float(obs[obstacle_start + 1])):+.1f}deg)"
+                f"  R={float(obs[obstacle_start + 2]):.2f}m"
+                f"({math.degrees(float(obs[obstacle_start + 3])):+.1f}deg)"
+                f"  F={float(obs[obstacle_start + 4]):.2f}m" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -504,14 +530,29 @@ class DryRunInspector(_Inspector):
             f"Dry-run: {mode_desc} for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
-        print(
-            "\nModel inputs per step (13-dim obs):"
-            "\n  [0-1]   vel: speed, vyaw"
-            "\n  [2-4]   cov: std(x, y, yaw)"
-            "\n  [5-7]   tgt: dx dy dyaw (ego-relative)"
-            "\n  [8-12]  obs: L(dist, bear)  R(dist, bear)  F(dist)"
-            "\n  bay/EKF lines are diagnostic only (not fed to model)"
+        # Legend reflects the active obs layout (depends on the ablation flags), so
+        # the cov / obstacle rows only appear when those blocks are in the obs.
+        inc_cov = bool(getattr(self._env, "_include_covariance", True))
+        inc_obs = bool(getattr(self._env, "_include_obstacle_obs", True))
+        i = VEHICLE_STATE_DIM
+        legend = [f"\nModel inputs per step ({self._env._compute_obs_dim()}-dim obs):"]
+        legend.append(f"\n  [0-{i - 1}]   vel: speed, vyaw")
+        if inc_cov:
+            legend.append(
+                f"\n  [{i}-{i + COVARIANCE_FEATURES_DIM - 1}]   cov: std(x, y, yaw)"
+            )
+            i += COVARIANCE_FEATURES_DIM
+        legend.append(
+            f"\n  [{i}-{i + TARGET_POSE_DIM - 1}]   tgt: dx dy dyaw (ego-relative)"
         )
+        i += TARGET_POSE_DIM
+        if inc_obs:
+            legend.append(
+                f"\n  [{i}-{i + OBSTACLE_FEATURES_DIM - 1}]  obs: "
+                "L(dist, bear)  R(dist, bear)  F(dist)"
+            )
+        legend.append("\n  bay/EKF lines are diagnostic only (not fed to model)")
+        print("".join(legend))
 
         try:
             while time.monotonic() < deadline:
