@@ -25,6 +25,7 @@ from uncertainty_rl.networks.sb3_integration import (  # noqa: E402
     EvidentialActorCriticPolicy,
     EvidentialDistribution,
     EvidentialPPO,
+    LayerNormActorCriticPolicy,
     ScheduledEntCoefPPO,
 )
 from uncertainty_rl.training.train_ppo import linear_schedule  # noqa: E402
@@ -694,6 +695,79 @@ class TestScheduledEntCoefPPO:
         )
         with pytest.raises(TypeError):
             model.learn(total_timesteps=128)
+
+
+# ===========================================================================
+# TestLayerNormActorCriticPolicy
+# ===========================================================================
+
+
+class TestLayerNormActorCriticPolicy:
+    """
+    @class TestLayerNormActorCriticPolicy
+    @brief The standard-head policy must match the evidential backbone + prior.
+
+    The 2x2 ablation needs the standard and evidential baselines identical except
+    for the head and the observation. These tests pin the two non-head matches:
+    the LayerNorm-equipped MLP extractor, and the default-forward action-mean bias
+    (steer 0, throttle +0.5, brake -1.0) that the evidential head already sets.
+    """
+
+    def _policy(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> LayerNormActorCriticPolicy:
+        return LayerNormActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+        )
+
+    def test_mlp_extractor_has_layernorm(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief The policy/value MLPs must contain LayerNorm, matching the
+               evidential policy backbone (stock MlpPolicy has none).
+        """
+        from torch import nn
+
+        pol = self._policy(obs_space, act_space)
+        has_ln = any(
+            isinstance(m, nn.LayerNorm) for m in pol.mlp_extractor.policy_net
+        )
+        assert has_ln, "policy_net is missing LayerNorm"
+
+    def test_action_mean_bias_matches_evidential_prior(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief The Gaussian action-mean bias must be the same default-forward prior
+               the evidential head uses (steer 0, throttle +0.5, brake -1.0).
+        """
+        pol = self._policy(obs_space, act_space)
+        bias = pol.action_net.bias.detach()
+        assert float(bias[0]) == pytest.approx(0.0)
+        assert float(bias[1]) == pytest.approx(0.5)
+        assert float(bias[2]) == pytest.approx(-1.0)
+
+    def test_trains_with_scheduled_ent_coef(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief End-to-end: the policy runs under ScheduledEntCoefPPO on a 3-action
+               env without error (the real vanilla/input-uncertainty path).
+        """
+        env = gym.make("Pendulum-v1")  # 1-action smoke env; bias branch is no-op
+        model = ScheduledEntCoefPPO(
+            policy=LayerNormActorCriticPolicy,
+            env=env,
+            ent_coef=linear_schedule(0.02, 0.006),
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
 
 
 # ===========================================================================

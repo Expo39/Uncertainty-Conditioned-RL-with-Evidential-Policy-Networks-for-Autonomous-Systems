@@ -22,12 +22,13 @@ target_kl: 0.04  # Early-stop epochs when KL divergence exceeds this threshold. 
 # Network architecture
 net_arch: [256, 256]  # Actor and critic hidden layers.
 activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
+log_std_init: -0.6  # Initial Gaussian action log-std (std = exp(-0.6) ~= 0.55). Lower than the SB3 default (0.0 -> std 1.0) so the policy starts committed rather than near-random: at std 1.0 the entropy bonus had room to inflate the std (1.0 -> 1.15) and the policy could not settle into a held stop. Standard-head only (the evidential head's std comes from the NIG aleatoric, not this); applied identically to all baselines so it is not an ablation variable.
 
 # Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
 evidential:
   lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
-  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty.
+  use_uncertainty_conditioning: false  # Route the covariance block through a separate dual-encoder pathway before the actor head (vs feeding it as plain obs dims through the flat MLP). False keeps the 2x2 ablation clean: covariance enters identically for both policy heads via include_covariance, so the baselines differ only by actor head and covariance-in-obs.
 
 
 policy_type: "evidential"  # evidential: EvidentialPPO + NIG actor. standard: PPO + MlpPolicy.

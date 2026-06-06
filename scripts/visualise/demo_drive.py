@@ -50,6 +50,30 @@ def _parse_args() -> argparse.Namespace:
         help="Path to training config (for policy_type used in model loading).",
     )
     parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Path to a baseline override config (configs/baselines/*.yaml). When "
+            "set, its keys (policy_type, include_covariance, include_obstacle_obs) "
+            "overlay the train/env configs so the demo loads the policy class and "
+            "builds the observation space the checkpoint was TRAINED with, rather "
+            "than the train_config/agent_config defaults (the full method). Without "
+            "this, evaluating a vanilla checkpoint against the evidential defaults "
+            "mismatches both the loader class and the obs dimensionality. Mirrors "
+            "the --baseline overlay in train_ppo.py."
+        ),
+    )
+    parser.add_argument(
+        "--stage",
+        type=int,
+        default=None,
+        help="Curriculum stage (1..N). When set, deep-merges the stage env_config "
+        "override so the demo evaluates the policy on the SAME difficulty it was "
+        "trained at (e.g. Stage 1's single fixed bay + loose margin). Omit to use "
+        "the base env_config difficulty.",
+    )
+    parser.add_argument(
         "--episodes",
         type=int,
         default=0,
@@ -128,17 +152,25 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
     @brief Create the CARLA parking environment from environment config.
     @param env_config: Parsed environment configuration dictionary.
     @return Vectorised environment.
+
+    The success acceptance margin is read from the (stage-merged) env_config
+    `bay_margin`, exactly as training does - so the demo scores the policy under
+    the SAME criterion it was trained at. With --stage N the stage's looser
+    margin applies (e.g. Stage 1's -0.75); with no stage the base env_config
+    value (the strict -0.25) applies. No hardcoded margin, so the demo success
+    cannot silently diverge from the training success metric.
     """
     # Env vars override config (e.g. CARLA_HOST=carla-server-demo for 3D view).
     host_override = os.environ.get("CARLA_HOST")
     port_override = (
         int(os.environ["CARLA_PORT"]) if "CARLA_PORT" in os.environ else None
     )
+    bay_margin = float(env_config.get("bay_margin", STRICT_BAY_MARGIN))
     return DummyVecEnv(
         [
             make_env(
                 env_config,
-                bay_margin=STRICT_BAY_MARGIN,
+                bay_margin=bay_margin,
                 rank=0,
                 host_override=host_override,
                 port_override=port_override,
@@ -202,9 +234,34 @@ def main() -> None:
     # with env_config.yaml (CARLA-specific keys) into one unified dict.
     from uncertainty_rl.training.train_ppo import load_env_config
 
-    env_config: Dict[str, Any] = load_env_config(args.env_config)
+    env_config: Dict[str, Any] = load_env_config(args.env_config, stage=args.stage)
     with open(args.train_config, "r") as f:
         train_config: Dict[str, Any] = yaml.safe_load(f)
+
+    # Overlay the baseline override (if any) so the demo loads the policy class
+    # and builds the observation space the checkpoint was TRAINED with, not the
+    # train_config/agent_config defaults (which describe the full method). The
+    # baseline's policy_type drives loader-class selection below; its
+    # include_covariance / include_obstacle_obs drive the obs dimensionality
+    # make_env builds (read from env_config) - the obs dim is baked into the
+    # checkpoint weights, so a mismatch is a hard shape error, not a difficulty
+    # choice. Baseline wins on conflict. Mirrors the --baseline overlay in
+    # train_ppo.py.
+    if args.baseline is not None:
+        with open(args.baseline, "r") as f:
+            baseline_override: Dict[str, Any] = yaml.safe_load(f)
+        for key in ("policy_type",):
+            if key in baseline_override:
+                train_config[key] = baseline_override[key]
+        for key in ("include_covariance", "include_obstacle_obs"):
+            if key in baseline_override:
+                env_config[key] = baseline_override[key]
+        print(
+            f"Baseline overlay '{baseline_override.get('baseline_name', args.baseline)}': "
+            f"policy_type={train_config.get('policy_type')}, "
+            f"include_covariance={env_config.get('include_covariance')}, "
+            f"include_obstacle_obs={env_config.get('include_obstacle_obs')}"
+        )
 
     # Load model: match the class used during training so the policy type is correct.
     print(f"Loading model from {args.checkpoint}...")
