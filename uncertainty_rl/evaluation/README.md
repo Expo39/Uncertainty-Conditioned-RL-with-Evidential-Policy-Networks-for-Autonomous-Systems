@@ -123,15 +123,11 @@ Beyond the training distribution on all axes simultaneously.
 | Epistemic uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
 | Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
 
-**Success criteria** (from `configs/eval_config.yaml` `success_criteria`):
-
-```math
-\text{position error} < 0.5\,\text{m}
-\qquad
-\text{orientation error} < 10\,\text{deg}
-\qquad
-\text{speed} < 0.1\,\text{m/s}
-```
+**Success criteria**: judged geometrically in the env, not by scalar thresholds.
+Every corner of the ego bounding box must lie inside the target bay polygon
+(`car_fully_inside_bay()` with `EVAL_BAY_MARGIN`) and speed must be below
+`SUCCESS_THRESHOLD_VELOCITY`, held for `success_dwell_steps` consecutive steps. See
+`uncertainty_rl/utils/constants.py`.
 
 ## Key interfaces
 
@@ -164,7 +160,7 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 
 | Config file | Keys |
 |-------------|------|
-| `configs/eval_config.yaml` | `model_path`, `carla_host`, `carla_port`, `n_episodes`, `deterministic`, `eval_conditions`, `output_dir`, `success_criteria.*` |
+| `configs/eval_config.yaml` | `model_path`, `n_episodes`, `deterministic`, `debug`, `eval_conditions`, `output_dir` (connection/timing come from env_config) |
 | `configs/deployment/sim/env_config.yaml` | `carla_sensors.gnss.*`, `carla_sensors.imu.*` (base noise, scaled by condition multipliers) |
 | `configs/train_config.yaml` | `policy_type` (selects evidential vs standard path for uncertainty logging) |
 | `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_VELOCITY`, `STRICT_BAY_MARGIN` (the strict margin applied during evaluation/demo/inspector; training reads `bay_margin` from config, relaxed per curriculum stage). Success is tested geometrically via `car_fully_inside_bay()` in `utils/geometry.py`. |

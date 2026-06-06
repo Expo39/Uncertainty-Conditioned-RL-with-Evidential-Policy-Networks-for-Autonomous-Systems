@@ -159,6 +159,16 @@ class RealWorldInferenceLoop:
         with open(agent_config_path) as f:
             agent_cfg: Dict[str, Any] = _yaml.safe_load(f) or {}
 
+        # Observation flags live ONLY in the baseline files (single source of
+        # truth, shared with sim training). Deployment names the baseline the
+        # checkpoint was trained as via agent_config `baseline`; its
+        # include_covariance / include_obstacle_obs must match the weights.
+        baseline_path: str = agent_cfg.get(
+            "baseline", "configs/baselines/full_method.yaml"
+        )
+        with open(baseline_path) as f:
+            baseline_cfg: Dict[str, Any] = _yaml.safe_load(f) or {}
+
         model_path: str = agent_cfg.get("model_path", "checkpoints/final_model")
         logger.info("Loading model from %s", model_path)
         model = EvidentialPPO.load(model_path)
@@ -178,8 +188,8 @@ class RealWorldInferenceLoop:
                 "handoff_threshold": agent_cfg.get("safety_handoff_threshold", 5.0),
             },
             ros2_cfg=agent_cfg.get("ros2", {}),
-            include_covariance=bool(agent_cfg.get("include_covariance", True)),
-            include_obstacle_obs=bool(agent_cfg.get("include_obstacle_obs", True)),
+            include_covariance=bool(baseline_cfg.get("include_covariance", True)),
+            include_obstacle_obs=bool(baseline_cfg.get("include_obstacle_obs", True)),
             max_steps=int(agent_cfg.get("max_steps", 500)),
         )
 

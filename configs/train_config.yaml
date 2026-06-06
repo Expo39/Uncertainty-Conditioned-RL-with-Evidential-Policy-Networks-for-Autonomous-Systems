@@ -4,38 +4,31 @@
 # See detailed_notes/ekf_pipeline.md, reward_function.md, evidential_nig_initialisation.md.
 
 # PPO hyperparameters
-learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over total_timesteps in train_ppo.py.
-learning_rate_final: 0.00001  # Small non-zero LR floor (not 0). With a generous total_timesteps, a run that converges early still has a live LR, so a plateau in success_rate is a real plateau and not learning-rate starvation. Lets the schedule be stretched long for headroom without freezing a fast run.
-n_steps: 2048  # Steps per PPO update. An episode is max_steps=1750 sim ticks / action_repeat=4 = ~437 policy decisions, so a 2048-step rollout holds ~4.7 episodes - enough terminal diversity to keep advantage estimation stable while updating often.
+learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over total_timesteps.
+learning_rate_final: 0.00001  # Non-zero LR floor so an early-converging run keeps a live LR.
+n_steps: 2048  # Steps per PPO update (~4.7 episodes at ~437 policy decisions each).
 batch_size: 256
 n_epochs: 5
-gamma: 0.997  # Discount factor. Effective horizon 1/(1-gamma) ~= 333 steps, matched to the ~437-step episode so the sparse +50 success terminal still propagates to the approach phase (50 * 0.997^437 ~= 13.5). At gamma=0.99 the horizon is only 100 steps and the terminal discounts to ~0.6, leaving the policy to optimise dense shaping alone. gae_lambda=0.95 and the multi-episode rollout absorb the added return variance.
+gamma: 0.997  # Discount; horizon 1/(1-gamma) ~= 333 steps so the +50 terminal reaches the approach phase.
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.02  # Entropy bonus at the start of training. Wired as a linear decay schedule (ent_coef -> ent_coef_final) in train_ppo.py.
-ent_coef_final: 0.006  # Entropy bonus at the end of training. Decays linearly from ent_coef. In the evidential policy the action std IS sqrt(aleatoric), so the entropy bonus is a direct pressure on the action std: too high a floor keeps the policy exploring and prevents it committing to a held park, too low lets it over-sharpen into a deterministic collapse. This floor sits in the band that lets the policy both explore early and commit late.
+ent_coef: 0.02  # Entropy bonus at start; linear decay to ent_coef_final.
+ent_coef_final: 0.006  # Entropy floor. Action std IS sqrt(aleatoric), so this floor must let the policy commit late yet still explore early.
 vf_coef: 0.5
 max_grad_norm: 0.5
-target_kl: 0.04  # Early-stop epochs when KL divergence exceeds this threshold. Doubled from 0.02 because the previous value triggered early-stop on almost every late-stage minibatch (approx_kl observed at ~1e-6 by end of training) and froze the policy with 10-15% of the budget still on the clock. clip_range=0.2 remains the primary safety; target_kl is a backup.
+target_kl: 0.04  # Early-stop epochs above this KL; clip_range is the primary safety, this a backup.
 
 # Network architecture
 net_arch: [256, 256]  # Actor and critic hidden layers.
 activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
-log_std_init: -0.6  # Initial Gaussian action log-std (std = exp(-0.6) ~= 0.55). Lower than the SB3 default (0.0 -> std 1.0) so the policy starts committed rather than near-random: at std 1.0 the entropy bonus had room to inflate the std (1.0 -> 1.15) and the policy could not settle into a held stop. Standard-head only (the evidential head's std comes from the NIG aleatoric, not this); applied identically to all baselines so it is not an ablation variable.
+log_std_init: -0.6  # Initial Gaussian action log-std (std ~= 0.55) so the policy starts committed. Standard head only; not an ablation variable.
 
 # Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
 evidential:
   lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
-  use_uncertainty_conditioning: false  # Route the covariance block through a separate dual-encoder pathway before the actor head (vs feeding it as plain obs dims through the flat MLP). False keeps the 2x2 ablation clean: covariance enters identically for both policy heads via include_covariance, so the baselines differ only by actor head and covariance-in-obs.
-
-
-policy_type: "evidential"  # evidential: EvidentialPPO + NIG actor. standard: PPO + MlpPolicy.
-
-# Reward function: pure additive potential-based shaping (progress + endgame +
-# clearance). Uncertainty is INPUT-ONLY - it enters via the observation and the
-# evidential policy, never the reward. See uncertainty_rl/envs/CLAUDE.md.
+  use_uncertainty_conditioning: false  # Route covariance through a dual-encoder pathway. False keeps the 2x2 ablation clean (covariance enters identically for both heads).
 
 # Logging and checkpointing
 checkpoint_freq: 50000  # Save checkpoint every N steps.
@@ -45,12 +38,11 @@ log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 8000000  # First Phase A run: budget set generously (~18000 episodes at ~437 policy steps each) so the LR and ent_coef decay schedules stretch over a long horizon and never starve a slow-converging run. The LR floor (learning_rate_final) and ent_coef floor keep a fast run alive, so stop when the success_rate curve plateaus rather than when a schedule hits zero. Resuming past total_timesteps pins both schedules at their floors, so prefer a long budget here over extend-by-resume.
-seed: 42
-random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
+total_timesteps: 8000000  # Generous budget so the LR/ent_coef schedules stretch over a long horizon; stop when success_rate plateaus, not when a schedule hits its floor.
+seed: 42  # Master RNG seed. The ablation runs multiple seeds via --seed / the Makefile, not a list here.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
 n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).
-success_rate_window: 50  # Episodes the logged success/collision/oob/timeout rates are averaged over. One PPO rollout holds only a few terminal episodes (~n_steps/max_steps), so a per-rollout rate is dominated by sampling noise; averaging over the last N episodes makes the logged rate track policy quality.
+success_rate_window: 50  # Episodes the logged terminal rates are averaged over (a per-rollout rate is too noisy).
 
 # Parallel workers. Each worker connects to a separate CARLA server on base_port + rank*1000.
 parallel_workers: 1

@@ -46,12 +46,15 @@ except ImportError:
     )
 
 from uncertainty_rl.training.train_ppo import (
+    DEFAULT_BASELINE,
+    DEFAULT_STAGE,
     load_config,
     load_env_config,
     make_env,
     merge_configs,
     train,
 )
+from uncertainty_rl.utils.config_merge import apply_baseline
 
 logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
@@ -449,13 +452,18 @@ def run_study(
     sampler_cfg = tuning_config.get("sampler", {})
     pruner_cfg = tuning_config.get("pruner", {})
 
-    # Create study. The sampler seed comes from `tuning_seed` (distinct from the
-    # `random_seeds` used for final training and evaluation) so the tuning split
-    # is disjoint from the evaluation split, as the ablation methodology
-    # requires. Falls back to the legacy `seed` only if `tuning_seed` is absent.
+    # Create study. The sampler seed is `tuning_seed` - the single source, distinct
+    # from train_config's `seed` (final training + evaluation) so the tuning split
+    # is disjoint from the evaluation split, as the ablation methodology requires.
+    # Required (no hardcoded fallback) so a missing seed fails loud rather than
+    # silently using a magic number.
+    if "tuning_seed" not in tuning_config:
+        raise KeyError(
+            "tuning_config.yaml must define 'tuning_seed' (the Optuna sampler seed)."
+        )
     study_name = tuning_config.get("study_name", "uncertainty_rl_tuning") + suffix
     sampler = optuna.samplers.TPESampler(
-        seed=tuning_config.get("tuning_seed", tuning_config.get("seed", 42)),
+        seed=tuning_config["tuning_seed"],
         multivariate=sampler_cfg.get("multivariate", True),
         n_startup_trials=sampler_cfg.get("n_startup_trials", 10),
     )
@@ -620,10 +628,9 @@ def main() -> None:
         help=(
             "Curriculum stage (1..N). Deep-merges "
             "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
-            "so tuning runs at that stage's difficulty (bay, spawns, occupancy, "
-            "margin). Tuning happens once at the clean Phase A -> B boundary "
-            "(the stage-6 checkpoint) per the curriculum plan, so set --stage "
-            "accordingly. Omit for the base env_config difficulty."
+            "so tuning runs at that stage's difficulty. The curriculum plan tunes "
+            "at the Phase A -> B boundary, so pass --stage 6 (or via STAGE= in the "
+            "Makefile). Omit to default to stage 1."
         ),
     )
     parser.add_argument(
@@ -634,8 +641,8 @@ def main() -> None:
             "Path to a baseline override config (configs/baselines/*.yaml). When "
             "set, the study tunes that baseline's observation/policy configuration "
             "and writes its best params to a per-baseline file, giving the 2x2 "
-            "ablation one independent study each. When omitted, tunes the "
-            "train_config defaults (the full_method baseline) and writes back to "
+            "ablation one independent study each. Omit to tune the shared "
+            "hyperparameters at the full-method observation space and write back to "
             "train_config.yaml."
         ),
     )
@@ -652,29 +659,39 @@ def main() -> None:
     # Load configs. load_env_config merges sensor_config.yaml (shared keys)
     # with env_config.yaml (CARLA-specific keys) so all shared params have
     # a single source of truth.
+    # Resolve effective stage / baseline the same way train_ppo.py does: difficulty
+    # lives only in the stage files and obs/policy flags only in the baseline files,
+    # so omitting a flag defaults to the curriculum head (stage 1) and the full
+    # method. The Makefile forwards STAGE= / BASELINE= into --stage / --baseline.
+    stage = args.stage if args.stage is not None else DEFAULT_STAGE
+    baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+
     train_config = load_config(args.train_config)
-    env_config = load_env_config(args.env_config, stage=args.stage)
+    env_config = load_env_config(args.env_config, stage=stage)
     tuning_config = load_config(args.tuning_config)
 
     # Merge train + env configs
     base_config = merge_configs(train_config, env_config)
 
-    # Overlay the baseline override (if any) so the study tunes that baseline's
-    # observation/policy configuration, not the train_config defaults. Baseline
-    # configs hold only the keys that differ (include_covariance,
-    # include_obstacle_obs, policy_type, baseline_name); baseline wins on
-    # conflict so the tuned config matches what that baseline trains with.
-    baseline_name: Optional[str] = None
-    if args.baseline is not None:
-        baseline_override = load_config(args.baseline)
-        base_config = {**base_config, **baseline_override}
-        baseline_name = baseline_override.get("baseline_name", Path(args.baseline).stem)
-        logger.info(
-            "Tuning baseline '%s' (include_covariance=%s, policy_type=%s)",
-            baseline_name,
-            base_config.get("include_covariance"),
-            base_config.get("policy_type"),
-        )
+    # Overlay the baseline flags so the study tunes against the correct observation
+    # space. The write-back target depends on whether --baseline was EXPLICIT: an
+    # explicit baseline gets its own study and a per-baseline best-params file
+    # (baseline_name set); the default full-method case tunes the shared
+    # hyperparameters and writes back to train_config.yaml (baseline_name None).
+    baseline_override = load_config(baseline_path)
+    apply_baseline(base_config, baseline_override)
+    baseline_name: Optional[str] = (
+        baseline_override.get("baseline_name", Path(baseline_path).stem)
+        if args.baseline is not None
+        else None
+    )
+    logger.info(
+        "Tuning stage %d, baseline '%s' (include_covariance=%s, policy_type=%s)",
+        stage,
+        baseline_override.get("baseline_name", Path(baseline_path).stem),
+        base_config.get("include_covariance"),
+        base_config.get("policy_type"),
+    )
 
     # Run study
     run_study(
