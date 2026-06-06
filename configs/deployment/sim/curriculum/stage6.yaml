@@ -1,0 +1,53 @@
+# Curriculum Stage 6 - Phase B (full sensor noise). THE phase the dissertation
+# is about: the uncertainty-conditioned and evidential baselines must earn their
+# keep here, and the four ablation baselines diverge.
+#
+# Resume from the Stage 5 (Phase A complete) checkpoint. Geometry, spawns, parked
+# cars, floor plan, and the strict margin are UNCHANGED from Stage 5 - only the
+# localisation uncertainty turns on. Per-episode RTK fix-state tier sampling means
+# most episodes are still near-clean (RTK-fixed) with occasional degraded ones, so
+# the noise has a soft onset built into its sampling - no separate noise sub-stages
+# are needed.
+#
+# IMPORTANT - this stage spans TWO config files. The --stage merge only patches
+# env_config (this file). The GNSS/IMU noise master switches live in
+# configs/ros2_config.yaml and the ros2-bridge reads them at launch, so before
+# training Stage 6 you MUST also set the following in configs/ros2_config.yaml and
+# restart the bridge (make docker-build-no-cache if the launch file is baked in):
+#
+#   gnss_noise_relay:
+#     enable_gnss_noise: true
+#     enable_markov_transitions: true
+#     enable_gnss_anisotropy: true
+#   imu_noise_relay:
+#     enable_imu_noise: true
+#
+# Revert all four back to false to return to a clean (Phase A) bridge.
+
+use_extra_spawns: true
+
+carla_sensors:
+  lidar:
+    noise:
+      enabled: true  # Phase B: LiDAR range noise on (env-side, no bridge restart).
+
+parking_scenarios:
+  fixed_floor_plan: rectangle
+  fixed_gnss_tier: null  # Back to weighted RTK tier sampling (was rtk_fixed in Phase A).
+  bay_occupancy_min: 0.2
+  bay_occupancy_max: 0.8
+  num_patrol_vehicles_max: 0
+  pedestrian_spawn_probability: 0.0
+
+bay_margin: -0.25  # Strict criterion, unchanged from Stage 5.
+
+# Per-stage training budget and schedules. Longest stage (noise is the hardest
+# axis). A fresh mid-range LR/ent_coef schedule here is the whole reason for
+# per-stage resets: the policy must ADAPT to noisy localisation, which it cannot do
+# if it inherited a near-floor LR from a global schedule.
+training_overrides:
+  stage_timesteps: 4000000
+  learning_rate: 0.0002
+  learning_rate_final: 0.00001
+  ent_coef: 0.01
+  ent_coef_final: 0.004

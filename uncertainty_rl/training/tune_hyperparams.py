@@ -52,7 +52,6 @@ from uncertainty_rl.training.train_ppo import (
     merge_configs,
     train,
 )
-from uncertainty_rl.utils.constants import TRAINING_BAY_MARGIN
 
 logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
@@ -494,9 +493,12 @@ def run_study(
         "Creating shared training environment (%d worker(s)) for all trials...",
         n_workers,
     )
+    # bay_margin comes from env_config (single source of truth); .get guards a
+    # missing key with the env's own constructor default.
+    tune_bay_margin = float(base_config.get("bay_margin", 0.0))
     shared_vec_env = DummyVecEnv(
         [
-            make_env(base_config, bay_margin=TRAINING_BAY_MARGIN, rank=i)
+            make_env(base_config, bay_margin=tune_bay_margin, rank=i)
             for i in range(n_workers)
         ]
     )
@@ -612,6 +614,19 @@ def main() -> None:
         help="Path to environment config",
     )
     parser.add_argument(
+        "--stage",
+        type=int,
+        default=None,
+        help=(
+            "Curriculum stage (1..N). Deep-merges "
+            "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
+            "so tuning runs at that stage's difficulty (bay, spawns, occupancy, "
+            "margin). Tuning happens at the Stage 3->4 checkpoint per the "
+            "curriculum plan, so set --stage accordingly. Omit for the base "
+            "env_config difficulty."
+        ),
+    )
+    parser.add_argument(
         "--baseline",
         type=str,
         default=None,
@@ -638,7 +653,7 @@ def main() -> None:
     # with env_config.yaml (CARLA-specific keys) so all shared params have
     # a single source of truth.
     train_config = load_config(args.train_config)
-    env_config = load_env_config(args.env_config)
+    env_config = load_env_config(args.env_config, stage=args.stage)
     tuning_config = load_config(args.tuning_config)
 
     # Merge train + env configs
@@ -653,9 +668,7 @@ def main() -> None:
     if args.baseline is not None:
         baseline_override = load_config(args.baseline)
         base_config = {**base_config, **baseline_override}
-        baseline_name = baseline_override.get(
-            "baseline_name", Path(args.baseline).stem
-        )
+        baseline_name = baseline_override.get("baseline_name", Path(args.baseline).stem)
         logger.info(
             "Tuning baseline '%s' (include_covariance=%s, policy_type=%s)",
             baseline_name,

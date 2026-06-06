@@ -14,6 +14,14 @@ max_steps: 1750  # Episode length (steps).
 action_repeat: 4  # Sim ticks per policy action. Policy runs at carla_timestep * action_repeat seconds per decision.
 use_extra_spawns: true  # When true, sample from extra_spawn_transforms in the layout YAML; false locks to the primary spawn.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
+
+# Inward bay margin (metres) for the polygon-fit success check. Negative inflates
+# the acceptance box outward so corners may overhang by |margin| metres. This is
+# the SINGLE source of truth for the default/strict success margin, read by
+# training (train_ppo, tune), evaluation, demo, and the lot inspector. Curriculum
+# stage files (deployment/sim/curriculum/) override it per stage to relax it early
+# and tighten it back to this strict value. -0.25 m is the published criterion.
+bay_margin: -0.25
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
 no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active).
 
@@ -58,10 +66,16 @@ carla_sensors:
     sensor_tick: 0.05  # Publish rate (seconds).
 
 parking_scenarios:
-  # When set, the three fixed_* keys force a specific floor plan / bay / GNSS
-  # tier every episode. Comment them out to return to random selection.
+  # Base (no-stage) difficulty: random bay from any spawn with 0.2-0.8 parked-car
+  # occupancy. The curriculum stage files in deployment/sim/curriculum/ deep-merge
+  # over this block when training with STAGE=N (make docker-train STAGE=1 ...),
+  # overriding use_extra_spawns, fixed_target_bay_id, bay_occupancy_*, and the
+  # top-level bay_margin to set the per-stage difficulty.
+  #
+  # The fixed_* keys force a specific floor plan / bay / GNSS tier every episode.
+  # Comment fixed_target_bay_id back in to lock to one bay without a stage file.
   fixed_floor_plan: rectangle
-  # fixed_target_bay_id: angled_13
+  # fixed_target_bay_id: perpendicular_5
   fixed_gnss_tier: rtk_fixed
 
   # CARLA blueprint for perimeter markers.

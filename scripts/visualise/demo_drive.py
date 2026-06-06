@@ -20,7 +20,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import make_env
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
-from uncertainty_rl.utils.constants import EVAL_BAY_MARGIN
+from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
 
 
 def _parse_args() -> argparse.Namespace:
@@ -92,6 +92,10 @@ def _parse_args() -> argparse.Namespace:
 # that is the point of the project.
 _TRACE_COLUMNS = [
     "step",
+    # Episode routing, constant per episode but logged per row so each trace is
+    # self-describing ("from spawn_id to bay_id") without a run_info lookup.
+    "bay_id",
+    "spawn_id",
     "speed_ms",
     "pos_error_m",
     "orientation_error_rad",
@@ -134,7 +138,7 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
         [
             make_env(
                 env_config,
-                bay_margin=EVAL_BAY_MARGIN,
+                bay_margin=STRICT_BAY_MARGIN,
                 rank=0,
                 host_override=host_override,
                 port_override=port_override,
@@ -188,35 +192,6 @@ def _write_run_info(trace_dir: Path, checkpoint: str, demo_stamp: str) -> None:
     )
 
 
-def _append_target_bay_info(trace_dir: Path, bay: Dict[str, Any]) -> None:
-    """
-    @brief Append the target bay (id, world pose, dimensions) to run_info.txt.
-
-    The target bay is only known after the first env step (it is sampled on
-    reset), so this is written separately from _write_run_info. With a fixed
-    target bay (Stage 1) every episode targets the same bay; when bays are
-    sampled per episode this records the first episode's bay, labelled as such.
-
-    @param trace_dir: Directory holding run_info.txt.
-    @param bay: Target bay dict from the env step info ("target_bay").
-    @return None.
-    """
-    lines = [
-        "",
-        "# Target bay (first episode; constant per episode):",
-        f"target_bay_id: {bay.get('bay_id', 'unknown')}",
-        f"target_bay_type: {bay.get('bay_type', 'unknown')}",
-        f"target_bay_x: {float(bay.get('x', float('nan'))):.4f}",
-        f"target_bay_y: {float(bay.get('y', float('nan'))):.4f}",
-        f"target_bay_yaw_rad: {float(bay.get('yaw', float('nan'))):.4f}",
-        f"target_bay_width: {float(bay.get('width', float('nan'))):.4f}",
-        f"target_bay_depth: {float(bay.get('depth', float('nan'))):.4f}",
-    ]
-    with open(trace_dir / "run_info.txt", "a") as f:
-        f.write("\n".join(lines) + "\n")
-    print(f"Target bay appended to run_info.txt: {bay.get('bay_id', 'unknown')}")
-
-
 def main() -> None:
     """
     @brief Load checkpoint and run deterministic episodes in a loop.
@@ -259,9 +234,6 @@ def main() -> None:
     _get_action = model.policy.get_action_with_uncertainty if is_evidential else None
 
     episode = 0
-    # The target bay is sampled on reset, so it is appended to run_info.txt once
-    # the first real step exposes it (guarded by this flag).
-    bay_info_written = False
 
     # Per-step trace logging. One timestamped folder per demo run, one CSV
     # per episode. Written under outputs/ (the rw-mounted volume) so the
@@ -338,14 +310,9 @@ def main() -> None:
                 # decision and drops the all-zero filler rows that made earlier
                 # traces 75% noise at action_repeat=4.
                 info0 = infos[0]
-                # On the first real step, record the target bay in run_info.txt.
-                if (
-                    not bay_info_written
-                    and trace_dir is not None
-                    and "target_bay" in info0
-                ):
-                    _append_target_bay_info(trace_dir, info0["target_bay"])
-                    bay_info_written = True
+                # The target bay id and spawn id are written per row in the
+                # episode CSV (see _TRACE_COLUMNS), so run_info.txt no longer
+                # carries per-episode bay info - it holds only run-level header.
                 if trace_writer is not None and "pos_error" in info0:
                     # action is shape (1, 3): [steer, throttle, brake]. The env
                     # exposes the post-clamp commands actually delivered to
@@ -355,6 +322,8 @@ def main() -> None:
                     trace_writer.writerow(
                         [
                             steps,
+                            info0.get("target_bay_id", ""),
+                            info0.get("spawn_id", ""),
                             f"{info0.get('speed', 0.0):.4f}",
                             f"{info0.get('pos_error', 0.0):.4f}",
                             f"{info0.get('orientation_error', 0.0):.4f}",

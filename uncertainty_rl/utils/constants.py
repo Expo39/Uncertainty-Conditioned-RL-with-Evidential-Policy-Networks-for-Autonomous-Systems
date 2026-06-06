@@ -24,37 +24,81 @@ SUCCESS_THRESHOLD_VELOCITY = 0.1
 # fly-through from counting as a success.
 SUCCESS_DWELL_STEPS = 5
 
-# Radius (metres) within which the outer approach reward term (`approach_term`,
-# the proximity-gated coarse-pull) fires. Sized larger than APPROACH_INNER_RADIUS
-# so the policy still has a continuous inward gradient between the inner sharp
-# zone and the outer coast-in zone. Lives here, not in YAML, because it shapes
-# the reward function and reward changes are code, not data - changing it
-# changes what the policy is learning to optimise.
-SUCCESS_APPROACH_RADIUS = 5.0
-
-# Inward bay margins applied to the polygon-fit success check (metres).
-# Zero = "inside or on the line"; positive shrinks the bay; negative inflates
-# it to allow corners to overhang the bay edge by `-margin` metres.
-# Two values: training uses a relaxed margin to densify terminal +50 events
-# so PPO has enough success samples to learn from; evaluation uses the strict
-# margin which is the published parking criterion.
-TRAINING_BAY_MARGIN = -0.25
-EVAL_BAY_MARGIN = -0.25
+# Strict inward bay margin (metres) for the polygon-fit success check - the
+# published parking criterion used by EVALUATION, the demo driver, and the lot
+# inspector. Negative inflates the acceptance box outward so corners may overhang
+# by |margin| metres.
+#
+# TRAINING does NOT use this constant: training (and hyperparameter tuning) read
+# `bay_margin` from configs/deployment/sim/env_config.yaml, relaxed per stage by
+# the curriculum files in configs/deployment/sim/curriculum/. The training default
+# in env_config equals this strict value, and the curriculum tightens back to it.
+STRICT_BAY_MARGIN = -0.25
 
 # ---------------------------------------------------------------------------
-# Approach Reward Shaping (not success criteria)
+# Corridor Reward Shaping (not success criteria)
 # ---------------------------------------------------------------------------
+#
+# The reward shapes the approach in the BAY FRAME, not as a radial distance to
+# the bay centre. The bay's long (depth) axis defines a centreline; the car is
+# rewarded for getting onto that centreline (cross-track -> 0), aligning with it
+# (heading -> bay axis, 180-deg symmetric), and advancing to the parked depth
+# (along-track -> 0). Bays are open / back-to-back, so the centreline extends out
+# BOTH ends and the shaping uses magnitudes (abs(along)) and 180-deg heading
+# symmetry. This is what produces the natural arc-onto-the-line approach and
+# breaks the "arrives crooked at the mouth" failure of the old radial ring.
+# These live here, not in YAML, because they shape the reward and reward changes
+# are code, not data.
 
-# Position error (metres) below which the centred-gated endgame seat term
-# fires. Decoupled from the success gate so this ring can be tuned independently
-# of what counts as a park. Wider than the success geometry so the sharp
-# inward gradient is alive across the entire approach zone where the policy
-# might stall, not just the last metre - earlier 1.5 m left a near-zero
-# gradient zone at ~2-3 m where stalled policies got no centring signal.
-APPROACH_INNER_RADIUS = 3.0
+# Cross-track reference (metres): the half-width of the approach corridor. The
+# `on_line` factor is 1 on the centreline and ramps to 0 at this offset. Sized so
+# the corridor is wide enough to capture realistic approach lanes yet narrow
+# enough that being "on the line" means genuinely lined up with the bay.
+CORRIDOR_HALF_WIDTH = 2.0
 
-# Orientation error (radians) at which the inner alignment factor saturates.
+# Along-track reference (metres): the depth scale over which the `near_depth`
+# factor ramps from 1 (at the parked depth) to 0. Covers the full approach run-in
+# so the endgame terms have a live gradient across the whole final approach.
+ALONG_TRACK_SCALE = 6.0
+
+# Orientation error (radians) at which the alignment factor saturates (45 deg).
+# Reused by the corridor `aligned` factor.
 APPROACH_INNER_ALIGNMENT_CUTOFF = np.pi / 4
+
+# Corridor potential weights: phi = -(W_ALONG*|along| + W_CROSS*|cross| +
+# W_HEAD*heading_err). Cross-track and heading are weighted ABOVE along-track so the
+# dominant progress gradient pulls the car onto the centreline and SQUARE before
+# advancing in depth. W_HEAD is the alignment lever: at 3.0, a 20 deg heading error
+# costs ~1.05 m of along-track distance, so the policy "feels" crookedness as
+# strongly as distance - the fix for arriving crooked at the bay mouth. The small
+# endgame term below only sharpens the held stop; the alignment pull lives here.
+CORRIDOR_W_ALONG = 1.0
+CORRIDOR_W_CROSS = 2.0
+CORRIDOR_W_HEAD = 3.0
+
+# Endgame held-stop term coefficients. One term (replacing the earlier split
+# approach/precision/hold terms): endgame = (ENDGAME_MOVE_COEF +
+# ENDGAME_HOLD_COEF*stopped) * on_line * aligned * near_depth. MOVE is the value
+# while still moving; +HOLD when fully stopped on the line. Kept small - the
+# dominant alignment pull is the corridor potential, not this finisher.
+ENDGAME_MOVE_COEF = 0.008
+ENDGAME_HOLD_COEF = 0.006
+
+# ---------------------------------------------------------------------------
+# Obstacle Clearance Shaping (safety nudge, not a success criterion)
+# ---------------------------------------------------------------------------
+#
+# Smooth penalty for drifting toward a neighbouring parked car DURING a crooked
+# approach, turning the binary post-impact collision penalty into a gradient that
+# discourages clipping occupied adjacent bays. Calibrated to the bay geometry:
+# bay centres are 3.1 m apart, and an ego (half-width ~1.06 m) parked square
+# beside an occupied neighbour (half-width ~1.06 m) leaves a ~0.98 m side gap. The
+# SAFE distance therefore sits BELOW 0.98 m so a CORRECT park pays ~0; only a
+# corner swinging in closer than SAFE incurs a cost. In the reward this penalty is
+# additionally gated off once the car is square on the centreline, so an expected
+# neighbour abeam of a correctly parked car never registers.
+OBSTACLE_CLEARANCE_SAFE = 0.8
+OBSTACLE_CLEARANCE_DANGER = 0.3
 
 # ---------------------------------------------------------------------------
 # State Space Dimensions

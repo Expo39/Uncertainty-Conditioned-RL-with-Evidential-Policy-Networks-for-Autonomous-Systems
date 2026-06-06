@@ -1,0 +1,39 @@
+# Curriculum Stage 1 - "make success common" (escape success starvation)
+#
+# Partial env_config override, deep-merged onto deployment/sim/env_config.yaml by
+# train_ppo.py when --stage 1 (make docker-train STAGE=1) is given. Only the keys
+# that differ from the base env_config appear here.
+#
+# Goal: remove every failure mode except the core park so the +50 terminal fires
+# often enough for PPO to learn from. One fixed bay, one fixed spawn, no parked
+# cars, and the loosest bay margin. Success should climb into double digits here;
+# if it does not, the reward/observation/control pipeline is the problem, not task
+# difficulty (see CURRICULUM_PLAN.md). Stage 2 adds bay variety from the SAME
+# spawn, stage 3 adds spawn variety - each transition changes ONE axis.
+
+use_extra_spawns: false  # Lock to the single primary spawn for a constant start.
+
+parking_scenarios:
+  fixed_floor_plan: rectangle
+  fixed_target_bay_id: perpendicular_0  # One fixed bay.
+  fixed_gnss_tier: rtk_fixed
+  bay_occupancy_min: 0.0  # No parked cars - removes the neighbour-collision failure mode.
+  bay_occupancy_max: 0.0
+  num_patrol_vehicles_max: 0
+  pedestrian_spawn_probability: 0.0
+
+# Loosest success acceptance box (metres). Negative inflates the bay outward, so
+# more near-aligned stops count as a park, densifying the +50 events PPO needs.
+# Tightened toward the strict STRICT_BAY_MARGIN across later stages.
+bay_margin: -0.75
+
+# Per-stage training budget and schedules (applied via --stage, allowlisted - see
+# _apply_stage_training_overrides). Each stage restarts its LR / ent_coef decay
+# from these initials over stage_timesteps; weights + VecNormalize still carry over
+# on resume. Stage 1 gets the highest exploration on the easiest task.
+training_overrides:
+  stage_timesteps: 2000000
+  learning_rate: 0.0003
+  learning_rate_final: 0.00005
+  ent_coef: 0.02
+  ent_coef_final: 0.008

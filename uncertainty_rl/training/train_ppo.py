@@ -15,7 +15,7 @@ import warnings
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Deque, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 import numpy as np
 
@@ -23,6 +23,7 @@ try:
     from yaml import CSafeLoader as _YamlLoader
 except ImportError:
     from yaml import SafeLoader as _YamlLoader  # type: ignore[assignment]
+
 import yaml
 
 try:
@@ -56,7 +57,6 @@ except ImportError:
     EvalCallback = None  # type: ignore[assignment,misc]
 
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
-from uncertainty_rl.utils.constants import TRAINING_BAY_MARGIN
 
 try:
     # make_env is re-exported here so existing imports
@@ -135,9 +135,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
     return config
 
 
-def _deep_merge(
-    base: Dict[str, Any], override: Dict[str, Any]
-) -> Dict[str, Any]:
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
     """
     @brief Recursively merge override into base; override wins on scalar keys.
     @param base: Lower-precedence dict (mutated in place and returned).
@@ -152,11 +150,7 @@ def _deep_merge(
           base key under any block the override also defines.
     """
     for key, value in override.items():
-        if (
-            key in base
-            and isinstance(base[key], dict)
-            and isinstance(value, dict)
-        ):
+        if key in base and isinstance(base[key], dict) and isinstance(value, dict):
             _deep_merge(base[key], value)
         else:
             base[key] = value
@@ -177,16 +171,36 @@ def merge_configs(
     return merged
 
 
-def load_env_config(env_config_path: str) -> Dict[str, Any]:
+def load_env_config(
+    env_config_path: str, stage: Optional[int] = None
+) -> Dict[str, Any]:
     """
     @brief Load and merge the environment config with shared deployment configs.
 
-
     @param env_config_path: Path to the CARLA environment config YAML.
+    @param stage: Optional curriculum stage. When set, deep-merges
+           configs/deployment/sim/curriculum/stage<N>.yaml over the env config
+           (the stage override wins on conflict), setting the per-stage
+           difficulty (bay, spawns, occupancy, margin). The stage file lives in a
+           sibling `curriculum/` directory next to the env config.
     @return Fully merged environment configuration dictionary.
     """
     with open(env_config_path) as f:
         env_config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+
+    # Stage override deep-merged onto the env config (stage wins on conflict), so
+    # later sensor/agent merging still sees the staged parking_scenarios values.
+    if stage is not None:
+        stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
+        if not stage_path.exists():
+            raise FileNotFoundError(
+                f"Curriculum stage config not found: {stage_path}. "
+                f"Expected configs/deployment/sim/curriculum/stage{stage}.yaml."
+            )
+        with open(stage_path) as f:
+            stage_cfg: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+        _deep_merge(env_config, stage_cfg)
+        logger.info("Curriculum stage %d applied from %s", stage, stage_path)
 
     deployment_dir = Path(env_config_path).parent.parent
 
@@ -217,7 +231,71 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
         if "mount" in sensor_data and sensor_name in merged.get("carla_sensors", {}):
             merged["carla_sensors"][sensor_name]["mount"] = sensor_data["mount"]
 
+    # `training_overrides` is a stage-file-only block of TRAINING hyperparameters
+    # (stage_timesteps, learning_rate, ent_coef, ...). It is not an environment
+    # setting, so strip it here - it is applied separately via
+    # _apply_stage_training_overrides() after the train/env merge, with an
+    # allowlist. Leaving it in would pass an unknown kwarg path into the env dict.
+    merged.pop("training_overrides", None)
+
     return merged
+
+
+# Stage `training_overrides` keys a curriculum stage is allowed to set. Excludes
+# every architecture key (net_arch, activation, policy_type, include_covariance,
+# include_obstacle_obs) so a stage can never change the policy shape and break
+# weight loading on resume across the curriculum.
+_STAGE_TRAINING_OVERRIDE_ALLOWLIST = frozenset(
+    {
+        "stage_timesteps",
+        "learning_rate",
+        "learning_rate_final",
+        "ent_coef",
+        "ent_coef_final",
+        "clip_range",
+        "n_epochs",
+        "batch_size",
+        "n_steps",
+        "target_kl",
+    }
+)
+
+
+def _apply_stage_training_overrides(
+    config: Dict[str, Any], env_config_path: str, stage: int
+) -> None:
+    """
+    @brief Apply a curriculum stage's `training_overrides` block onto config.
+    @param config: The merged train+env config (mutated in place).
+    @param env_config_path: Path to env_config.yaml (the stage file sits in a
+           sibling `curriculum/` directory).
+    @param stage: Curriculum stage number.
+
+    Reads `training_overrides` from configs/deployment/sim/curriculum/stage<N>.yaml
+    and copies only allowlisted keys (@see _STAGE_TRAINING_OVERRIDE_ALLOWLIST) onto
+    config, overriding train_config.yaml. A non-allowlisted key raises, so a stage
+    cannot silently change an architecture key and corrupt resume. Absent block is
+    a no-op.
+    """
+    stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
+    with open(stage_path) as f:
+        stage_cfg: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+    overrides = stage_cfg.get("training_overrides", {})
+    if not overrides:
+        return
+    for key, value in overrides.items():
+        if key not in _STAGE_TRAINING_OVERRIDE_ALLOWLIST:
+            raise ValueError(
+                f"Stage {stage} training_overrides key '{key}' is not allowed. "
+                f"Permitted keys: {sorted(_STAGE_TRAINING_OVERRIDE_ALLOWLIST)}. "
+                f"Architecture keys must stay constant across the curriculum."
+            )
+        config[key] = value
+    logger.info(
+        "Stage %d training_overrides applied: %s",
+        stage,
+        {k: overrides[k] for k in overrides},
+    )
 
 
 class EnvDiagnosticsCallback(BaseCallback):
@@ -408,7 +486,18 @@ def train(
     """
     # Resolve operational settings from config
     seed = config.get("seed", 42)
-    total_timesteps = config.get("total_timesteps", 1000000)
+    # A curriculum stage may set `stage_timesteps`: the number of steps to run in
+    # THIS stage, with its LR / ent_coef schedules restarting from the stage's own
+    # initial values over that budget (see the reset_num_timesteps logic below).
+    # When set, it takes precedence over the global `total_timesteps`. This is what
+    # lets each stage own a fresh, full-range schedule instead of sharing one
+    # decay stretched across the whole curriculum.
+    stage_timesteps = config.get("stage_timesteps", None)
+    total_timesteps = (
+        int(stage_timesteps)
+        if stage_timesteps is not None
+        else config.get("total_timesteps", 1000000)
+    )
 
     # Build a run name that uniquely identifies this configuration so each
     # training run gets its own TensorBoard subdirectory under logs/.
@@ -455,11 +544,12 @@ def train(
     if own_env:
         n_workers: int = config.get("parallel_workers", 1)
         logger.info(f"Creating training environment ({n_workers} worker(s))...")
+        # bay_margin comes from env_config (its single source of truth), relaxed
+        # per stage by a curriculum override merged in via --stage. The .get guard
+        # falls back to the env's own constructor default if the key is absent.
+        bay_margin = float(config.get("bay_margin", 0.0))
         train_vec_env = DummyVecEnv(
-            [
-                make_env(config, bay_margin=TRAINING_BAY_MARGIN, rank=i)
-                for i in range(n_workers)
-            ]
+            [make_env(config, bay_margin=bay_margin, rank=i) for i in range(n_workers)]
         )
 
         # norm_reward divides rewards by a running estimate of the discounted-
@@ -656,6 +746,22 @@ def train(
             use_uncertainty_conditioning = evidential_config.get(
                 "use_uncertainty_conditioning", False
             )
+            # The dual-encoder actor routes the covariance block (obs indices
+            # VEHICLE_STATE_DIM..VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM) into a
+            # dedicated uncertainty encoder. With include_covariance=False that
+            # block does not exist, so the slice would silently capture the
+            # relative target pose instead and starve the actor of its goal
+            # direction. The two are mutually exclusive: fall back to the flat
+            # evidential MLP (which is exactly the output_uncertainty baseline:
+            # evidential policy head, no covariance input).
+            if use_uncertainty_conditioning and not include_cov:
+                logger.warning(
+                    "use_uncertainty_conditioning=True requires "
+                    "include_covariance=True; no covariance block is present, "
+                    "so disabling uncertainty conditioning and using the flat "
+                    "evidential MLP actor."
+                )
+                use_uncertainty_conditioning = False
             # Forwarded into policy_kwargs so the policy can wire the
             # dual-encoder actor when requested.
             ppo_kwargs["policy_kwargs"][
@@ -705,9 +811,7 @@ def train(
 
     callbacks = [
         checkpoint_callback,
-        EnvDiagnosticsCallback(
-            outcome_window=config.get("success_rate_window", 50)
-        ),
+        EnvDiagnosticsCallback(outcome_window=config.get("success_rate_window", 50)),
         BaySuccessCallback(
             output_dir=_bay_output_dir,
             run_info=_bay_run_info,
@@ -739,7 +843,15 @@ def train(
         # tqdm[rich] leaks a "live display" between trials when model.learn()
         # is called repeatedly in one process, so the second call onwards
         # raises "Only one live display may be active at once".
-        reset_num_ts = resume_from is None
+        # Reset the step counter for a fresh run, OR when a curriculum stage
+        # defines its own budget: a per-stage `stage_timesteps` means the LR /
+        # ent_coef schedules should restart from this stage's initial values and
+        # decay over this stage's budget (progress_remaining = 1 -
+        # num_timesteps/total_timesteps needs num_timesteps to start at 0 for the
+        # schedule to span the full stage). The model weights and VecNormalize
+        # statistics are still carried over from the resumed checkpoint; only the
+        # step counter (and hence the schedule clock) restarts.
+        reset_num_ts = (resume_from is None) or (stage_timesteps is not None)
         model.learn(
             total_timesteps=total_timesteps,
             callback=callback_list,
@@ -802,6 +914,17 @@ def main() -> None:
         help="Path to environment config (CARLA, sensors, parking scenarios)",
     )
     parser.add_argument(
+        "--stage",
+        type=int,
+        default=None,
+        help=(
+            "Curriculum stage (1..N). Deep-merges "
+            "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
+            "to set the per-stage difficulty (bay, spawns, occupancy, margin). "
+            "Omit for the base env_config difficulty."
+        ),
+    )
+    parser.add_argument(
         "--total-timesteps",
         type=int,
         default=None,
@@ -850,8 +973,17 @@ def main() -> None:
     # load_env_config() merges sensor_config.yaml (shared keys) with env_config.yaml
     # (CARLA-specific keys) so all consumers see a single unified dict.
     config = merge_configs(
-        load_config(args.train_config), load_env_config(args.env_config)
+        load_config(args.train_config),
+        load_env_config(args.env_config, stage=args.stage),
     )
+    # Apply per-stage training-hyperparameter overrides (stage_timesteps,
+    # learning_rate, ent_coef, ...). These live in a `training_overrides` block in
+    # the stage file and are applied AFTER merge_configs (which otherwise lets
+    # train_config win), restricted to an allowlist so a stage can never change an
+    # architecture key (net_arch / policy_type / obs flags) and break weight
+    # loading across the curriculum.
+    if args.stage is not None:
+        _apply_stage_training_overrides(config, args.env_config, args.stage)
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:

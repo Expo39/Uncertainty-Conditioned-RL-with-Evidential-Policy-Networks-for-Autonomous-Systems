@@ -25,6 +25,7 @@ DOCKER_COMPOSE_WORKERS := docker compose -f docker-compose.env_workers.yml
 LAYOUT       ?= rectangle
 CHECKPOINT   ?=
 BASELINE     ?=
+STAGE        ?=
 
 # Scripts that bring up/down N env workers (N read from train_config.yaml by default).
 WORKERS_UP   = bash scripts/multi_workers/workers_up.sh
@@ -118,29 +119,29 @@ docker-top: ## Show running processes in containers
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [CHECKPOINT=path/to/checkpoint]
-	@echo "Training: layout=$(LAYOUT) checkpoint=$(CHECKPOINT)"
+docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [CHECKPOINT=path/to/checkpoint]
+	@echo "Training: layout=$(LAYOUT) stage=$(STAGE) checkpoint=$(CHECKPOINT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),)
 
-docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [CHECKPOINT=path/to/checkpoint]
-	@echo "Training (10k steps): layout=$(LAYOUT) checkpoint=$(CHECKPOINT)"
+docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [CHECKPOINT=path/to/checkpoint]
+	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(STAGE) checkpoint=$(CHECKPOINT)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),)
 
-docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [BASELINE=configs/baselines/full_method.yaml]
-	@echo "Tuning: layout=$(LAYOUT) baseline=$(or $(BASELINE),<train_config defaults>)"
+docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=4] [BASELINE=configs/baselines/full_method.yaml]
+	@echo "Tuning: layout=$(LAYOUT) stage=$(STAGE) baseline=$(or $(BASELINE),<train_config defaults>)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(BASELINE),--baseline $(BASELINE),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE),)
 
 docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [CHECKPOINT=path]
 	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
