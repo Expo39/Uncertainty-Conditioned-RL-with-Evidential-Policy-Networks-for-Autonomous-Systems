@@ -12,6 +12,7 @@ from uncertainty_rl.networks.sb3_integration import (
     EvidentialActorCriticPolicy,
     EvidentialDistribution,
     EvidentialPPO,
+    ScheduledEntCoefPPO,
 )
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "EvidentialActorCriticPolicy",
     "EvidentialDistribution",
     "EvidentialPPO",
+    "ScheduledEntCoefPPO",
 ]

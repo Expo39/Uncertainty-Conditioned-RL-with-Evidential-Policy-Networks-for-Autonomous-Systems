@@ -25,7 +25,9 @@ from uncertainty_rl.networks.sb3_integration import (  # noqa: E402
     EvidentialActorCriticPolicy,
     EvidentialDistribution,
     EvidentialPPO,
+    ScheduledEntCoefPPO,
 )
+from uncertainty_rl.training.train_ppo import linear_schedule  # noqa: E402
 from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -616,6 +618,82 @@ class TestEvidentialPPO:
         assert (
             reg_loss < 50.0
         ), f"evidential_reg_loss unexpectedly large: {reg_loss} (expected < 50)"
+
+
+# ===========================================================================
+# TestScheduledEntCoefPPO
+# ===========================================================================
+
+
+class TestScheduledEntCoefPPO:
+    """
+    @class TestScheduledEntCoefPPO
+    @brief Tests the standard-PPO subclass that accepts a callable ent_coef.
+
+    This is the path the vanilla / input-uncertainty baselines take. Stock PPO
+    cannot multiply a callable ent_coef by the loss tensor; this subclass must
+    resolve the schedule per train() call and leave it callable afterwards.
+    """
+
+    @pytest.fixture
+    def dummy_env(self) -> gym.Env:
+        """
+        @brief Simple continuous-action environment for testing.
+        """
+        return gym.make("Pendulum-v1")
+
+    def test_train_runs_with_callable_ent_coef(self, dummy_env: gym.Env) -> None:
+        """
+        @brief A short run with a scheduled ent_coef completes without the
+               'function * Tensor' TypeError that bare PPO raises.
+        """
+        model = ScheduledEntCoefPPO(
+            policy="MlpPolicy",
+            env=dummy_env,
+            ent_coef=linear_schedule(0.02, 0.006),
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+        # ent_coef must remain the callable after training so the schedule keeps
+        # advancing on subsequent updates.
+        assert callable(model.ent_coef)
+
+    def test_constant_ent_coef_still_works(self, dummy_env: gym.Env) -> None:
+        """
+        @brief A plain float ent_coef is passed straight through (no regression
+               for the non-scheduled case).
+        """
+        model = ScheduledEntCoefPPO(
+            policy="MlpPolicy",
+            env=dummy_env,
+            ent_coef=0.01,
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+        assert model.ent_coef == 0.01
+
+    def test_bare_ppo_rejects_callable_ent_coef(self, dummy_env: gym.Env) -> None:
+        """
+        @brief Regression guard documenting WHY the subclass exists: stock PPO
+               raises on a callable ent_coef, which is what crashed the vanilla
+               curriculum run.
+        """
+        from stable_baselines3.ppo import PPO
+
+        model = PPO(
+            policy="MlpPolicy",
+            env=dummy_env,
+            ent_coef=linear_schedule(0.02, 0.006),
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        with pytest.raises(TypeError):
+            model.learn(total_timesteps=128)
 
 
 # ===========================================================================

@@ -41,7 +41,15 @@ def generate() -> Dict[str, Any]:
         wall=WALL_TOP,
         centred=True,
     )
-    bottom_perp = lot.row_along_perimeter("perpendicular", n=10, wall=WALL_BOTTOM)
+    # Start 2 bay-widths from the left corner so the gap near spawn 1 is empty.
+    # Spawn 1 is hardcoded below to its original position (midpoint of
+    # left_perp.bays[-1] and the now-absent first bay) so it does not shift.
+    bottom_perp = lot.row_along_perimeter(
+        "perpendicular",
+        n=8,
+        wall=WALL_BOTTOM,
+        start_along=8.25,
+    )
     bottom_right_perp = lot.row_along_perimeter(
         "perpendicular",
         n=5,
@@ -64,12 +72,11 @@ def generate() -> Dict[str, Any]:
     moto_first, _ = _motorcycle_corner_bays(lot)
 
     # ---------- Spawns -------------------------------------------------
-    # Each spawn sits at the midpoint between two named bays so it stays
-    # equidistant from them if the layout shifts. Bay roles (not raw indices):
-    #   Spawn 1: between the top-most left-wall bay and the first bottom-left bay.
-    #   Spawn 2: between the last bottom-left bay and the last bottom-right bay.
-    #   Spawn 3: between the first top-wall bay and the upper motorcycle bay.
-    s1_x, s1_y = _midpoint(left_perp.bays[-1], bottom_perp.bays[0])
+    # Spawn 2: midpoint of the last bottom-left bay and the last bottom-right bay.
+    # Spawn 3: midpoint of the first top-wall bay and the upper motorcycle bay.
+    # Spawn 1: original midpoint of left_perp.bays[-1] and the removed first
+    # bottom bay; hardcoded so the gap left by the removed bays does not shift it.
+    s1_x, s1_y = -2.3, 12.625
     s2_x, s2_y = _midpoint(bottom_perp.bays[-1], bottom_right_perp.bays[-1])
     s3_x, s3_y = _midpoint(top_perp.bays[0], moto_first)
     lot.spawn(x=s1_x, y=s1_y, yaw_deg=0.0, primary=True)

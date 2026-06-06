@@ -1,36 +1,47 @@
-# Curriculum Stage 2 - bay variety from the SAME spawn (one new axis)
+# Curriculum Stage 2 - bay variety on ONE row, single orientation (one new axis)
 #
 # Resume from Stage 1's final checkpoint. Stage 1 parks one fixed bay from the
-# fixed primary spawn; now the target bay is RANDOM each episode but the spawn is
-# still locked to the primary point. This isolates "park ANY bay" from "park from
-# ANY spawn" - the single biggest jump in the curriculum (1 -> 47 target bays,
-# spread across the lot at 4 approach orientations) is introduced on its own,
-# without also exploding the spawn distribution at the same time.
+# fixed primary spawn; now the target bay is RANDOM but restricted to the north
+# row (perpendicular_0..11, all facing yaw 270). The spawn is still locked to the
+# primary point. This isolates "generalise across bays at a SINGLE approach
+# orientation" before the harder "generalise across all 4 orientations" jump in
+# Stage 3.
 #
-# Why split here: going straight from one (spawn, bay) pair to random-spawn +
-# random-bay changes the reachable-state count from 1 to ~141 in a single step,
-# which risks catastrophic forgetting of the Stage 1 parking skill. Adding bay
-# variety first, then spawn variety, keeps each transition to one axis.
+# Why this intermediate exists: going straight from one bay to all 47 bays at
+# once mixes two distinct generalisations - across-bays and across-orientations
+# (the lot has banks facing 270/90/0/180). Splitting them keeps each transition
+# to a single axis, the curriculum's core invariant, and de-risks the single
+# biggest stall point in the clean phase.
 
 use_extra_spawns: false  # STILL locked to the primary spawn - only the bay varies.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  # fixed_target_bay_id removed -> random target bay each episode.
+  # fixed_target_bay_id removed -> random target bay each episode, but...
+  # ...restricted to the north row (all yaw 270) so only ONE orientation varies.
+  allowed_bay_ids:
+    - perpendicular_0
+    - perpendicular_1
+    - perpendicular_2
+    - perpendicular_3
+    - perpendicular_4
+    - perpendicular_5
+    - perpendicular_6
+    - perpendicular_7
+    - perpendicular_8
+    - perpendicular_9
+    - perpendicular_10
+    - perpendicular_11
   fixed_gnss_tier: rtk_fixed
   bay_occupancy_min: 0.0  # Still no parked cars.
   bay_occupancy_max: 0.0
   num_patrol_vehicles_max: 0
   pedestrian_spawn_probability: 0.0
 
-bay_margin: -0.6  # Slightly tighter than Stage 1; still loose while bay variety lands.
+bay_margin: -0.65  # Slightly tighter than Stage 1; still loose while bay variety lands.
 
 training_overrides:
-  # Longer budget than the 2M default: 1 -> 47 target bays is the single biggest
-  # generalisation jump in the curriculum (47x the reachable-state count), so this
-  # stage gets extra time to consolidate "park ANY bay" before spawn variety is
-  # added in Stage 3.
-  stage_timesteps: 3000000
+  stage_timesteps: 2000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
   ent_coef: 0.018

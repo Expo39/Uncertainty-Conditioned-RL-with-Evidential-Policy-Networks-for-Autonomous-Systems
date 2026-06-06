@@ -1,26 +1,30 @@
-# Curriculum Stage 5 - full clean Phase A (the published training condition)
+# Curriculum Stage 5 - introduce parked cars (the avoidance task)
 #
-# Resume from Stage 4's final checkpoint. Full bay occupancy range (0.2-0.8) and
-# the strict evaluation bay margin. This is the real Phase A task the dissertation
-# reports; sensor noise (Phase B) is turned on separately in Stage 6. When this
-# stage passes, the policy parks reliably among parked cars in clean conditions at
-# the published success criterion.
+# Resume from Stage 4's final checkpoint. The policy parks any bay from any spawn
+# in clean conditions; now non-target bays start filling with parked cars, so the
+# obstacle-clearance behaviour (Gap B reward term) finally has episodes that reach
+# the bay to learn avoidance from. Occupancy starts light (0.2-0.4) and the margin
+# tightens toward the strict criterion. Density rises in Stage 6.
+#
+# 2M is sufficient here: the geometry (bays, spawns, orientations) is already
+# solved from Stages 1-4; this stage only layers neighbour-avoidance onto a
+# working park, so it refines rather than generalises a new axis.
 
 use_extra_spawns: true
 
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed
-  bay_occupancy_min: 0.2  # Full occupancy range (the base env_config setting).
-  bay_occupancy_max: 0.8
+  bay_occupancy_min: 0.2  # Light occupancy - some neighbours, not a packed lot.
+  bay_occupancy_max: 0.4
   num_patrol_vehicles_max: 0
   pedestrian_spawn_probability: 0.0
 
-bay_margin: -0.25  # Strict published criterion (matches STRICT_BAY_MARGIN).
+bay_margin: -0.4  # Approaching the strict criterion.
 
 training_overrides:
   stage_timesteps: 2000000
-  learning_rate: 0.0002
-  learning_rate_final: 0.00003
-  ent_coef: 0.01
-  ent_coef_final: 0.004
+  learning_rate: 0.00025
+  learning_rate_final: 0.00005
+  ent_coef: 0.012
+  ent_coef_final: 0.005

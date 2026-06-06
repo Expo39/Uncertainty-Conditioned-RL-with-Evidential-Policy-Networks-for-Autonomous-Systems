@@ -480,6 +480,100 @@ class TestBaySampling:
         env.close()
 
 
+class TestAllowedBayIds:
+    """
+    @class TestAllowedBayIds
+    @brief Tests for the parking_scenarios.allowed_bay_ids target whitelist.
+
+    The whitelist filtering lives in _load_floor_plan(), so these tests patch
+    the module-level load_floor_plan() to return a synthetic layout (no CARLA,
+    no disk) and then drive the real filtering path.
+    """
+
+    def _layout(self) -> Dict[str, Any]:
+        """
+        @brief Synthetic 6-bay single-type layout for whitelist tests.
+        """
+        bays = [
+            {
+                "id": f"perpendicular_{i}",
+                "bay_type": "perpendicular",
+                "x": float(i * 3),
+                "y": 0.0,
+                "yaw_deg": 270.0,
+                "width": 3.1,
+                "depth": 5.7,
+            }
+            for i in range(6)
+        ]
+        return {
+            "spawn_transform": {"x": 0.0, "y": 5.0, "yaw_deg": 0.0},
+            "extra_spawn_transforms": [],
+            "bays": bays,
+        }
+
+    def _make_env(
+        self, monkeypatch: Any, allowed: Any
+    ) -> Any:
+        from uncertainty_rl.envs.sim import carla_parking as cp
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        layout = self._layout()
+        monkeypatch.setattr(
+            cp, "load_floor_plan", lambda *a, **k: ("rectangle", layout)
+        )
+        scenarios: Dict[str, Any] = {"fixed_floor_plan": "rectangle"}
+        if allowed is not None:
+            scenarios["allowed_bay_ids"] = allowed
+        return CARLAParkingEnv(max_steps=5, parking_scenarios_config=scenarios)
+
+    def test_unset_whitelist_keeps_all_bays(self, monkeypatch: Any) -> None:
+        """
+        @brief No allowed_bay_ids -> every eligible bay is a target.
+        """
+        env = self._make_env(monkeypatch, allowed=None)
+        env._load_floor_plan()
+        ids = {b["id"] for bays in env._bays_by_type.values() for b in bays}
+        assert ids == {f"perpendicular_{i}" for i in range(6)}
+        env.close()
+
+    def test_whitelist_restricts_pool(self, monkeypatch: Any) -> None:
+        """
+        @brief allowed_bay_ids restricts the target pool to the listed ids.
+        """
+        allowed = ["perpendicular_0", "perpendicular_1", "perpendicular_2"]
+        env = self._make_env(monkeypatch, allowed=allowed)
+        env._load_floor_plan()
+        ids = {b["id"] for bays in env._bays_by_type.values() for b in bays}
+        assert ids == set(allowed)
+        env.close()
+
+    def test_whitelist_sampler_only_returns_allowed(
+        self, monkeypatch: Any
+    ) -> None:
+        """
+        @brief Over many samples, the target bay id is always in the whitelist.
+        """
+        allowed = ["perpendicular_0", "perpendicular_3"]
+        env = self._make_env(monkeypatch, allowed=allowed)
+        env._load_floor_plan()
+        seen = set()
+        for _ in range(100):
+            env._sample_target_bay()
+            seen.add(env._target_bay["bay_id"])
+        assert seen <= set(allowed)
+        env.close()
+
+    def test_unknown_id_raises(self, monkeypatch: Any) -> None:
+        """
+        @brief An id absent from the layout fails loud at pool build.
+        """
+        env = self._make_env(monkeypatch, allowed=["perpendicular_0", "nope_99"])
+        with pytest.raises(RuntimeError, match="absent from floor plan"):
+            env._load_floor_plan()
+        env.close()
+
+
 # ---------------------------------------------------------------------------
 # VisStateWriter
 # ---------------------------------------------------------------------------

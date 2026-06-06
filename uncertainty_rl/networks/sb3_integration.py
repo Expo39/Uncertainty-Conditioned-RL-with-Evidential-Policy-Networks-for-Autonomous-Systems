@@ -917,3 +917,38 @@ class EvidentialPPO(PPO):
             "train/aleatoric_uncertainty", _mean(aleatoric_uncertainties)
         )
         self.logger.record("train/lambda_reg", current_lambda_reg)
+
+
+class ScheduledEntCoefPPO(PPO):
+    """
+    @class ScheduledEntCoefPPO
+    @brief Standard SB3 PPO that accepts a callable (scheduled) ent_coef.
+
+    SB3 wraps learning_rate and clip_range into internal schedules but stores
+    ent_coef verbatim, so stock PPO.train() does `self.ent_coef * entropy_loss`
+    and raises `unsupported operand type(s) for *: 'function' and 'Tensor'` when
+    ent_coef is a linear-decay closure. The evidential path avoids this because
+    EvidentialPPO.train() resolves the callable itself; the standard (vanilla /
+    input-uncertainty) baselines use this subclass so the SAME ent_coef decay
+    schedule drives every baseline - a fairness requirement for the ablation.
+
+    @note Resolves ent_coef(progress_remaining) to a float for the duration of
+          one train() call, then restores the callable so the schedule keeps
+          advancing on the next update. The whole rollout's epochs share one
+          ent_coef value, matching SB3's per-update (not per-epoch) convention.
+    """
+
+    def train(self) -> None:
+        """
+        @brief Resolve a callable ent_coef to a float, then run standard PPO.train().
+        """
+        ent_coef_attr: Any = self.ent_coef
+        if callable(ent_coef_attr):
+            self.ent_coef = float(ent_coef_attr(self._current_progress_remaining))
+            try:
+                super().train()
+            finally:
+                # Restore the callable so the next update re-resolves the schedule.
+                self.ent_coef = ent_coef_attr
+        else:
+            super().train()
