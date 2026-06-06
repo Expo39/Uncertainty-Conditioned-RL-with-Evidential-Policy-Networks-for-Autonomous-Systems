@@ -4,6 +4,11 @@
 """
 
 from uncertainty_rl.utils.actuation_calibration import ActuationCalibration
+from uncertainty_rl.utils.config_merge import (
+    BASELINE_KEYS,
+    apply_baseline,
+    deep_merge,
+)
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
     ALONG_TRACK_SCALE,
@@ -45,6 +50,10 @@ from uncertainty_rl.utils.visualisation import VisStateWriter
 __all__ = [
     # Actuation calibration
     "ActuationCalibration",
+    # Config merge hierarchy
+    "BASELINE_KEYS",
+    "apply_baseline",
+    "deep_merge",
     # Logging
     "DebugLogger",
     # Visualisation

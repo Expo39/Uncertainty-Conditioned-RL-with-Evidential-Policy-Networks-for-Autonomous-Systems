@@ -19,10 +19,10 @@ max_ego_speed_ms: 8.0  # Speed limit (m/s).
 # carla_timestep=0.05). See docs/detailed_notes/actuator_model.md.
 # ---------------------------------------------------------------------------
 actuator_model:
-  steer_max_delta_per_decision: 0.20  # Steer rate limit. ~70 deg/s at the road wheel (CARLA max_steer_angle=70 deg); below the ~140 deg/s actuator ceiling and ~115 deg/s MPC comfort envelope. See docs/detailed_notes/actuator_model.md.
-  throttle_max_delta_per_decision: 0.5  # Throttle rate limit. 0 -> full in 0.4 s. Matches drive-by-wire response.
-  brake_max_delta_per_decision: 0.5  # Brake rate limit. 0 -> full in 0.4 s. Matches hydraulic pressure rise.
-  brake_override_throttle_threshold: 0.3  # Throttle is zeroed whenever brake exceeds this fraction. Raised from 0.1 to 0.3 so soft-brake samples (common while the policy is uncertain) do not silently cut throttle and corrupt the late-stage credit assignment between the two axes.
+  steer_max_delta_per_decision: 0.20  # Steer rate limit (~70 deg/s at the road wheel). See actuator_model.md.
+  throttle_max_delta_per_decision: 0.5  # Throttle rate limit (0 -> full in 0.4 s).
+  brake_max_delta_per_decision: 0.5  # Brake rate limit (0 -> full in 0.4 s).
+  brake_override_throttle_threshold: 0.3  # Throttle is zeroed when brake exceeds this fraction.
 
 # SafetyWrapper parameters.
 # aleatoric_scaling: higher = more aggressive longitudinal cap under outcome noise.
@@ -31,10 +31,13 @@ safety_aleatoric_scaling: 0.5
 safety_handoff_threshold: 5.0
 
 # ---------------------------------------------------------------------------
-# Observation space flags (must match the trained policy)
+# Deployed baseline (real vehicle)
+#
+# Observation flags (include_covariance / include_obstacle_obs) and policy_type
+# live ONLY in the baseline files - this names the one the deployed checkpoint
+# was trained as, so its obs shape and policy class are read from there.
 # ---------------------------------------------------------------------------
-include_covariance: true  # Include EKF covariance features
-include_obstacle_obs: true  # Include 5 hemispheric LiDAR clearance dims
+baseline: configs/baselines/full_method.yaml
 
 # ---------------------------------------------------------------------------
 # ROS 2 / EKF pipeline settings
@@ -44,12 +47,9 @@ ros2:
   covariance_timeout: 120.0  # Seconds to wait for covariance messages.
   ekf_convergence_timeout: 15.0  # Seconds to wait for EKF convergence.
   publish_initial_pose: true  # Publishes /set_pose at each episode reset.
-  initial_pose_topic: "/set_pose"
 
 # ---------------------------------------------------------------------------
-# Real-world deployment flags
+# Real-world deployment paths
 # ---------------------------------------------------------------------------
-real_world_deployment: false  # Set true to activate datum-based EKF calibration
-                              # and actuation calibration on the real vehicle.
 real_world_datum: configs/deployment/real/real_world_datum.yaml
 actuation_calibration: configs/deployment/real/actuation_calibration.yaml

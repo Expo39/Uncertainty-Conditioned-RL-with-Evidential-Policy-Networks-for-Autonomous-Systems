@@ -186,11 +186,39 @@ def main() -> None:
             "Ignored in all other modes."
         ),
     )
+    parser.add_argument(
+        "--stage",
+        type=int,
+        default=None,
+        help=(
+            "Curriculum stage (1..N). Dryrun builds the env at this stage's "
+            "difficulty, identical to training. Omit to default to stage 1. "
+            "Dryrun mode only."
+        ),
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Baseline override config (configs/baselines/*.yaml). Sets the "
+            "observation flags / policy_type the dryrun env is built with, "
+            "identical to training. Omit to default to the full method. "
+            "Dryrun mode only."
+        ),
+    )
     args = parser.parse_args()
 
-    from uncertainty_rl.training.train_ppo import load_env_config
+    from uncertainty_rl.training.train_ppo import DEFAULT_STAGE, load_env_config
 
-    train_cfg = load_env_config("configs/deployment/sim/env_config.yaml")
+    # Difficulty knobs live only in the stage files; resolve the stage the same way
+    # training does (--stage, defaulting to the curriculum head) so the inspector
+    # reflects a real training condition, not the env constructor defaults. The
+    # layout/sensor/live modes override the layout and occupancy themselves; the
+    # dryrun mode additionally applies the baseline + train_config below to build an
+    # env identical to a training rollout.
+    stage = args.stage if args.stage is not None else DEFAULT_STAGE
+    train_cfg = load_env_config("configs/deployment/sim/env_config.yaml", stage=stage)
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
     if args.mode != "dryrun":
@@ -256,51 +284,58 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
-        # Build the env via the shared factory so dryrun is, by construction,
-        # identical to a training rollout (same constructor kwargs, same
-        # defaults).
+        # Build the env through the SAME resolution as train_ppo.main() so the
+        # dryrun is, by construction, identical to a training rollout: merge
+        # train_config onto the stage-merged env config, then overlay the baseline
+        # (defaulting to the full method). Stage difficulty and obs flags therefore
+        # match what `make docker-train STAGE=.. BASELINE=..` would use.
         from uncertainty_rl.envs import make_env
+        from uncertainty_rl.training.train_ppo import (
+            DEFAULT_BASELINE,
+            load_config,
+            merge_configs,
+        )
+        from uncertainty_rl.utils.config_merge import apply_baseline
         from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
 
-        dryrun_cfg = dict(train_cfg)
+        baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+        dryrun_cfg = merge_configs(load_config("configs/train_config.yaml"), train_cfg)
+        apply_baseline(dryrun_cfg, load_config(baseline_path))
+        # Windowed CARLA for visual inspection (training runs headless).
         dryrun_cfg["no_rendering_mode"] = False
+        print(
+            f"Dryrun: stage {stage}, baseline "
+            f"'{dryrun_cfg.get('baseline_name', baseline_path)}' "
+            f"(bay_margin={dryrun_cfg.get('bay_margin')}, "
+            f"include_covariance={dryrun_cfg.get('include_covariance')}, "
+            f"include_obstacle_obs={dryrun_cfg.get('include_obstacle_obs')})"
+        )
 
-        # Randomise layout based on INSPECT_OOD flag.
-        # INSPECT_OOD=true: sample from OOD layouts only.
-        # INSPECT_OOD=false (default): sample from training layouts only.
+        # INSPECT_OOD is an inspection-only override: when true, swap the stage's
+        # floor plans for the OOD-only set so you can eyeball held-out layouts.
+        # Default false keeps the dryrun on the stage's training layouts.
         inspect_ood = os.environ.get("INSPECT_OOD", "false").lower() == "true"
+        if inspect_ood:
+            scenarios = dict(dryrun_cfg.get("parking_scenarios", {}))
+            ood_plans = {
+                name: {k: v for k, v in cfg.items() if k != "ood"}
+                for name, cfg in scenarios.get("floor_plans", {}).items()
+                if cfg.get("ood", False)
+            }
+            if not ood_plans:
+                raise RuntimeError(
+                    "INSPECT_OOD=true but no OOD floor plans are defined in "
+                    "env_config.yaml parking_scenarios.floor_plans."
+                )
+            scenarios["floor_plans"] = ood_plans
+            dryrun_cfg["parking_scenarios"] = scenarios
 
-        scenarios = dict(dryrun_cfg.get("parking_scenarios", {}))
-        original_floor_plans = scenarios.get("floor_plans", {})
-
-        # Filter floor plans by OOD flag, matching load_floor_plan() logic.
-        eligible_plans = {}
-        for name, cfg in original_floor_plans.items():
-            is_ood = cfg.get("ood", False)
-            if inspect_ood:
-                # OOD mode: include OOD plans only
-                if is_ood:
-                    # Strip ood flag so the env's eval_mode filter accepts it.
-                    eligible_plans[name] = {k: v for k, v in cfg.items() if k != "ood"}
-            else:
-                # Training mode: exclude OOD plans
-                if not is_ood:
-                    eligible_plans[name] = cfg
-
-        if not eligible_plans:
-            raise RuntimeError(
-                f"No eligible floor plans found. "
-                f"INSPECT_OOD={inspect_ood}, available plans: {list(original_floor_plans.keys())}"
-            )
-
-        # Pass ALL eligible plans to the environment (do not pin to one).
-        # The environment's load_floor_plan() will randomise per-episode.
-        scenarios["floor_plans"] = eligible_plans
-        dryrun_cfg["parking_scenarios"] = scenarios
-
+        # bay_margin from the resolved config (the stage's margin), exactly as the
+        # training factory reads it - not a hardcoded constant.
+        dryrun_bay_margin = float(dryrun_cfg.get("bay_margin", STRICT_BAY_MARGIN))
         env = make_env(
             dryrun_cfg,
-            bay_margin=STRICT_BAY_MARGIN,
+            bay_margin=dryrun_bay_margin,
             rank=0,
             host_override=args.host,
             port_override=args.port,
@@ -327,10 +362,9 @@ def main() -> None:
         else:
             action_desc = f"constant {dryrun_action}"
         layout_mode = "OOD" if inspect_ood else "training"
+        _plans = list(dryrun_cfg.get("parking_scenarios", {}).get("floor_plans", {}))
         print(f"Dry-run mode: full training pipeline, action={action_desc}, no model.")
-        print(
-            f"  Layouts ({layout_mode}): {list(eligible_plans.keys())} (randomised per-episode)"
-        )
+        print(f"  Layouts ({layout_mode}): {_plans} (randomised per-episode)")
         print(
             f"  View: {args.inspect_view}  |  " f"pause: {args.termination_pause:.1f}s"
         )

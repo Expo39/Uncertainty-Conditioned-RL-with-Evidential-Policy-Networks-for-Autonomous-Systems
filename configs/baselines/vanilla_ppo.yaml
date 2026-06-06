@@ -7,6 +7,5 @@ baseline_name: "vanilla_ppo"
 include_covariance: false
 include_obstacle_obs: true
 policy_type: "standard"
-
-log_dir: "./logs/vanilla_ppo"
-checkpoint_dir: "./checkpoints/vanilla_ppo"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.
