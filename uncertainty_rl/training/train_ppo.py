@@ -64,12 +64,16 @@ try:
     # working; the canonical owner is uncertainty_rl.envs.factory.
     from uncertainty_rl.envs import CARLAParkingEnv, make_env  # noqa: F401
     from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
-    from uncertainty_rl.networks.sb3_integration import ScheduledEntCoefPPO
+    from uncertainty_rl.networks.sb3_integration import (
+        LayerNormActorCriticPolicy,
+        ScheduledEntCoefPPO,
+    )
 except ImportError:
     CARLAParkingEnv = None  # type: ignore[assignment,misc]
     make_env = None  # type: ignore[assignment,misc]
     EvidentialActorCriticPolicy = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
+    LayerNormActorCriticPolicy = None  # type: ignore[assignment,misc]
     ScheduledEntCoefPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
@@ -591,12 +595,20 @@ def train(
     activation_fn = _activation_map.get(
         config.get("activation", "relu").lower(), torch.nn.ReLU
     )
+    # log_std_init sets the initial Gaussian action log-std (std = exp(log_std_init)).
+    # Shared across all baselines so it is not an ablation variable. It only affects
+    # the standard (Gaussian) head; the evidential head ignores it (its std comes from
+    # the NIG aleatoric), but it is passed uniformly so the construction path is
+    # identical. A value below the SB3 default (0.0 -> std 1.0) starts the policy
+    # committed so the entropy bonus cannot inflate the std into a non-committing
+    # circling policy.
     policy_kwargs = dict(
         net_arch=dict(
             pi=config.get("net_arch", [256, 256]),
             vf=config.get("net_arch", [256, 256]),
         ),
         activation_fn=activation_fn,
+        log_std_init=config.get("log_std_init", 0.0),
     )
 
     # Shared PPO hyperparameters. learning_rate decays linearly to
@@ -784,8 +796,12 @@ def train(
             # multiply (it stores ent_coef verbatim). The subclass resolves the
             # callable per update, so the standard baselines share the identical
             # ent_coef schedule as the evidential ones.
+            # LayerNormActorCriticPolicy (not "MlpPolicy"): matches the evidential
+            # policy's LayerNorm backbone and default-forward action prior so the
+            # ONLY differences between the standard and evidential baselines are the
+            # actor head and the observation - the 2x2 ablation axes.
             model = ScheduledEntCoefPPO(
-                policy="MlpPolicy",
+                policy=LayerNormActorCriticPolicy,
                 **ppo_kwargs,
             )
         else:

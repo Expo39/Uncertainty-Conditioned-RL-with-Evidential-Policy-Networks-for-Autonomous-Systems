@@ -952,3 +952,59 @@ class ScheduledEntCoefPPO(PPO):
                 self.ent_coef = ent_coef_attr
         else:
             super().train()
+
+
+class LayerNormActorCriticPolicy(ActorCriticPolicy):
+    """
+    @class LayerNormActorCriticPolicy
+    @brief Standard Gaussian actor-critic matched to the evidential policy's
+           backbone and action prior.
+
+    The 2x2 ablation requires the four baselines to differ ONLY on the two axes
+    under test: the actor HEAD (Gaussian vs evidential NIG) and the OBSERVATION
+    (covariance present or not). Everything else - the feature backbone and the
+    initial action prior - must be identical, or it becomes a confound. Stock
+    SB3 MlpPolicy differs from EvidentialActorCriticPolicy in two ways that have
+    nothing to do with the head, both removed here:
+
+    1. LayerNorm: EvidentialActorCriticPolicy inserts nn.LayerNorm after every
+       hidden Linear in the policy/value MLPs (RL stability); MlpPolicy does not.
+       This policy injects the same LayerNorm so the backbones match.
+    2. Action prior: the evidential head biases the action mean to a gentle
+       default-forward (steer 0, throttle +0.5, brake -1.0 pre-tanh) so the car
+       drives at init; MlpPolicy starts at mean 0 (throttle 0 -> pedal-off, the
+       car defaults to doing nothing while the brake axis dominates by noise).
+       This policy sets the SAME action-mean bias so both heads start from the
+       same forward-leaning prior.
+
+    The Gaussian log_std remains the standard learned per-axis parameter - that
+    IS the head difference the ablation tests, so it is left as SB3 default.
+    """
+
+    def _build_mlp_extractor(self) -> None:
+        """
+        @brief Build the MLP extractor with LayerNorm after each hidden Linear,
+               matching EvidentialActorCriticPolicy.
+        """
+        super()._build_mlp_extractor()
+        self.mlp_extractor.policy_net = _insert_layernorm(self.mlp_extractor.policy_net)
+        self.mlp_extractor.value_net = _insert_layernorm(self.mlp_extractor.value_net)
+
+    def _build(self, lr_schedule: Schedule) -> None:
+        """
+        @brief Build the policy, then set the default-forward action-mean bias.
+        @param lr_schedule: Learning rate schedule.
+
+        After the standard build (which ortho-inits and zeroes action_net bias),
+        overwrite the Gaussian mean bias to match the evidential head's per-axis
+        action prior when action_dim == 3 (steer 0, throttle +0.5, brake -1.0).
+        Any other action_dim keeps the symmetric zero default (smoke tests).
+        """
+        super()._build(lr_schedule)
+        action_dim = get_action_dim(self.action_space)
+        if action_dim == 3:
+            with th.no_grad():
+                bias = self.action_net.bias
+                bias[0] = 0.0   # steer (bipolar)
+                bias[1] = 0.5   # throttle (default-on, gentle forward)
+                bias[2] = -1.0  # brake (default-off)
