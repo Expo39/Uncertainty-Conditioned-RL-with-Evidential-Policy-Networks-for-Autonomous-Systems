@@ -28,9 +28,10 @@ def make_env(
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param bay_margin: Geometric success margin (metres) to use for this env.
-           Required and explicit: training callers pass TRAINING_BAY_MARGIN,
-           evaluation callers pass EVAL_BAY_MARGIN. No default to prevent
-           silent training-vs-eval contamination.
+           Required and explicit: training/tuning callers pass the `bay_margin`
+           resolved from env_config (relaxed per curriculum stage); evaluation,
+           demo, and inspector callers pass STRICT_BAY_MARGIN. No default, to
+           prevent silent training-vs-eval contamination.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
     @param host_override: Override the per-worker CARLA host (e.g. for the
@@ -85,7 +86,6 @@ def make_env(
             use_extra_spawns=config.get("use_extra_spawns", False),
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             vis_output_path=vis_path,
-            uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
             bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),
         )

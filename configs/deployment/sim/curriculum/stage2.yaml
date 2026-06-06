@@ -1,0 +1,37 @@
+# Curriculum Stage 2 - bay variety from the SAME spawn (one new axis)
+#
+# Resume from Stage 1's final checkpoint. Stage 1 parks one fixed bay from the
+# fixed primary spawn; now the target bay is RANDOM each episode but the spawn is
+# still locked to the primary point. This isolates "park ANY bay" from "park from
+# ANY spawn" - the single biggest jump in the curriculum (1 -> 47 target bays,
+# spread across the lot at 4 approach orientations) is introduced on its own,
+# without also exploding the spawn distribution at the same time.
+#
+# Why split here: going straight from one (spawn, bay) pair to random-spawn +
+# random-bay changes the reachable-state count from 1 to ~141 in a single step,
+# which risks catastrophic forgetting of the Stage 1 parking skill. Adding bay
+# variety first, then spawn variety, keeps each transition to one axis.
+
+use_extra_spawns: false  # STILL locked to the primary spawn - only the bay varies.
+
+parking_scenarios:
+  fixed_floor_plan: rectangle
+  # fixed_target_bay_id removed -> random target bay each episode.
+  fixed_gnss_tier: rtk_fixed
+  bay_occupancy_min: 0.0  # Still no parked cars.
+  bay_occupancy_max: 0.0
+  num_patrol_vehicles_max: 0
+  pedestrian_spawn_probability: 0.0
+
+bay_margin: -0.6  # Slightly tighter than Stage 1; still loose while bay variety lands.
+
+training_overrides:
+  # Longer budget than the 2M default: 1 -> 47 target bays is the single biggest
+  # generalisation jump in the curriculum (47x the reachable-state count), so this
+  # stage gets extra time to consolidate "park ANY bay" before spawn variety is
+  # added in Stage 3.
+  stage_timesteps: 3000000
+  learning_rate: 0.0003
+  learning_rate_final: 0.00005
+  ent_coef: 0.018
+  ent_coef_final: 0.007

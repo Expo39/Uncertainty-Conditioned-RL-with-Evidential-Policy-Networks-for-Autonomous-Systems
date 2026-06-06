@@ -44,6 +44,7 @@ except ImportError:
     EvidentialPPO = None  # type: ignore[assignment,misc]
 
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
+from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
 
@@ -204,6 +205,9 @@ def make_eval_env(
             use_extra_spawns=use_extra_spawns,
             gnss_noise_profiles_path=gnss_profiles_path,
             gnss_noise_multiplier_override=gnss_override,
+            # Evaluation is judged at the strict published criterion, not the
+            # env default (0.0) or any relaxed training/curriculum margin.
+            bay_margin=STRICT_BAY_MARGIN,
             debug=debug,
         )
         return SafetyWrapper(
