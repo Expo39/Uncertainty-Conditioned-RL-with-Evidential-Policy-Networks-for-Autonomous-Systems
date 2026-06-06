@@ -26,7 +26,10 @@ from uncertainty_rl.envs._parking_core import (
 from uncertainty_rl.envs.sim.helpers._lot_spawner import LotSpawner
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
+    CORRIDOR_W_HEAD,
     COVARIANCE_FEATURES_DIM,
+    ENDGAME_HOLD_COEF,
+    ENDGAME_MOVE_COEF,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     TOTAL_OBS_DIM,
@@ -783,9 +786,16 @@ def _make_env_for_reward() -> Any:
     # dimensions. Ego half-extents are CARLA's reported bounding box for
     # vehicle.bmw.grandtourer (length 4.612 m, width 2.242 m).
     env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
+    # _sample_target_bay() normally mirrors the bay pose into these scalars; set
+    # them directly here since the test bypasses sampling.
+    env._target_x = 0.0
+    env._target_y = 0.0
+    env._target_yaw = 0.0
     env._ego_half_length = 2.306
     env._ego_half_width = 1.121
-    env._prev_distance = 5.0
+    # Corridor potential at the default 5 m straight-ahead start, so the first
+    # progress reading in a test is relative to a sensible prior pose.
+    env._prev_phi = env._corridor_potential(5.0, 0.0, 0.0)
 
     # Layout with generous corners so OOB check doesn't fire unless intended.
     env._current_layout = {
@@ -943,29 +953,27 @@ class TestComputeReward:
 
     def test_progress_reward_positive_when_closing_in(self) -> None:
         """
-        @brief Moving toward target gives positive progress minus the time penalty.
+        @brief Closing in along the centreline gives a positive corridor-progress
+               reward (phi increases as along-track shrinks).
         """
         env = _make_env_for_reward()
-        env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
-        # Current distance is ~5m (vehicle at (5,0))
+        # Previous pose 10 m out on the centreline; now 5 m out, still on the line.
+        env._prev_phi = env._corridor_potential(10.0, 0.0, 0.0)
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         reward, terminated, success, diag = env._compute_reward()
 
-        # progress = (10 - 5) / 20 = 0.25; reward = 0.25 - 0.01 = 0.24
         assert reward > 0.0
         assert terminated is False
         assert success is False
 
     def test_progress_reward_negative_when_moving_away(self) -> None:
         """
-        @brief Moving away from target gives a negative reward.
+        @brief Moving away along the centreline gives a negative corridor-progress
+               reward (phi decreases as along-track grows).
         """
         env = _make_env_for_reward()
-        env._prev_distance = 2.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
-        # Current distance ~10m (vehicle moved away)
+        env._prev_phi = env._corridor_potential(2.0, 0.0, 0.0)
         _set_vehicle(env, x=10.0, y=0.0, yaw_deg=0.0)
 
         reward, terminated, success, diag = env._compute_reward()
@@ -973,38 +981,49 @@ class TestComputeReward:
         assert reward < 0.0
         assert terminated is False
 
-    def test_position_penalty_always_applied(self) -> None:
+    def test_drifting_off_centreline_is_penalised(self) -> None:
         """
-        @brief Even when making zero progress, reward includes the position_term
-               proximity penalty (-0.003 * position_error).
-        """
-        env = _make_env_for_reward()
-        dist = 5.0
-        env._prev_distance = dist
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
-        # Vehicle stays at exactly the same distance (no progress)
-        _set_vehicle(env, x=dist, y=0.0, yaw_deg=0.0)
-
-        reward, terminated, success, diag = env._compute_reward()
-
-        # progress = 0 and yaw aligned, so distance_term = 0. With
-        # SUCCESS_APPROACH_RADIUS = 5.0 m and dist = 5.0 m, proximity =
-        # 1 - 5/5 = 0, so approach_term = 0. centred = 0 outside the inner
-        # radius too. Only position_term remains: -0.003 * 5.0 = -0.015.
-        assert reward == pytest.approx(-0.015, abs=1e-4)
-
-    def test_prev_distance_updated_after_step(self) -> None:
-        """
-        @brief _prev_distance is updated to the current position error after each call.
+        @brief Gap A: at equal along-track distance, drifting OFF the centreline
+               (growing cross-track) yields a negative corridor-progress reward,
+               because phi weights cross-track above along-track.
         """
         env = _make_env_for_reward()
-        env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
-        _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
+        # Previous pose: 4 m out, on the line. Now: same 4 m depth but 2 m off
+        # the line laterally. along unchanged, cross grew -> phi dropped.
+        env._prev_phi = env._corridor_potential(4.0, 0.0, 0.0)
+        _set_vehicle(env, x=4.0, y=2.0, yaw_deg=0.0)
+
+        reward, _, _, _ = env._compute_reward()
+
+        assert reward < 0.0, "drifting off the centreline must cost reward"
+
+    def test_no_negative_dead_band_at_the_mouth(self) -> None:
+        """
+        @brief Gap A regression: a car creeping in ALONG the centreline aligned
+               always earns non-negative shaping at the bay mouth (the old radial
+               reward bled negative here, stranding the policy). With no obstacle
+               and on-line aligned motion inward, reward must be >= 0.
+        """
+        env = _make_env_for_reward()
+        # 3.2 m out (the old dead-band edge), creeping inward on the line.
+        env._prev_phi = env._corridor_potential(3.4, 0.0, 0.0)
+        _set_vehicle(env, x=3.2, y=0.0, yaw_deg=0.0, vx=0.1)
+
+        reward, _, _, _ = env._compute_reward()
+
+        assert reward >= 0.0, "no negative dead band on an inward on-line approach"
+
+    def test_prev_phi_updated_after_step(self) -> None:
+        """
+        @brief _prev_phi is updated to the current corridor potential each call.
+        """
+        env = _make_env_for_reward()
+        env._prev_phi = env._corridor_potential(10.0, 0.0, 0.0)
+        _set_vehicle(env, x=3.0, y=0.0, yaw_deg=0.0)
 
         env._compute_reward()
 
-        assert env._prev_distance == pytest.approx(5.0)
+        assert env._prev_phi == pytest.approx(env._corridor_potential(3.0, 0.0, 0.0))
 
     def test_yaw_180_offset_valid_any_orientation(self) -> None:
         """
@@ -1030,10 +1049,10 @@ class TestComputeReward:
 
     def test_diag_keys_present(self) -> None:
         """
-        @brief diag dict must contain all five expected keys on every code path.
+        @brief diag dict must contain all expected keys on the shaping path,
+               including the corridor and clearance terms.
         """
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         _, _, _, diag = env._compute_reward()
@@ -1044,8 +1063,123 @@ class TestComputeReward:
             "speed",
             "collision",
             "progress_reward",
+            "endgame_reward",
+            "clearance_penalty",
         ):
             assert key in diag, f"Missing diag key: {key}"
+
+    def test_endgame_term_at_parked_pose_includes_hold_bonus(self) -> None:
+        """
+        @brief The merged endgame term (replacing the old align + hold split)
+               equals MOVE + HOLD at the parked pose: on the line, square, at
+               depth, and stopped, all corridor factors saturate to 1.
+        """
+        env = _make_env_for_reward()
+        # Parked pose: along=cross=heading=0 (target at origin), speed 0.
+        env._prev_phi = env._corridor_potential(0.0, 0.0, 0.0)
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0, vx=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["endgame_reward"] == pytest.approx(
+            ENDGAME_MOVE_COEF + ENDGAME_HOLD_COEF
+        )
+
+    def test_endgame_term_drops_hold_bonus_when_moving(self) -> None:
+        """
+        @brief When the car is on the line, square, and at depth but still
+               moving (speed above the slowness reference), the hold bonus
+               vanishes and only the MOVE component remains.
+        """
+        env = _make_env_for_reward()
+        env._prev_phi = env._corridor_potential(0.0, 0.0, 0.0)
+        # slowness_reference_speed = 5 * SUCCESS_THRESHOLD_VELOCITY = 0.5 m/s;
+        # 1.0 m/s drives the stopped factor to 0, dropping the HOLD bonus.
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0, vx=1.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["endgame_reward"] == pytest.approx(ENDGAME_MOVE_COEF)
+
+    def test_squared_pose_earns_more_potential_than_crooked(self) -> None:
+        """
+        @brief D1 alignment regression: with W_HEAD raised to 3.0 the corridor
+               potential penalises a 20-deg-crooked pose clearly more than a
+               squared pose at the same depth and cross-track, so phi - the
+               dominant gradient - pulls the car square, not just close.
+        """
+        env = _make_env_for_reward()
+        depth, cross = 1.0, 0.0
+        squared = env._corridor_potential(depth, cross, 0.0)
+        crooked = env._corridor_potential(depth, cross, math.radians(20.0))
+
+        # phi <= 0; squared (heading_err 0) must be strictly greater (less
+        # negative) than crooked.
+        assert squared > crooked
+        # The gap is exactly W_HEAD * heading_err - confirm the heading weight,
+        # not the along/cross weights, drives the alignment pull.
+        assert squared - crooked == pytest.approx(
+            CORRIDOR_W_HEAD * math.radians(20.0)
+        )
+
+    def test_clearance_zero_when_no_obstacle(self) -> None:
+        """
+        @brief Gap B: with an empty LiDAR buffer (no returns) the clearance
+               penalty is zero.
+        """
+        env = _make_env_for_reward()
+        env._include_obstacle_obs = True
+        env._obstacle_features_buffer[:] = 0.0  # all hemispheres: no return
+        _set_vehicle(env, x=4.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["clearance_penalty"] == pytest.approx(0.0)
+
+    def test_clearance_penalises_close_forward_return_off_line(self) -> None:
+        """
+        @brief Gap B: a close forward-cone return during an OFF-line, crooked
+               approach incurs a negative clearance penalty.
+        """
+        env = _make_env_for_reward()
+        env._include_obstacle_obs = True
+        # forward_dist (index 4) = 0.4 m, inside the danger band; off-line/crooked.
+        env._obstacle_features_buffer[:] = 0.0
+        env._obstacle_features_buffer[4] = 0.4
+        _set_vehicle(env, x=4.0, y=1.5, yaw_deg=20.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["clearance_penalty"] < 0.0
+
+    def test_clearance_zero_for_correct_park_beside_neighbour(self) -> None:
+        """
+        @brief Gap B edge case (the 0.98 m abeam neighbour): a car parked square
+               on the centreline with a neighbour ~0.98 m to the side incurs no
+               clearance penalty, because the term is gated off when on-line and
+               aligned. The SAME side return on a crooked off-line approach DOES
+               incur a penalty - so the gate, not the distance alone, is decisive.
+        """
+        env = _make_env_for_reward()
+        env._include_obstacle_obs = True
+
+        # Square on the centreline at the parked pose with a neighbour 0.98 m
+        # abeam on the right (index 2 = right_dist) -> gated off -> ~0. A side
+        # return abeam of a square car is the benign case.
+        env._obstacle_features_buffer[:] = 0.0
+        env._obstacle_features_buffer[2] = 0.98
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0)
+        _, _, _, diag_square = env._compute_reward()
+        assert diag_square["clearance_penalty"] == pytest.approx(0.0, abs=1e-6)
+
+        # Crooked and off the line with a close forward-cone return (index 4 =
+        # forward_dist, the collision-critical direction) -> penalty present.
+        env._obstacle_features_buffer[:] = 0.0
+        env._obstacle_features_buffer[4] = 0.4
+        env._prev_phi = env._corridor_potential(4.0, 1.5, math.radians(20.0))
+        _set_vehicle(env, x=4.0, y=1.5, yaw_deg=20.0)
+        _, _, _, diag_crooked = env._compute_reward()
+        assert diag_crooked["clearance_penalty"] < 0.0
 
     def test_diag_pos_error_matches_distance(self) -> None:
         """
@@ -1087,8 +1221,7 @@ class TestComputeReward:
         @brief diag['progress_reward'] is positive when the vehicle closes on target.
         """
         env = _make_env_for_reward()
-        env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
+        env._prev_phi = env._corridor_potential(10.0, 0.0, 0.0)
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         _, _, _, diag = env._compute_reward()
@@ -1127,10 +1260,11 @@ class TestComputeReward:
         """
         env = _make_env_for_reward()
         # Target just inside the boundary; ego a metre outside it (x = 54 > 53),
-        # so the progress term is small and the OOB term dominates the reward.
+        # so the progress term is zero (prev_phi set to the current pose) and the
+        # OOB term dominates the reward.
         env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
         _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
-        env._prev_distance = 2.0
+        env._prev_phi = env._corridor_potential(2.0, 0.0, 0.0)
 
         reward, terminated, success, diag = env._compute_reward()
 
@@ -1151,7 +1285,6 @@ class TestComputeReward:
         env = _make_env_for_reward()
         env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
         _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
-        env._prev_distance = 2.0
         # Prime the accumulator just below the limit so one more OOB step crosses it.
         env._oob_accumulated_penalty = (
             env._oob_termination_limit + env._oob_step_penalty

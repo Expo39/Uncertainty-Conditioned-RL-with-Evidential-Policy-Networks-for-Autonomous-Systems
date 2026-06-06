@@ -7,13 +7,17 @@ ROS 2, or a GPU. The main training entry point is excluded (requires full
 Docker stack).
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from uncertainty_rl.training.train_ppo import (
     EnvDiagnosticsCallback,
+    _apply_stage_training_overrides,
     linear_schedule,
+    load_env_config,
     make_env,
 )
 
@@ -392,3 +396,194 @@ class TestMakeEnvParallel:
             captured["ros2_config"]["ekf_state_file"]
             == "/workspace/outputs/ekf_state_2.json"
         )
+
+
+# ===========================================================================
+# TestLoadEnvConfigStage
+# ===========================================================================
+
+
+class TestLoadEnvConfigStage:
+    """
+    @class TestLoadEnvConfigStage
+    @brief Tests the curriculum stage override deep-merge in load_env_config().
+    """
+
+    def _write_base(self, sim_dir: Path) -> Path:
+        """@brief Write a minimal env_config.yaml and return its path."""
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(
+            yaml.safe_dump(
+                {
+                    "use_extra_spawns": True,
+                    "bay_margin": -0.25,
+                    "parking_scenarios": {
+                        "fixed_floor_plan": "rectangle",
+                        "bay_occupancy_min": 0.2,
+                        "bay_occupancy_max": 0.8,
+                    },
+                }
+            )
+        )
+        return env_path
+
+    def test_no_stage_leaves_base_config(self, tmp_path: Path) -> None:
+        """
+        @brief Without a stage, the base env_config values are unchanged.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_base(sim_dir)
+
+        cfg = load_env_config(str(env_path), stage=None)
+
+        assert cfg["use_extra_spawns"] is True
+        assert cfg["bay_margin"] == -0.25
+        assert cfg["parking_scenarios"]["bay_occupancy_max"] == 0.8
+
+    def test_stage_override_deep_merges_and_wins(self, tmp_path: Path) -> None:
+        """
+        @brief A stage file overrides top-level and nested keys (deep merge),
+               while leaving non-overridden nested keys intact.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_base(sim_dir)
+        curr_dir = sim_dir / "curriculum"
+        curr_dir.mkdir()
+        (curr_dir / "stage1.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "use_extra_spawns": False,
+                    "bay_margin": -0.75,
+                    "parking_scenarios": {
+                        "fixed_target_bay_id": "perpendicular_5",
+                        "bay_occupancy_min": 0.0,
+                        "bay_occupancy_max": 0.0,
+                    },
+                }
+            )
+        )
+
+        cfg = load_env_config(str(env_path), stage=1)
+
+        # Overridden keys take the stage value.
+        assert cfg["use_extra_spawns"] is False
+        assert cfg["bay_margin"] == -0.75
+        assert cfg["parking_scenarios"]["bay_occupancy_max"] == 0.0
+        assert cfg["parking_scenarios"]["fixed_target_bay_id"] == "perpendicular_5"
+        # Non-overridden nested key from the base survives the deep merge.
+        assert cfg["parking_scenarios"]["fixed_floor_plan"] == "rectangle"
+
+    def test_missing_stage_file_raises(self, tmp_path: Path) -> None:
+        """
+        @brief Requesting a stage with no matching file raises FileNotFoundError.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_base(sim_dir)
+
+        with pytest.raises(FileNotFoundError):
+            load_env_config(str(env_path), stage=99)
+
+
+# ===========================================================================
+# TestStageTrainingOverrides
+# ===========================================================================
+
+
+class TestStageTrainingOverrides:
+    """
+    @class TestStageTrainingOverrides
+    @brief Tests the per-stage training_overrides application + allowlist.
+    """
+
+    def _write_stage(self, sim_dir: Path, stage: int, overrides: dict) -> str:
+        """@brief Write a stage file with a training_overrides block; return env path."""
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        curr = sim_dir / "curriculum"
+        curr.mkdir(exist_ok=True)
+        (curr / f"stage{stage}.yaml").write_text(
+            yaml.safe_dump({"training_overrides": overrides})
+        )
+        return str(env_path)
+
+    def test_allowlisted_overrides_applied(self, tmp_path: Path) -> None:
+        """
+        @brief Allowlisted keys (stage_timesteps, learning_rate, ent_coef) override
+               the merged config.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_stage(
+            sim_dir,
+            1,
+            {
+                "stage_timesteps": 2000000,
+                "learning_rate": 0.0003,
+                "ent_coef": 0.02,
+            },
+        )
+        config = {"learning_rate": 0.0001, "ent_coef": 0.005}  # train_config values
+
+        _apply_stage_training_overrides(config, env_path, stage=1)
+
+        assert config["stage_timesteps"] == 2000000
+        assert config["learning_rate"] == 0.0003
+        assert config["ent_coef"] == 0.02
+
+    def test_architecture_key_rejected(self, tmp_path: Path) -> None:
+        """
+        @brief A non-allowlisted (architecture) key in training_overrides raises,
+               so a stage cannot break weight loading on resume.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_stage(sim_dir, 2, {"net_arch": [512, 512]})
+        config: dict = {}
+
+        with pytest.raises(ValueError, match="not allowed"):
+            _apply_stage_training_overrides(config, env_path, stage=2)
+
+    def test_absent_block_is_noop(self, tmp_path: Path) -> None:
+        """
+        @brief A stage with no training_overrides block leaves config unchanged.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        curr = sim_dir / "curriculum"
+        curr.mkdir()
+        (curr / "stage3.yaml").write_text(yaml.safe_dump({"bay_margin": -0.35}))
+        config = {"learning_rate": 0.0001}
+
+        _apply_stage_training_overrides(config, str(env_path), stage=3)
+
+        assert config == {"learning_rate": 0.0001}
+
+    def test_training_overrides_stripped_from_env(self, tmp_path: Path) -> None:
+        """
+        @brief load_env_config() strips training_overrides so it never reaches the
+               env dict (it is a training-side block, applied separately).
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        curr = sim_dir / "curriculum"
+        curr.mkdir()
+        (curr / "stage1.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "bay_margin": -0.75,
+                    "training_overrides": {"stage_timesteps": 2000000},
+                }
+            )
+        )
+
+        env_cfg = load_env_config(str(env_path), stage=1)
+
+        assert "training_overrides" not in env_cfg
+        assert env_cfg["bay_margin"] == -0.75

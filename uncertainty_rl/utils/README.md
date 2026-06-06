@@ -34,10 +34,11 @@ Structural constants fixed by system architecture. Changing any of these require
 | `TOTAL_OBS_DIM` | $13$ | Full observation: $2 + 3 + 3 + 5$ (both ablation flags true). |
 | `ACTION_DIM` | $3$ | Steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$. Throttle and brake are separate non-negative axes. No reverse gear. |
 | `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. Combined with the geometric in-bay check to define a parked vehicle. |
-| `TRAINING_BAY_MARGIN` | $-0.5$ m | Inward bay-polygon shrink applied during training (negative inflates the bay by $0.5$ m on each side). Looser than evaluation so that PPO sees enough $+50$ terminal events to learn from. |
-| `EVAL_BAY_MARGIN` | $-0.5$ m | Inward bay-polygon shrink applied during evaluation. The strict criterion the policy is judged against. |
-| `APPROACH_INNER_RADIUS` | $3.0$ m | Inner-annulus boundary for the centred-gated endgame shaping terms (not a success criterion). |
-| `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff inside `approach_term` ($45$ deg). |
+| `STRICT_BAY_MARGIN` | $-0.25$ m | Strict inward bay-polygon margin (negative inflates the bay by $0.25$ m per side). The published criterion used by evaluation, the demo driver, and the lot inspector. Training/tuning instead read `bay_margin` from `env_config.yaml`, relaxed per curriculum stage. |
+| `CORRIDOR_HALF_WIDTH` | $2.0$ m | Cross-track reference: the `on_line` reward factor is $1$ on the bay centreline and $0$ at this offset. |
+| `ALONG_TRACK_SCALE` | $6.0$ m | Along-track reference: the `near_depth` reward factor ramps from $1$ at the parked depth to $0$ over this distance. |
+| `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff in the corridor `aligned` term ($45$ deg). |
+| `OBSTACLE_CLEARANCE_SAFE` / `OBSTACLE_CLEARANCE_DANGER` | $0.8$ / $0.3$ m | Clearance-penalty ramp band; SAFE sits below the $\sim 0.98$ m gap a correctly parked car leaves beside an occupied neighbour, so a correct park pays $\sim 0$. |
 | `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Radial distance from the target above which the real-world inference loop aborts. The sim path uses the soft polygon boundary below instead. |
 | `OOB_INFLATION_MARGIN` | $5.0$ m | Metres the lot polygon is offset outward (uniformly, on every edge) to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
 | `OOB_STEP_PENALTY` | $-0.5$ | Reward applied each policy decision the ego centre is outside the inflated polygon. |
@@ -49,10 +50,10 @@ box must lie inside the target bay rectangle, via `car_fully_inside_bay()`)
 combined with the velocity threshold above. Any orientation that physically
 fits is accepted; the bay's rectangular geometry combined with the car's
 dimensions restricts feasible orientations to small yaw errors in practice.
-The margin used by the check is supplied at env construction time
-(`TRAINING_BAY_MARGIN` from the factory at training, `EVAL_BAY_MARGIN` from
-the demo / inspector at evaluation) - the env itself has no concept of
-"training vs eval" mode.
+The margin used by the check is supplied at env construction time: training and
+tuning pass the `bay_margin` resolved from `env_config.yaml` (relaxed per
+curriculum stage), while the demo / inspector / evaluation pass
+`STRICT_BAY_MARGIN` - the env itself has no concept of "training vs eval" mode.
 
 Observation dimension as a function of ablation flags:
 
@@ -127,8 +128,9 @@ from uncertainty_rl.utils import (
     ACTION_DIM, TOTAL_OBS_DIM, VEHICLE_STATE_DIM,
     COVARIANCE_FEATURES_DIM, TARGET_POSE_DIM, OBSTACLE_FEATURES_DIM,
     SUCCESS_THRESHOLD_VELOCITY,
-    TRAINING_BAY_MARGIN, EVAL_BAY_MARGIN,
-    APPROACH_INNER_RADIUS, APPROACH_INNER_ALIGNMENT_CUTOFF,
+    STRICT_BAY_MARGIN,
+    CORRIDOR_HALF_WIDTH, ALONG_TRACK_SCALE, APPROACH_INNER_ALIGNMENT_CUTOFF,
+    OBSTACLE_CLEARANCE_SAFE, OBSTACLE_CLEARANCE_DANGER,
     OUT_OF_BOUNDS_THRESHOLD,
     OOB_INFLATION_MARGIN, OOB_STEP_PENALTY, OOB_TERMINATION_PENALTY_LIMIT,
     # Covariance

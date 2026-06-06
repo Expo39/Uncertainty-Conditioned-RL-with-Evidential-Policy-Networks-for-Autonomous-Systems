@@ -32,8 +32,9 @@ evidential:
 
 policy_type: "evidential"  # evidential: EvidentialPPO + NIG actor. standard: PPO + MlpPolicy.
 
-# Reward function: uncertainty-scaled potential-based shaping. See detailed_notes/reward_function.md.
-uncertainty_std_max: 2.0  # EKF std (metres) at which progress reward reaches zero.
+# Reward function: pure additive potential-based shaping (progress + endgame +
+# clearance). Uncertainty is INPUT-ONLY - it enters via the observation and the
+# evidential policy, never the reward. See uncertainty_rl/envs/CLAUDE.md.
 
 # Logging and checkpointing
 checkpoint_freq: 50000  # Save checkpoint every N steps.
