@@ -32,6 +32,9 @@ from uncertainty_rl.utils.constants import (
     ENDGAME_MOVE_COEF,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
+    TIMEOUT_PENALTY_FLOOR,
+    TIMEOUT_POS_COEF,
+    TIMEOUT_YAW_COEF,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
@@ -572,6 +575,51 @@ class TestAllowedBayIds:
         with pytest.raises(RuntimeError, match="absent from floor plan"):
             env._load_floor_plan()
         env.close()
+
+
+class TestGradedTimeoutPenalty:
+    """
+    @class TestGradedTimeoutPenalty
+    @brief Invariants of the graded timeout penalty coefficients.
+
+    The penalty is -(TIMEOUT_POS_COEF*pos + TIMEOUT_YAW_COEF*yaw) clamped to
+    TIMEOUT_PENALTY_FLOOR. These tests pin the design invariants that must hold for
+    any coefficient choice: the ordering success(+50) > timeout > collision(-25)
+    (floor strictly above -25), and ending closer/straighter is always less costly
+    (a live gradient toward the bay).
+    """
+
+    def _penalty(self, pos: float, yaw: float = 0.35) -> float:
+        return max(
+            -(TIMEOUT_POS_COEF * pos + TIMEOUT_YAW_COEF * yaw),
+            TIMEOUT_PENALTY_FLOOR,
+        )
+
+    def test_floor_above_collision(self) -> None:
+        """
+        @brief Floor must sit strictly above the -25 ego-crash penalty so the car
+               never crashes deliberately to escape a worse timeout.
+        """
+        assert TIMEOUT_PENALTY_FLOOR > -25.0
+
+    def test_penalty_never_below_floor(self) -> None:
+        """
+        @brief Even a far/badly-misaligned timeout is clamped to the floor.
+        """
+        assert self._penalty(50.0, 3.14) == TIMEOUT_PENALTY_FLOOR
+
+    def test_near_miss_cheaper_than_floor(self) -> None:
+        """
+        @brief A ~3 m near-miss must cost clearly less than the floor, so getting
+               closer is always rewarded (a gradient toward the bay).
+        """
+        assert TIMEOUT_PENALTY_FLOOR < self._penalty(3.0) < 0.0
+
+    def test_closer_is_always_better(self) -> None:
+        """
+        @brief Ending closer is monotonically less costly (until the floor clamps).
+        """
+        assert self._penalty(2.0) > self._penalty(4.0) >= self._penalty(9.0)
 
 
 # ---------------------------------------------------------------------------

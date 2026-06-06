@@ -153,12 +153,25 @@ ACTION_DIM = 3
 # polygon boundary below.
 OUT_OF_BOUNDS_THRESHOLD = 20.0
 
-# Lower bound on the graded timeout penalty. The timeout penalty scales with
-# final position and orientation error, and the lot diagonal exceeds 16 m with
-# the target bay sampled per episode, so the unclamped penalty can exceed the
-# ego-fault collision magnitude (25) for far-target timeouts. Floored here
-# strictly above -25 so timing out is always less costly than crashing - the
-# policy must never have an incentive to crash deliberately to escape a worse
+# Graded timeout penalty coefficients. The penalty at truncation is
+# -(TIMEOUT_POS_COEF * final_pos_error + TIMEOUT_YAW_COEF * final_orientation_error),
+# clamped to TIMEOUT_PENALTY_FLOOR. It judges the final state when the clock runs
+# out without a park, so ending closer and straighter is always less costly than
+# stopping short.
+#
+# @note A steeper TIMEOUT_POS_COEF (3.5) was tried to break a brake-and-idle local
+# optimum but BACKFIRED: it made the policy game the cheaper yaw term by turning in
+# place to trim orientation_error without driving (the throttle never fired). The
+# real cause was an init asymmetry letting the brake axis dominate throttle, not a
+# weak timeout - so this is kept at the original 1.5 while the init is fixed instead.
+TIMEOUT_POS_COEF = 1.5
+TIMEOUT_YAW_COEF = 2.5
+
+# Lower bound on the graded timeout penalty. The lot diagonal exceeds 16 m with the
+# target bay sampled per episode, so the unclamped penalty (TIMEOUT_POS_COEF * pos
+# + ...) can exceed the ego-fault collision magnitude (25) for far-target timeouts.
+# Floored here strictly above -25 so timing out is always less costly than crashing
+# - the policy must never have an incentive to crash deliberately to escape a worse
 # timeout. Keeps the terminal ordering success(+50) > timeout > collision(-25).
 TIMEOUT_PENALTY_FLOOR = -24.0
 

@@ -351,7 +351,7 @@ visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
-eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path] [REALTIME=false]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path] [REALTIME=false] [BASELINE=vanilla_ppo] [STAGE=N]
 	$(call ensure-venv)
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
@@ -380,6 +380,8 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
+		$(if $(BASELINE),--baseline $(CONFIG_DIR)/baselines/$(BASELINE).yaml,) \
+		$(if $(STAGE),--stage $(STAGE),) \
 		$(if $(filter false,$(REALTIME)),--no-realtime,) | tail -n1); \
 	echo "Demo container: $$demo_cid"; \
 	docker logs -f $$demo_cid 2>&1 | sed 's/^/[demo] /' & \

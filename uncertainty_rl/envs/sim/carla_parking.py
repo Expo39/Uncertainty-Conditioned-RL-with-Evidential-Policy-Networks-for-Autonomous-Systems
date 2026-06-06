@@ -59,6 +59,8 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
     TIMEOUT_PENALTY_FLOOR,
+    TIMEOUT_POS_COEF,
+    TIMEOUT_YAW_COEF,
     VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
@@ -535,16 +537,26 @@ class CARLAParkingEnv(gym.Env):
         )
 
         # ROS 2 covariance subscriber (only when covariance included)
+        # EKF localisation runs for EVERY baseline - it is the source of the
+        # pose, speed, and yaw-rate the policy navigates by, and the per-episode
+        # GNSS noise that the EKF estimates. include_covariance controls ONLY
+        # whether the 3 covariance feature dims (std_x/y/yaw) are written into
+        # the observation vector (an obs-layout ablation), NOT whether the EKF
+        # runs. Coupling the two would give the no-covariance baselines perfect
+        # ground-truth localisation while the covariance baselines run on noisy
+        # EKF - an unfair ablation. The subscriber is file-based (no DDS, no
+        # connection), so constructing it is always safe; when ekf_state.json is
+        # absent (CI/tests) get_latest_state() returns (None, None) and the env
+        # falls back to CARLA ground truth in _get_state().
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
-        if self._include_covariance:
-            self._init_ros2()
+        self._init_ros2()
 
         # ------------------------------------------------------------------
         # Stored callables for fixed-flag hot-path branches
         # ------------------------------------------------------------------
 
         # _read_ekf_state() -> (raw_pose, uncertainty) or (None, None)
-        if self._include_covariance and self._cov_subscriber is not None:
+        if self._cov_subscriber is not None:
             _read_ekf_state: Callable[
                 [], Tuple[Optional[np.ndarray], Optional[np.ndarray]]
             ] = self._cov_subscriber.get_latest_state
@@ -1918,11 +1930,7 @@ class CARLAParkingEnv(gym.Env):
         sy = float(self._chosen_spawn.get("y", 0.0))
         syaw = math.radians(float(self._chosen_spawn.get("yaw_deg", 0.0)))
 
-        if (
-            self._include_covariance
-            and self._cov_subscriber is not None
-            and len(self._gnss_noise_tiers) > 0
-        ):
+        if self._cov_subscriber is not None and len(self._gnss_noise_tiers) > 0:
             datum_lat: Optional[float] = None
             datum_lon: Optional[float] = None
             try:
@@ -1951,15 +1959,13 @@ class CARLAParkingEnv(gym.Env):
 
         # Invalidate stale pre-reset EKF data so _wait_for_covariance() blocks
         # until a genuinely post-spawn reading arrives from ekf_state.json.
-        if self._include_covariance and self._cov_subscriber is not None:
+        if self._cov_subscriber is not None:
             self._cov_subscriber.invalidate()
 
         # Publish spawn pose as local (0, 0, yaw) so /set_pose seeds the EKF
         # at local origin, matching the re-latched GNSS datum frame.
-        if (
-            self._include_covariance
-            and self._cov_subscriber is not None
-            and self._ros2_config.get("publish_initial_pose", False)
+        if self._cov_subscriber is not None and self._ros2_config.get(
+            "publish_initial_pose", False
         ):
             self._cov_subscriber.publish_initial_pose(0.0, 0.0, syaw)
 
@@ -1974,7 +1980,7 @@ class CARLAParkingEnv(gym.Env):
             self._all_vehicle_actors = list(self.world.get_actors().filter("vehicle.*"))
             self._npc_controller.set_vehicle_cache(self._all_vehicle_actors)
 
-        if self._include_covariance:
+        if self._cov_subscriber is not None:
             # Wait once to confirm the extractor is writing, tick the world
             # long enough for the EKF to consume the /set_pose published from
             # initial_pose.json, then invalidate and wait again so only
@@ -1983,8 +1989,7 @@ class CARLAParkingEnv(gym.Env):
             if self.world is not None:
                 for _ in range(10):
                     self.world.tick(10.0)
-            if self._cov_subscriber is not None:
-                self._cov_subscriber.invalidate()
+            self._cov_subscriber.invalidate()
             self._wait_for_covariance()
             # Always recalibrate: the GNSS datum is re-latched to the spawn
             # position at each episode reset, so the EKF odom origin shifts
@@ -2231,19 +2236,19 @@ class CARLAParkingEnv(gym.Env):
 
         # Graded timeout penalty: judge the final state when the clock runs out
         # without a park. Scaled by how far and how misaligned the car ended, so
-        # ending closer and straighter is always better than stopping short. At
-        # final_pos ~3 m the penalty is ~-4.5, at ~8 m it is ~-12.
-        # Clamped to TIMEOUT_PENALTY_FLOOR so it can never drop below the
-        # ego-fault collision penalty (-25): the lot diagonal exceeds 16 m and
-        # the target bay is sampled per episode, so an unclamped graded penalty
-        # (1.5 * pos + ...) would exceed 25 for far-target timeouts and make a
-        # deliberate crash strictly cheaper than timing out. The clamp keeps the
-        # ordering success(+50) > timeout > collision(-25) for every geometry.
+        # ending closer and straighter is always less costly than stopping short.
+        # The pos coefficient is steep (TIMEOUT_POS_COEF) so a far-short timeout
+        # saturates near the floor: this removes the "drive out a little, then brake
+        # and idle out the clock" local optimum (braking dodges collision/OOB, so a
+        # shallow timeout made stopping short the safe choice). Clamped to
+        # TIMEOUT_PENALTY_FLOOR (> -25) so timing out is always less costly than an
+        # ego-fault crash, keeping the ordering success(+50) > timeout > collision.
+        # @see constants.TIMEOUT_POS_COEF for the local-optimum rationale.
         if truncated and not terminated:
             reward += max(
                 -(
-                    1.5 * reward_diag["pos_error"]
-                    + 2.5 * reward_diag["orientation_error"]
+                    TIMEOUT_POS_COEF * reward_diag["pos_error"]
+                    + TIMEOUT_YAW_COEF * reward_diag["orientation_error"]
                 ),
                 TIMEOUT_PENALTY_FLOOR,
             )

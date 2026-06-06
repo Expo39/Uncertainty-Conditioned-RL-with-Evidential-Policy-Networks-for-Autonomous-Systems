@@ -614,15 +614,22 @@ class TestBaselineOverlay:
         baseline = yaml.safe_load((self._BASELINES / baseline_file).read_text())
         return {**train_cfg, **baseline}
 
-    def test_train_config_default_is_full_method(self) -> None:
+    def test_train_config_default_is_evidential_head(self) -> None:
         """
-        @brief The bare train_config defaults are the full method (evidential +
-               covariance) - which is exactly why a baseline overlay is needed to
-               run vanilla.
+        @brief The bare train_config defaults use the evidential head - which is
+               why a baseline overlay is needed to run the standard-head baselines.
         """
         train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
         assert train_cfg["policy_type"] == "evidential"
-        assert train_cfg["evidential"]["use_uncertainty_conditioning"] is True
+
+    def test_dual_encoder_off_for_clean_ablation(self) -> None:
+        """
+        @brief use_uncertainty_conditioning must be False so covariance enters
+               identically (as obs dims) for both heads - no dual-encoder confound
+               on the covariance axis of the 2x2 ablation.
+        """
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        assert train_cfg["evidential"]["use_uncertainty_conditioning"] is False
 
     def test_vanilla_overlay_selects_standard_no_covariance(self) -> None:
         """
