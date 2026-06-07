@@ -6,8 +6,6 @@ Gymnasium-compatible environment for autonomous parking in CARLA. Localisation
 uncertainty comes from the robot_localisation EKF fusing RTK-GNSS and IMU; 2D LiDAR
 provides obstacle detection only. CARLA ground truth is used only for reward
 computation.
-
-See documentation/detailed_notes/observation_space.md for the full obs breakdown.
 """
 
 import collections
@@ -192,8 +190,7 @@ class CARLAParkingEnv(gym.Env):
                throttle_max_delta_per_decision, brake_max_delta_per_decision,
                brake_override_throttle_threshold. Clamps the policy command
                in step() before forwarding to CARLA. If None or missing keys,
-               defaults match production drive-by-wire literature; see
-               docs/detailed_notes/envs/actuator_model.md.
+               defaults match production drive-by-wire literature.
         """
         super().__init__()
 
@@ -209,8 +206,7 @@ class CARLAParkingEnv(gym.Env):
         self._max_ego_speed_ms = max_ego_speed_ms
         self._use_extra_spawns = use_extra_spawns
 
-        # Actuator rate limits and brake-overrides-throttle threshold. See
-        # docs/detailed_notes/envs/actuator_model.md.
+        # Actuator rate limits and brake-overrides-throttle threshold.
         am = actuator_model or {}
         self._steer_max_delta: float = float(
             am.get("steer_max_delta_per_decision", 0.15)
@@ -1017,12 +1013,9 @@ class CARLAParkingEnv(gym.Env):
 
         phi = -(W_ALONG*|along| + W_CROSS*|cross| + W_HEAD*heading_err). The
         cross-track and heading weights exceed the along-track weight so the
-        dominant progress gradient pulls the car ONTO the centreline and SQUARE
-        before advancing in depth - a crooked short-cut to the bay centre accrues
-        cross/heading cost en route and therefore scores below the aligned arc,
-        even though both end at the same parked pose. This is the term that makes
-        the policy prefer the correct approach; the radial distance-to-centre
-        potential it replaces was indifferent to approach angle.
+        gradient pulls the car onto the centreline and square before advancing in
+        depth: a crooked short-cut accrues cross/heading cost en route and scores
+        below an aligned arc that ends at the same parked pose.
         """
         return -(
             self._w_along * abs(along)
@@ -1038,30 +1031,14 @@ class CARLAParkingEnv(gym.Env):
         @return Penalty <= 0; 0 when no obstacle is inside the danger band or when
                 the car is square on the centreline.
 
-        @note Intentionally DORMANT in the early curriculum stages: with no parked
-              cars and no perimeter cones (curriculum stages 1-3) there are no LiDAR
-              returns, so this returns exactly 0.0. It activates from the stage that
-              introduces parked cars (stage 4). The term must exist from stage 1
-              because the reward is fixed across the whole curriculum - it simply
-              sleeps until there is something to avoid. Stage-1 zeros here are
-              expected, not a fault.
-
-        Reads the hemispheric LiDAR clearance features filled this step into
-        `self._obstacle_features_buffer`
-        ([left_dist, left_bearing, right_dist, right_bearing, forward_dist], ego
-        body frame; a hemisphere with no return is 0.0). A zero distance therefore
-        means "no obstacle" (treated as infinite clearance), not "0 m away". The
-        forward-cone clearance is weighted more heavily than the side clearances,
-        since a return ahead while moving is the real collision risk whereas a
-        neighbour directly abeam of a square car is benign.
-
-        The penalty ramps from 0 at OBSTACLE_CLEARANCE_SAFE to its cap at
-        OBSTACLE_CLEARANCE_DANGER, and is multiplied by (1 - on_line*aligned) so it
-        FADES TO ZERO once the car is square on the centreline. A correctly parked
-        car sits ~0.98 m from an occupied neighbour (bay centres 3.1 m apart minus
-        two ~1.06 m half-widths); SAFE (0.8 m) sits below this AND the gate is then
-        ~0, so a correct park is never penalised - only a crooked, off-line drift
-        toward a neighbour is.
+        Reads the hemispheric LiDAR clearance features in
+        `self._obstacle_features_buffer` (a hemisphere with no return is 0.0, treated
+        as infinite clearance). The forward cone is weighted above the side clearances
+        since a return ahead while moving is the real collision risk. The penalty
+        ramps from 0 at OBSTACLE_CLEARANCE_SAFE to its cap at OBSTACLE_CLEARANCE_DANGER
+        and is multiplied by (1 - on_line*aligned), fading to zero once the car is
+        square on the line, so a correct park (~0.98 m from a neighbour) is never
+        penalised.
         """
         if not self._include_obstacle_obs:
             return 0.0
@@ -1131,10 +1108,9 @@ class CARLAParkingEnv(gym.Env):
         yaw = math.radians(transform.rotation.yaw)
         speed = math.hypot(velocity.x, velocity.y)
 
-        # position_error (Euclidean to bay centre) is DIAGNOSTIC/TERMINAL ONLY - it
-        # feeds the pos_error diag, the graded timeout penalty, and the
-        # mean_pos_error_m metric. It does NOT shape the per-step reward; the
-        # corridor potential (bay-frame along/cross/heading) replaced that role.
+        # position_error (Euclidean to bay centre) is diagnostic / terminal only: it
+        # feeds the diag, the graded timeout penalty, and the metric, not the per-step
+        # reward (the corridor potential shapes that).
         position_error = math.hypot(x - self._target_x, y - self._target_y)
         orientation_error = abs(wrap_angle_symmetric(yaw - self._target_yaw))
 
@@ -1186,22 +1162,11 @@ class CARLAParkingEnv(gym.Env):
         # centreline (cross), and how square to the bay axis (heading_err).
         along, cross, heading_err = self._bay_frame_pose(x, y, yaw)
 
-        # Corridor potential progress. progress = phi(curr) - phi(prev) telescopes
-        # to zero over any loiter (a stationary car earns nothing), but because phi
-        # penalises cross-track and heading, the dominant gradient pulls the car
-        # ONTO the centreline and SQUARE before advancing in depth - so an aligned
-        # arc out-earns a crooked shortcut that ends at the same pose.
-        # @see _corridor_potential.
-        #
-        # Divided by the per-episode start potential and scaled by PROGRESS_TARGET so
-        # the full-episode progress sum equals PROGRESS_TARGET for every bay,
-        # regardless of its distance from the spawn. The /start factor EQUALISES bays
-        # (without it a far bay offers a far larger shaping pool than a near one and
-        # any forward motion that closes shared depth banks reward toward EVERY bay,
-        # rewarding a drive to a fixed memorised bay over the commanded one). The
-        # *PROGRESS_TARGET factor sets the absolute dense scale so the terminal-to-
-        # dense ratio lets the value function fit the return cleanly. @see
-        # PROGRESS_TARGET, PHI_NORM_FLOOR.
+        # Corridor potential progress. progress = phi(curr) - phi(prev) telescopes to
+        # zero over a loiter; the cross/heading weighting pulls the car onto the
+        # centreline and square before advancing. Divided by the start potential and
+        # scaled by PROGRESS_TARGET so every bay's full-episode progress sum is equal.
+        # @see _corridor_potential, PROGRESS_TARGET, PHI_NORM_FLOOR.
         curr_phi = self._corridor_potential(along, cross, heading_err)
         progress = (curr_phi - self._prev_phi) / self._phi_start * PROGRESS_TARGET
         self._prev_phi = curr_phi
@@ -1217,14 +1182,9 @@ class CARLAParkingEnv(gym.Env):
         aligned = max(0.0, 1.0 - heading_err / APPROACH_INNER_ALIGNMENT_CUTOFF)
         stopped = max(0.0, 1.0 - speed / slowness_reference_speed)
 
-        # Single endgame term on top of the corridor potential: reward being on the
-        # line, square, and at the parked depth, with an extra bonus once stopped.
-        # Gated on the corridor factors (NOT a binary nose-in containment), so it is
-        # continuous up to the success window - no separate at-the-goal brake bonus
-        # needed. The conjunction (on_line AND aligned AND near_depth) means a
-        # stop-short-and-crooked pose earns ~0; the +HOLD*stopped sharpens the final
-        # commit to a held stop. The DOMINANT alignment pull is the corridor
-        # potential (W_HEAD), not this small finisher.
+        # Endgame finisher gated on the corridor factors: their conjunction
+        # (on_line AND aligned AND near_depth) means a stop-short-and-crooked pose
+        # earns ~0, and +HOLD*stopped sharpens the final commit to a held stop.
         endgame = (
             (ENDGAME_MOVE_COEF + ENDGAME_HOLD_COEF * stopped)
             * on_line
@@ -1232,35 +1192,25 @@ class CARLAParkingEnv(gym.Env):
             * near_depth
         )
 
-        # Obstacle clearance (Gap B). Smooth penalty for drifting toward a
-        # neighbouring parked car during a crooked approach. Uses the LiDAR
-        # clearance features the policy already observes (so the signal transfers
-        # to hardware), favouring the forward cone over pure-side returns, with a
-        # zero-means-no-return convention. Anchored BELOW the parked-square side
-        # gap (~0.98 m) and gated off once the car is square on the line, so an
-        # expected neighbour abeam of a CORRECT park is never penalised. Raw (a
-        # safety signal, like the OOB penalty). @see _obstacle_clearance_penalty.
+        # Obstacle clearance: smooth penalty for drifting toward a neighbouring parked
+        # car during a crooked approach. Uses the observed LiDAR clearance (so it
+        # transfers to hardware), anchored below the ~0.98 m parked-square side gap and
+        # gated off once the car is square on the line. Raw, like the OOB penalty.
         clearance_term = self._obstacle_clearance_penalty(on_line, aligned)
 
-        # Pure additive task reward. Uncertainty is INPUT-ONLY: it enters the
-        # system through the EKF covariance observation and the evidential policy
-        # head, NOT the reward. The reward does not forgive careless behaviour under
-        # uncertainty - the policy learns caution from consequences (high observed
-        # uncertainty + careless action -> crash / timeout). All three terms are
-        # additive, so no factor can zero the whole reward.
+        # Pure additive task reward; no single factor can zero it. Uncertainty is
+        # input-only: it enters via the EKF covariance observation and the evidential
+        # head, never the reward.
         reward = progress + endgame + clearance_term
 
         diag["progress_reward"] = float(progress)
         diag["endgame_reward"] = float(endgame)
         diag["clearance_penalty"] = float(clearance_term)
 
-        # Soft out-of-bounds boundary. Evaluated last, so collision and success
-        # always take precedence. Applied RAW (not scaled by 1 - uncertainty)
-        # because leaving the lot is a safety boundary, not progress shaping -
-        # high EKF uncertainty must never make it cheap. The penalty accumulates
-        # until it crosses the limit, then terminates with no extra crash cost
-        # (the accrued penalties are the cost). The test uses CARLA ground-truth
-        # (x, y), so it is exact regardless of EKF noise.
+        # Soft out-of-bounds boundary, evaluated last so collision and success take
+        # precedence. Applied raw (leaving the lot is a safety boundary, not shaping);
+        # accumulates until the limit, then terminates with no extra crash cost. Tested
+        # on CARLA ground truth, so it is exact regardless of EKF noise.
         if self._oob_inflated_corners and not point_in_polygon(
             x, y, self._oob_inflated_corners
         ):
@@ -2105,8 +2055,7 @@ class CARLAParkingEnv(gym.Env):
                 and brake in [0, 1]. The env rate-limits the command on the
                 policy decision boundary via the actuator model before
                 forwarding to CARLA, so what the policy commands and what the
-                vehicle physically receives may differ. See documentation/
-                detailed_notes/actuator_model.md.
+                vehicle physically receives may differ.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
         # On the policy decision boundary, rate-limit the raw policy command

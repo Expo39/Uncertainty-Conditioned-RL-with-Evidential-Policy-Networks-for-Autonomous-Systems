@@ -49,7 +49,6 @@ class EvidentialLayer(nn.Module):
 
         # Bias layout [gamma | nu | alpha | beta] keeps NIG parameters in a stable
         # prior region at step 0. Weights scaled by 0.01 so biases dominate init.
-        # See documentation/detailed_notes/evidential_nig_initialisation.md for derivation.
         with torch.no_grad():
             self.linear.weight.mul_(0.01)
             n = self.output_dim

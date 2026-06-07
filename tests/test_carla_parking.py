@@ -1198,13 +1198,12 @@ class TestComputeReward:
 
     def test_no_negative_dead_band_at_the_mouth(self) -> None:
         """
-        @brief Gap A regression: a car creeping in ALONG the centreline aligned
-               always earns non-negative shaping at the bay mouth (the old radial
-               reward bled negative here, stranding the policy). With no obstacle
-               and on-line aligned motion inward, reward must be >= 0.
+        @brief A car creeping inward along the centreline while aligned must earn
+               non-negative shaping at the bay mouth: with no obstacle and on-line
+               aligned motion inward, reward must be >= 0.
         """
         env = _make_env_for_reward()
-        # 3.2 m out (the old dead-band edge), creeping inward on the line.
+        # 3.2 m out, creeping inward on the line.
         env._prev_phi = env._corridor_potential(3.4, 0.0, 0.0)
         _set_vehicle(env, x=3.2, y=0.0, yaw_deg=0.0, vx=0.1)
 

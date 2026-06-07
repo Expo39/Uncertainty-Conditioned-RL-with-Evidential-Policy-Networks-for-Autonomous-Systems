@@ -91,7 +91,7 @@ DEFAULT_STAGE = 1
 DEFAULT_BASELINE = "configs/baselines/full_method.yaml"
 
 # Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
-# spaces.Box with low/high=±inf always triggers this; it is harmless.
+# spaces.Box with low/high=+/-inf always triggers this; it is harmless.
 warnings.filterwarnings(
     "ignore",
     message=".*Box.*precision lowered.*",
@@ -556,16 +556,12 @@ def train(
             [make_env(config, bay_margin=bay_margin, rank=i) for i in range(n_workers)]
         )
 
-        # norm_reward divides rewards by a running estimate of the discounted-
-        # return std so the critic predicts a unit-variance target. The reward
-        # range is near-bimodal (large terminal bonuses dominate the per-step
-        # shaping), so an unnormalised critic struggles to track it.
-        # clip_reward raised from SB3's default 10.0 to 20.0 so the +50
-        # success terminal is not clipped during the early-training window
-        # where the reward-normalisation running_std is still small.
-        # gamma must match the PPO discount so the discounted-return running std
-        # is estimated at the same horizon the critic actually bootstraps at;
-        # the SB3 default (0.99) would otherwise mis-scale the normalised target.
+        # norm_reward divides rewards by a running discounted-return std so the
+        # critic predicts a unit-variance target; the reward range is near-bimodal
+        # (terminal bonuses dominate the per-step shaping) and hard to track raw.
+        # clip_reward=20.0 keeps the +50 success terminal from being clipped while
+        # the running std is still small early in training. gamma matches the PPO
+        # discount so the running std is estimated at the critic's bootstrap horizon.
         env = VecNormalize(
             train_vec_env,
             norm_obs=True,
