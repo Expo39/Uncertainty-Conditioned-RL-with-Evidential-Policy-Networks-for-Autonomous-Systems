@@ -40,7 +40,7 @@ def generate() -> Dict[str, Any]:
 
     lot = LotBuilder(name="trapezoid", corners=[p0, p1, p2, p3])
 
-    # ---------- Bays ---------------------------------------------------
+    # Bays
     centre_low = lot.row_centred(
         bay_type="perpendicular",
         n=5,
@@ -87,11 +87,11 @@ def generate() -> Dict[str, Any]:
         start_along=38.0,
     )
 
-    # ---------- Spawns -------------------------------------------------
+    # Spawns
     lot.spawn(x=-2.0, y=WIDTH_FRONT / 2.0, yaw_deg=0.0, primary=True)
     _diagonal_bottom_spawn(lot, p0, p1)
 
-    # ---------- Patrol path (4-waypoint loop) --------------------------
+    # Patrol path (4-waypoint loop)
     patrol = PatrolPath()
     y_lower = patrol.aisle_y(below=bottom_perp, above=centre_low)
     y_upper = patrol.aisle_y(below=centre_low, above=top_perp)
@@ -103,7 +103,7 @@ def generate() -> Dict[str, Any]:
     patrol.add(x_enter, y_upper + 5.0)
     lot.set_patrol(patrol)
 
-    # ---------- Pedestrian zones ---------------------------------------
+    # Pedestrian zones
     lot.add_zone(PedestrianZone.along_row(centre_low, side="south"))
     lot.add_zone(PedestrianZone.along_row(centre_mid_low, side="nose"))
 

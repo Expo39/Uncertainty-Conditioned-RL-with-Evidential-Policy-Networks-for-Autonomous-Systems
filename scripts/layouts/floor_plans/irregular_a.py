@@ -46,7 +46,7 @@ def generate() -> Dict[str, Any]:
     )
     dims_perp = lot.dims["perpendicular"]
 
-    # ---------- Bottom wall: single centred cluster --------------------
+    # Bottom wall: single centred cluster
     bottom_perp = lot.row_along_perimeter(
         bay_type="perpendicular",
         n=8,
@@ -55,7 +55,7 @@ def generate() -> Dict[str, Any]:
         start_along=16.5,
     )
 
-    # ---------- Left wall perpendicular bays ---------------------------
+    # Left wall perpendicular bays
     perp_corner_clearance = dims_perp["width"] / 2.0 + lot.wall_gap
     lot.row_along_perimeter(
         bay_type="perpendicular",
@@ -68,7 +68,7 @@ def generate() -> Dict[str, Any]:
         pack_from="end",
     )
 
-    # ---------- Diagonal top wall: perpendicular bays hugging P3 end ---
+    # Diagonal top wall: perpendicular bays hugging P3 end
     diag_wall_len = math.hypot(P3[0] - P2[0], P3[1] - P2[1])
     perp_spacing = dims_perp["width"]
     end_clearance = perp_corner_clearance
@@ -79,7 +79,7 @@ def generate() -> Dict[str, Any]:
         start_along=diag_wall_len - end_clearance - 10 * perp_spacing - 5.0,
     )
 
-    # ---------- Top-flat back-to-back perp rows ------------------------
+    # Top-flat back-to-back perp rows
     top_flat_back = lot.row_along_perimeter(
         bay_type="perpendicular",
         n=6,
@@ -88,7 +88,7 @@ def generate() -> Dict[str, Any]:
     )
     top_flat_facing = lot.facing_row(top_flat_back, gap=TOP_FLAT_AISLE, n=4)
 
-    # ---------- Right wall perpendicular bays --------------------------
+    # Right wall perpendicular bays
     right_perp = lot.row_along_perimeter(
         bay_type="perpendicular",
         n=4,
@@ -96,12 +96,12 @@ def generate() -> Dict[str, Any]:
         centred=True,
     )
 
-    # ---------- Spawns -------------------------------------------------
+    # Spawns
     lot.spawn(x=3.0, y=25.0, yaw_deg=0.0, primary=True)
     _diagonal_top_spawn(lot)
     lot.spawn(x=45.0, y=5.0, yaw_deg=90.0)
 
-    # ---------- Patrol path --------------------------------------------
+    # Patrol path
     patrol = PatrolPath()
     y_lower = patrol.aisle_y(below=bottom_perp, above=0.0)
     y_upper = patrol.aisle_y(below=0.0, above=diag_perp)
@@ -113,7 +113,7 @@ def generate() -> Dict[str, Any]:
     patrol.add(x_right, y_lower + 4.0)
     lot.set_patrol(patrol)
 
-    # ---------- Pedestrian zones ---------------------------------------
+    # Pedestrian zones
     lot.add_zone(PedestrianZone.along_row(bottom_perp, side="north"))
     lot.add_zone(PedestrianZone.along_row(top_flat_facing, side="south"))
     lot.add_zone(PedestrianZone.along_row(right_perp, side="west"))

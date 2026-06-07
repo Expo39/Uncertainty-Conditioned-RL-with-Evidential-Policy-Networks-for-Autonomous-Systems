@@ -147,7 +147,7 @@ def _draw_layout_overlays(
     Location = carla.Location
     z = float(layout.get("origin", {}).get("z", 0.3)) + 0.15
 
-    # --- Bay outlines ---
+    # Bay outlines
     for bay_idx, bay in enumerate(layout.get("bays", [])):
         bay_type = bay.get("bay_type", "perpendicular")
         is_target = bay.get("id", bay.get("bay_id", "")) == target_bay_id
@@ -191,7 +191,7 @@ def _draw_layout_overlays(
             life_time=life_time,
         )
 
-    # --- Lot perimeter boundary ---
+    # Lot perimeter boundary
     lot_corners_raw = layout.get("corners", [])
     if lot_corners_raw:
         lot_corners: List[Tuple[float, float]] = [
@@ -205,7 +205,7 @@ def _draw_layout_overlays(
                 debug, ax, ay, bxc, byc, z + 0.1, _COL_LOT, 0.06, life_time
             )
 
-        # --- Soft out-of-bounds boundary (lot polygon inflated by the margin) ---
+        # Soft out-of-bounds boundary (lot polygon inflated by the margin)
         if oob_inflation_margin is not None:
             oob_corners = inflate_polygon(lot_corners, oob_inflation_margin)
             n_oob = len(oob_corners)
@@ -216,7 +216,7 @@ def _draw_layout_overlays(
                     debug, ax, ay, bxc, byc, z + 0.1, _COL_OOB, 0.06, life_time
                 )
 
-    # --- Spawn point ---
+    # Spawn point
     spawn = layout.get("spawn_transform", {})
     sx = float(spawn.get("x", 0.0))
     sy = float(spawn.get("y", 0.0))
@@ -233,7 +233,7 @@ def _draw_layout_overlays(
         life_time=life_time,
     )
 
-    # --- Extra spawn points ---
+    # Extra spawn points
     for i, extra in enumerate(layout.get("extra_spawn_transforms", [])):
         ex = float(extra.get("x", 0.0))
         ey = float(extra.get("y", 0.0))
@@ -250,7 +250,7 @@ def _draw_layout_overlays(
             life_time=life_time,
         )
 
-    # --- Pedestrian zones ---
+    # Pedestrian zones
     if show_pedestrians:
         for zone_idx, zone_raw in enumerate(layout.get("pedestrian_zones", [])):
             x_min, x_max, y_min, y_max = zone_bbox(zone_raw)
@@ -275,7 +275,7 @@ def _draw_layout_overlays(
                 life_time=life_time,
             )
 
-    # --- Patrol waypoints ---
+    # Patrol waypoints
     if show_patrol:
         waypoints: List[Tuple[float, float]] = [
             (float(wp["x"]), float(wp["y"]))
@@ -455,7 +455,7 @@ def _draw_sensor_overlays(
             z=vz + lz,
         )
 
-    # ---- IMU ---------------------------------------------------------------
+    # IMU
     imu_m = sensors_cfg.get("imu", {}).get("mount", {})
     imu_loc = _to_world(
         float(imu_m.get("x", 0.0)),
@@ -472,7 +472,7 @@ def _draw_sensor_overlays(
         ground_z=ground_z,
     )
 
-    # ---- 2D LiDAR (obstacle detection) ------------------------------------
+    # 2D LiDAR (obstacle detection)
     lid_m = sensors_cfg.get("lidar", {}).get("mount", {})
     lx = float(lid_m.get("x", 2.4))
     ly = float(lid_m.get("y", 0.0))
@@ -520,7 +520,7 @@ def _draw_sensor_overlays(
             draw_radials=False,
         )
 
-    # ---- GNSS antenna ---------------------------------------
+    # GNSS antenna
     _gnss_locs: List[Any] = []
     for sensor_key, label in _GNSS_LABELS.items():
         if sensor_key not in sensors_cfg:

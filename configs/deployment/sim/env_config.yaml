@@ -38,7 +38,7 @@ carla_sensors:
 
   lidar:  # 2D LiDAR (SICK TiM571). CARLA spawn keys only - range/channels come
     # from sensor_config.yaml (the physical sensor suite source), injected by
-    # load_env_config. See documentation/detailed_notes/sensor_noise_models.md.
+    # load_env_config.
     points_per_second: 12150  # ~810 pts/scan at 15 Hz. Min-distance features are density-invariant.
     rotation_frequency: 15.0  # Native scan rate (Hz). CARLA flushes on scan boundary.
     upper_fov: 0.0  # Flat 2D plane.

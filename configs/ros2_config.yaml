@@ -1,6 +1,5 @@
 # ROS 2 Configuration for the RTK-GNSS + IMU localisation pipeline.
 # EKF fuses GNSS odometry (odom0), COG heading (pose0), and IMU yaw rate (imu0).
-# See detailed_notes/ekf_pipeline.md for pipeline architecture and tuning rationale.
 
 carla_topics:
   imu: "/carla/ego_vehicle/imu"
@@ -14,11 +13,8 @@ ekf:
   world_frame: "odom"
   odom_frame: "odom"
   base_link_frame: "ego_vehicle"
-  # IMU: vyaw (index 11) only. Linear acceleration (ax, ay) is deliberately
-  # disabled - robot_localization stores ax/ay in the odom frame, so the
-  # body-to-odom rotation makes every accel update couple into the yaw state
-  # and fight the COG heading correction. With a 20 Hz GNSS velocity update
-  # the accelerometer is no longer needed for velocity prediction anyway.
+  # IMU: vyaw (index 11) only. Linear acceleration is not fused (the 20 Hz GNSS
+  # velocity update covers velocity prediction).
   imu0: "/carla/ego_vehicle/imu/stamped"
   # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   imu0_config: [false, false, false, false, false, false,
@@ -27,11 +23,9 @@ ekf:
   imu0_differential: false
   imu0_relative: false
 
-  # Initial state covariance (15x15). Reloaded at every /set_pose. Active
-  # pose states (x, y, yaw) use 0.25; velocity states (vx, vy, vyaw) use 4.0
-  # so the first GNSS / COG correction can dominate any stale terminal value
-  # carried over from the previous episode. Inert states use 1.0e-9 to keep
-  # the matrix positive-definite.
+  # Initial state covariance (15x15), reloaded at every /set_pose. Active pose
+  # states (x, y, yaw) use 0.25, velocity states 4.0 so the first correction
+  # dominates a stale value; inert states use 1.0e-9 to stay positive-definite.
   initial_estimate_covariance: [
     0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
@@ -77,11 +71,9 @@ ekf:
   pose0_differential: false
   pose0_relative: false
 
-  # GNSS flat-earth odometry from GnssNoiseRelayNode. Fuses position
-  # (x, y - indices 0, 1) and body-frame longitudinal speed (vx - index 6).
-  # vy is not fused: the relay publishes scalar GNSS speed as vx only,
-  # because a 2D velocity vector carries a direction that conflicts with
-  # the EKF yaw state through slip angle.
+  # GNSS flat-earth odometry from GnssNoiseRelayNode. Fuses position (x, y) and
+  # body-frame longitudinal speed (vx); vy is not fused (the relay publishes
+  # scalar GNSS speed as vx only).
   odom0: "/odometry/gps"
   # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   odom0_config: [true, true, false, false, false, false,

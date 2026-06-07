@@ -1,7 +1,6 @@
 # Training Configuration
 # PPO hyperparameters, network architecture, evidential settings, and training schedule.
 # Environment settings live in deployment/sim/env_config.yaml.
-# See detailed_notes/ekf_pipeline.md, reward_function.md, evidential_nig_initialisation.md.
 
 # PPO hyperparameters
 learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over total_timesteps.
@@ -9,12 +8,12 @@ learning_rate_final: 0.00001  # Non-zero LR floor so an early-converging run kee
 n_steps: 2048  # Steps per PPO update (~4.7 episodes at ~437 policy decisions each).
 batch_size: 256
 n_epochs: 5
-gamma: 0.997  # Discount; horizon 1/(1-gamma) ~= 333 steps so the +50 terminal reaches the approach phase.
+gamma: 0.997  # Discount; effective horizon 1/(1-gamma) ~= 333 steps.
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
 ent_coef: 0.02  # Entropy bonus at start; linear decay to ent_coef_final.
-ent_coef_final: 0.006  # Entropy floor. Action std IS sqrt(aleatoric), so this floor must let the policy commit late yet still explore early.
+ent_coef_final: 0.006  # Entropy floor (the action std is sqrt(aleatoric)).
 vf_coef: 0.5
 max_grad_norm: 0.5
 target_kl: 0.04  # Early-stop epochs above this KL; clip_range is the primary safety, this a backup.
@@ -22,9 +21,9 @@ target_kl: 0.04  # Early-stop epochs above this KL; clip_range is the primary sa
 # Network architecture
 net_arch: [256, 256]  # Actor and critic hidden layers.
 activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
-log_std_init: -0.6  # Initial Gaussian action log-std (std ~= 0.55) so the policy starts committed. Standard head only; not an ablation variable.
+log_std_init: -0.6  # Initial Gaussian action log-std (std ~= 0.55). Standard head only.
 
-# Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
+# Evidential network settings.
 evidential:
   lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
@@ -38,7 +37,7 @@ log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 8000000  # Generous budget so the LR/ent_coef schedules stretch over a long horizon; stop when success_rate plateaus, not when a schedule hits its floor.
+total_timesteps: 8000000  # Budget over which the LR/ent_coef schedules decay.
 seed: 42  # Master RNG seed. The ablation runs multiple seeds via --seed / the Makefile, not a list here.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
 n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).
