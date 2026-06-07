@@ -433,7 +433,6 @@ class SensorManager:
         CARLAParkingEnv.reset(). A no-op when noise is disabled or the limit is zero.
 
         @param rng: numpy Generator (np_random from CARLAParkingEnv) for reproducibility.
-        @see documentation/detailed_notes/sensor_noise_models.md
         """
         # Reseed the per-point noise generator from a child seed drawn off the
         # env RNG. This ties the sensor-thread noise stream to the training seed
@@ -463,7 +462,6 @@ class SensorManager:
         @param points_xyz: (N, 3) float32 array in vehicle frame (x-forward, y-left, z-up)
                            after _LIDAR_SIGN_FLIP has been applied.
         @return (M, 3) float32 array with M <= N after noise and range filtering.
-        @see documentation/detailed_notes/sensor_noise_models.md
         """
         if not self._lidar_noise_enabled or len(points_xyz) == 0:
             return points_xyz

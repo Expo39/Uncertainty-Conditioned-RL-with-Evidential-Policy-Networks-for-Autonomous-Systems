@@ -7,8 +7,7 @@ The project layers YAML configs in one precedence chain:
     sensor_config < agent_config < env_config (+ stage) < train_config (+ baseline)
 
 Every consumer (training, tuning, the demo driver) must merge through the helpers
-here so the precedence is defined once. @see configs/README.md for the chain and
-configs/CLAUDE.md for which key lives in which file.
+here so the precedence is defined once.
 """
 
 from typing import Any, Dict, FrozenSet

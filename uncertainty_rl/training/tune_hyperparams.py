@@ -7,9 +7,6 @@ hyperparameters. Each trial runs a short training session and evaluates
 env/success_rate (primary), with env/mean_progress_reward as a tiebreaker
 before any success has been observed. Best params are written back to
 train_config.yaml.
-
-@see documentation/detailed_notes/hyperparameter_search.md for search space
-     design rationale and literature references.
 """
 
 import argparse

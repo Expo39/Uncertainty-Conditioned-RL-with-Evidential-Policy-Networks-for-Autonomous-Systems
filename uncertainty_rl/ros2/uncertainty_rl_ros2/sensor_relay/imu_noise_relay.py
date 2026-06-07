@@ -7,8 +7,6 @@ The CARLA ROS bridge publishes sensor_msgs/Imu with zero covariance on all
 fields. robot_localization interprets zero covariance as infinite sensor
 reliability, which pins the EKF state to the IMU measurement with no
 uncertainty growth between GNSS fixes.
-
-See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 """
 
 import json
