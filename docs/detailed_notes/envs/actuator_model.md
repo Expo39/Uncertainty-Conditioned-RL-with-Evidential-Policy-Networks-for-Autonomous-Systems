@@ -5,34 +5,29 @@ Extracted from `uncertainty_rl/envs/sim/carla_parking.py` (`step()`) and
 
 This note records the physical actuator model the env imposes on the policy
 action, the derivation of each rate limit value from the published literature,
-and the rationale for moving these constraints out of the reward function into
-the env's action mapping.
+and why these constraints live in the env's action mapping rather than in the
+reward function.
 
 ## 1 Motivation
 
 A trained policy must produce actions that a real vehicle's actuators can
-physically deliver. Earlier iterations of this project used soft reward
-penalties to discourage chatter (a `-0.01 * (action - prev_action)^2` shape on
-each axis). Two failure modes were observed:
+physically deliver. The constraint is enforced as a hard rate limit in the
+env's action mapping rather than as a soft reward penalty on action change.
 
-- **Coefficient too small.** A weak penalty (e.g. -0.01 per change^2) pays only
-  a few tenths reward per episode against a +50 success terminal. The policy
-  learns to ignore the penalty and produces bang-bang outputs (throttle flipping
-  0 <-> 1 on ~9 % of consecutive decisions; brake on ~11 %).
-- **Coefficient too large.** A strong penalty (e.g. -0.1 per change^2) is
-  minimised by *any* constant action regardless of magnitude (a symmetric
-  quadratic has a minima everywhere on flat lines). The policy locks steering,
-  throttle, and brake at constants, drives in circles, and times out. Success
-  rate collapses to zero.
+A soft penalty (a `-k * (action - prev_action)^2` shape per axis) is the wrong
+tool because it conflates "do not change the actuator" with "the actuator
+cannot change that quickly" - only the second is physically true - and neither
+coefficient regime works:
 
-Both failures share a structural cause: a soft penalty conflates "do not
-change the actuator" with "the actuator cannot change that quickly". Only the
-second statement is physically true.
+- A weak penalty pays only a few tenths reward per episode against a +50
+  success terminal, so the policy ignores it and produces bang-bang outputs.
+- A strong symmetric quadratic is minimised by *any* constant action regardless
+  of magnitude, so the policy locks the actuators at constants, drives in
+  circles, and times out.
 
-The fix is to enforce the second statement directly in the env. The policy is
-free to command any action; the env clamps the delivered command to a
-physically achievable value before forwarding it to CARLA. The reward
-function then becomes outcome-only.
+Enforcing the rate limit directly in the env keeps the policy free to command
+any action while clamping the delivered command to a physically achievable
+value before forwarding it to CARLA. The reward function is then outcome-only.
 
 ## 2 Model
 
@@ -86,9 +81,8 @@ Manca et al.) and the MPC comfort/control envelope (~ 115 deg/s, Domina and
 Tihanyi), so the rate is physically realisable and still transfers to
 hardware. It is fast enough that the policy can complete a full lock-to-lock
 manoeuvre in 140 / 70 = ~ 2.0 s, slow enough that step changes of 180 deg in
-one decision are impossible. The earlier 0.15 (52.5 deg/s) was conservative
-relative to both published bounds; 0.20 gives a brisker parking-lot manoeuvre
-while remaining defensible against the cited limits.
+one decision are impossible, and brisk enough for a parking-lot manoeuvre
+while remaining defensible against both cited bounds.
 
 We do not separately model EPS slowdown at standstill. It is a second-order
 effect; modelling it adds complexity without affecting the outcome metric

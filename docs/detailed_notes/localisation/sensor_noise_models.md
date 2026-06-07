@@ -145,8 +145,6 @@ Variance at 20 Hz: 3.73157e-9 * 20 = 7.46314e-8 (rad/s)^2
 The code computes this exactly: `(0.0035 * pi/180)**2 * 20`.
 Config key: `imu_noise_relay.imu_gyro_variance = 7.4631e-8`
 
-Previous value was 1.0e-7 - not derived from the datasheet.
-
 **Accel covariance:**
 
 Noise density: 0.14 mg/sqrt(Hz)                                     (Table 2)
@@ -156,8 +154,6 @@ Variance at 20 Hz: 1.88623e-6 * 20 = 3.77246e-5 (m/s^2)^2
 
 The code computes this exactly: `(0.14e-3 * 9.81)**2 * 20`.
 Config key: `imu_noise_relay.imu_accel_variance = 3.77245e-5`
-
-Previous value was 3.76e-5 - a rough approximation.
 
 **Diagonal covariance matrices** (3x3) are pre-built once at node init and
 assigned to the published message. `orientation_covariance` uses the -1.0
