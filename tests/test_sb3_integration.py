@@ -873,7 +873,7 @@ class TestUncertaintyConditionedActorWiring:
     @pytest.fixture
     def obs_space(self) -> spaces.Box:
         """
-        @brief 12-dim observation space (full obs with covariance + obstacle dims).
+        @brief 13-dim observation space (full obs with covariance + obstacle dims).
         """
         return spaces.Box(
             low=-np.inf,

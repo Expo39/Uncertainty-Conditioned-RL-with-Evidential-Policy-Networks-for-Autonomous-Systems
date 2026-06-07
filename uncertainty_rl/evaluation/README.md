@@ -6,7 +6,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 - 9 evaluation conditions sweep GNSS noise from $1\times$ (RTK fixed, ~2 cm) to $250\times$ (~5 m)
 - Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()`
-- Success: position error $< 0.5$ m, orientation $< 10$ deg, speed $< 0.1$ m/s
+- Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `EVAL_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `success_dwell_steps`
 - `n_episodes = 100` per condition, deterministic (mean) actions
 - OOD conditions use `irregular_a` floor plan (never seen during training)
 - No weather variation - FlatPlane does not render weather effects
