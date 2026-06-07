@@ -8,6 +8,14 @@ This note documents the derivation of all sensor noise parameters used in simula
 with explicit references to the source datasheets. It exists here rather than in the
 source files to keep inline comments concise.
 
+## Target hardware
+
+- **IMU**: VectorNav VN-100 Rugged (tactical-grade MEMS AHRS)
+- **GNSS**: u-blox ZED-F9P-05B (multi-band RTK module)
+- **LiDAR**: SICK TiM571 (obstacle detection only; not in the EKF localisation pipeline)
+
+All noise injection in the simulator is gated by master flags (`enable_gnss_noise`, `enable_imu_noise`). In real deployment both flags are false and every mechanism below becomes a pass-through.
+
 ---
 
 ## 1. SICK TiM571 2D LiDAR (P/N 1075091)

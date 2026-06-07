@@ -51,7 +51,7 @@ come and go.
 | `parking_scenarios.floor_plans` | Layout-file paths and OOD flags |
 
 Real LiDAR-noise parameters under `carla_sensors.lidar.noise` are documented
-in [`docs/detailed_notes/sensor_noise_models.md`](../../../docs/detailed_notes/sensor_noise_models.md).
+in [`docs/detailed_notes/localisation/sensor_noise_models.md`](../../../docs/detailed_notes/localisation/sensor_noise_models.md).
 
 ---
 
@@ -101,4 +101,4 @@ world.
 - [configs/README.md](../../README.md) - full configs directory map and loading chain
 - [configs/deployment/README.md](../README.md) - shared sensor and agent configs
 - [uncertainty_rl/envs/README.md](../../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that consumes these files
-- [docs/detailed_notes/sensor_noise_models.md](../../../docs/detailed_notes/sensor_noise_models.md) - LiDAR and IMU noise derivation
+- [docs/detailed_notes/localisation/sensor_noise_models.md](../../../docs/detailed_notes/localisation/sensor_noise_models.md) - LiDAR and IMU noise derivation

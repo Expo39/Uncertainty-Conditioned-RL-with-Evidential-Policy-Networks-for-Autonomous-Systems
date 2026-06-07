@@ -170,5 +170,5 @@ obs, reward, terminated, truncated, info = env.step(action)
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [networks/README.md](../networks/README.md) - evidential actor that consumes this observation
 - [ros2/README.md](../ros2/README.md) - EKF covariance extraction pipeline
-- [docs/detailed_notes/observation_space.md](../../docs/detailed_notes/observation_space.md) - observation design rationale
-- [docs/detailed_notes/layout.md](../../docs/detailed_notes/layout.md) - floor plan geometry and DSL
+- [docs/detailed_notes/envs/observation_space.md](../../docs/detailed_notes/envs/observation_space.md) - observation design rationale
+- [docs/detailed_notes/envs/layout.md](../../docs/detailed_notes/envs/layout.md) - floor plan geometry and DSL

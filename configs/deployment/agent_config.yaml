@@ -16,7 +16,7 @@ max_ego_speed_ms: 8.0  # Speed limit (m/s).
 # Rate limits and a brake-overrides-throttle constraint applied to the policy
 # action before it is forwarded to CARLA or the real vehicle. Units are
 # normalised action units per policy decision (0.2 s with action_repeat=4 and
-# carla_timestep=0.05). See docs/detailed_notes/actuator_model.md.
+# carla_timestep=0.05). See docs/detailed_notes/envs/actuator_model.md.
 # ---------------------------------------------------------------------------
 actuator_model:
   steer_max_delta_per_decision: 0.20  # Steer rate limit (~70 deg/s at the road wheel). See actuator_model.md.

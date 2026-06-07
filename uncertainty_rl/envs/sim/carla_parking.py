@@ -193,7 +193,7 @@ class CARLAParkingEnv(gym.Env):
                brake_override_throttle_threshold. Clamps the policy command
                in step() before forwarding to CARLA. If None or missing keys,
                defaults match production drive-by-wire literature; see
-               docs/detailed_notes/actuator_model.md.
+               docs/detailed_notes/envs/actuator_model.md.
         """
         super().__init__()
 
@@ -210,7 +210,7 @@ class CARLAParkingEnv(gym.Env):
         self._use_extra_spawns = use_extra_spawns
 
         # Actuator rate limits and brake-overrides-throttle threshold. See
-        # docs/detailed_notes/actuator_model.md.
+        # docs/detailed_notes/envs/actuator_model.md.
         am = actuator_model or {}
         self._steer_max_delta: float = float(
             am.get("steer_max_delta_per_decision", 0.15)

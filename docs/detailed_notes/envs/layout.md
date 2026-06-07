@@ -11,7 +11,7 @@ Geometry derivations and design rationale for the three parking-lot layouts used
 
 ## See also
 
-- `docs/detailed_notes/observation_space.md` - LiDAR sector derivation that depends
+- `docs/detailed_notes/envs/observation_space.md` - LiDAR sector derivation that depends
   on lot geometry.
 
 ---

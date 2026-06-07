@@ -177,5 +177,5 @@ Active observation dimensions are derived at runtime.
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [networks/README.md](../networks/README.md) - EvidentialPPO and EvidentialActorCriticPolicy
 - [evaluation/README.md](../evaluation/README.md) - evaluation after training completes
-- [docs/detailed_notes/hyperparameter_search.md](../../docs/detailed_notes/hyperparameter_search.md) - search space design rationale
-- [docs/detailed_notes/evidential_nig_initialisation.md](../../docs/detailed_notes/evidential_nig_initialisation.md) - NIG init and regularisation derivation
+- [docs/detailed_notes/training/hyperparameter_search.md](../../docs/detailed_notes/training/hyperparameter_search.md) - search space design rationale
+- [docs/detailed_notes/networks/evidential_nig_initialisation.md](../../docs/detailed_notes/networks/evidential_nig_initialisation.md) - NIG init and regularisation derivation
