@@ -82,20 +82,18 @@ CORRIDOR_W_HEAD = 3.0
 # ENDGAME_HOLD_COEF*stopped) * on_line * aligned * near_depth. MOVE is the value
 # while still moving; +HOLD when fully stopped on the line.
 #
-# Sized to give a meaningful final-approach PRECISION gradient. The corridor
-# progress is normalised to a full-episode sum of +1 that is essentially complete
-# once the car ARRIVES near the bay; the last fraction of a metre of precision that
-# a strict acceptance box (margin -0.25) demands is then shaped almost entirely by
-# this endgame term. Too small and the policy plateaus at "stop just outside the
-# box" (the dense reward is spent on arrival, leaving only the sparse +50 to chase).
-# The coefficients are bounded ABOVE by the loiter-at-goal constraint: a policy that
-# hovers near the goal without completing must never out-earn going for the +50. At
-# (0.02, 0.03) the maximum endgame an episode can accrue (~18 over a full hover) stays
-# well below the discounted +50 (~30-39 at gamma 0.99 and 25-50 decisions out), so
-# completing the park strictly dominates hovering; raising them much further (e.g.
-# 0.03/0.04) lets a hover rival the +50 and creates a loiter optimum.
-ENDGAME_MOVE_COEF = 0.02
-ENDGAME_HOLD_COEF = 0.03
+# A modest held-stop finisher on top of the corridor progress. With progress scaled
+# to a full-episode sum of PROGRESS_TARGET (~11), the progress gradient is itself
+# strong near the goal and does the bulk of the final-approach precision work; this
+# endgame term only sharpens the commit to a held stop. The coefficients are bounded
+# ABOVE by the loiter-at-goal constraint: a policy that hovers near the goal without
+# completing must never out-earn going for the +50. At (0.015, 0.015) the maximum
+# endgame an episode can accrue (~11 over a full hover) stays below the discounted +50
+# (~35 at gamma 0.99, ~25 decisions out), so completing the park strictly dominates
+# hovering. Raising them toward ~0.04 lets a hover rival the +50 and creates a loiter
+# optimum, so the precision lever lives in PROGRESS_TARGET, not here.
+ENDGAME_MOVE_COEF = 0.015
+ENDGAME_HOLD_COEF = 0.015
 
 # ---------------------------------------------------------------------------
 # Obstacle Clearance Shaping (safety nudge, not a success criterion)
@@ -186,26 +184,38 @@ TIMEOUT_POS_COEF = 1.5
 TIMEOUT_YAW_COEF = 2.5
 
 # Lower bound on the NORMALISED graded timeout penalty. The graded penalty is divided
-# by the per-episode start potential before clamping, so it lives on the same unit
-# scale as the corridor progress (full episode sum +1). A worst-case timeout therefore
-# costs about as much as forfeiting the entire progress reward, while the fixed
-# terminals stay far larger in magnitude - preserving success(+50) > timeout > ego
-# collision(-25) so the policy never has an incentive to crash deliberately to escape
-# a worse timeout.
-TIMEOUT_PENALTY_FLOOR_NORM = -1.0
+# by the per-episode start potential and scaled by PROGRESS_TARGET (the same transform
+# the corridor progress uses), so it lives on the dense progress scale (full episode
+# progress sum = PROGRESS_TARGET ~ 11). A worst-case timeout therefore costs about as
+# much as forfeiting the entire progress reward, while the fixed terminals stay larger
+# in magnitude - preserving success(+50) > timeout(>= -11) > ego collision(-25) so the
+# policy never has an incentive to crash deliberately to escape a worse timeout.
+TIMEOUT_PENALTY_FLOOR_NORM = -11.0
 
 # Floor on the per-episode start potential |phi(start)| used as the reward
 # normaliser. Progress and the graded timeout penalty are divided by
 # max(|phi(start)|, PHI_NORM_FLOOR) so that an episode whose spawn happens to sit
 # very close to the bay (|phi(start)| -> 0) cannot blow the normalised reward up.
-# Above this floor every bay yields a full-episode progress sum of +1; below it the
-# (rare) near-spawn episode is scaled by the floor instead.
 # @note The minimum |phi(start)| over every spawn-bay pair in the committed layouts
 #   (including the stage-4 extra spawns) is ~7.7 m (trapezoid), comfortably above
-#   this floor - so in practice the floor never clamps a real episode and the +1
-#   invariant holds for all stages. The floor only guards against future layouts
-#   placing a spawn closer than ~5 m of potential to its bay.
+#   this floor - so in practice the floor never clamps a real episode and the
+#   per-bay-equal invariant holds for all stages. The floor only guards against
+#   future layouts placing a spawn closer than ~5 m of potential to its bay.
 PHI_NORM_FLOOR = 5.0
+
+# Per-episode progress target: every bay's full-episode progress sum equals this,
+# i.e. progress = (phi(curr) - phi(prev)) / max(|phi(start)|, PHI_NORM_FLOOR) *
+# PROGRESS_TARGET. The /|phi(start)| factor EQUALISES bays (a far bay no longer
+# offers a larger shaping pool than a near one - the loophole that rewarded driving
+# to a fixed memorised bay). The * PROGRESS_TARGET factor then sets the ABSOLUTE
+# dense scale. It is set to the representative single-bay start potential so the
+# terminal-to-dense ratio (+50 success / ~11 dense ~ 4.6x) matches the balance under
+# which the value function fits the return cleanly; normalising all the way to 1.0
+# leaves a ~50x terminal spike the critic cannot fit (slow, under-converged learning).
+# The terminals (+50 / -25 / -10) are deliberately NOT scaled by this, so the
+# completion signal stays large and undiluted as success becomes scarce in the later
+# curriculum stages.
+PROGRESS_TARGET = 11.0
 
 # ---------------------------------------------------------------------------
 # Soft Out-of-Bounds Boundary (sim training)
@@ -223,16 +233,16 @@ OOB_INFLATION_MARGIN = 5.0
 # Applied RAW (NOT divided by the per-episode normaliser S): the lot edge is a
 # bay-independent world boundary, so its cost must not shrink for far bays (which
 # sit closest to the edge, where it matters most). Sized to sit sensibly against
-# the unit-scale progress reward (whose full-episode sum is +1): a brief excursion
-# costs a small fraction of the progress budget, while a sustained run-out still
-# accumulates to the termination limit.
-OOB_STEP_PENALTY = -0.05
+# the dense progress reward (whose full-episode sum is PROGRESS_TARGET ~ 11, i.e.
+# ~0.11 per decision): a brief excursion costs a few decisions' worth of progress,
+# while a sustained run-out still accumulates to the termination limit.
+OOB_STEP_PENALTY = -0.5
 
 # Accumulated out-of-bounds cost (sum of |OOB_STEP_PENALTY| over outside steps)
 # at which the episode terminates with no extra crash-magnitude penalty - the
-# accrued per-step penalties are the cost. At OOB_STEP_PENALTY = -0.05 this is
+# accrued per-step penalties are the cost. At OOB_STEP_PENALTY = -0.5 this is
 # reached after ~20 consecutive outside decisions, so a committed run-out
 # terminates while a momentary clip of the boundary does not. Sized below the ego
 # collision penalty so leaving the lot is never punished harder than a real
 # collision.
-OOB_TERMINATION_PENALTY_LIMIT = 1.0
+OOB_TERMINATION_PENALTY_LIMIT = 10.0

@@ -57,6 +57,7 @@ from uncertainty_rl.utils.constants import (
     OOB_STEP_PENALTY,
     OOB_TERMINATION_PENALTY_LIMIT,
     PHI_NORM_FLOOR,
+    PROGRESS_TARGET,
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
     TIMEOUT_PENALTY_FLOOR_NORM,
@@ -1192,14 +1193,17 @@ class CARLAParkingEnv(gym.Env):
         # arc out-earns a crooked shortcut that ends at the same pose.
         # @see _corridor_potential.
         #
-        # Normalised by the per-episode start potential so the full-episode progress
-        # sum is +1 for every bay regardless of its distance from the spawn. Without
-        # this, a far bay offers a far larger total shaping pool than a near one (it
-        # can exceed the +50 terminal), and any forward motion that closes shared
-        # depth banks reward toward EVERY bay - which rewards driving toward a fixed
-        # memorised bay instead of the commanded one. @see PHI_NORM_FLOOR.
+        # Divided by the per-episode start potential and scaled by PROGRESS_TARGET so
+        # the full-episode progress sum equals PROGRESS_TARGET for every bay,
+        # regardless of its distance from the spawn. The /start factor EQUALISES bays
+        # (without it a far bay offers a far larger shaping pool than a near one and
+        # any forward motion that closes shared depth banks reward toward EVERY bay,
+        # rewarding a drive to a fixed memorised bay over the commanded one). The
+        # *PROGRESS_TARGET factor sets the absolute dense scale so the terminal-to-
+        # dense ratio lets the value function fit the return cleanly. @see
+        # PROGRESS_TARGET, PHI_NORM_FLOOR.
         curr_phi = self._corridor_potential(along, cross, heading_err)
-        progress = (curr_phi - self._prev_phi) / self._phi_start
+        progress = (curr_phi - self._prev_phi) / self._phi_start * PROGRESS_TARGET
         self._prev_phi = curr_phi
 
         # Corridor shaping factors, each in [0, 1]:
@@ -2281,7 +2285,8 @@ class CARLAParkingEnv(gym.Env):
                     TIMEOUT_POS_COEF * reward_diag["pos_error"]
                     + TIMEOUT_YAW_COEF * reward_diag["orientation_error"]
                 )
-                / self._phi_start,
+                / self._phi_start
+                * PROGRESS_TARGET,
                 TIMEOUT_PENALTY_FLOOR_NORM,
             )
 
