@@ -56,9 +56,10 @@ from uncertainty_rl.utils.constants import (
     OOB_INFLATION_MARGIN,
     OOB_STEP_PENALTY,
     OOB_TERMINATION_PENALTY_LIMIT,
+    PHI_NORM_FLOOR,
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
-    TIMEOUT_PENALTY_FLOOR,
+    TIMEOUT_PENALTY_FLOOR_NORM,
     TIMEOUT_POS_COEF,
     TIMEOUT_YAW_COEF,
     VEHICLE_STATE_DIM,
@@ -494,6 +495,13 @@ class CARLAParkingEnv(gym.Env):
         # in _compute_reward. progress = phi(curr) - phi(prev) telescopes to zero
         # over any loiter, so a stationary car earns nothing from it.
         self._prev_phi: float = 0.0
+        # Per-episode reward normaliser: |phi(start)| (floored). progress and the
+        # graded timeout penalty are divided by this so every bay - near or far -
+        # yields a full-episode progress sum of +1, and the timeout penalty stays on
+        # the same unit scale regardless of how far the sampled bay is from the
+        # spawn. Set on reset; the floor avoids a blow-up when the spawn is already
+        # near the bay. @see PHI_NORM_FLOOR.
+        self._phi_start: float = PHI_NORM_FLOOR
 
         # Corridor potential weights (shaping, hence code not YAML; values in
         # constants.py). cross-track and heading are weighted above along-track so
@@ -1183,8 +1191,15 @@ class CARLAParkingEnv(gym.Env):
         # ONTO the centreline and SQUARE before advancing in depth - so an aligned
         # arc out-earns a crooked shortcut that ends at the same pose.
         # @see _corridor_potential.
+        #
+        # Normalised by the per-episode start potential so the full-episode progress
+        # sum is +1 for every bay regardless of its distance from the spawn. Without
+        # this, a far bay offers a far larger total shaping pool than a near one (it
+        # can exceed the +50 terminal), and any forward motion that closes shared
+        # depth banks reward toward EVERY bay - which rewards driving toward a fixed
+        # memorised bay instead of the commanded one. @see PHI_NORM_FLOOR.
         curr_phi = self._corridor_potential(along, cross, heading_err)
-        progress = curr_phi - self._prev_phi
+        progress = (curr_phi - self._prev_phi) / self._phi_start
         self._prev_phi = curr_phi
 
         # Corridor shaping factors, each in [0, 1]:
@@ -2023,8 +2038,22 @@ class CARLAParkingEnv(gym.Env):
                 math.radians(t.rotation.yaw),
             )
             self._prev_phi = self._corridor_potential(along0, cross0, head0)
+            # Fix the per-episode normaliser from the start potential. phi is <= 0
+            # and 0 at the parked pose, so |phi(start)| is the total potential the
+            # car must close to park; dividing progress by it makes the full-episode
+            # progress sum +1 for every bay. Floored to avoid a blow-up when the
+            # spawn already sits near the bay.
+            # @note The floor only preserves the +1 invariant while every realistic
+            #   spawn-to-bay start potential exceeds PHI_NORM_FLOOR. Spawn variety
+            #   (curriculum stage 4 onward) widens the spawn set: if any spawn can
+            #   land close enough to its commanded bay that |phi(start)| < the floor,
+            #   that episode is under-rewarded (progress sum < 1). Check the closest
+            #   realistic spawn-to-bay potential against PHI_NORM_FLOOR when spawn
+            #   variety is enabled.
+            self._phi_start = max(abs(self._prev_phi), PHI_NORM_FLOOR)
         else:
             self._prev_phi = 0.0
+            self._phi_start = PHI_NORM_FLOOR
 
         state = self._get_state()
 
@@ -2237,20 +2266,23 @@ class CARLAParkingEnv(gym.Env):
         # Graded timeout penalty: judge the final state when the clock runs out
         # without a park. Scaled by how far and how misaligned the car ended, so
         # ending closer and straighter is always less costly than stopping short.
-        # The pos coefficient is steep (TIMEOUT_POS_COEF) so a far-short timeout
-        # saturates near the floor: this removes the "drive out a little, then brake
-        # and idle out the clock" local optimum (braking dodges collision/OOB, so a
-        # shallow timeout made stopping short the safe choice). Clamped to
-        # TIMEOUT_PENALTY_FLOOR (> -25) so timing out is always less costly than an
-        # ego-fault crash, keeping the ordering success(+50) > timeout > collision.
-        # @see constants.TIMEOUT_POS_COEF for the local-optimum rationale.
+        # Divided by the per-episode start potential (the same |phi(start)|
+        # normaliser the corridor progress uses) so the penalty lives on the unit
+        # scale of progress (full-episode sum +1) and a far-bay timeout is not
+        # penalised more heavily than a near-bay one merely for being far - the old
+        # raw-metre penalty grew with the sampled bay's distance and saturated at a
+        # flat floor for far bays, removing the per-distance gradient. Clamped to
+        # TIMEOUT_PENALTY_FLOOR_NORM so timing out costs about as much as forfeiting
+        # the whole progress reward and the fixed terminals stay far larger, keeping
+        # the ordering success(+50) > timeout > ego collision(-25).
         if truncated and not terminated:
             reward += max(
                 -(
                     TIMEOUT_POS_COEF * reward_diag["pos_error"]
                     + TIMEOUT_YAW_COEF * reward_diag["orientation_error"]
-                ),
-                TIMEOUT_PENALTY_FLOOR,
+                )
+                / self._phi_start,
+                TIMEOUT_PENALTY_FLOOR_NORM,
             )
 
         if (terminated or truncated) and self.world is not None:
