@@ -5,7 +5,7 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 ## At a glance
 
 - `train_ppo.py` is config-driven: all hyperparameters come from [`configs/train_config.yaml`](../../configs/train_config.yaml).
-- `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` selects SB3 `PPO` + `MlpPolicy`.
+- `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` selects `ScheduledEntCoefPPO` + `LayerNormActorCriticPolicy` (the baseline must match the evidential backbone for fair ablation).
 - `VecNormalize` wraps the environment with observation and reward normalisation (`norm_obs=True`, `norm_reward=True`).
 - $\lambda_{\text{reg}}$ is linearly annealed from $0$ over the warmup window. The learning rate and entropy coefficient are linear decay schedules wired in `train_ppo.py`.
 - Resume support via `make docker-train CHECKPOINT=path/to/checkpoint` (or `--resume-from`).
@@ -100,7 +100,7 @@ See [`networks/README.md`](../networks/README.md) for $\mathcal{L}_{\text{reg}}$
 | `policy_type` | Agent | Policy | Observation routed to actor |
 |---------------|-------|--------|------------------------------|
 | `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full obs in flat mode; full obs split into a navigation block (everything bar the covariance) and the covariance block in dual-encoder mode |
-| `"standard"` | `PPO` | `MlpPolicy` | Full obs |
+| `"standard"` | `ScheduledEntCoefPPO` | `LayerNormActorCriticPolicy` | Full obs |
 
 `include_covariance` and `include_obstacle_obs` flags (set per baseline) control
 observation dimensionality. The active dimension is derived from the structural
