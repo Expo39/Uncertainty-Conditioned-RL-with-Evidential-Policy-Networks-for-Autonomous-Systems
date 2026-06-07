@@ -321,9 +321,7 @@ class RealWorldInferenceLoop:
     # Actuation and termination (stubs)
     # -----------------------------------------------------------------------
 
-    def _apply_action(
-        self, steering: float, throttle: float, brake: float
-    ) -> None:
+    def _apply_action(self, steering: float, throttle: float, brake: float) -> None:
         """
         @brief Publish a calibrated action to the vehicle via geometry_msgs/Twist.
         @param steering: Calibrated steering command in [-1, 1]; mapped to angular.z.

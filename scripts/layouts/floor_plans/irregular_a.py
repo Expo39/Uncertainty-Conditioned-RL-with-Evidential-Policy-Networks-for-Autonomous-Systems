@@ -19,18 +19,18 @@ HEADING_DEG = 0.0
 OOD = True
 
 # Perimeter corners (CCW polygon order).
-P0 = (0.0, 0.0)   # bottom-left
+P0 = (0.0, 0.0)  # bottom-left
 P1 = (62.0, 0.0)  # bottom-right
 P2 = (62.0, 20.0)  # right wall top
 P3 = (20.0, 50.0)  # diagonal/flat junction
-P4 = (0.0, 50.0)   # top-left
+P4 = (0.0, 50.0)  # top-left
 
 # Wall indices in CCW order.
-WALL_BOTTOM = 0   # P0 -> P1
-WALL_RIGHT = 1    # P1 -> P2
+WALL_BOTTOM = 0  # P0 -> P1
+WALL_RIGHT = 1  # P1 -> P2
 WALL_TOP_DIAGONAL = 2  # P2 -> P3
 WALL_TOP_FLAT = 3  # P3 -> P4
-WALL_LEFT = 4     # P4 -> P0
+WALL_LEFT = 4  # P4 -> P0
 
 TOP_FLAT_AISLE = 6.0  # Aisle between top-flat back-to-back perp rows.
 LEFT_ANG_BOTTOM_Y = 3.0  # Local y of the bottom-most left-wall bay.

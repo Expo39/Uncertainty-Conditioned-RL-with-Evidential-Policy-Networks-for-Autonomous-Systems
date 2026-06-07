@@ -6,7 +6,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 - 9 evaluation conditions sweep GNSS noise from $1\times$ (RTK fixed, ~2 cm) to $250\times$ (~5 m)
 - Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()`
-- Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `EVAL_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `success_dwell_steps`
+- Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `STRICT_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `SUCCESS_DWELL_STEPS`
 - `n_episodes = 100` per condition, deterministic (mean) actions
 - OOD conditions use `irregular_a` floor plan (never seen during training)
 - No weather variation - FlatPlane does not render weather effects
@@ -125,9 +125,9 @@ Beyond the training distribution on all axes simultaneously.
 
 **Success criteria**: judged geometrically in the env, not by scalar thresholds.
 Every corner of the ego bounding box must lie inside the target bay polygon
-(`car_fully_inside_bay()` with `EVAL_BAY_MARGIN`) and speed must be below
-`SUCCESS_THRESHOLD_VELOCITY`, held for `success_dwell_steps` consecutive steps. See
-`uncertainty_rl/utils/constants.py`.
+(`car_fully_inside_bay()` with `STRICT_BAY_MARGIN` at evaluation) and speed must be
+below `SUCCESS_THRESHOLD_VELOCITY`, held for `SUCCESS_DWELL_STEPS` consecutive steps.
+See `uncertainty_rl/utils/constants.py`.
 
 ## Key interfaces
 

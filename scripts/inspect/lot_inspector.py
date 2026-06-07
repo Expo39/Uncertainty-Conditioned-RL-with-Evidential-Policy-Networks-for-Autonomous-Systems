@@ -244,7 +244,7 @@ def main() -> None:
         inspector: _Inspector = LayoutInspector(env, args.duration)
         inspector.place_spectator()  # type: ignore[attr-defined]
         print("Debug overlays:")
-        print("  blue=perpendicular bays | yellow=angled bays | violet=parallel bays")
+        print("  blue=perpendicular bays | grey=motorcycle bays")
         print(
             "  bright green=TARGET | yellow=SPAWN"
             " | turquoise=pedestrian zones | red=patrol path"

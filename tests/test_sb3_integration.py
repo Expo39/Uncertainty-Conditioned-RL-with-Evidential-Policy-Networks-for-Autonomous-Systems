@@ -46,7 +46,7 @@ BATCH_SIZE = 8
 @pytest.fixture
 def obs_space() -> spaces.Box:
     """
-    @brief 15-dim continuous observation space.
+    @brief Full observation space (TOTAL_OBS_DIM, both ablation flags on).
     """
     return spaces.Box(
         low=-np.inf,
@@ -733,9 +733,7 @@ class TestLayerNormActorCriticPolicy:
         from torch import nn
 
         pol = self._policy(obs_space, act_space)
-        has_ln = any(
-            isinstance(m, nn.LayerNorm) for m in pol.mlp_extractor.policy_net
-        )
+        has_ln = any(isinstance(m, nn.LayerNorm) for m in pol.mlp_extractor.policy_net)
         assert has_ln, "policy_net is missing LayerNorm"
 
     def test_action_mean_bias_matches_evidential_prior(

@@ -387,8 +387,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                     flat = cast(EvidentialLayer, self.action_net)
                     bias = flat.linear.bias
                 if action_dim == 3:
-                    bias[0] = 0.0   # gamma steer (bipolar)
-                    bias[1] = 0.5   # gamma throttle (default-on)
+                    bias[0] = 0.0  # gamma steer (bipolar)
+                    bias[1] = 0.5  # gamma throttle (default-on)
                     bias[2] = -1.0  # gamma brake (default-off)
                 else:
                     bias[0 * n : 1 * n].fill_(0.0)
@@ -728,7 +728,7 @@ class EvidentialPPO(PPO):
         # Unlike clip_range / learning_rate, SB3 does NOT wrap ent_coef into a
         # schedule internally - it is stored verbatim as passed to the
         # constructor - so this override must resolve a callable itself.
-        ent_coef_attr: Any = self.ent_coef
+        ent_coef_attr: Any = getattr(self, "ent_coef")
         if callable(ent_coef_attr):
             ent_coef = float(ent_coef_attr(self._current_progress_remaining))
         else:
@@ -942,7 +942,7 @@ class ScheduledEntCoefPPO(PPO):
         """
         @brief Resolve a callable ent_coef to a float, then run standard PPO.train().
         """
-        ent_coef_attr: Any = self.ent_coef
+        ent_coef_attr: Any = getattr(self, "ent_coef")
         if callable(ent_coef_attr):
             self.ent_coef = float(ent_coef_attr(self._current_progress_remaining))
             try:
@@ -1005,6 +1005,6 @@ class LayerNormActorCriticPolicy(ActorCriticPolicy):
         if action_dim == 3:
             with th.no_grad():
                 bias = self.action_net.bias
-                bias[0] = 0.0   # steer (bipolar)
-                bias[1] = 0.5   # throttle (default-on, gentle forward)
+                bias[0] = 0.0  # steer (bipolar)
+                bias[1] = 0.5  # throttle (default-on, gentle forward)
                 bias[2] = -1.0  # brake (default-off)

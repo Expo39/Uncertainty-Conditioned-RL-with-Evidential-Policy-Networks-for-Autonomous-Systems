@@ -124,9 +124,7 @@ def _centre_perp_row(lot: LotBuilder):
     )
 
 
-def _midpoint(
-    bay_a: Dict[str, Any], bay_b: Dict[str, Any]
-) -> Tuple[float, float]:
+def _midpoint(bay_a: Dict[str, Any], bay_b: Dict[str, Any]) -> Tuple[float, float]:
     """@brief Local-frame midpoint between two bay centres."""
     return (
         (bay_a["local_x"] + bay_b["local_x"]) / 2.0,

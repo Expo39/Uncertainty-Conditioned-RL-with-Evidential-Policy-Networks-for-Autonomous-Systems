@@ -78,9 +78,7 @@ def test_dump_writes_csv_and_run_info(tmp_path: Path) -> None:
     tracker.record("angled_1", success=False, bay_type="angled")
 
     out_dir = tmp_path / "training" / "run_x"
-    csv_path = tracker.dump(
-        out_dir, run_info={"run_name": "run_x", "seed": 42}
-    )
+    csv_path = tracker.dump(out_dir, run_info={"run_name": "run_x", "seed": 42})
 
     assert csv_path == out_dir / "bay_successes.csv"
     rows = _read_csv(csv_path)

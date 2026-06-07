@@ -6,9 +6,10 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 
 - `train_ppo.py` is config-driven: all hyperparameters come from [`configs/train_config.yaml`](../../configs/train_config.yaml).
 - `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` selects `ScheduledEntCoefPPO` + `LayerNormActorCriticPolicy` (the baseline must match the evidential backbone for fair ablation).
-- `VecNormalize` wraps the environment with observation and reward normalisation (`norm_obs=True`, `norm_reward=True`).
-- $\lambda_{\text{reg}}$ is linearly annealed from $0$ over the warmup window. The learning rate and entropy coefficient are linear decay schedules wired in `train_ppo.py`.
-- Resume support via `make docker-train CHECKPOINT=path/to/checkpoint` (or `--resume-from`).
+- `VecNormalize` wraps the environment with observation and reward normalisation (`norm_obs=True`, `norm_reward=True`); reward normalisation keeps the near-bimodal return (large terminals over dense shaping) in a range the critic can track.
+- $\lambda_{\text{reg}}$ is linearly annealed from $0$ over the warmup window. The learning rate and entropy coefficient are linear decay schedules wired in `train_ppo.py`, restarted per curriculum stage from each stage's `training_overrides`.
+- Training follows the 7-stage curriculum: each stage is selected with `make docker-train STAGE=N` and resumes from the previous stage's checkpoint via `CHECKPOINT=` (or `--resume-from`), carrying over weights and `VecNormalize` statistics.
+- Runs are seeded from `seed` in `train_config.yaml` (the ablation sweeps seeds via `--seed`), and the training entry point restarts the run if the CARLA stack crashes mid-episode.
 - Optuna TPE + MedianPruner study with the search space defined in [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml).
 - No evaluation environment during training - two CARLA clients on a synchronous server deadlock.
 
@@ -125,10 +126,10 @@ result: TrainResult = train(cfg)
 Training via Make:
 
 ```bash
-make docker-train                                # full run
-make docker-train-short                          # short smoke-test
-make docker-train CHECKPOINT=path/to/checkpoint  # resume from checkpoint
-make docker-tune                                 # Optuna hyperparameter search
+make docker-train STAGE=1                                   # curriculum head (random init)
+make docker-train STAGE=2 CHECKPOINT=path/to/stage1/ckpt    # resume next stage
+make docker-train-short                                     # short smoke-test
+make docker-tune                                            # Optuna hyperparameter search
 ```
 
 ## Hyperparameter tuning (Optuna)

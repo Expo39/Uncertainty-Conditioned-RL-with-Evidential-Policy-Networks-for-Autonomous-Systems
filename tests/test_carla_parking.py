@@ -517,9 +517,7 @@ class TestAllowedBayIds:
             "bays": bays,
         }
 
-    def _make_env(
-        self, monkeypatch: Any, allowed: Any
-    ) -> Any:
+    def _make_env(self, monkeypatch: Any, allowed: Any) -> Any:
         from uncertainty_rl.envs.sim import carla_parking as cp
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -553,9 +551,7 @@ class TestAllowedBayIds:
         assert ids == set(allowed)
         env.close()
 
-    def test_whitelist_sampler_only_returns_allowed(
-        self, monkeypatch: Any
-    ) -> None:
+    def test_whitelist_sampler_only_returns_allowed(self, monkeypatch: Any) -> None:
         """
         @brief Over many samples, the target bay id is always in the whitelist.
         """
@@ -1316,9 +1312,7 @@ class TestComputeReward:
         assert squared > crooked
         # The gap is exactly W_HEAD * heading_err - confirm the heading weight,
         # not the along/cross weights, drives the alignment pull.
-        assert squared - crooked == pytest.approx(
-            CORRIDOR_W_HEAD * math.radians(20.0)
-        )
+        assert squared - crooked == pytest.approx(CORRIDOR_W_HEAD * math.radians(20.0))
 
     def test_clearance_zero_when_no_obstacle(self) -> None:
         """
