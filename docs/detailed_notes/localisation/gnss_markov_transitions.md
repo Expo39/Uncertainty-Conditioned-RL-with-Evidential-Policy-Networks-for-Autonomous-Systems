@@ -2,24 +2,22 @@
 
 Extracted from the GNSS noise relay pipeline in `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`.
 
-## Problem
+## Rationale
 
-The original training scheme sampled an RTK fix-state tier (fixed, float,
-standalone, degraded) once per episode at `reset()` and held it constant for
-the full episode duration. This is unrealistic: in a real outdoor parking lot,
-RTK fix quality changes continuously as the vehicle moves -- driving past a
-parked van blocks satellites, rounding a corner re-exposes the antenna, nearby
-structures cause multipath bursts.
+In a real outdoor parking lot RTK fix quality changes continuously as the
+vehicle moves: driving past a parked van blocks satellites, rounding a corner
+re-exposes the antenna, nearby structures cause multipath bursts. The policy
+must therefore see covariance spikes that occur mid-manoeuvre, not only a
+single constant fix state per episode, so that its uncertainty-conditioned
+behaviour is defined across the whole covariance range it will meet on the
+real vehicle.
 
-If the policy is only trained on episodes with a single constant fix state, it
-has never seen a covariance spike that occurs mid-manoeuvre. On the real
-vehicle this could happen at any point during the approach or final alignment,
-leaving the policy in an out-of-distribution covariance region where its
-uncertainty-conditioned behaviour is undefined.
+The fix-state tier is therefore modelled as a discrete-time Markov chain that
+can transition mid-episode, rather than a constant sampled once at `reset()`.
 
 ---
 
-## Solution: Discrete-Time Markov Chain
+## Discrete-Time Markov Chain
 
 At each GNSS callback (20 Hz) the active fix-state tier can transition to an
 adjacent tier with a small probability. The transition is drawn from a 4-state

@@ -25,7 +25,6 @@ Technical notes on system design, derivations, and rationale. Organised by subsy
 | `ros2_architecture.md` | `envs/covariance_subscriber.py`, `ros2/` | DDS-bypass via shared JSON, atomicity, sequence-number guard |
 | `sensor_noise_models.md` | `envs/sim/helpers/_sensor_manager.py`, `ros2/uncertainty_rl_ros2/sensor_relay/imu_noise_relay.py` | SICK TiM571 LiDAR and VN-100 IMU noise derivations with datasheet sources |
 | `gnss_markov_transitions.md` | `ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | RTK fix-state Markov chain design and sim-to-real rationale |
-| `cog_heading_fixes.md` | `ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | Course-Over-Ground heading fusion and three EKF yaw stability fixes |
 
 ### training/
 
