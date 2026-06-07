@@ -32,6 +32,7 @@ from uncertainty_rl.utils.constants import (
     ENDGAME_MOVE_COEF,
     OBSTACLE_FEATURES_DIM,
     PHI_NORM_FLOOR,
+    PROGRESS_TARGET,
     TARGET_POSE_DIM,
     TIMEOUT_PENALTY_FLOOR_NORM,
     TIMEOUT_POS_COEF,
@@ -594,7 +595,9 @@ class TestGradedTimeoutPenalty:
 
     def _penalty(self, pos: float, yaw: float = 0.35, phi_start: float = 20.0) -> float:
         return max(
-            -(TIMEOUT_POS_COEF * pos + TIMEOUT_YAW_COEF * yaw) / phi_start,
+            -(TIMEOUT_POS_COEF * pos + TIMEOUT_YAW_COEF * yaw)
+            / phi_start
+            * PROGRESS_TARGET,
             TIMEOUT_PENALTY_FLOOR_NORM,
         )
 
@@ -1117,19 +1120,19 @@ class TestComputeReward:
         assert success is False
         assert env._success_counter == 0
 
-    def test_total_progress_normalised_to_one_regardless_of_bay_distance(
-        self,
-    ) -> None:
+    def test_total_progress_equal_across_bay_distance(self) -> None:
         """
         @brief Regression guard for the per-episode progress normalisation.
 
         The full-episode progress sum telescopes to (phi(parked) - phi(start)) /
-        |phi(start)| = +1 for EVERY bay, near or far. Before normalisation a far bay
-        offered a far larger total shaping pool than a near one (it could exceed the
-        +50 terminal), and shared forward motion banked reward toward every bay -
-        which rewarded driving toward a fixed memorised bay instead of the commanded
-        one. Here we drive each start pose all the way to the parked pose in one step
-        and assert the banked progress is ~+1 in both cases.
+        |phi(start)| * PROGRESS_TARGET = PROGRESS_TARGET for EVERY bay, near or far.
+        The /|phi(start)| factor equalises bays: before it, a far bay offered a far
+        larger total shaping pool than a near one (it could exceed the +50 terminal),
+        and shared forward motion banked reward toward every bay - which rewarded
+        driving toward a fixed memorised bay instead of the commanded one. The
+        *PROGRESS_TARGET factor sets the absolute dense scale. Here we drive each
+        start pose all the way to the parked pose in one step and assert the banked
+        progress equals PROGRESS_TARGET in both cases.
         """
         for start_along in (6.0, 30.0):
             env = _make_env_for_reward()
@@ -1140,9 +1143,11 @@ class TestComputeReward:
 
             _, _, _, diag = env._compute_reward()
 
-            assert diag["progress_reward"] == pytest.approx(1.0, abs=1e-6), (
-                f"full close-in from {start_along} m must bank ~+1 progress, "
-                f"got {diag['progress_reward']}"
+            assert diag["progress_reward"] == pytest.approx(
+                PROGRESS_TARGET, abs=1e-6
+            ), (
+                f"full close-in from {start_along} m must bank ~{PROGRESS_TARGET} "
+                f"progress, got {diag['progress_reward']}"
             )
 
     def test_progress_reward_positive_when_closing_in(self) -> None:
