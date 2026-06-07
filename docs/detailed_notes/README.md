@@ -1,13 +1,6 @@
 # detailed_notes
 
-Long-form explanations, derivations, and design rationale organised by subsystem.
-
-## Purpose
-
-Every `.md` file here covers one topic that was previously embedded as a multi-paragraph comment
-inside a `.py` or `.yaml` file. Keeping long explanations here lets the code stay navigable while
-preserving the full reasoning for future reference. Notes are grouped by theme: networks, envs,
-localisation, training, and deployment.
+Technical notes on system design, derivations, and rationale. Organised by subsystem: networks, envs, localisation, training, deployment.
 
 ## Cross-reference index
 
