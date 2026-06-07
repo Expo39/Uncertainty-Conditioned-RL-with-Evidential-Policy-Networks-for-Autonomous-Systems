@@ -6,7 +6,7 @@ Gymnasium-compatible CARLA parking environment with real EKF covariance from `ro
 
 - Observation comprises EKF kinematics, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance. The active dimension is derived from the structural constants in [`uncertainty_rl/utils/constants.py`](../utils/constants.py) and the `include_covariance` / `include_obstacle_obs` ablation flags; use `compute_obs_dim()` rather than hardcoding.
 - Continuous action space `[steering, throttle, brake]`. Steering is bipolar; throttle and brake are independent non-negative axes. No reverse gear: forward perpendicular bay parking only.
-- Reward shaped by localisation quality: per-step shaping is attenuated when EKF position covariance is large.
+- Reward is outcome-only (success +50, collision -25/-10, graded timeout penalty, soft out-of-bounds accumulation); no shaping term couples to EKF uncertainty. Uncertainty enters the system as observation features and through the policy's evidential head only.
 - Three pre-computed floor plans: `rectangle`, `trapezoid` (training), and `irregular_a` (OOD only).
 - Sim-to-real capable: all observation features come from EKF and LiDAR, never CARLA ground truth.
 - Requires the full Docker stack for training (carla-server + ros2-bridge + training).
