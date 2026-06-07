@@ -39,26 +39,19 @@ STRICT_BAY_MARGIN = -0.25
 # Corridor Reward Shaping (not success criteria)
 # ---------------------------------------------------------------------------
 #
-# The reward shapes the approach in the BAY FRAME, not as a radial distance to
-# the bay centre. The bay's long (depth) axis defines a centreline; the car is
-# rewarded for getting onto that centreline (cross-track -> 0), aligning with it
-# (heading -> bay axis, 180-deg symmetric), and advancing to the parked depth
-# (along-track -> 0). Bays are open / back-to-back, so the centreline extends out
-# BOTH ends and the shaping uses magnitudes (abs(along)) and 180-deg heading
-# symmetry. This is what produces the natural arc-onto-the-line approach and
-# breaks the "arrives crooked at the mouth" failure of the old radial ring.
-# These live here, not in YAML, because they shape the reward and reward changes
-# are code, not data.
+# The reward is shaped in the BAY FRAME, not as a radial distance to the bay
+# centre: the bay depth axis defines a centreline and the car is rewarded for
+# getting onto it (cross-track -> 0), squaring to it (heading, 180-deg symmetric),
+# and advancing to the parked depth (along-track -> 0). Bays are open / back-to-
+# back, so the shaping uses magnitudes and 180-deg heading symmetry. These live
+# here, not in YAML, because reward changes are code, not data.
 
-# Cross-track reference (metres): the half-width of the approach corridor. The
-# `on_line` factor is 1 on the centreline and ramps to 0 at this offset. Sized so
-# the corridor is wide enough to capture realistic approach lanes yet narrow
-# enough that being "on the line" means genuinely lined up with the bay.
+# Cross-track reference (metres): half-width of the approach corridor. The
+# `on_line` factor is 1 on the centreline and ramps to 0 at this offset.
 CORRIDOR_HALF_WIDTH = 2.0
 
-# Along-track reference (metres): the depth scale over which the `near_depth`
-# factor ramps from 1 (at the parked depth) to 0. Covers the full approach run-in
-# so the endgame terms have a live gradient across the whole final approach.
+# Along-track reference (metres): depth scale over which the `near_depth` factor
+# ramps from 1 (at the parked depth) to 0, covering the full approach run-in.
 ALONG_TRACK_SCALE = 6.0
 
 # Orientation error (radians) at which the alignment factor saturates (45 deg).
@@ -66,32 +59,18 @@ ALONG_TRACK_SCALE = 6.0
 APPROACH_INNER_ALIGNMENT_CUTOFF = np.pi / 4
 
 # Corridor potential weights: phi = -(W_ALONG*|along| + W_CROSS*|cross| +
-# W_HEAD*heading_err). Cross-track and heading are weighted ABOVE along-track so the
-# dominant progress gradient pulls the car onto the centreline and SQUARE before
-# advancing in depth. W_HEAD is the alignment lever: at 3.0, a 20 deg heading error
-# costs ~1.05 m of along-track distance, so the policy "feels" crookedness as
-# strongly as distance - the fix for arriving crooked at the bay mouth. The corridor
-# potential does the bulk approach and squaring-up; the endgame term below shapes the
-# final-approach precision into the acceptance box (see ENDGAME_MOVE_COEF).
+# W_HEAD*heading_err). Cross-track and heading outweigh along-track so the gradient
+# pulls the car onto the centreline and square before advancing in depth; W_HEAD is
+# the alignment lever (at 3.0 a 20 deg heading error costs ~1.05 m of along-track).
 CORRIDOR_W_ALONG = 1.0
 CORRIDOR_W_CROSS = 2.0
 CORRIDOR_W_HEAD = 3.0
 
-# Endgame held-stop term coefficients. One term (replacing the earlier split
-# approach/precision/hold terms): endgame = (ENDGAME_MOVE_COEF +
-# ENDGAME_HOLD_COEF*stopped) * on_line * aligned * near_depth. MOVE is the value
-# while still moving; +HOLD when fully stopped on the line.
-#
-# A modest held-stop finisher on top of the corridor progress. With progress scaled
-# to a full-episode sum of PROGRESS_TARGET (~11), the progress gradient is itself
-# strong near the goal and does the bulk of the final-approach precision work; this
-# endgame term only sharpens the commit to a held stop. The coefficients are bounded
-# ABOVE by the loiter-at-goal constraint: a policy that hovers near the goal without
-# completing must never out-earn going for the +50. At (0.015, 0.015) the maximum
-# endgame an episode can accrue (~11 over a full hover) stays below the discounted +50
-# (~35 at gamma 0.99, ~25 decisions out), so completing the park strictly dominates
-# hovering. Raising them toward ~0.04 lets a hover rival the +50 and creates a loiter
-# optimum, so the precision lever lives in PROGRESS_TARGET, not here.
+# Held-stop finisher on top of the corridor potential:
+# endgame = (ENDGAME_MOVE_COEF + ENDGAME_HOLD_COEF*stopped) * on_line * aligned
+# * near_depth. MOVE applies while moving, +HOLD once stopped on the line. Bounded
+# so the most an episode can accrue stays below the discounted +50 terminal, hence
+# completing the park always dominates hovering near the goal.
 ENDGAME_MOVE_COEF = 0.015
 ENDGAME_HOLD_COEF = 0.015
 
@@ -99,15 +78,10 @@ ENDGAME_HOLD_COEF = 0.015
 # Obstacle Clearance Shaping (safety nudge, not a success criterion)
 # ---------------------------------------------------------------------------
 #
-# Smooth penalty for drifting toward a neighbouring parked car DURING a crooked
-# approach, turning the binary post-impact collision penalty into a gradient that
-# discourages clipping occupied adjacent bays. Calibrated to the bay geometry:
-# bay centres are 3.1 m apart, and an ego (half-width ~1.06 m) parked square
-# beside an occupied neighbour (half-width ~1.06 m) leaves a ~0.98 m side gap. The
-# SAFE distance therefore sits BELOW 0.98 m so a CORRECT park pays ~0; only a
-# corner swinging in closer than SAFE incurs a cost. In the reward this penalty is
-# additionally gated off once the car is square on the centreline, so an expected
-# neighbour abeam of a correctly parked car never registers.
+# Smooth penalty for drifting toward a neighbouring parked car during a crooked
+# approach. SAFE sits below the ~0.98 m side gap a square-parked ego leaves beside
+# an occupied neighbour, so a correct park pays ~0; the reward also gates this off
+# once the car is square on the centreline.
 OBSTACLE_CLEARANCE_SAFE = 0.8
 OBSTACLE_CLEARANCE_DANGER = 0.3
 
@@ -166,83 +140,47 @@ OUT_OF_BOUNDS_THRESHOLD = 20.0
 
 # Graded timeout penalty coefficients. The penalty at truncation is
 # -(TIMEOUT_POS_COEF * final_pos_error + TIMEOUT_YAW_COEF * final_orientation_error),
-# DIVIDED by the per-episode start potential (the same |phi(start)| normaliser the
-# corridor progress uses) and clamped to TIMEOUT_PENALTY_FLOOR_NORM. Normalising by
-# the start potential puts the timeout penalty on the SAME unit scale as the
-# progress term (whose full episode sum is +1) regardless of how far the sampled bay
-# is from the spawn - so a far-bay timeout is not penalised more heavily than a
-# near-bay one purely for being far, and the per-distance gradient stays live
-# instead of saturating at a flat clamp. The penalty still judges the final state:
-# ending closer and straighter is less costly than stopping short.
-#
-# @note A steeper TIMEOUT_POS_COEF (3.5) was tried to break a brake-and-idle local
-# optimum but BACKFIRED: it made the policy game the cheaper yaw term by turning in
-# place to trim orientation_error without driving (the throttle never fired). The
-# real cause was an init asymmetry letting the brake axis dominate throttle, not a
-# weak timeout - so this is kept at the original 1.5 while the init is fixed instead.
+# normalised by the per-episode start potential and clamped to
+# TIMEOUT_PENALTY_FLOOR_NORM. yaw is weighted above pos so a square near-miss is
+# cheaper than a far-short freeze.
 TIMEOUT_POS_COEF = 1.5
 TIMEOUT_YAW_COEF = 2.5
 
-# Lower bound on the NORMALISED graded timeout penalty. The graded penalty is divided
-# by the per-episode start potential and scaled by PROGRESS_TARGET (the same transform
-# the corridor progress uses), so it lives on the dense progress scale (full episode
-# progress sum = PROGRESS_TARGET ~ 11). A worst-case timeout therefore costs about as
-# much as forfeiting the entire progress reward, while the fixed terminals stay larger
-# in magnitude - preserving success(+50) > timeout(>= -11) > ego collision(-25) so the
-# policy never has an incentive to crash deliberately to escape a worse timeout.
+# Floor on the NORMALISED graded timeout penalty. The penalty is transformed by
+# /max(|phi(start)|, PHI_NORM_FLOOR) * PROGRESS_TARGET so it lives on the dense
+# progress scale; the floor keeps the ordering success(+50) > timeout(>= -11) >
+# ego collision(-25) so the policy never crashes deliberately to escape a timeout.
 TIMEOUT_PENALTY_FLOOR_NORM = -11.0
 
 # Floor on the per-episode start potential |phi(start)| used as the reward
 # normaliser. Progress and the graded timeout penalty are divided by
-# max(|phi(start)|, PHI_NORM_FLOOR) so that an episode whose spawn happens to sit
-# very close to the bay (|phi(start)| -> 0) cannot blow the normalised reward up.
-# @note The minimum |phi(start)| over every spawn-bay pair in the committed layouts
-#   (including the stage-4 extra spawns) is ~7.7 m (trapezoid), comfortably above
-#   this floor - so in practice the floor never clamps a real episode and the
-#   per-bay-equal invariant holds for all stages. The floor only guards against
-#   future layouts placing a spawn closer than ~5 m of potential to its bay.
+# max(|phi(start)|, PHI_NORM_FLOOR) so a spawn very close to its bay
+# (|phi(start)| -> 0) cannot blow the normalised reward up.
 PHI_NORM_FLOOR = 5.0
 
-# Per-episode progress target: every bay's full-episode progress sum equals this,
-# i.e. progress = (phi(curr) - phi(prev)) / max(|phi(start)|, PHI_NORM_FLOOR) *
-# PROGRESS_TARGET. The /|phi(start)| factor EQUALISES bays (a far bay no longer
-# offers a larger shaping pool than a near one - the loophole that rewarded driving
-# to a fixed memorised bay). The * PROGRESS_TARGET factor then sets the ABSOLUTE
-# dense scale. It is set to the representative single-bay start potential so the
-# terminal-to-dense ratio (+50 success / ~11 dense ~ 4.6x) matches the balance under
-# which the value function fits the return cleanly; normalising all the way to 1.0
-# leaves a ~50x terminal spike the critic cannot fit (slow, under-converged learning).
-# The terminals (+50 / -25 / -10) are deliberately NOT scaled by this, so the
-# completion signal stays large and undiluted as success becomes scarce in the later
-# curriculum stages.
+# Per-episode progress target. progress = (phi(curr) - phi(prev)) /
+# max(|phi(start)|, PHI_NORM_FLOOR) * PROGRESS_TARGET. The /|phi(start)| factor
+# equalises bays so a far bay offers no larger shaping pool than a near one;
+# PROGRESS_TARGET sets the dense scale so the +50-to-dense ratio (~4.6x) is one
+# the value function can fit. Terminals are NOT scaled by it.
 PROGRESS_TARGET = 11.0
 
 # ---------------------------------------------------------------------------
 # Soft Out-of-Bounds Boundary (sim training)
 # ---------------------------------------------------------------------------
 # The drivable boundary is the lot polygon inflated outward by this margin
-# (metres), forming a run-off skirt beyond the lot edge. Leaving the lot is a
-# lost episode for a forward-only vehicle, so the skirt is sized to soften the
-# penalty near the operational boundary during early learning, not to enable
-# recovery.
+# (metres), forming a run-off skirt beyond the lot edge that softens the boundary
+# penalty during early learning.
 OOB_INFLATION_MARGIN = 5.0
 
 # Reward applied each policy decision the ego centre is outside the inflated
-# polygon. Small and negative so a brief excursion is cheap; it accumulates so
-# a sustained run-out terminates the episode (see OOB_TERMINATION_PENALTY_LIMIT).
-# Applied RAW (NOT divided by the per-episode normaliser S): the lot edge is a
-# bay-independent world boundary, so its cost must not shrink for far bays (which
-# sit closest to the edge, where it matters most). Sized to sit sensibly against
-# the dense progress reward (whose full-episode sum is PROGRESS_TARGET ~ 11, i.e.
-# ~0.11 per decision): a brief excursion costs a few decisions' worth of progress,
-# while a sustained run-out still accumulates to the termination limit.
+# polygon. Applied RAW (never divided by the per-episode normaliser): the lot edge
+# is a bay-independent world boundary, so its cost must not shrink for far bays. It
+# accumulates so a sustained run-out terminates the episode.
 OOB_STEP_PENALTY = -0.5
 
-# Accumulated out-of-bounds cost (sum of |OOB_STEP_PENALTY| over outside steps)
-# at which the episode terminates with no extra crash-magnitude penalty - the
-# accrued per-step penalties are the cost. At OOB_STEP_PENALTY = -0.5 this is
-# reached after ~20 consecutive outside decisions, so a committed run-out
-# terminates while a momentary clip of the boundary does not. Sized below the ego
-# collision penalty so leaving the lot is never punished harder than a real
-# collision.
+# Accumulated out-of-bounds cost (sum of |OOB_STEP_PENALTY|) at which the episode
+# terminates with no extra crash penalty - the accrued per-step penalties are the
+# cost. Sized below the ego collision penalty so leaving the lot is never punished
+# harder than a real collision.
 OOB_TERMINATION_PENALTY_LIMIT = 10.0
