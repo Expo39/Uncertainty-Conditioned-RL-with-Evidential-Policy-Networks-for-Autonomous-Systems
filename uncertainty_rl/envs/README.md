@@ -97,21 +97,7 @@ expression and the CARLA-vs-REP-103 chirality handling.
 
 ## Reward function
 
-Per-step potential-based shaping (Ng et al. 1999) scaled by localisation
-quality, plus a bounded approach reward peak co-located with the target
-bay so the success state is the unique per-step optimum. Terminal events
-(success, collision) and the approach peak bypass the uncertainty scaling
-so they are not down-weighted under high EKF covariance.
-
-The reward coefficients (proximity weight, alignment weight, approach
-radius and peak, terminal magnitudes, success thresholds) change as the
-project iterates. Read the live values from
-[`configs/deployment/sim/env_config.yaml`](../../configs/deployment/sim/env_config.yaml),
-[`configs/train_config.yaml`](../../configs/train_config.yaml), and
-[`uncertainty_rl/utils/constants.py`](../utils/constants.py)
-rather than relying on a duplicate in this README. The exact source of
-truth for the reward computation is `CARLAParkingEnv._compute_reward()`
-in [`sim/carla_parking.py`](sim/carla_parking.py).
+Outcome-only: terminal events (success +50, collision -25/-10, graded timeout penalty) and a soft out-of-bounds accumulation. Per-step shaping is corridor potential (bay-frame); no uncertainty coupling. See `CARLAParkingEnv._compute_reward()` in [`sim/carla_parking.py`](sim/carla_parking.py) for the exact implementation and the source of truth for all coefficients.
 
 ## Floor plans
 
