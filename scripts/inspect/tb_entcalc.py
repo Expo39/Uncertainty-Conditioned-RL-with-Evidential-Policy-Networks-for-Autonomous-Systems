@@ -66,9 +66,7 @@ def main() -> None:
     for target in (1.0, 0.5, 0.25):
         # ent_coef * late_ent = target * late_pg
         ec = target * late_pg / late_ent
-        print(
-            f"  ent_coef for ent_term = {target:>4} x pg_loss: {ec:.5f}"
-        )
+        print(f"  ent_coef for ent_term = {target:>4} x pg_loss: {ec:.5f}")
 
 
 if __name__ == "__main__":

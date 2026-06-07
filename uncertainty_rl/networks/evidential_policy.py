@@ -59,8 +59,8 @@ class EvidentialLayer(nn.Module):
                 # samples on a clipped-to-zero pedal. Bias throttle positive
                 # (default-on during approach) and brake negative (exceptional
                 # action, default-off) to match the task.
-                self.linear.bias[0] = 0.0   # gamma steer (bipolar)
-                self.linear.bias[1] = 0.5   # gamma throttle (default-on)
+                self.linear.bias[0] = 0.0  # gamma steer (bipolar)
+                self.linear.bias[1] = 0.5  # gamma throttle (default-on)
                 self.linear.bias[2] = -1.0  # gamma brake (default-off)
             else:
                 # Generic fallback for non-parking action spaces (test harness).

@@ -61,7 +61,6 @@ from uncertainty_rl.utils.constants import (
     TIMEOUT_PENALTY_FLOOR_NORM,
     TIMEOUT_POS_COEF,
     TIMEOUT_YAW_COEF,
-    VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
@@ -887,7 +886,7 @@ class CARLAParkingEnv(gym.Env):
         # 1+ = extra_spawn_transforms in layout order) so traces can report
         # where the episode started from.
         self._chosen_spawn_idx = idx
-        return self._spawn_pool[idx]
+        return cast(Dict[str, Any], self._spawn_pool[idx])
 
     def _cache_blueprints(self) -> None:
         """
@@ -2267,7 +2266,11 @@ class CARLAParkingEnv(gym.Env):
         # vx is the signed body-frame longitudinal velocity (matches the EKF
         # vx convention); vyaw is in REP-103 (left turn positive), matching the
         # EKF vyaw at obs[1] and the GT vyaw written by _write_vis_state().
-        if _post_transform is not None and self.vehicle is not None:
+        if (
+            _post_transform is not None
+            and _post_velocity is not None
+            and self.vehicle is not None
+        ):
             gt_yaw = math.radians(_post_transform.rotation.yaw)
             gt_vx = _post_velocity.x * math.cos(gt_yaw) + _post_velocity.y * math.sin(
                 gt_yaw

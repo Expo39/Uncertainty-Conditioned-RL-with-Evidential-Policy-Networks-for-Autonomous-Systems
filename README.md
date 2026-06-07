@@ -160,18 +160,25 @@ make install   # one-time setup: creates .venv/ and installs the package + dev d
 # 1. Start the full stack
 make docker-up
 
-# 2. Run training (1M steps)
-make docker-train
+# 2. Train a curriculum stage (STAGE defaults to 1, the curriculum head)
+make docker-train STAGE=1
 
-# 3. Attach the 2D visualiser at any time (host terminal, non-blocking)
+# 3. Resume the next stage from the previous stage's checkpoint
+make docker-train STAGE=2 CHECKPOINT=path/to/stage1/checkpoint
+
+# 4. Attach the 2D visualiser at any time (host terminal, non-blocking)
 make visualise
 
-# 4. Run evaluation across all 9 uncertainty conditions
+# 5. Run evaluation across all 9 uncertainty conditions
 make docker-eval
 
-# 5. Stop when done
+# 6. Stop when done
 make docker-down
 ```
+
+Training follows a 7-stage curriculum (clean geometry ramp in stages 1-6, sensor
+noise in stage 7); each stage resumes from the previous stage's checkpoint. See
+[documentation/CURRICULUM_PLAN.md](documentation/CURRICULUM_PLAN.md).
 
 ---
 
@@ -190,6 +197,7 @@ Uncertainty-Conditioned-RL.../
 |   |
 |   |-- envs/                          Gymnasium environments
 |   |   |-- sim/carla_parking.py       CARLAParkingEnv (Gymnasium parking env)
+|   |   |-- factory.py                 Env factory (training vs eval bay margin)
 |   |   |-- real/deployment_utils.py   RealWorldDeployment
 |   |   |-- real/inference_loop.py     RealWorldInferenceLoop
 |   |   |-- _parking_core.py           Shared pure logic: obs build, reward,
@@ -218,9 +226,11 @@ Uncertainty-Conditioned-RL.../
 |   |
 |   +-- utils/                         Shared utilities (no CARLA or ROS 2 deps)
 |       |-- constants.py               Structural dims and success thresholds
+|       |-- config_merge.py            deep_merge, apply_baseline (config precedence)
 |       |-- covariance_utils.py        extract_2d_covariance_features
-|       |-- geometry.py                point_in_polygon, wrap_angle_symmetric,
-|       |                              _compute_relative_target_pose
+|       |-- geometry.py                point_in_polygon, car_fully_inside_bay,
+|       |                              inflate_polygon, wrap_angle_symmetric
+|       |-- bay_success.py             Geometric in-bay success test helpers
 |       |-- logging.py                 DebugLogger (per-step structured output)
 |       |-- visualisation.py           Matplotlib plots, VisStateWriter
 |       +-- actuation_calibration.py   Real-vehicle gain / deadband / bias mapping
@@ -230,8 +240,9 @@ Uncertainty-Conditioned-RL.../
 |   |-- eval_config.yaml               9-condition evaluation sweep
 |   |-- ros2_config.yaml               EKF topics and QoS settings
 |   |-- deployment/sim/env_config.yaml CARLA env, sensors, GNSS noise profiles
+|   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage7)
 |   |-- deployment/sensor_config.yaml  Physical sensor mounts and specs
-|   |-- deployment/agent_config.yaml   include_covariance, safety thresholds
+|   |-- deployment/agent_config.yaml   safety thresholds, actuator model, baseline
 |   |-- layouts/                       Pre-computed lot YAMLs (do not edit by hand)
 |   |-- baselines/                     4 ablation override configs (2x2 study)
 |   +-- training/tuning_config.yaml    Optuna study settings and search bounds
@@ -268,9 +279,12 @@ Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
 
 | Layout | Bays | OOD | Training use | Description |
 |--------|------|-----|-------------|-------------|
-| `rectangle` | 49 | No | Training + evaluation | Rectangular lot, all perpendicular bays: 12-bay centre row, 8-bay top row, 10+5 bottom rows, 7 left-wall, 5 right-wall, 2 motorcycle bays. 3 spawns: left, bottom-centre, top-right. |
-| `trapezoid` | 48 | No | Training + evaluation | Trapezoid lot (front=60 m, rear=40 m, depth=50 m), all perpendicular bays: two central clusters plus perimeter rows along the tapered walls. |
-| `irregular_a` | 55 | Yes | OOD evaluation only | Irregular polygon lot (held out from training), all perpendicular bays around a central obstacle and the perimeter. |
+| `rectangle` | 47 | No | Training + evaluation | Rectangular lot, perpendicular bays across a centre row, top row, bottom rows, and left and right walls, plus two always-empty motorcycle bays in the top-right corner. Three spawns: left, bottom-centre, top-right. |
+| `trapezoid` | 39 | No | Training + evaluation | Trapezoid lot, perpendicular bays in central clusters plus perimeter rows along the tapered walls. |
+| `irregular_a` | 36 | Yes | OOD evaluation only | Irregular polygon lot (held out from training), perpendicular bays around a central obstacle and the perimeter. |
+
+Bay counts come from the generated `configs/layouts/*.yaml`; regenerate with
+`make generate-layouts` if a floor plan module changes.
 
 ### Verify Layout in CARLA
 
@@ -295,7 +309,7 @@ make visualise           # open viewer (close window to detach - training unaffe
 make eval-visualise-2d   # load checkpoint + demo drive + 2D viewer
 ```
 
-Shows: lot boundary, bay outlines (blue = perpendicular, yellow = angled, violet = parallel),
+Shows: lot boundary, bay outlines (blue = perpendicular, grey = motorcycle),
 target bay (green), parked NPCs (orange), patrol NPC (red), pedestrians (magenta),
 ego vehicle (cyan) with heading arrow and 50-step trail.
 
