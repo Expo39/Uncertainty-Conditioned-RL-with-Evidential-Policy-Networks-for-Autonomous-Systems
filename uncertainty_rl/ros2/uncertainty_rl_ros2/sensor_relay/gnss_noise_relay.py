@@ -6,9 +6,6 @@
 Subscribes to CARLA NavSatFix, adds tier-appropriate Gaussian noise, converts
 to metric Odometry via flat-earth projection (/odometry/gps), and derives a
 Course Over Ground heading from successive noisy fixes (/gnss/heading).
-
-@see documentation/detailed_notes/ros2_architecture.md for the COG heading
-     variance formula and Markov tier model.
 """
 
 import json
@@ -31,7 +28,6 @@ _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 _TIER_INDEX: Dict[str, int] = {name: i for i, name in enumerate(_TIER_ORDER)}
 
 # Noise parameters for each tier (fallback if config file is absent).
-# See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
     # RTK fixed:
     # Conservative 0.020 m used to cover antenna phase-centre offset
@@ -94,8 +90,6 @@ class GnssNoiseRelayNode(Node):
     """
     @class GnssNoiseRelayNode
     @brief Adds per-episode noise to CARLA GNSS, publishes Odometry + COG heading.
-
-    @see documentation/design/gnss_markov_transitions.md
     """
 
     _DEFAULT_CONFIG_PATH: str = "/workspace/outputs/episode_config.json"

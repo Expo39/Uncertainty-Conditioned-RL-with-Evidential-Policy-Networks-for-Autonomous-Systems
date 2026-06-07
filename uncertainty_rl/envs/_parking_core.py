@@ -325,8 +325,6 @@ def calibrate_ekf_frame_offset(
     @param min_stable_readings: Consecutive stable readings required.
     @return (tx, ty, cos_r, sin_r, r) offset tuple, or identity if timed out
             before any pose was received.
-
-    @note See documentation/detailed_notes/ekf_pipeline.md for derivation.
     """
     start = time.monotonic()
     prev_tx: Optional[float] = None
