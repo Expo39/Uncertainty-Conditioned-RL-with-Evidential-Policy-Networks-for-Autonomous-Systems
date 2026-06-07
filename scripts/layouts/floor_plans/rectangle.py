@@ -33,7 +33,7 @@ def generate() -> Dict[str, Any]:
         name="rectangle",
         corners=[(LEFT_X, 0.0), (DEPTH, 0.0), (DEPTH, WIDTH), (LEFT_X, WIDTH)],
     )
-    # ---------- Bays ---------------------------------------------------
+    # Bays
     centre_perp = _centre_perp_row(lot)
     top_perp = lot.row_along_perimeter(
         "perpendicular",
@@ -71,7 +71,7 @@ def generate() -> Dict[str, Any]:
     )
     moto_first, _ = _motorcycle_corner_bays(lot)
 
-    # ---------- Spawns -------------------------------------------------
+    # Spawns
     # Spawn 2: midpoint of the last bottom-left bay and the last bottom-right bay.
     # Spawn 3: midpoint of the first top-wall bay and the upper motorcycle bay.
     # Spawn 1: original midpoint of left_perp.bays[-1] and the removed first
@@ -83,7 +83,7 @@ def generate() -> Dict[str, Any]:
     lot.spawn(x=s2_x, y=s2_y, yaw_deg=90.0)
     lot.spawn(x=s3_x, y=s3_y, yaw_deg=270.0)
 
-    # ---------- Patrol path (4-waypoint CCW loop) ----------------------
+    # Patrol path (4-waypoint CCW loop)
     # Loop the open aisles: lower aisle (between bottom rows and the perp
     # centre row) -> right aisle (in front of the right-wall row) -> upper
     # aisle (between the perp centre row and the top-wall row) -> left aisle
@@ -99,7 +99,7 @@ def generate() -> Dict[str, Any]:
     patrol.add(x_left, y_upper)
     lot.set_patrol(patrol)
 
-    # ---------- Pedestrian zones ---------------------------------------
+    # Pedestrian zones
     lot.add_zone(PedestrianZone.along_row(bottom_perp, side="north"))
     lot.add_zone(PedestrianZone.along_row(bottom_right_perp, side="north"))
     lot.add_zone(PedestrianZone.along_row(left_perp, side="east"))

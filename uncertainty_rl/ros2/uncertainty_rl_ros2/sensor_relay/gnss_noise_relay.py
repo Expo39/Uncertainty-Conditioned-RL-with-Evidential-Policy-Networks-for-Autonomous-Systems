@@ -338,9 +338,9 @@ class GnssNoiseRelayNode(Node):
             f"markov_transitions={self._markov_enabled})"
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Config and tier helpers
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _load_transition_matrix(self, profiles_path: str) -> np.ndarray:
         """
@@ -541,9 +541,9 @@ class GnssNoiseRelayNode(Node):
                 f"(metric_stddev={self._metric_stddev_m:.3f}m)"
             )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # COG heading helpers
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _cog_heading_variance(self, displacement_m: float, sigma: float) -> float:
         """
@@ -557,9 +557,9 @@ class GnssNoiseRelayNode(Node):
         min_var = 2.0 * self._rtk_fixed_var / disp_sq
         return max(raw_var, min_var)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # IMU callback (ZUPT detection)
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _imu_callback(self, msg: Imu) -> None:
         """
@@ -572,9 +572,9 @@ class GnssNoiseRelayNode(Node):
             and msg.linear_acceleration.y == 0.0
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Main callback
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _gnss_callback(self, msg: NavSatFix) -> None:
         """
@@ -600,7 +600,7 @@ class GnssNoiseRelayNode(Node):
 
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
-        # -- Datum latch -------------------------------------------------------
+        # Datum latch
         # Preferred path: the training container writes datum_lat/datum_lon to
         # episode_config.json before any GNSS callback fires for the new
         # episode, and _apply_episode_config() latches that value. Falling
@@ -623,7 +623,7 @@ class GnssNoiseRelayNode(Node):
                 f"lat={self._datum_lat:.6f} lon={self._datum_lon:.6f}"
             )
 
-        # -- Inject noise to lat/lon -------------------------------------------
+        # Inject noise to lat/lon
         out = NavSatFix()
         out.header = msg.header
         if self._gnss_noise_enabled:
@@ -680,13 +680,13 @@ class GnssNoiseRelayNode(Node):
             out.position_covariance_type = msg.position_covariance_type
         self._pub.publish(out)
 
-        # -- Flat-earth projection: noisy lat/lon -> local XY ------------------
+        # Flat-earth projection: noisy lat/lon -> local XY
         # CARLA latitude increases southward, so the raw delta gives a
         # south-positive y. Negate to put +y north (REP-103) for the EKF.
         local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
         local_y = -(out.latitude - self._datum_lat) * self._metres_per_deg_lat
 
-        # -- Compute GNSS-derived speed from successive positions -------------
+        # Compute GNSS-derived speed from successive positions
         # The scalar speed magnitude is published as body-frame longitudinal
         # velocity (twist.linear.x). A 2D velocity vector would conflict with
         # the EKF yaw state through slip angle, so only the scalar is fused.
@@ -722,7 +722,7 @@ class GnssNoiseRelayNode(Node):
                     velocity_state = "moving"
                 # else: poor fix quality -> "unknown", EKF uses prediction.
 
-        # -- Publish GNSS odometry (EKF odom0: x, y position + vx speed) ------
+        # Publish GNSS odometry (EKF odom0: x, y position + vx speed)
         odom_msg = Odometry()
         odom_msg.header = out.header
         odom_msg.header.frame_id = "odom"
@@ -757,7 +757,7 @@ class GnssNoiseRelayNode(Node):
         odom_msg.twist.covariance = twist_cov
         self._odom_pub.publish(odom_msg)
 
-        # -- COG heading (EKF pose0: yaw correction) ---------------------------
+        # COG heading (EKF pose0: yaw correction)
         # Reuses dx, dy, displacement_m computed above.
         if displacement_m > 0.0 and dt > 0.0:
             speed_ms = self._last_speed_ms

@@ -1,16 +1,9 @@
 # Curriculum Stage 7 - Phase B (full sensor noise). Resume from Stage 6. Geometry
 # is identical to Stage 6; only localisation uncertainty turns on.
 #
-# IMPORTANT - this stage spans TWO config files. The --stage merge only patches
-# env_config (this file). The GNSS/IMU noise master switches live in
-# configs/ros2_config.yaml and the ros2-bridge reads them at launch, so before
-# training Stage 7 you MUST also set the following there and restart the bridge
-# (make docker-build-no-cache if the launch file is baked in):
-#
-#   gnss_noise_relay: {enable_gnss_noise: true, enable_markov_transitions: true, enable_gnss_anisotropy: true}
-#   imu_noise_relay:  {enable_imu_noise: true}
-#
-# Revert all four to false to return to a clean (Phase A) bridge.
+# Spans TWO config files. The -stage merge only patches env_config (this file). The
+# GNSS/IMU noise master switches live in configs/ros2_config.yaml and must be enabled
+# there manually with the ros2-bridge restarted; revert them for a clean bridge.
 
 use_extra_spawns: true
 bay_margin: -0.25  # Strict criterion, unchanged from Stage 6.
@@ -26,8 +19,8 @@ carla_sensors:
     noise:
       enabled: true  # Phase B: LiDAR range noise on (env-side, no bridge restart).
 
-# Longest stage (noise is the hardest axis). A fresh mid-range LR/ent_coef schedule
-# lets the policy ADAPT to noisy localisation rather than inherit a near-floor LR.
+# Longest stage (noise is the hardest axis), with a fresh mid-range LR/ent_coef
+# schedule so the policy can adapt to noisy localisation.
 training_overrides:
   stage_timesteps: 4000000
   learning_rate: 0.0002
