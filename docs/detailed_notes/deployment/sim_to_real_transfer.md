@@ -42,11 +42,11 @@ with no cumulative drift.
 3-10 deg/hr for consumer-grade IMUs). Over a 45 s parking manoeuvre this is
 3-10 deg/hr * (45/3600) hr = 0.04-0.12 deg of accumulated heading error.
 At 1.5 m from the vehicle centre to a bay edge, 0.1 deg heading error
-introduces ~2.6 mm lateral position error -- negligible for a 2.5 m bay.
+introduces ~2.6 mm lateral position error - negligible for a 2.5 m bay.
 
-**Conclusion:** For short-duration parking manoeuvres, IMU bias drift is
-below the success threshold (0.5 m position, 10 deg orientation) and can be
-safely ignored.
+**Conclusion:** For short-duration parking manoeuvres, IMU bias drift is far
+below the geometric acceptance tolerance (the ego bounding box must fit inside
+the bay polygon, `car_fully_inside_bay()`) and can be safely ignored.
 
 ### No surface variation (FlatPlane world)
 

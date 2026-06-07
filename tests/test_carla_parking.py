@@ -289,7 +289,7 @@ class TestObservationSpaceShape:
 
     def test_action_space_shape(self) -> None:
         """
-        @brief Action space must be 2-dim: [steering, drive].
+        @brief Action space must be 3-dim: [steering, throttle, brake].
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 

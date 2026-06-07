@@ -1,8 +1,8 @@
 # Actuation calibration for sim-to-real transfer.
 #
-# Maps the policy's normalised action output [steering, drive] to physical
-# actuator commands on the real vehicle. drive is bipolar:
-# positive = throttle, negative = brake. No reverse gear.
+# Maps the policy's normalised action output [steering, throttle, brake] to
+# physical actuator commands on the real vehicle. Steering is bipolar [-1, 1];
+# throttle and brake are separate non-negative axes [0, 1]. No reverse gear.
 
 calibration:
   steering:
@@ -15,13 +15,22 @@ calibration:
     min_output: -1.0
     max_output: 1.0
 
-  drive:
-    # Maps policy drive [-1, 1] to throttle/brake command [-1, 1].
-    # Positive = throttle, negative = brake (same sign convention as env).
+  throttle:
+    # Maps policy throttle [0, 1] to throttle command [0, 1].
     # @warning UNCALIBRATED - identity mapping until measured.
-    gain: 1.0  # TODO: measure from throttle/brake response
+    gain: 1.0  # TODO: measure from throttle response
     deadband: 0.0  # TODO: measure minimum input for vehicle motion
     deadband_offset: 0.0  # TODO: adjust for any input bias
     bias: 0.0  # TODO: adjust for creep at zero throttle
-    min_output: -1.0  # Full brake
-    max_output: 1.0  # Full throttle
+    min_output: 0.0
+    max_output: 1.0
+
+  brake:
+    # Maps policy brake [0, 1] to brake command [0, 1].
+    # @warning UNCALIBRATED - identity mapping until measured.
+    gain: 1.0  # TODO: measure from brake response
+    deadband: 0.0  # TODO: measure minimum input for non-zero braking
+    deadband_offset: 0.0  # TODO: adjust for any input bias
+    bias: 0.0  # TODO: adjust for any brake neutral offset
+    min_output: 0.0
+    max_output: 1.0

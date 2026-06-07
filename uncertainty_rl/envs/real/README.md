@@ -72,8 +72,10 @@ deployment = RealWorldDeployment.from_mission(
     calibration_path="configs/deployment/real/actuation_calibration.yaml",
 )
 
-# Map policy action to physical command (drive is bipolar: + = throttle, - = brake)
-steering, drive = deployment.calibrate_action(raw_action[0], raw_action[1])
+# Map policy action to physical command (steering, throttle, brake)
+steering, throttle, brake = deployment.calibrate_action(
+    raw_action[0], raw_action[1], raw_action[2]
+)
 
 # Reference pose in lot frame (used for EKF frame calibration)
 lot_x, lot_y, heading_rad = deployment.reference_pose()

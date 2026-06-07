@@ -19,7 +19,7 @@ except ImportError:
 
 # ---------------------------------------------------------------------------
 # Constants for network tests. Network tests use a small arbitrary state dim
-# (not the full 12-dim env obs) for fast unit test execution. Env obs space
+# (not the full 13-dim env obs) for fast unit test execution. Env obs space
 # tests in test_carla_parking.py use _compute_obs_dim() directly.
 # ---------------------------------------------------------------------------
 STATE_DIM = 15

@@ -230,13 +230,15 @@ class RealWorldDeployment:
     # Actuation calibration
     # -----------------------------------------------------------------------
 
-    def calibrate_action(self, steering: float, drive: float) -> Tuple[float, float]:
+    def calibrate_action(
+        self, steering: float, throttle: float, brake: float
+    ) -> Tuple[float, float, float]:
         """
         @brief Map policy action outputs to physical actuator commands.
 
         @param steering: Policy steering output in [-1, 1].
-        @param drive: Policy drive output in [-1, 1]; positive = throttle,
-                      negative = brake.
-        @return Tuple (steering_cmd, drive_cmd) in physical range.
+        @param throttle: Policy throttle output in [0, 1].
+        @param brake: Policy brake output in [0, 1].
+        @return Tuple (steering_cmd, throttle_cmd, brake_cmd) in physical range.
         """
-        return self._actuation.apply(steering, drive)
+        return self._actuation.apply(steering, throttle, brake)

@@ -321,16 +321,20 @@ class RealWorldInferenceLoop:
     # Actuation and termination (stubs)
     # -----------------------------------------------------------------------
 
-    def _apply_action(self, steering: float, drive: float) -> None:
+    def _apply_action(
+        self, steering: float, throttle: float, brake: float
+    ) -> None:
         """
         @brief Publish a calibrated action to the vehicle via geometry_msgs/Twist.
         @param steering: Calibrated steering command in [-1, 1]; mapped to angular.z.
-        @param drive: Calibrated drive command in [-1, 1]; positive = throttle,
-                      negative = brake. Mapped to linear.x; the downstream
-                      actuation node interprets sign.
+        @param throttle: Calibrated throttle command in [0, 1].
+        @param brake: Calibrated brake command in [0, 1].
 
-        Publishes on the topic configured by ros2.actuation_topic (default: /cmd_vel).
-        The node and publisher are initialised lazily on the first call inside run().
+        throttle and brake combine into a single signed longitudinal command
+        (linear.x = throttle - brake) for the downstream /cmd_vel actuation node;
+        forward-only, so the result is clamped to [-1, 1]. Publishes on the topic
+        configured by ros2.actuation_topic (default: /cmd_vel). The node and
+        publisher are initialised lazily on the first call inside run().
         """
         if self._twist_publisher is None:
             raise RuntimeError(
@@ -338,6 +342,8 @@ class RealWorldInferenceLoop:
                 "Call run() rather than invoking _apply_action() directly."
             )
 
+        # throttle drives forward, brake decelerates: combine into one signed axis.
+        drive = throttle - brake
         # Scalar clamping is faster than np.clip for individual floats.
         assert self._twist_msg is not None
         self._twist_msg.linear.x = (
@@ -491,7 +497,7 @@ class RealWorldInferenceLoop:
     ) -> Tuple[np.ndarray, bool]:
         """
         @brief Apply SafetyWrapper interception logic to a raw policy action.
-        @param action: Raw policy action [steering, longitudinal].
+        @param action: Raw policy action [steering, throttle, brake].
         @param epistemic: Epistemic uncertainty from evidential actor.
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @return Tuple (modulated_action, handoff_triggered).
@@ -565,11 +571,12 @@ class RealWorldInferenceLoop:
                     if handoff:
                         handoff_count += 1
 
-                    steering, drive = self._deployment.calibrate_action(
+                    steering, throttle, brake = self._deployment.calibrate_action(
                         float(modulated_action[0]),
                         float(modulated_action[1]),
+                        float(modulated_action[2]),
                     )
-                    self._apply_action(steering, drive)
+                    self._apply_action(steering, throttle, brake)
 
                     steps += 1
                     terminated, truncated = self._is_done()

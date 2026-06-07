@@ -8,8 +8,11 @@ outputs. Training runs WITHOUT the wrapper (the policy learns freely).
 Evaluation runs WITH the wrapper (safety layer active).
 
 Two uncertainty types produce two distinct responses:
-- Aleatoric (outcome noise): cap the forward drive limit (slower driving).
+- Aleatoric (outcome noise): cap the throttle limit (slower driving).
 - Epistemic (novelty/ignorance): full stop when above handoff_threshold.
+
+Actions are [steering, throttle, brake]: steering in [-1, 1], throttle and
+brake non-negative in [0, 1].
 """
 
 import logging
@@ -96,25 +99,28 @@ class SafetyWrapper(gym.Wrapper):
         Static method so it can be called by both SafetyWrapper.step() (sim eval)
         and RealWorldInferenceLoop (real deployment) without duplicating logic.
 
-        @param action: Raw policy action [steering, drive].
+        @param action: Raw policy action [steering, throttle, brake].
         @param epistemic: Epistemic uncertainty from evidential actor.
         @param aleatoric: Aleatoric uncertainty from evidential actor.
-        @param aleatoric_scaling: Scaling factor for drive cap.
+        @param aleatoric_scaling: Scaling factor for the throttle cap.
         @param handoff_threshold: Epistemic level above which full stop is triggered.
         @return Tuple (modulated_action, handoff_triggered, aleatoric_scale).
         """
         # Epistemic: full stop if above threshold (out-of-distribution state).
+        # Zero steering and throttle, full brake, to bring the vehicle to rest.
         handoff = epistemic >= handoff_threshold
         if handoff:
-            return np.zeros_like(action), True, 0.0
+            stop = np.zeros_like(action)
+            stop[2] = 1.0
+            return stop, True, 0.0
 
-        # Aleatoric: cap drive magnitude only - steering is unrestricted.
+        # Aleatoric: cap throttle only - steering and brake are unrestricted.
         # High aleatoric = unpredictable outcomes (e.g. pedestrian cutting across).
         # Reducing speed lowers collision risk without compromising directional control.
         aleatoric_scale = 1.0 / (1.0 + aleatoric_scaling * aleatoric)
         modulated = action.copy()
-        lon = float(modulated[1])
-        modulated[1] = lon if lon <= aleatoric_scale else aleatoric_scale
+        throttle = float(modulated[1])
+        modulated[1] = throttle if throttle <= aleatoric_scale else aleatoric_scale
 
         return modulated, False, aleatoric_scale
 
