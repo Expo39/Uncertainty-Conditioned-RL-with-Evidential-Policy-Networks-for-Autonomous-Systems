@@ -33,5 +33,12 @@ training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
-  ent_coef: 0.018
-  ent_coef_final: 0.007
+  # ent_coef sized against the NORMALISED reward (progress sums to +1 per episode,
+  # ~0.01 reward/decision). The entropy bonus ent_coef*H is reward-scale-independent,
+  # so the old 0.018 (chosen against the un-normalised reward) now dwarfs the
+  # per-decision progress gradient by 3-8x and drives entropy runaway (std climbs,
+  # success stays 0). 0.006 keeps the entropy bonus near parity with the reward
+  # gradient at the operating std (~0.5) - a genuine exploration nudge, not a
+  # dominating term. @see CURRICULUM_PLAN: later stages likely need similar cuts.
+  ent_coef: 0.006
+  ent_coef_final: 0.004

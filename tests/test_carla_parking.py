@@ -31,8 +31,9 @@ from uncertainty_rl.utils.constants import (
     ENDGAME_HOLD_COEF,
     ENDGAME_MOVE_COEF,
     OBSTACLE_FEATURES_DIM,
+    PHI_NORM_FLOOR,
     TARGET_POSE_DIM,
-    TIMEOUT_PENALTY_FLOOR,
+    TIMEOUT_PENALTY_FLOOR_NORM,
     TIMEOUT_POS_COEF,
     TIMEOUT_YAW_COEF,
     TOTAL_OBS_DIM,
@@ -580,19 +581,21 @@ class TestAllowedBayIds:
 class TestGradedTimeoutPenalty:
     """
     @class TestGradedTimeoutPenalty
-    @brief Invariants of the graded timeout penalty coefficients.
+    @brief Invariants of the NORMALISED graded timeout penalty.
 
-    The penalty is -(TIMEOUT_POS_COEF*pos + TIMEOUT_YAW_COEF*yaw) clamped to
-    TIMEOUT_PENALTY_FLOOR. These tests pin the design invariants that must hold for
-    any coefficient choice: the ordering success(+50) > timeout > collision(-25)
-    (floor strictly above -25), and ending closer/straighter is always less costly
-    (a live gradient toward the bay).
+    The penalty is -(TIMEOUT_POS_COEF*pos + TIMEOUT_YAW_COEF*yaw) DIVIDED by the
+    per-episode start potential |phi(start)| and clamped to
+    TIMEOUT_PENALTY_FLOOR_NORM. These tests pin the design invariants: the ordering
+    success(+50) > timeout > ego collision(-25) (floor strictly above -25), ending
+    closer/straighter is always less costly (a live gradient toward the bay), and -
+    the property that motivated normalisation - a far-bay timeout is NOT penalised
+    more heavily than a near-bay one purely for being far.
     """
 
-    def _penalty(self, pos: float, yaw: float = 0.35) -> float:
+    def _penalty(self, pos: float, yaw: float = 0.35, phi_start: float = 20.0) -> float:
         return max(
-            -(TIMEOUT_POS_COEF * pos + TIMEOUT_YAW_COEF * yaw),
-            TIMEOUT_PENALTY_FLOOR,
+            -(TIMEOUT_POS_COEF * pos + TIMEOUT_YAW_COEF * yaw) / phi_start,
+            TIMEOUT_PENALTY_FLOOR_NORM,
         )
 
     def test_floor_above_collision(self) -> None:
@@ -600,26 +603,43 @@ class TestGradedTimeoutPenalty:
         @brief Floor must sit strictly above the -25 ego-crash penalty so the car
                never crashes deliberately to escape a worse timeout.
         """
-        assert TIMEOUT_PENALTY_FLOOR > -25.0
+        assert TIMEOUT_PENALTY_FLOOR_NORM > -25.0
 
     def test_penalty_never_below_floor(self) -> None:
         """
         @brief Even a far/badly-misaligned timeout is clamped to the floor.
         """
-        assert self._penalty(50.0, 3.14) == TIMEOUT_PENALTY_FLOOR
+        assert self._penalty(50.0, 3.14) == TIMEOUT_PENALTY_FLOOR_NORM
 
     def test_near_miss_cheaper_than_floor(self) -> None:
         """
-        @brief A ~3 m near-miss must cost clearly less than the floor, so getting
-               closer is always rewarded (a gradient toward the bay).
+        @brief A small residual error must cost clearly less than the floor, so
+               getting closer is always rewarded (a gradient toward the bay).
         """
-        assert TIMEOUT_PENALTY_FLOOR < self._penalty(3.0) < 0.0
+        assert TIMEOUT_PENALTY_FLOOR_NORM < self._penalty(1.0, 0.05) < 0.0
 
     def test_closer_is_always_better(self) -> None:
         """
         @brief Ending closer is monotonically less costly (until the floor clamps).
         """
-        assert self._penalty(2.0) > self._penalty(4.0) >= self._penalty(9.0)
+        assert self._penalty(1.0) > self._penalty(2.0) >= self._penalty(9.0)
+
+    def test_far_bay_not_penalised_more_for_distance_alone(self) -> None:
+        """
+        @brief The regression guard for the normalisation: two episodes ending the
+               SAME proportion short of their bay (here, the full start distance,
+               i.e. the car never moved) cost the same after normalisation, even
+               though the far bay's raw metre error is far larger. Without dividing
+               by |phi(start)|, the far-bay timeout would be much harsher purely
+               because the bay is further away.
+        """
+        # Near bay: starts 6 m out; far bay: starts 30 m out. A car that never moves
+        # ends pos_error == start distance for each, and |phi(start)| scales with it.
+        near = self._penalty(pos=6.0, yaw=0.3, phi_start=6.0)
+        far = self._penalty(pos=30.0, yaw=0.3, phi_start=30.0)
+        # Both saturate at the floor here (never-moved is the worst case); the point
+        # is the far bay is not pushed BELOW the near one by distance alone.
+        assert far >= near
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +958,10 @@ def _make_env_for_reward() -> Any:
     # Corridor potential at the default 5 m straight-ahead start, so the first
     # progress reading in a test is relative to a sensible prior pose.
     env._prev_phi = env._corridor_potential(5.0, 0.0, 0.0)
+    # Per-episode reward normaliser. reset() normally sets this from the spawn
+    # potential; set it directly here since these tests bypass reset(). Tests that
+    # exercise the normalisation explicitly override it.
+    env._phi_start = max(abs(env._prev_phi), PHI_NORM_FLOOR)
 
     # Layout with generous corners so OOB check doesn't fire unless intended.
     env._current_layout = {
@@ -1092,6 +1116,34 @@ class TestComputeReward:
         assert terminated is False
         assert success is False
         assert env._success_counter == 0
+
+    def test_total_progress_normalised_to_one_regardless_of_bay_distance(
+        self,
+    ) -> None:
+        """
+        @brief Regression guard for the per-episode progress normalisation.
+
+        The full-episode progress sum telescopes to (phi(parked) - phi(start)) /
+        |phi(start)| = +1 for EVERY bay, near or far. Before normalisation a far bay
+        offered a far larger total shaping pool than a near one (it could exceed the
+        +50 terminal), and shared forward motion banked reward toward every bay -
+        which rewarded driving toward a fixed memorised bay instead of the commanded
+        one. Here we drive each start pose all the way to the parked pose in one step
+        and assert the banked progress is ~+1 in both cases.
+        """
+        for start_along in (6.0, 30.0):
+            env = _make_env_for_reward()
+            env._prev_phi = env._corridor_potential(start_along, 0.0, 0.0)
+            env._phi_start = max(abs(env._prev_phi), PHI_NORM_FLOOR)
+            # Drive to the parked pose (along=cross=heading=0 -> phi = 0).
+            _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0)
+
+            _, _, _, diag = env._compute_reward()
+
+            assert diag["progress_reward"] == pytest.approx(1.0, abs=1e-6), (
+                f"full close-in from {start_along} m must bank ~+1 progress, "
+                f"got {diag['progress_reward']}"
+            )
 
     def test_progress_reward_positive_when_closing_in(self) -> None:
         """
