@@ -15,15 +15,15 @@ physically deliver. Earlier iterations of this project used soft reward
 penalties to discourage chatter (a `-0.01 * (action - prev_action)^2` shape on
 each axis). Two failure modes were observed:
 
-- **Coefficient too small.** Run `23052026-0743` paid only ~ -1.2 reward per
-  episode for steering chatter, against a +50 success terminal. The policy
-  ignored the penalty and produced bang-bang outputs (throttle flipping 0 <-> 1
-  on 9 % of consecutive decisions; brake on 11 %).
-- **Coefficient too large.** Run `23052026-1816` raised the same shape on all
-  three axes and found a new attractor: a symmetric `Delta^2` cost is
-  minimised by *any* constant action regardless of magnitude. The policy
-  locked steering at +1.0, throttle at ~ 0.4, brake at ~ 0, and drove in
-  circles until the timeout. Success rate dropped from 8 % to 0 %.
+- **Coefficient too small.** A weak penalty (e.g. -0.01 per change^2) pays only
+  a few tenths reward per episode against a +50 success terminal. The policy
+  learns to ignore the penalty and produces bang-bang outputs (throttle flipping
+  0 <-> 1 on ~9 % of consecutive decisions; brake on ~11 %).
+- **Coefficient too large.** A strong penalty (e.g. -0.1 per change^2) is
+  minimised by *any* constant action regardless of magnitude (a symmetric
+  quadratic has a minima everywhere on flat lines). The policy locks steering,
+  throttle, and brake at constants, drives in circles, and times out. Success
+  rate collapses to zero.
 
 Both failures share a structural cause: a soft penalty conflates "do not
 change the actuator" with "the actuator cannot change that quickly". Only the
