@@ -99,6 +99,19 @@ expression and the CARLA-vs-REP-103 chirality handling.
 
 Outcome-only: terminal events (success +50, collision -25/-10, graded timeout penalty) and a soft out-of-bounds accumulation. Per-step shaping is corridor potential (bay-frame); no uncertainty coupling. See `CARLAParkingEnv._compute_reward()` in [`sim/carla_parking.py`](sim/carla_parking.py) for the exact implementation and the source of truth for all coefficients.
 
+## Success criterion
+
+Success is geometric, not a scalar position/orientation tolerance: every corner of
+the ego bounding box must lie inside the target bay polygon (`car_fully_inside_bay()`
+in [`utils/geometry.py`](../utils/geometry.py)) and the speed must be below
+`SUCCESS_THRESHOLD_VELOCITY`, held for `SUCCESS_DWELL_STEPS` consecutive steps. The
+inward bay margin is supplied at env construction: training / tuning callers pass the
+`bay_margin` from the active curriculum stage (looser, to densify terminal +50 events)
+while evaluation, demo, and inspector callers pass `STRICT_BAY_MARGIN` (the strict
+published criterion). The env itself has no training-vs-eval mode; it uses whatever
+margin it was constructed with. The env factory that supplies the right margin per
+caller lives in [`factory.py`](factory.py).
+
 ## Floor plans
 
 | Floor plan | Shape | Role |
