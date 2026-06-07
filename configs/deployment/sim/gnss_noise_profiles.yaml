@@ -2,8 +2,6 @@
 # Consumed by GnssNoiseRelayNode. Tier is sampled each reset(); noise injected
 # into NavSatFix.position_covariance so the EKF receives correctly scaled
 # measurement noise.
-#
-# See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 
 tiers:
   rtk_fixed:
@@ -47,8 +45,6 @@ tiers:
 
 # Per-step transition matrix at GNSS callback rate (20 Hz).
 # Rows = from-tier, columns = to-tier in the order of the named keys.
-#
-# See documentation/detailed_notes/sensor_noise_models.md for derivation.
 transition_matrix:
   rtk_fixed:  [0.9958, 0.0042, 0.0000, 0.0000]   # mean dwell 11.9 s
   rtk_float:  [0.0042, 0.9928, 0.0030, 0.0000]   # mean dwell  6.9 s

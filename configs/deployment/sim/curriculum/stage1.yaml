@@ -24,18 +24,8 @@ training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
-  # ent_coef sized against the NORMALISED reward. The /phi_start * PROGRESS_TARGET
-  # transform makes a successful approach bank PROGRESS_TARGET (~11) per episode for
-  # EVERY bay, i.e. ~0.028 reward/decision at convergence - the same dense scale as
-  # every later stage. The entropy bonus ent_coef*H is reward-scale-independent (H
-  # depends only on the policy std, ~2.1 at the operating std), so a value sized for
-  # the old un-normalised reward (0.02) dwarfs the per-decision gradient and the
-  # policy never commits. 0.006 keeps the start bonus near parity with the reward
-  # gradient - a genuine exploration nudge, not a dominating term. The floor decays
-  # to 0.001 so that once the policy has converged (std ~0.5, reward gradient quiet
-  # near the optimum) the entropy bonus drops to ~0.08x the reward gradient and gets
-  # out of the way, letting the committed policy HOLD rather than re-inflating its
-  # std off the optimum late in training. Matches stage 2 by design: both stages
-  # share the normalised reward scale, so one principled ent_coef serves both.
+  # ent_coef sized against the normalised reward so the entropy bonus stays near
+  # parity with the per-decision reward gradient at the operating std, decaying to a
+  # low floor so the converged policy holds. Matches stage 2 (same reward scale).
   ent_coef: 0.006
   ent_coef_final: 0.001
