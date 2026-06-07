@@ -106,7 +106,7 @@ live in `EvidentialLayer.forward()` and `EvidentialDistribution.proba_distributi
 They are tuned to keep the head in a well-behaved region for RL training -
 in particular the alpha offset keeps `alpha - 1` bounded away from zero so
 the aleatoric variance cannot diverge. See the source files and
-[docs/detailed_notes/evidential_nig_initialisation.md](../../docs/detailed_notes/evidential_nig_initialisation.md)
+[docs/detailed_notes/networks/evidential_nig_initialisation.md](../../docs/detailed_notes/networks/evidential_nig_initialisation.md)
 for the derivation.
 
 ## Evidential regularisation
@@ -169,4 +169,4 @@ bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiri
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [envs/README.md](../envs/README.md) - observation layout that feeds this network
 - [training/README.md](../training/README.md) - how EvidentialPPO is wired into the training loop
-- [docs/detailed_notes/evidential_nig_initialisation.md](../../docs/detailed_notes/evidential_nig_initialisation.md) - derivation of NIG initialisation and clamping choices
+- [docs/detailed_notes/networks/evidential_nig_initialisation.md](../../docs/detailed_notes/networks/evidential_nig_initialisation.md) - derivation of NIG initialisation and clamping choices

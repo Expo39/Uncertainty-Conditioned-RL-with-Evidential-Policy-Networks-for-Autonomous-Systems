@@ -57,4 +57,4 @@ layout YAML, and `layout_file` to the path of the corresponding layout.
 
 - [configs/deployment/README.md](../README.md) - shared sensor and agent configs
 - [uncertainty_rl/envs/real/README.md](../../../uncertainty_rl/envs/real/README.md) - `RealWorldDeployment` and `RealWorldInferenceLoop`
-- [docs/detailed_notes/real_world_deployment.md](../../../docs/detailed_notes/real_world_deployment.md) - deployment architecture and sim-to-real transfer
+- [docs/detailed_notes/deployment/real_world_deployment.md](../../../docs/detailed_notes/deployment/real_world_deployment.md) - deployment architecture and sim-to-real transfer
