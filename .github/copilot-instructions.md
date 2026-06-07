@@ -271,7 +271,7 @@ The dissertation's core experiment: test agent across escalating localisation un
 6. **extreme_noise** - 5.0x GNSS noise (simulates multipath / RTK loss of fix)
 
 Each condition runs 100 episodes. Metrics collected:
-- Success rate (position <0.5m, orientation <10deg, velocity <0.1 m/s)
+- Success rate (ego bounding box fully inside the bay polygon via car_fully_inside_bay(), velocity <0.1 m/s, held for success_dwell_steps)
 - Mean reward, position/orientation error
 - Epistemic/aleatoric uncertainty evolution
 - Collision rate, timeout rate

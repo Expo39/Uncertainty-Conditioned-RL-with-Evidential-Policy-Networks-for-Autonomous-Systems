@@ -35,7 +35,9 @@ class _StubEnv(gym.Env):
             low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float32
         )
         self.action_space = gym.spaces.Box(
-            low=-1.0, high=1.0, shape=(2,), dtype=np.float32
+            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            dtype=np.float32,
         )
 
     def reset(
@@ -57,8 +59,10 @@ def _make_mock_env(obs_shape: int = 12) -> _StubEnv:
     return _StubEnv(obs_shape)
 
 
-def _make_action(steer: float = 0.0, lon: float = 0.5) -> np.ndarray:
-    return np.array([steer, lon], dtype=np.float32)
+def _make_action(
+    steer: float = 0.0, throttle: float = 0.5, brake: float = 0.0
+) -> np.ndarray:
+    return np.array([steer, throttle, brake], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +80,7 @@ class TestSafetyWrapperApply:
         """
         @brief Zero uncertainty should leave the action unchanged.
         """
-        action = _make_action(steer=0.3, lon=0.8)
+        action = _make_action(steer=0.3, throttle=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -88,11 +92,11 @@ class TestSafetyWrapperApply:
         assert modulated[0] == pytest.approx(0.3)
         assert modulated[1] == pytest.approx(0.8)
 
-    def test_aleatoric_caps_drive(self) -> None:
+    def test_aleatoric_caps_throttle(self) -> None:
         """
-        @brief High aleatoric uncertainty caps the drive component.
+        @brief High aleatoric uncertainty caps the throttle component.
         """
-        action = _make_action(lon=1.0)
+        action = _make_action(throttle=1.0)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -109,7 +113,7 @@ class TestSafetyWrapperApply:
         """
         @brief Aleatoric uncertainty must not change the steering component.
         """
-        action = _make_action(steer=0.9, lon=0.5)
+        action = _make_action(steer=0.9, throttle=0.5)
         modulated, _, _s = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -121,9 +125,10 @@ class TestSafetyWrapperApply:
 
     def test_epistemic_above_threshold_triggers_handoff(self) -> None:
         """
-        @brief Epistemic >= handoff_threshold must zero the action and return handoff=True.
+        @brief Epistemic >= handoff_threshold must command a full stop (zero
+               steering and throttle, full brake) and return handoff=True.
         """
-        action = _make_action(steer=0.5, lon=0.9)
+        action = _make_action(steer=0.5, throttle=0.9)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=5.0,
@@ -132,13 +137,15 @@ class TestSafetyWrapperApply:
             handoff_threshold=5.0,
         )
         assert handoff
-        np.testing.assert_array_equal(modulated, np.zeros(2))
+        np.testing.assert_array_equal(
+            modulated, np.array([0.0, 0.0, 1.0], dtype=action.dtype)
+        )
 
     def test_epistemic_below_threshold_no_handoff(self) -> None:
         """
         @brief Epistemic just below threshold must not trigger handoff.
         """
-        action = _make_action(lon=0.8)
+        action = _make_action(throttle=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=4.99,
@@ -153,7 +160,7 @@ class TestSafetyWrapperApply:
         """
         @brief apply() must return a copy, not modify the input array in place.
         """
-        action = _make_action(steer=0.3, lon=0.7)
+        action = _make_action(steer=0.3, throttle=0.7)
         original = action.copy()
         SafetyWrapper.apply(
             action,
@@ -164,21 +171,20 @@ class TestSafetyWrapperApply:
         )
         np.testing.assert_array_equal(action, original)
 
-    def test_negative_drive_passes_through_unchanged(self) -> None:
+    def test_brake_passes_through_unchanged(self) -> None:
         """
-        @brief apply() only caps the upper drive limit; negative (braking) drive
-               commands pass through untouched. Lower-bound clamping is the
-               action_space's responsibility, not apply()'s.
+        @brief apply() only caps the throttle; the brake axis passes through
+               untouched (the cap reduces speed, it does not suppress braking).
         """
-        action = np.array([0.0, -0.7], dtype=np.float32)
+        action = _make_action(throttle=0.0, brake=0.7)
         modulated, _, _s = SafetyWrapper.apply(
             action,
             epistemic=0.0,
-            aleatoric=0.0,
+            aleatoric=4.0,
             aleatoric_scaling=0.5,
             handoff_threshold=5.0,
         )
-        assert modulated[1] == pytest.approx(-0.7)
+        assert modulated[2] == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------

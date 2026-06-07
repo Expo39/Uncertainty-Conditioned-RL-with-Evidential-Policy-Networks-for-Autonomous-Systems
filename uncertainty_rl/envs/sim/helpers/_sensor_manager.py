@@ -8,7 +8,7 @@ a SensorManager instance and delegates sensor lifecycle calls to it.
 
 Sensor roles:
   - RTK-GNSS + IMU: localisation via robot_localisation EKF.
-  - 2D LiDAR: obstacle detection only (obs indices 7-11). NOT localisation.
+  - 2D LiDAR: obstacle detection only (obs indices 8-12). NOT localisation.
   - Collision sensor: terminal reward signal.
 """
 
