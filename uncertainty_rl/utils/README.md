@@ -5,8 +5,8 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 ## At a glance
 
 - `constants.py` is the single source of truth for all architectural dimensions and success thresholds - never hardcode these elsewhere
-- `ACTION_DIM = 2`: steering $\in [-1, 1]$, drive $\in [-1, 1]$ (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
-- `TOTAL_OBS_DIM = 12` (default, both ablation flags true); use `compute_obs_dim()` in `_parking_core.py` at runtime
+- `ACTION_DIM = 3`: steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$ (throttle and brake are separate non-negative axes; no reverse gear)
+- `TOTAL_OBS_DIM = 13` (default, both ablation flags true); use `compute_obs_dim()` in `_parking_core.py` at runtime
 - `VisStateWriter` streams environment state for the detachable 2D bird's-eye visualiser via atomic JSON writes
 - No tuneable hyperparameters here - those live in `configs/*.yaml`
 
@@ -15,6 +15,8 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 | Module | Purpose |
 |--------|---------|
 | `constants.py` | Structural constants: dimensions, thresholds. Not tuneable. |
+| `bay_success.py` | Per-bay episode accounting for success-rate reporting |
+| `config_merge.py` | Config merge hierarchy: `deep_merge`, `apply_baseline`, `BASELINE_KEYS` |
 | `covariance_utils.py` | EKF covariance extraction and validation helpers |
 | `geometry.py` | Coordinate transforms, polygon tests, angle wrapping |
 | `logging.py` | `DebugLogger` - zero-overhead per-step diagnostics |
