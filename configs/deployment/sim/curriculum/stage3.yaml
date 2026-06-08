@@ -3,7 +3,13 @@
 # still locked. The biggest generalisation jump in the clean phase.
 
 use_extra_spawns: false  # Still locked to the primary spawn - only the bay varies.
-bay_margin: -0.6  # Looser while orientation variety lands.
+bay_margin: -0.5  # First tightening step. The square-onto-the-centreline skill is
+                  # orientation-invariant and plateaus under a loose box (the corridor
+                  # reward alone does not square the park - the strict terminal does, via
+                  # the yaw-weighted timeout penalty). So the margin is front-loaded into
+                  # the two clean stages (3, 4) where squaring competes with nothing but
+                  # the navigation it already shares, reaching the strict -0.25 at stage 4
+                  # and holding it flat through cars (5), density (6) and noise (7).
 
 parking_scenarios:
   fixed_floor_plan: rectangle
@@ -20,5 +26,9 @@ training_overrides:
   stage_timesteps: 3000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
-  ent_coef: 0.015
-  ent_coef_final: 0.006
+  # Near the shared 0.0005 floor (resumed stage; the carried-over policy is already
+  # converged at the previous floor's action std, and a from-scratch-sized initial
+  # widens the free Gaussian log_std without bound). The largest Phase-A state-space
+  # jump (all 47 bays, all orientations) takes the largest nudge above the floor.
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005
