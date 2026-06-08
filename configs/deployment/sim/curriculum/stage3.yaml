@@ -1,34 +1,52 @@
-# Curriculum Stage 3 - all bays, all orientations, from the same fixed spawn.
-# Resume from Stage 2. Target is any eligible bay across all 4 orientations; spawn
-# still locked. The biggest generalisation jump in the clean phase.
+# Curriculum Stage 3 - bay count up (~4 per cluster). Resume from Stage 2.
+# Primary axis: bay variety.
 
-use_extra_spawns: false  # Still locked to the primary spawn - only the bay varies.
-bay_margin: -0.5  # First tightening step. The square-onto-the-centreline skill is
-                  # orientation-invariant and plateaus under a loose box (the corridor
-                  # reward alone does not square the park - the strict terminal does, via
-                  # the yaw-weighted timeout penalty). So the margin is front-loaded into
-                  # the two clean stages (3, 4) where squaring competes with nothing but
-                  # the navigation it already shares, reaching the strict -0.25 at stage 4
-                  # and holding it flat through cars (5), density (6) and noise (7).
+use_extra_spawns: false
+bay_margin: -0.55
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_gnss_tier: rtk_fixed
-  bay_occupancy_min: 0.0  # Still no parked cars.
-  bay_occupancy_max: 0.0
+  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  drift_scale: 0.14
+  allowed_bay_ids:  # ~4 per cluster, all 4 orientations.
+    - perpendicular_0
+    - perpendicular_4
+    - perpendicular_8
+    - perpendicular_11   # yaw 270, north row
+    - perpendicular_20
+    - perpendicular_24
+    - perpendicular_28
+    - perpendicular_31   # yaw 270, upper row
+    - perpendicular_12
+    - perpendicular_14
+    - perpendicular_16
+    - perpendicular_18   # yaw 90, south row
+    - perpendicular_33
+    - perpendicular_35
+    - perpendicular_37
+    - perpendicular_39   # yaw 0, west column
+    - perpendicular_40
+    - perpendicular_41
+    - perpendicular_42
+    - perpendicular_43   # yaw 180, east column
+  bay_occupancy_min: 0.1
+  bay_occupancy_max: 0.1
 
 carla_sensors:
   lidar:
     noise:
-      enabled: false  # Phase A: clean sensors.
+      enabled: true  # Constant realism floor (on in every stage).
 
-training_overrides:
-  stage_timesteps: 3000000
-  learning_rate: 0.0003
+# Identical standard/evidential blocks - see Stage 1.
+standard_overrides:
+  stage_timesteps: 1500000
+  learning_rate: 0.00025
   learning_rate_final: 0.00005
-  # Near the shared 0.0005 floor (resumed stage; the carried-over policy is already
-  # converged at the previous floor's action std, and a from-scratch-sized initial
-  # widens the free Gaussian log_std without bound). The largest Phase-A state-space
-  # jump (all 47 bays, all orientations) takes the largest nudge above the floor.
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005
+evidential_overrides:
+  stage_timesteps: 1500000
+  learning_rate: 0.00025
+  learning_rate_final: 0.00005
   ent_coef: 0.0015
   ent_coef_final: 0.0005

@@ -117,6 +117,31 @@ TOTAL_OBS_DIM = (
 )  # 13
 
 # ---------------------------------------------------------------------------
+# Observation Normalisation Scales
+# ---------------------------------------------------------------------------
+# Fixed physical-range divisors for the observation, applied in build_observation():
+# each component is divided by its scale and clipped to +/-OBS_NORM_CLIP. Stage- and
+# layout-invariant: identical in training, evaluation, every layout, and on the real
+# vehicle. Generous physical bounds; the clip guards outliers, not the working range.
+OBS_SPEED_SCALE = 5.0  # m/s - forward parking speed cap (speed is non-negative)
+OBS_YAW_RATE_SCALE = np.pi  # rad/s - vyaw is wrapped to [-pi, pi] in build_observation
+OBS_STD_POS_SCALE = 5.0  # m - EKF position-std ceiling (degraded GNSS tier ~5 m)
+OBS_STD_YAW_SCALE = 0.5  # rad - EKF heading-std ceiling (~29 deg)
+OBS_TARGET_POS_SCALE = (
+    40.0  # m - relative target offset scale over the lot (65 x 42.5 m)
+)
+OBS_TARGET_YAW_SCALE = (
+    np.pi / 2
+)  # rad - dyaw wrapped to [-pi/2, pi/2] (180-deg symmetry)
+OBS_OBSTACLE_DIST_SCALE = (
+    25.0  # m - 2D LiDAR max range (configs/deployment/sensor_config.yaml)
+)
+OBS_OBSTACLE_BEARING_SCALE = np.pi / 2  # rad - forward-hemisphere bearing bound
+
+# Clip magnitude applied after scaling. Wide enough that only outliers are clipped.
+OBS_NORM_CLIP = 5.0
+
+# ---------------------------------------------------------------------------
 # Action Space Dimensions
 # ---------------------------------------------------------------------------
 

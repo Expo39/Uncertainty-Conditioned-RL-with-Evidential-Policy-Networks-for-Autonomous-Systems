@@ -176,8 +176,10 @@ make docker-eval
 make docker-down
 ```
 
-Training follows a 7-stage curriculum (clean geometry ramp in stages 1-6, sensor
-noise in stage 7); each stage resumes from the previous stage's checkpoint. See
+Training follows a single-phase ADR curriculum (10 stages): every observation
+channel is live in every stage, and one axis's range ramps per stage (bays + margin
+-> obstacle occupancy -> GNSS uncertainty). Each stage resumes from the previous
+stage's checkpoint. See
 [documentation/CURRICULUM_PLAN.md](documentation/CURRICULUM_PLAN.md).
 
 ---

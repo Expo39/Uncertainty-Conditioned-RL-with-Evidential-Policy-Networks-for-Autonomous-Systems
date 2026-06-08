@@ -48,6 +48,7 @@ from uncertainty_rl.utils.constants import (
     CORRIDOR_W_HEAD,
     ENDGAME_HOLD_COEF,
     ENDGAME_MOVE_COEF,
+    OBS_NORM_CLIP,
     OBSTACLE_CLEARANCE_DANGER,
     OBSTACLE_CLEARANCE_SAFE,
     OBSTACLE_FEATURES_DIM,
@@ -279,6 +280,10 @@ class CARLAParkingEnv(gym.Env):
             "fixed_target_bay_id", None
         )
         self._fixed_gnss_tier: Optional[str] = scenarios.get("fixed_gnss_tier", None)
+
+        # Per-stage mid-episode Markov-drift margin in [0, 1], signalled to the GNSS
+        # relay each reset (0 = the start tier holds; 1 = the full transition chain).
+        self._drift_scale: float = float(scenarios.get("drift_scale", 1.0))
 
         # Optional whitelist restricting which bays the per-episode sampler may
         # target. None (default) samples from every eligible bay in the layout.
@@ -521,10 +526,11 @@ class CARLAParkingEnv(gym.Env):
             self._zero_vec3 = None
             self._zero_walker_ctrl = None
 
-        # Observation and action spaces
+        # Bounds are the fixed-normaliser clip: build_observation scales each dim by
+        # a physical range and clips to +/-OBS_NORM_CLIP.
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
+            low=-OBS_NORM_CLIP,
+            high=OBS_NORM_CLIP,
             shape=(_obs_dim,),
             dtype=np.float32,
         )
@@ -1915,6 +1921,7 @@ class CARLAParkingEnv(gym.Env):
                     tier_name=str(tier.get("name", "")),
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,
+                    drift_scale=self._drift_scale,
                 )
 
         if reuse_vehicle:
@@ -2188,8 +2195,10 @@ class CARLAParkingEnv(gym.Env):
             if self._cov_subscriber is not None:
                 _, _unc = self._cov_subscriber.get_latest_state()
             _ekf_drift = float(max(_unc[0], _unc[1])) if _unc is not None else 0.0
+            # Read the RAW (unscaled) obs buffer, not the normalised return
+            # value, so the debug distance stays in metres.
             _obs_dist = (
-                float(state[-OBSTACLE_FEATURES_DIM])
+                float(self._obs_buffer[-OBSTACLE_FEATURES_DIM])
                 if self._include_obstacle_obs
                 else 0.0
             )
