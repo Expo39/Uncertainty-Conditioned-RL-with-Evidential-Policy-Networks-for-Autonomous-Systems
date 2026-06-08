@@ -1,31 +1,61 @@
-# Curriculum Stage 4 - add spawn variety (still no parked cars).
-# Resume from Stage 3. Spawn is now random (primary + extras).
+# Curriculum Stage 4 - bay count up (~6 per cluster). Resume from Stage 3.
+# Primary axis: bay variety (last bay-ramp step before all 47 in Stage 5).
 
-use_extra_spawns: true  # Random spawn each episode (primary + extras).
-bay_margin: -0.25  # Strict published criterion, reached in the last fully-clean stage.
-                   # Front-loaded here (not deferred to stage 6) because squaring is an
-                   # orientation-invariant skill the loose box leaves on a plateau, and it
-                   # is cheapest to drive to square while the lot is still empty - before
-                   # parked cars (5) and noise (7) add competing gradients. Held at -0.25
-                   # for every stage after this.
+use_extra_spawns: false
+bay_margin: -0.45
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_gnss_tier: rtk_fixed
-  bay_occupancy_min: 0.0  # Still no parked cars.
-  bay_occupancy_max: 0.0
+  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  drift_scale: 0.16
+  allowed_bay_ids:  # ~6 per cluster (capped at cluster size), all 4 orientations.
+    - perpendicular_0
+    - perpendicular_2
+    - perpendicular_4
+    - perpendicular_6
+    - perpendicular_8
+    - perpendicular_10   # yaw 270, north row
+    - perpendicular_20
+    - perpendicular_23
+    - perpendicular_26
+    - perpendicular_28
+    - perpendicular_30
+    - perpendicular_32   # yaw 270, upper row
+    - perpendicular_12
+    - perpendicular_13
+    - perpendicular_15
+    - perpendicular_16
+    - perpendicular_18
+    - perpendicular_19   # yaw 90, south row
+    - perpendicular_33
+    - perpendicular_34
+    - perpendicular_36
+    - perpendicular_37
+    - perpendicular_38
+    - perpendicular_39   # yaw 0, west column
+    - perpendicular_40
+    - perpendicular_41
+    - perpendicular_42
+    - perpendicular_43
+    - perpendicular_44   # yaw 180, east column
+  bay_occupancy_min: 0.1
+  bay_occupancy_max: 0.1
 
 carla_sensors:
   lidar:
     noise:
-      enabled: false  # Phase A: clean sensors.
+      enabled: true  # Constant realism floor (on in every stage).
 
-training_overrides:
-  stage_timesteps: 3000000
+# Identical standard/evidential blocks - see Stage 1.
+standard_overrides:
+  stage_timesteps: 1500000
   learning_rate: 0.00025
   learning_rate_final: 0.00005
-  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Spawn variety
-  # roughly triples the reachable-state count, so it takes the same larger nudge as
-  # stage 3.
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005
+evidential_overrides:
+  stage_timesteps: 1500000
+  learning_rate: 0.00025
+  learning_rate_final: 0.00005
   ent_coef: 0.0015
   ent_coef_final: 0.0005

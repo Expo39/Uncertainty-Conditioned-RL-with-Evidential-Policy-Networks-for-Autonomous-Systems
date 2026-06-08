@@ -1,5 +1,11 @@
 # observation_space
 
+> **Updated 8 June 2026.** `build_observation` now RETURNS a copy normalised by FIXED
+> physical ranges (`constants.py` `OBS_*_SCALE`, clipped to `+/-OBS_NORM_CLIP`) via
+> `normalise_observation`; the raw buffer is retained for internal diagnostics. The scaler is
+> stage- and layout-invariant (weights transfer on resume; OOD eval unconfounded), so
+> `VecNormalize` does reward-norm only (`norm_obs=False`). The index layout below is unchanged.
+
 Extracted from `uncertainty_rl/envs/_parking_core.py`.
 
 ## 13-dimensional default observation vector

@@ -117,13 +117,14 @@ At each episode reset the training container writes `episode_config.json` to the
 ```json
 {
   "seq": 42,
-  "tier_name": "rtk_float",
+  "tier_name": "rtk_fixed",
   "datum_lat": 0.0,
-  "datum_lon": 0.0
+  "datum_lon": 0.0,
+  "drift_scale": 0.20
 }
 ```
 
-`GnssNoiseRelayNode` polls this file on every GNSS callback (gated by `seq` and mtime), applies the noise tier, re-latches the datum, and resamples per-episode east/north anisotropy factors. This allows per-episode RTK fix-state variation without restarting ROS 2 nodes. COG heading is no longer seeded from the spawn yaw - the node initialises COG from the first GNSS fix pair that passes the displacement, ZUPT, and variance-ceiling gates.
+`GnssNoiseRelayNode` polls this file on every GNSS callback (gated by `seq` and mtime), applies the START noise tier (`tier_name`, always `rtk_fixed` under the single-phase curriculum), re-latches the datum, resamples per-episode east/north anisotropy factors, and rebuilds its effective Markov transition matrix from `drift_scale` (the per-stage mid-episode drift margin in `[0, 1]`; `scale_transition_matrix` in `uncertainty_rl/utils/gnss_drift.py` scales the base off-diagonals, so `0` = the tier holds and `1` = the full realistic chain). This allows per-episode RTK fix-state variation and per-stage drift without restarting ROS 2 nodes; the master switches (`enable_gnss_noise`, `enable_imu_noise`, `enable_markov_transitions`) are on globally from curriculum Stage 1. COG heading is no longer seeded from the spawn yaw - the node initialises COG from the first GNSS fix pair that passes the displacement, ZUPT, and variance-ceiling gates.
 
 ## TF tree
 

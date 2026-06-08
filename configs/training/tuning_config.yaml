@@ -3,12 +3,12 @@
 
 study_name: "uncertainty_rl_tuning"  # Per-baseline runs suffix this with the baseline name.
 storage_path: "logs/tuning/optuna_study.db"  # SQLite for resume. Per-baseline runs suffix the filename.
-n_trials: 40   # Budget for the 10-parameter search space.
+n_trials: 40   # Budget for the structural-parameter search space.
 timesteps_per_trial: 100000  # ~49 PPO updates; enough to rank configs without full convergence.
 tuning_seed: 777  # TPE sampler seed (the only tuning seed); disjoint from train_config seeds so tuning and eval splits differ.
 
 sampler:
-  multivariate: true  # Captures parameter interactions (e.g. learning_rate vs batch_size).
+  multivariate: true  # Captures parameter interactions (e.g. n_steps vs batch_size).
   n_startup_trials: 12  # Random exploration before TPE builds its density model.
 
 pruner:
@@ -16,14 +16,19 @@ pruner:
   n_warmup_steps: 5  # ~10k steps before pruning begins.
   n_min_trials: 5  # Require 5 completed trials before pruning any.
 
+# STRUCTURAL PPO params only. Excluded from the search (single-phase curriculum):
+# - learning_rate, ent_coef: stage-owned (standard_overrides/evidential_overrides), so
+#   tuning them in train_config is a no-op (the stage overrides clobber them);
+# - net_arch, activation, policy_type: architectural, locked across stages/baselines;
+# - evidential.*: ablation-specific (cannot be tuned on vanilla; would break fairness);
+# - total_timesteps, seed, eval/checkpoint freqs: infrastructure, not hyperparameters.
+# See documentation/detailed_notes/ablation_hpo_methodology.md.
 search_space:
-  learning_rate: [1e-5, 1e-3]  # Log scale.
   n_steps: [1024, 2048, 4096]  # Categorical.
   batch_size: [64, 128, 256]  # Categorical; constrained <= n_steps in code.
   n_epochs: [3, 5, 10]  # Categorical.
   gamma: [0.98, 0.999]  # Sampled via 1-(1-gamma) log scale.
   gae_lambda: [0.90, 0.98]  # GAE bias-variance trade-off.
   clip_range: [0.1, 0.3]  # PPO trust region width.
-  ent_coef: [1e-6, 0.05]  # Log scale; upper widened for cold-start exploration.
-  lambda_reg: [1e-5, 0.01]  # Log scale.
-  lambda_reg_warmup_steps: [10000, 100000]  # Log scale.
+  vf_coef: [0.25, 1.0]  # Value-loss weight.
+  max_grad_norm: [0.3, 2.0]  # Gradient clipping norm.

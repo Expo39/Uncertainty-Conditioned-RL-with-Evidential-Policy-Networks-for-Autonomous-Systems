@@ -67,8 +67,10 @@ the live file rather than relying on a snapshot in this README.
 
 At eval time, `gnss_noise_multiplier` in `configs/eval_config.yaml` overrides
 the per-episode sampling to fix a specific noise level for each evaluation
-condition. When `parking_scenarios.fixed_gnss_tier` is set in `env_config.yaml`,
-the named tier is used every episode (curriculum override).
+condition. The curriculum sets `parking_scenarios.fixed_gnss_tier: rtk_fixed` in
+every stage as the per-episode START tier; mid-episode Markov drift (always on) then
+wanders from there, scaled by the per-stage `parking_scenarios.drift_scale` in [0,1]
+(0 = the start tier holds, 1 = the full realistic chain).
 
 The file also defines a `transition_matrix` block: a per-step Markov chain
 over the tiers used by `GnssNoiseRelayNode` when

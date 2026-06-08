@@ -1,32 +1,31 @@
-# Curriculum Stage 7 - Phase B (full sensor noise). Resume from Stage 6. Geometry
-# is identical to Stage 6; only localisation uncertainty turns on.
-#
-# Spans TWO config files. The -stage merge only patches env_config (this file). The
-# GNSS/IMU noise master switches live in configs/ros2_config.yaml and must be enabled
-# there manually with the ros2-bridge restarted; revert them for a clean bridge.
+# Curriculum Stage 7 - obstacles begin. Resume from Stage 6.
+# Primary axis: bay occupancy (the avoidance task); geometry and margin frozen.
 
-use_extra_spawns: true
-bay_margin: -0.25  # Strict criterion, unchanged from Stage 6.
+use_extra_spawns: false
+bay_margin: -0.25  # Strict, held.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_gnss_tier: null  # Weighted RTK tier sampling (Phase B), not the rtk_fixed lock.
+  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  drift_scale: 0.22
   bay_occupancy_min: 0.2
-  bay_occupancy_max: 0.8
+  bay_occupancy_max: 0.4
 
 carla_sensors:
   lidar:
     noise:
-      enabled: true  # Phase B: LiDAR range noise on (env-side, no bridge restart).
+      enabled: true  # Constant realism floor (on in every stage).
 
-# Longest stage (noise is the hardest axis); the LR spans a mid-range-to-low decay so
-# the policy can adapt to noisy localisation.
-training_overrides:
-  stage_timesteps: 4000000
+# Identical standard/evidential blocks - see Stage 1.
+standard_overrides:
+  stage_timesteps: 2000000
   learning_rate: 0.0002
-  learning_rate_final: 0.00001
-  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Sensor noise needs
-  # some adaptation room for degraded localisation, so a modest nudge rather than the
-  # floor.
+  learning_rate_final: 0.00003
+  ent_coef: 0.001
+  ent_coef_final: 0.0005
+evidential_overrides:
+  stage_timesteps: 2000000
+  learning_rate: 0.0002
+  learning_rate_final: 0.00003
   ent_coef: 0.001
   ent_coef_final: 0.0005

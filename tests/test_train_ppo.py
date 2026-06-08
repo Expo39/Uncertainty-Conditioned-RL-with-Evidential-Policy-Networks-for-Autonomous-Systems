@@ -616,11 +616,12 @@ class TestBaselineOverlay:
 
     def test_train_config_default_is_evidential_head(self) -> None:
         """
-        @brief The bare train_config defaults use the evidential head - which is
-               why a baseline overlay is needed to run the standard-head baselines.
+        @brief The DEFAULT baseline (full_method) is the evidential head - which is
+               why an explicit baseline overlay is needed to run the standard-head
+               baselines. policy_type is owned by the baseline files, not
+               train_config, so the default is asserted via the default overlay.
         """
-        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
-        assert train_cfg["policy_type"] == "evidential"
+        assert self._overlay("full_method.yaml")["policy_type"] == "evidential"
 
     def test_dual_encoder_off_for_clean_ablation(self) -> None:
         """

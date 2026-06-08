@@ -797,11 +797,15 @@ class TestCovarianceObservation:
         env.world = MagicMock()
         env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
 
-        obs = env._get_state()
+        env._get_state()
 
+        # _get_state() returns a fixed-physical-range NORMALISED copy; the raw
+        # buffer it fills holds the verbatim values. Positional placement is
+        # asserted on the raw buffer here; the scaling is covered by
+        # test_observation_norm.py.
         cov_start = VEHICLE_STATE_DIM
         np.testing.assert_allclose(
-            obs[cov_start : cov_start + COVARIANCE_FEATURES_DIM],
+            env._obs_buffer[cov_start : cov_start + COVARIANCE_FEATURES_DIM],
             raw,
             rtol=1e-5,
             err_msg=(
@@ -2321,7 +2325,7 @@ class TestBuildObservation:
         dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=False)
         buf = np.zeros(dim, dtype=np.float32)
         unc = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        obs = build_observation(
+        build_observation(
             ekf_pose=self._ekf_pose(),
             uncertainty=unc,
             target_bay=self._make_target(),
@@ -2330,9 +2334,11 @@ class TestBuildObservation:
             include_obstacle_obs=False,
             obs_buffer=buf,
         )
+        # The return value is the fixed-range NORMALISED copy; the raw buffer holds
+        # the verbatim values. Assert positional placement on the raw buffer.
         cov_start = VEHICLE_STATE_DIM
         np.testing.assert_allclose(
-            obs[cov_start : cov_start + COVARIANCE_FEATURES_DIM], unc
+            buf[cov_start : cov_start + COVARIANCE_FEATURES_DIM], unc
         )
 
     def test_speed_written_to_obs_zero(self) -> None:
@@ -2342,7 +2348,7 @@ class TestBuildObservation:
         dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=True)
         buf = np.zeros(dim, dtype=np.float32)
         ekf = self._ekf_pose(vx=1.7)
-        obs = build_observation(
+        build_observation(
             ekf_pose=ekf,
             uncertainty=np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32),
             target_bay=self._make_target(),
@@ -2351,9 +2357,10 @@ class TestBuildObservation:
             include_obstacle_obs=True,
             obs_buffer=buf,
         )
-        np.testing.assert_allclose(obs[0], 1.7, rtol=1e-5)
+        # Positional placement on the raw buffer (the return is the normalised copy).
+        np.testing.assert_allclose(buf[0], 1.7, rtol=1e-5)
         # vyaw still appears immediately after speed.
-        np.testing.assert_allclose(obs[1], ekf[3], rtol=1e-5)
+        np.testing.assert_allclose(buf[1], ekf[3], rtol=1e-5)
 
     def test_returns_copy_not_buffer(self) -> None:
         """

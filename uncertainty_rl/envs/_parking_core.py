@@ -19,6 +19,15 @@ import yaml
 
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
+    OBS_NORM_CLIP,
+    OBS_OBSTACLE_BEARING_SCALE,
+    OBS_OBSTACLE_DIST_SCALE,
+    OBS_SPEED_SCALE,
+    OBS_STD_POS_SCALE,
+    OBS_STD_YAW_SCALE,
+    OBS_TARGET_POS_SCALE,
+    OBS_TARGET_YAW_SCALE,
+    OBS_YAW_RATE_SCALE,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
@@ -31,6 +40,70 @@ logger = logging.getLogger(__name__)
 # Left: bearing > _SECTOR_BOUNDARY; forward: |bearing| <= _SECTOR_BOUNDARY;
 # right: < -_SECTOR_BOUNDARY.
 _SECTOR_BOUNDARY: float = math.radians(15.0)
+
+# Cache of fixed observation-scale vectors keyed by the (include_covariance,
+# include_obstacle_obs) ablation flags, so the per-step hot path reuses one
+# array per layout instead of rebuilding it.
+_obs_scale_cache: Dict[Tuple[bool, bool], np.ndarray] = {}
+
+
+def _obs_scale_vector(
+    include_covariance: bool,
+    include_obstacle_obs: bool,
+) -> np.ndarray:
+    """
+    @brief Per-dimension fixed scale vector matching the build_observation layout.
+    @param include_covariance: Whether covariance dims (2-4) are present.
+    @param include_obstacle_obs: Whether obstacle dims (last 5) are present.
+    @return float32 array of divisors, one per active observation dimension, in
+            the order [speed, vyaw, (std_x, std_y, std_yaw), dx, dy, dyaw,
+            (left_dist, left_bearing, right_dist, right_bearing, forward_dist)].
+    """
+    key = (include_covariance, include_obstacle_obs)
+    cached = _obs_scale_cache.get(key)
+    if cached is not None:
+        return cached
+    parts = [OBS_SPEED_SCALE, OBS_YAW_RATE_SCALE]
+    if include_covariance:
+        parts += [OBS_STD_POS_SCALE, OBS_STD_POS_SCALE, OBS_STD_YAW_SCALE]
+    parts += [OBS_TARGET_POS_SCALE, OBS_TARGET_POS_SCALE, OBS_TARGET_YAW_SCALE]
+    if include_obstacle_obs:
+        parts += [
+            OBS_OBSTACLE_DIST_SCALE,
+            OBS_OBSTACLE_BEARING_SCALE,
+            OBS_OBSTACLE_DIST_SCALE,
+            OBS_OBSTACLE_BEARING_SCALE,
+            OBS_OBSTACLE_DIST_SCALE,
+        ]
+    vec = np.array(parts, dtype=np.float32)
+    _obs_scale_cache[key] = vec
+    return vec
+
+
+def normalise_observation(
+    raw_obs: np.ndarray,
+    include_covariance: bool,
+    include_obstacle_obs: bool,
+) -> np.ndarray:
+    """
+    @brief Scale a raw observation by fixed physical ranges and clip.
+
+    Divides each component by its fixed physical scale (see constants.py
+    OBS_*_SCALE) and clips to [-OBS_NORM_CLIP, OBS_NORM_CLIP]. The scales are
+    stage- and layout-invariant, so the mapping is identical in training,
+    evaluation, OOD layouts, and on the real vehicle. Returns a NEW array; the
+    input is not mutated (callers reuse a raw buffer for internal diagnostics).
+
+    @param raw_obs: Raw (unscaled) observation vector.
+    @param include_covariance: Whether covariance dims are present.
+    @param include_obstacle_obs: Whether obstacle dims are present.
+    @return New float32 array of the same shape, scaled and clipped.
+    """
+    scale = _obs_scale_vector(include_covariance, include_obstacle_obs)
+    out = np.asarray(raw_obs, dtype=np.float32) / scale
+    np.clip(out, -OBS_NORM_CLIP, OBS_NORM_CLIP, out=out)
+    return np.asarray(out, dtype=np.float32)
+
 
 # Shared layout cache: keyed by resolved absolute path string so multiple env
 # instances in the same process share the parsed YAML without re-reading disk.
@@ -71,8 +144,11 @@ def build_observation(
     """
     @brief Construct the policy observation vector.
 
-    Fills obs_buffer in-place and returns a copy. The caller is responsible
-    for providing a pre-allocated buffer of the correct shape.
+    Fills obs_buffer in-place with RAW (physical-unit) values, then returns a
+    NORMALISED copy (see normalise_observation): the returned vector is what the
+    policy consumes, while obs_buffer retains the raw values for the caller's
+    internal diagnostics/visualisation. The caller is responsible for providing
+    a pre-allocated buffer of the correct shape.
 
     When ekf_pose is None (EKF not yet initialised), all pose-derived dims
     (speed, vyaw, target) are set to zero. When uncertainty is None, covariance
@@ -132,7 +208,9 @@ def build_observation(
             obs_buffer[5 : 5 + OBSTACLE_FEATURES_DIM] = obstacle_features
         else:
             obs_buffer[5 : 5 + OBSTACLE_FEATURES_DIM] = 0.0
-        return np.asarray(obs_buffer.copy())
+        return normalise_observation(
+            obs_buffer, include_covariance, include_obstacle_obs
+        )
 
     # With covariance: [speed(1), vyaw(1), cov(3), target(3), obstacle(5)] -> 13 dims
     obs_buffer[0] = speed
@@ -160,7 +238,7 @@ def build_observation(
     else:
         obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = 0.0
 
-    return np.asarray(obs_buffer.copy())
+    return normalise_observation(obs_buffer, include_covariance, include_obstacle_obs)
 
 
 def extract_obstacle_features(

@@ -1,5 +1,12 @@
 # GNSS Fix-State Markov Chain - Design and Sim-to-Real Rationale
 
+> **Updated 8 June 2026 - single-phase curriculum.** Mid-episode Markov drift is now ON from
+> Stage 1 (master switches in `ros2_config.yaml` enabled globally). Each episode STARTS in
+> `rtk_fixed` and the chain wanders from there, scaled per stage by `drift_scale` in [0,1]:
+> the relay rebuilds its effective transition matrix as base-off-diagonals x `drift_scale`
+> (`uncertainty_rl/utils/gnss_drift.py`), so early stages drift gently and the capstone uses
+> the full chain. The base matrix and tiers below are unchanged.
+
 Extracted from the GNSS noise relay pipeline in `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`.
 
 ## Rationale
@@ -135,5 +142,4 @@ The Markov chain can be disabled via `enable_markov_transitions: false` in
 - Off-diagonal covariance terms (from correlated satellite geometry errors)
   are not modelled -- the NavSatFix covariance is always diagonal.
 - Weather effects (ionospheric delay in rain) are not modelled because
-  FlatPlane does not render weather. This is a known limitation documented
-  in CLAUDE.md.
+  FlatPlane does not render weather. This is a known, documented limitation.
