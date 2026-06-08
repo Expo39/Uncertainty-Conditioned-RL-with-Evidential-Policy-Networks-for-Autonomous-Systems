@@ -22,6 +22,8 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
 
+from uncertainty_rl.utils.gnss_drift import scale_transition_matrix
+
 # Ordered tier names - index position defines row/column in transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 # reverse lookup: tier name -> index in _TIER_ORDER / transition matrix.
@@ -223,9 +225,14 @@ class GnssNoiseRelayNode(Node):
         noise_profiles_path = str(
             self.get_parameter("noise_profiles_path").get_parameter_value().string_value
         )
-        self._transition_matrix: np.ndarray = self._load_transition_matrix(
+        # Base transition matrix (full chain) and the effective matrix actually
+        # stepped by the Markov chain. _apply_drift_scale rebuilds the effective
+        # matrix from base x drift_scale when the training container signals one.
+        self._base_transition_matrix: np.ndarray = self._load_transition_matrix(
             noise_profiles_path
         )
+        self._drift_scale: float = 1.0
+        self._transition_matrix: np.ndarray = self._base_transition_matrix.copy()
         self._active_tier_idx: int = 0
 
         self._extra_alt_stddev_m: float = 0.0
@@ -391,6 +398,21 @@ class GnssNoiseRelayNode(Node):
         self.get_logger().info(f"Loaded transition matrix from {profiles_path}.")
         return P
 
+    def _apply_drift_scale(self, scale: float) -> None:
+        """
+        @brief Rebuild the effective transition matrix from base * drift_scale.
+
+        Scales the base matrix off-diagonals by `scale` and re-normalises the
+        diagonals: scale = 0 gives the identity (start tier holds), scale = 1 the
+        base chain. @see uncertainty_rl.utils.gnss_drift.scale_transition_matrix.
+
+        @param scale: Drift margin in [0, 1] (out-of-range values are clipped).
+        """
+        self._transition_matrix = scale_transition_matrix(
+            self._base_transition_matrix, scale
+        )
+        self._drift_scale = float(min(1.0, max(0.0, scale)))
+
     def _resample_anisotropy(self) -> None:
         """
         @brief Sample per-episode axis-aligned GNSS noise anisotropy.
@@ -457,6 +479,18 @@ class GnssNoiseRelayNode(Node):
                 return
 
             self._config_seq = seq
+
+            # Per-episode drift margin: rebuild the effective transition matrix
+            # when the training container signals a new drift_scale.
+            drift_scale = data.get("drift_scale")
+            if drift_scale is not None:
+                try:
+                    self._apply_drift_scale(float(drift_scale))
+                except (TypeError, ValueError):
+                    self.get_logger().warn(
+                        f"episode_config.json has invalid drift_scale"
+                        f" '{drift_scale}', keeping current matrix."
+                    )
 
             tier_name: Optional[str] = data.get("tier_name")
             if not self._markov_enabled:

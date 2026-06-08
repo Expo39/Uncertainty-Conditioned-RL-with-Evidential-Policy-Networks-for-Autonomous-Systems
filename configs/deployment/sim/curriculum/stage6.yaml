@@ -1,26 +1,31 @@
-# Curriculum Stage 6 - full clean Phase A (the published training condition).
-# Resume from Stage 5. Full occupancy (0.2-0.8) and the strict margin. Phase B
-# (sensor noise) turns on in Stage 7.
+# Curriculum Stage 6 - margin to strict (still clean). Resume from Stage 5.
+# Primary axis: bay_margin tightens to the strict criterion (-0.25), held hereafter.
 
-use_extra_spawns: true
-bay_margin: -0.25  # Strict published criterion.
+use_extra_spawns: false
+bay_margin: -0.25  # Strict criterion (STRICT_BAY_MARGIN), held hereafter.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_gnss_tier: rtk_fixed
-  bay_occupancy_min: 0.2  # Full occupancy range.
-  bay_occupancy_max: 0.8
+  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  drift_scale: 0.20
+  bay_occupancy_min: 0.1
+  bay_occupancy_max: 0.1
 
 carla_sensors:
   lidar:
     noise:
-      enabled: false  # Phase A: clean sensors.
+      enabled: true  # Constant realism floor (on in every stage).
 
-training_overrides:
-  stage_timesteps: 2000000
+# Identical standard/evidential blocks - see Stage 1.
+standard_overrides:
+  stage_timesteps: 1500000
   learning_rate: 0.0002
-  learning_rate_final: 0.00003
-  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Density only (no new
-  # geometry), so the smallest nudge.
-  ent_coef: 0.0008
+  learning_rate_final: 0.00004
+  ent_coef: 0.001
+  ent_coef_final: 0.0005
+evidential_overrides:
+  stage_timesteps: 1500000
+  learning_rate: 0.0002
+  learning_rate_final: 0.00004
+  ent_coef: 0.001
   ent_coef_final: 0.0005

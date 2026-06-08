@@ -1,5 +1,14 @@
 # Ablation Study and Hyperparameter Optimisation Methodology
 
+> **Updated 8 June 2026 - single-phase curriculum.** The 2-phase (clean -> noisy) framing
+> below is superseded. HPO now runs AFTER the curriculum validates on vanilla (post-stage-9
+> checkpoint) and tunes STRUCTURAL PPO params only (`n_steps`, `batch_size`, `n_epochs`,
+> `clip_range`, `gae_lambda`, `gamma`, `vf_coef`, `max_grad_norm`) - NOT `learning_rate`/
+> `ent_coef`, which are stage-owned per-policy (`standard_overrides`/`evidential_overrides`)
+> schedules. The fairness arguments (vanilla-and-share, disjoint tuning/eval seeds) are
+> unchanged. Canonical: `documentation/detailed_notes/ablation_hpo_methodology.md` and
+> `documentation/CURRICULUM_PLAN.md`.
+
 Extracted from the training and tuning pipeline (`training/train_ppo.py`, `training/tune_hyperparams.py`). This document explains how hyperparameter tuning is performed for the four ablation baselines, and why, grounded in the RL methodology literature.
 
 ## The four ablation baselines

@@ -160,7 +160,8 @@ obs, reward, terminated, truncated, info = env.step(action)
 | Function | Purpose |
 |----------|---------|
 | `compute_obs_dim` | Active obs dimension from ablation flags |
-| `build_observation` | Fill pre-allocated obs buffer from EKF state, uncertainty, and LiDAR |
+| `build_observation` | Fill the raw obs buffer from EKF state, uncertainty, and LiDAR, then return a `normalise_observation` copy (the policy obs) |
+| `normalise_observation` | Scale each obs dim by its fixed physical range (`constants.py` `OBS_*_SCALE`) and clip to `+/-OBS_NORM_CLIP` - stage- and layout-invariant, so `VecNormalize` does reward-norm only (`norm_obs=False`) and OOD eval is unconfounded |
 | `extract_obstacle_features` | Hemispheric LiDAR clearance (5-element buffer) |
 | `load_floor_plan` | Select and cache a floor plan YAML for one episode |
 | `wait_for_ekf` | Block until LiDAR and EKF data are both available |

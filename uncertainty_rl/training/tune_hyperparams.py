@@ -76,7 +76,7 @@ def _composite_objective(
 
 
 # ---------------------------------------------------------------------------
-# sample_hyperparams: Tuning search space (10 active parameters)
+# sample_hyperparams: Tuning search space (8 structural PPO parameters)
 # ---------------------------------------------------------------------------
 
 
@@ -92,22 +92,14 @@ def sample_hyperparams(
     """
     space = tuning_config.get("search_space", {})
 
-    # Cache each range once to avoid duplicate .get() calls and list allocations.
-    lr_range = space.get("learning_rate", [1e-5, 1e-3])
+    # Structural PPO params only: learning_rate / ent_coef are stage-owned and
+    # evidential.* is ablation-specific, so neither is tuned.
+    # @see documentation/detailed_notes/ablation_hpo_methodology.md
     gamma_range = space.get("gamma", [0.98, 0.999])
     gae_range = space.get("gae_lambda", [0.90, 0.98])
     clip_range_bounds = space.get("clip_range", [0.1, 0.3])
-    ent_range = space.get("ent_coef", [1e-6, 0.05])
-    lreg_range = space.get("lambda_reg", [1e-5, 0.01])
-    warmup_range = space.get("lambda_reg_warmup_steps", [10000, 100000])
-
-    # PPO Hyperparameters
-    learning_rate = trial.suggest_float(
-        "learning_rate",
-        float(lr_range[0]),
-        float(lr_range[1]),
-        log=True,
-    )
+    vf_coef_range = space.get("vf_coef", [0.25, 1.0])
+    grad_norm_range = space.get("max_grad_norm", [0.3, 2.0])
 
     n_steps = trial.suggest_categorical(
         "n_steps",
@@ -148,42 +140,27 @@ def sample_hyperparams(
         float(clip_range_bounds[1]),
     )
 
-    ent_coef = trial.suggest_float(
-        "ent_coef",
-        float(ent_range[0]),
-        float(ent_range[1]),
-        log=True,
+    vf_coef = trial.suggest_float(
+        "vf_coef",
+        float(vf_coef_range[0]),
+        float(vf_coef_range[1]),
     )
 
-    # Evidential parameters - always enabled (lambda_reg > 0).
-    # Disabling evidential regularisation defeats the architecture's purpose.
-    lambda_reg = trial.suggest_float(
-        "lambda_reg",
-        float(lreg_range[0]),
-        float(lreg_range[1]),
-        log=True,
-    )
-
-    lambda_reg_warmup_steps = trial.suggest_float(
-        "lambda_reg_warmup_steps",
-        float(warmup_range[0]),
-        float(warmup_range[1]),
-        log=True,
+    max_grad_norm = trial.suggest_float(
+        "max_grad_norm",
+        float(grad_norm_range[0]),
+        float(grad_norm_range[1]),
     )
 
     return {
-        "learning_rate": learning_rate,
         "n_steps": n_steps,
         "batch_size": batch_size,
         "n_epochs": n_epochs,
         "gamma": gamma,
         "gae_lambda": gae_lambda,
         "clip_range": clip_range,
-        "ent_coef": ent_coef,
-        "evidential": {
-            "lambda_reg": lambda_reg,
-            "lambda_reg_warmup_steps": int(lambda_reg_warmup_steps),
-        },
+        "vf_coef": vf_coef,
+        "max_grad_norm": max_grad_norm,
     }
 
 

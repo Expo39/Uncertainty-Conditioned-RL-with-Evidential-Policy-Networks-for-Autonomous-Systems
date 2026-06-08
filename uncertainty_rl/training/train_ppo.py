@@ -269,35 +269,46 @@ def _apply_stage_training_overrides(
     config: Dict[str, Any], env_config_path: str, stage: int
 ) -> None:
     """
-    @brief Apply a curriculum stage's `training_overrides` block onto config.
-    @param config: The merged train+env config (mutated in place).
+    @brief Apply a curriculum stage's per-policy override block onto config.
+    @param config: The merged train+env config (mutated in place). Carries the
+           baseline's `policy_type` (apply_baseline runs first).
     @param env_config_path: Path to env_config.yaml (the stage file sits in a
            sibling `curriculum/` directory).
     @param stage: Curriculum stage number.
 
-    Reads `training_overrides` from configs/deployment/sim/curriculum/stage<N>.yaml
-    and copies only allowlisted keys (@see _STAGE_TRAINING_OVERRIDE_ALLOWLIST) onto
-    config, overriding train_config.yaml. A non-allowlisted key raises, so a stage
-    cannot silently change an architecture key and corrupt resume. Absent block is
-    a no-op.
+    The stage file carries `standard_overrides` and `evidential_overrides`, selected
+    by `policy_type` (a single `training_overrides` block is accepted as a fallback).
+    Only allowlisted keys (@see _STAGE_TRAINING_OVERRIDE_ALLOWLIST) are copied onto
+    config; a non-allowlisted key raises. An absent block is a no-op.
     """
     stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
     with open(stage_path) as f:
         stage_cfg: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
-    overrides = stage_cfg.get("training_overrides", {})
+
+    policy_type = str(config.get("policy_type", "evidential"))
+    block_key = (
+        "standard_overrides" if policy_type == "standard" else "evidential_overrides"
+    )
+    overrides = stage_cfg.get(block_key)
+    if overrides is None:
+        # Fallback: a single shared block (pre-split schema).
+        block_key = "training_overrides"
+        overrides = stage_cfg.get(block_key, {})
     if not overrides:
         return
     for key, value in overrides.items():
         if key not in _STAGE_TRAINING_OVERRIDE_ALLOWLIST:
             raise ValueError(
-                f"Stage {stage} training_overrides key '{key}' is not allowed. "
+                f"Stage {stage} {block_key} key '{key}' is not allowed. "
                 f"Permitted keys: {sorted(_STAGE_TRAINING_OVERRIDE_ALLOWLIST)}. "
                 f"Architecture keys must stay constant across the curriculum."
             )
         config[key] = value
     logger.info(
-        "Stage %d training_overrides applied: %s",
+        "Stage %d %s applied (policy_type=%s): %s",
         stage,
+        block_key,
+        policy_type,
         {k: overrides[k] for k in overrides},
     )
 
@@ -556,17 +567,15 @@ def train(
             [make_env(config, bay_margin=bay_margin, rank=i) for i in range(n_workers)]
         )
 
-        # norm_reward divides rewards by a running discounted-return std so the
-        # critic predicts a unit-variance target; the reward range is near-bimodal
-        # (terminal bonuses dominate the per-step shaping) and hard to track raw.
-        # clip_reward=20.0 keeps the +50 success terminal from being clipped while
-        # the running std is still small early in training. gamma matches the PPO
-        # discount so the running std is estimated at the critic's bootstrap horizon.
+        # Reward normalisation only. Observations are normalised by fixed physical
+        # ranges in build_observation (constants.py OBS_*_SCALE), so norm_obs is off.
+        # norm_reward divides rewards by the running discounted-return std (unit-variance
+        # critic target); clip_reward keeps the +50 terminal unclipped; gamma matches
+        # the PPO discount.
         env = VecNormalize(
             train_vec_env,
-            norm_obs=True,
+            norm_obs=False,
             norm_reward=True,
-            clip_obs=10.0,
             clip_reward=20.0,
             gamma=config.get("gamma", 0.99),
         )

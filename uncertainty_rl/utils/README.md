@@ -18,6 +18,7 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 | `bay_success.py` | Per-bay episode accounting for success-rate reporting |
 | `config_merge.py` | Config merge hierarchy: `deep_merge`, `apply_baseline`, `BASELINE_KEYS` |
 | `covariance_utils.py` | EKF covariance extraction and validation helpers |
+| `gnss_drift.py` | `scale_transition_matrix` - pure helper (no ROS 2) scaling a GNSS Markov transition matrix by the per-stage `drift_scale`; used by the ros2-bridge relay, host/CI-testable |
 | `geometry.py` | Coordinate transforms, polygon tests, angle wrapping |
 | `logging.py` | `DebugLogger` - zero-overhead per-step diagnostics |
 | `visualisation.py` | `VisStateWriter` - atomic JSON writer for the detachable visualiser |
@@ -45,6 +46,7 @@ Structural constants fixed by system architecture. Changing any of these require
 | `OOB_INFLATION_MARGIN` | $5.0$ m | Metres the lot polygon is offset outward (uniformly, on every edge) to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
 | `OOB_STEP_PENALTY` | $-0.5$ | Reward applied each policy decision the ego centre is outside the inflated polygon. |
 | `OOB_TERMINATION_PENALTY_LIMIT` | $10.0$ | Accumulated out-of-bounds cost at which the episode terminates (no extra crash-magnitude penalty). |
+| `OBS_*_SCALE`, `OBS_NORM_CLIP` | various | Fixed physical-range observation scales (`OBS_SPEED_SCALE`, `OBS_YAW_RATE_SCALE`, `OBS_STD_POS_SCALE`, `OBS_STD_YAW_SCALE`, `OBS_TARGET_POS_SCALE`, `OBS_TARGET_YAW_SCALE`, `OBS_OBSTACLE_DIST_SCALE`, `OBS_OBSTACLE_BEARING_SCALE`) applied in `build_observation`, with clip `OBS_NORM_CLIP`. Stage- and layout-invariant: each obs dim is divided by its physical range, so weights transfer on resume and OOD eval is unconfounded (replaces VecNormalize obs-norm). |
 
 Success position and orientation are no longer scalar constants. The success
 gate is the geometric polygon-fit check (every corner of the ego bounding

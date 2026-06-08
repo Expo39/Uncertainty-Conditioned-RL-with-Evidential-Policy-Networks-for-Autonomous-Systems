@@ -1,5 +1,11 @@
 # Hyperparameter Search
 
+> **Updated 8 June 2026.** Under the single-phase curriculum, HPO tunes STRUCTURAL PPO params
+> only (`n_steps`, `batch_size`, `n_epochs`, `clip_range`, `gae_lambda`, `gamma`, `vf_coef`,
+> `max_grad_norm`). `learning_rate` and `ent_coef` are NOT tuned - they are stage-owned
+> per-policy schedules (`standard_overrides`/`evidential_overrides`). See
+> `documentation/detailed_notes/ablation_hpo_methodology.md`.
+
 Search space design rationale and literature references for the Optuna-based
 hyperparameter tuning in `uncertainty_rl/training/tune_hyperparams.py`.
 

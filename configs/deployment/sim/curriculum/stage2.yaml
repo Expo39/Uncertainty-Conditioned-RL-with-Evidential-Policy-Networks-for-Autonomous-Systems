@@ -1,49 +1,42 @@
-# Curriculum Stage 2 - bay variety on one row, single orientation.
-# Resume from Stage 1. Target bay random but restricted to the north row
-# (perpendicular_0..11, all yaw 270); spawn still locked. One new axis vs Stage 1.
+# Curriculum Stage 2 - bay count up (~2 per cluster). Resume from Stage 1.
+# Primary axis: bay variety.
 
-use_extra_spawns: false  # Still locked to the primary spawn - only the bay varies.
-bay_margin: -0.75  # Held at the stage-1 value so bay variety is the ONLY new axis
-                   # this stage. The resumed stage-1 weights were trained against this
-                   # acceptance box, so the terminal-reward boundary is unchanged and a
-                   # stall here is unambiguously a bay-generalisation issue, not the box
-                   # rejecting otherwise-good parks. The tightening toward the strict
-                   # -0.25 resumes from stage 3 (0.125 m per stage to stage 6).
+use_extra_spawns: false
+bay_margin: -0.65
 
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed
-  allowed_bay_ids:  # Random target restricted to the north row (one orientation).
-    - perpendicular_0
-    - perpendicular_1
-    - perpendicular_2
+  drift_scale: 0.12
+  allowed_bay_ids:  # Two per cluster, all 4 orientations.
     - perpendicular_3
-    - perpendicular_4
-    - perpendicular_5
-    - perpendicular_6
-    - perpendicular_7
-    - perpendicular_8
-    - perpendicular_9
-    - perpendicular_10
-    - perpendicular_11
-  bay_occupancy_min: 0.0  # Still no parked cars.
-  bay_occupancy_max: 0.0
+    - perpendicular_8     # yaw 270, north row
+    - perpendicular_23
+    - perpendicular_29    # yaw 270, upper row
+    - perpendicular_14
+    - perpendicular_17    # yaw 90, south row
+    - perpendicular_35
+    - perpendicular_38    # yaw 0, west column
+    - perpendicular_41
+    - perpendicular_43    # yaw 180, east column
+  bay_occupancy_min: 0.1
+  bay_occupancy_max: 0.1
 
 carla_sensors:
   lidar:
     noise:
-      enabled: false  # Phase A: clean sensors.
+      enabled: true  # Constant realism floor (on in every stage).
 
-training_overrides:
-  stage_timesteps: 2000000
-  learning_rate: 0.0003
+# Identical standard/evidential blocks - see Stage 1.
+standard_overrides:
+  stage_timesteps: 1500000
+  learning_rate: 0.00025
   learning_rate_final: 0.00005
-  # Held flat at the shared 0.0005 floor. A resumed stage carries over a policy already
-  # converged at the previous floor's action std, and the Gaussian log_std is a free
-  # parameter held up only by the entropy bonus; any pressure above the floor re-widens
-  # it without bound and degenerates the policy. The carried-over parking skill is
-  # bay-frame (orientation-invariant) and the target bay is already in the observation,
-  # so generalising across the row needs no entropy-driven exploration - only the floor
-  # needed to keep a non-zero action distribution.
-  ent_coef: 0.0005
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005
+evidential_overrides:
+  stage_timesteps: 1500000
+  learning_rate: 0.00025
+  learning_rate_final: 0.00005
+  ent_coef: 0.0015
   ent_coef_final: 0.0005

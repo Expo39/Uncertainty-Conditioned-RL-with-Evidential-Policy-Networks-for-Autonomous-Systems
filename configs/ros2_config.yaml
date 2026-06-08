@@ -84,13 +84,13 @@ gnss_noise_relay:
   input_topic: "/carla/ego_vehicle/gnss"
   output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
   odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
-  enable_gnss_noise: false  # Master switch for the GNSS noise / dropout model.
-  enable_markov_transitions: false  # Whether to allow mid-episode RTK tier transitions.
+  enable_gnss_noise: true  # GNSS noise / dropout master switch. On globally; per-stage intensity via drift_scale.
+  enable_markov_transitions: true  # Mid-episode RTK tier transitions. On globally; scaled per stage by drift_scale.
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.
   enable_cog_heading: true  # false = suppress all COG publication (diagnostic: isolate IMU prediction error).
-  enable_gnss_anisotropy: false  # Per-episode east/north sigma asymmetry (models satellite-geometry DOP).
+  enable_gnss_anisotropy: true # Per-episode east/north sigma asymmetry (models satellite-geometry DOP).
   aniso_ratio_max: 1.5  # Maximum variance ratio between major and minor axes (1.0 = isotropic).
   gnss_dropout_probability: 0.02  # Per-callback probability of skipping a fix (cycle slips / occlusions).
   noise_profiles_path: "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"  # Path inside ros2-bridge container; transition_matrix loaded from this YAML at startup.
@@ -99,7 +99,7 @@ gnss_noise_relay:
 imu_noise_relay:
   imu_input_topic: "/carla/ego_vehicle/imu"
   imu_output_topic: "/carla/ego_vehicle/imu/stamped"
-  enable_imu_noise: false  # Master switch for IMU noise injection (covariance stamping always active).
+  enable_imu_noise: true  # IMU noise injection (covariance stamping always active). On globally (constant realism floor).
   imu_gyro_variance: 7.4631e-8  # (rad/s)^2
   imu_accel_variance: 3.77245e-5  # (m/s^2)^2
   zupt_threshold_rad_s: 0.015
