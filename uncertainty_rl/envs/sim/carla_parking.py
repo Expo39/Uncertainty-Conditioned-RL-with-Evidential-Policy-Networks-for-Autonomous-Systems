@@ -492,11 +492,11 @@ class CARLAParkingEnv(gym.Env):
         # over any loiter, so a stationary car earns nothing from it.
         self._prev_phi: float = 0.0
         # Per-episode reward normaliser: |phi(start)| (floored). progress and the
-        # graded timeout penalty are divided by this so every bay - near or far -
-        # yields a full-episode progress sum of +1, and the timeout penalty stays on
-        # the same unit scale regardless of how far the sampled bay is from the
-        # spawn. Set on reset; the floor avoids a blow-up when the spawn is already
-        # near the bay. @see PHI_NORM_FLOOR.
+        # graded timeout penalty are divided by this (then scaled by PROGRESS_TARGET)
+        # so every bay - near or far - yields a full-episode progress sum of
+        # PROGRESS_TARGET, and the timeout penalty stays on the same scale regardless
+        # of how far the sampled bay is from the spawn. Set on reset; the floor avoids
+        # a blow-up when the spawn is already near the bay. @see PHI_NORM_FLOOR.
         self._phi_start: float = PHI_NORM_FLOOR
 
         # Corridor potential weights (shaping, hence code not YAML; values in
@@ -1994,15 +1994,8 @@ class CARLAParkingEnv(gym.Env):
             # Fix the per-episode normaliser from the start potential. phi is <= 0
             # and 0 at the parked pose, so |phi(start)| is the total potential the
             # car must close to park; dividing progress by it makes the full-episode
-            # progress sum +1 for every bay. Floored to avoid a blow-up when the
-            # spawn already sits near the bay.
-            # @note The floor only preserves the +1 invariant while every realistic
-            #   spawn-to-bay start potential exceeds PHI_NORM_FLOOR. Spawn variety
-            #   (curriculum stage 4 onward) widens the spawn set: if any spawn can
-            #   land close enough to its commanded bay that |phi(start)| < the floor,
-            #   that episode is under-rewarded (progress sum < 1). Check the closest
-            #   realistic spawn-to-bay potential against PHI_NORM_FLOOR when spawn
-            #   variety is enabled.
+            # progress sum equal to PROGRESS_TARGET for every bay. Floored to avoid a
+            # blow-up when the spawn already sits near the bay.
             self._phi_start = max(abs(self._prev_phi), PHI_NORM_FLOOR)
         else:
             self._prev_phi = 0.0
@@ -2218,15 +2211,13 @@ class CARLAParkingEnv(gym.Env):
         # Graded timeout penalty: judge the final state when the clock runs out
         # without a park. Scaled by how far and how misaligned the car ended, so
         # ending closer and straighter is always less costly than stopping short.
-        # Divided by the per-episode start potential (the same |phi(start)|
-        # normaliser the corridor progress uses) so the penalty lives on the unit
-        # scale of progress (full-episode sum +1) and a far-bay timeout is not
-        # penalised more heavily than a near-bay one merely for being far - the old
-        # raw-metre penalty grew with the sampled bay's distance and saturated at a
-        # flat floor for far bays, removing the per-distance gradient. Clamped to
-        # TIMEOUT_PENALTY_FLOOR_NORM so timing out costs about as much as forfeiting
-        # the whole progress reward and the fixed terminals stay far larger, keeping
-        # the ordering success(+50) > timeout > ego collision(-25).
+        # Transformed by /|phi(start)| * PROGRESS_TARGET (the same normaliser the
+        # corridor progress uses) so the penalty lives on the dense progress scale
+        # and a far-bay timeout is not penalised more heavily than a near-bay one
+        # merely for being far. Clamped to TIMEOUT_PENALTY_FLOOR_NORM so timing out
+        # costs about as much as forfeiting the whole progress reward and the fixed
+        # terminals stay far larger, keeping success(+50) > timeout > ego
+        # collision(-25).
         if truncated and not terminated:
             reward += max(
                 -(
