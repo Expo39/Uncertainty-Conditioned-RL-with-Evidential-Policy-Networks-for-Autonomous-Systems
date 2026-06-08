@@ -2,7 +2,9 @@
 # Resume from Stage 4. Light occupancy (0.2-0.4); margin approaches the strict value.
 
 use_extra_spawns: true
-bay_margin: -0.4  # Approaching the strict criterion.
+bay_margin: -0.25  # Strict criterion, held from stage 4. This stage adds parked cars as
+                   # the single new axis; the square-park skill is already learned in the
+                   # clean stages, so the margin does not change here.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
@@ -19,5 +21,7 @@ training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.00025
   learning_rate_final: 0.00005
-  ent_coef: 0.012
-  ent_coef_final: 0.005
+  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Parked cars add one
+  # axis but the geometry is frozen, so a modest nudge.
+  ent_coef: 0.001
+  ent_coef_final: 0.0005

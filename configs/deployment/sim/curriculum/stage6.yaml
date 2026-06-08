@@ -20,5 +20,7 @@ training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.0002
   learning_rate_final: 0.00003
-  ent_coef: 0.01
-  ent_coef_final: 0.004
+  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Density only (no new
+  # geometry), so the smallest nudge.
+  ent_coef: 0.0008
+  ent_coef_final: 0.0005
