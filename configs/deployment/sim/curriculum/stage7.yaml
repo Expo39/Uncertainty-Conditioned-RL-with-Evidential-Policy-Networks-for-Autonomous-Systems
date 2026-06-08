@@ -19,11 +19,14 @@ carla_sensors:
     noise:
       enabled: true  # Phase B: LiDAR range noise on (env-side, no bridge restart).
 
-# Longest stage (noise is the hardest axis), with a fresh mid-range LR/ent_coef
-# schedule so the policy can adapt to noisy localisation.
+# Longest stage (noise is the hardest axis); the LR spans a mid-range-to-low decay so
+# the policy can adapt to noisy localisation.
 training_overrides:
   stage_timesteps: 4000000
   learning_rate: 0.0002
   learning_rate_final: 0.00001
-  ent_coef: 0.01
-  ent_coef_final: 0.004
+  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Sensor noise needs
+  # some adaptation room for degraded localisation, so a modest nudge rather than the
+  # floor.
+  ent_coef: 0.001
+  ent_coef_final: 0.0005

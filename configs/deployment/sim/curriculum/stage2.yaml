@@ -3,7 +3,12 @@
 # (perpendicular_0..11, all yaw 270); spawn still locked. One new axis vs Stage 1.
 
 use_extra_spawns: false  # Still locked to the primary spawn - only the bay varies.
-bay_margin: -0.65  # Looser while bay variety lands.
+bay_margin: -0.75  # Held at the stage-1 value so bay variety is the ONLY new axis
+                   # this stage. The resumed stage-1 weights were trained against this
+                   # acceptance box, so the terminal-reward boundary is unchanged and a
+                   # stall here is unambiguously a bay-generalisation issue, not the box
+                   # rejecting otherwise-good parks. The tightening toward the strict
+                   # -0.25 resumes from stage 3 (0.125 m per stage to stage 6).
 
 parking_scenarios:
   fixed_floor_plan: rectangle
@@ -33,8 +38,12 @@ training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
-  # ent_coef sized against the normalised reward so the entropy bonus stays near
-  # parity with the per-decision reward gradient at the operating std, decaying to a
-  # low floor so the converged policy holds. Matches stage 1 (same reward scale).
-  ent_coef: 0.006
-  ent_coef_final: 0.001
+  # Held flat at the shared 0.0005 floor. A resumed stage carries over a policy already
+  # converged at the previous floor's action std, and the Gaussian log_std is a free
+  # parameter held up only by the entropy bonus; any pressure above the floor re-widens
+  # it without bound and degenerates the policy. The carried-over parking skill is
+  # bay-frame (orientation-invariant) and the target bay is already in the observation,
+  # so generalising across the row needs no entropy-driven exploration - only the floor
+  # needed to keep a non-zero action distribution.
+  ent_coef: 0.0005
+  ent_coef_final: 0.0005

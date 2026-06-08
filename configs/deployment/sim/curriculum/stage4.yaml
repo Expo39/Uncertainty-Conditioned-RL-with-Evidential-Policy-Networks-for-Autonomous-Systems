@@ -2,7 +2,12 @@
 # Resume from Stage 3. Spawn is now random (primary + extras).
 
 use_extra_spawns: true  # Random spawn each episode (primary + extras).
-bay_margin: -0.5  # Looser while spawn variety lands.
+bay_margin: -0.25  # Strict published criterion, reached in the last fully-clean stage.
+                   # Front-loaded here (not deferred to stage 6) because squaring is an
+                   # orientation-invariant skill the loose box leaves on a plateau, and it
+                   # is cheapest to drive to square while the lot is still empty - before
+                   # parked cars (5) and noise (7) add competing gradients. Held at -0.25
+                   # for every stage after this.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
@@ -19,5 +24,8 @@ training_overrides:
   stage_timesteps: 3000000
   learning_rate: 0.00025
   learning_rate_final: 0.00005
-  ent_coef: 0.013
-  ent_coef_final: 0.006
+  # Near the shared 0.0005 floor (resumed stage - see stage 2/3). Spawn variety
+  # roughly triples the reachable-state count, so it takes the same larger nudge as
+  # stage 3.
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005
