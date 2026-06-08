@@ -3,7 +3,7 @@
 # Environment settings live in deployment/sim/env_config.yaml.
 
 # PPO hyperparameters
-learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over total_timesteps.
+learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over the stage budget (stage_timesteps).
 learning_rate_final: 0.00001  # Non-zero LR floor so an early-converging run keeps a live LR.
 n_steps: 2048  # Steps per PPO update (~4.7 episodes at ~437 policy decisions each).
 batch_size: 256
@@ -37,7 +37,9 @@ log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 8000000  # Budget over which the LR/ent_coef schedules decay.
+# The run budget is the active stage's stage_timesteps (curriculum file), which the
+# LR/ent_coef schedules decay over. A run with no stage falls back to train_ppo.py's
+# 1,000,000-step default.
 seed: 42  # Master RNG seed. The ablation runs multiple seeds via --seed / the Makefile, not a list here.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
 n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).

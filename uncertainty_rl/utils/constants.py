@@ -71,8 +71,8 @@ CORRIDOR_W_HEAD = 3.0
 # * near_depth. MOVE applies while moving, +HOLD once stopped on the line. Bounded
 # so the most an episode can accrue stays below the discounted +50 terminal, hence
 # completing the park always dominates hovering near the goal.
-ENDGAME_MOVE_COEF = 0.015
-ENDGAME_HOLD_COEF = 0.015
+ENDGAME_MOVE_COEF = 0.008
+ENDGAME_HOLD_COEF = 0.006
 
 # ---------------------------------------------------------------------------
 # Obstacle Clearance Shaping (safety nudge, not a success criterion)
@@ -138,6 +138,25 @@ ACTION_DIM = 3
 # polygon boundary below.
 OUT_OF_BOUNDS_THRESHOLD = 20.0
 
+# ---------------------------------------------------------------------------
+# Dense reward scale
+# ---------------------------------------------------------------------------
+# Per-episode progress target. progress = (phi(curr) - phi(prev)) /
+# max(|phi(start)|, PHI_NORM_FLOOR) * PROGRESS_TARGET. The /|phi(start)| factor
+# equalises bays so a far bay offers no larger shaping pool than a near one;
+# PROGRESS_TARGET sets the dense magnitude. Set to the stage-1 |phi(start)| (~39 m)
+# so for the fixed stage-1 bay the /|phi(start)| factor is ~1 and the dense reward
+# equals the raw potential progress (phi(curr) - phi(prev)) the stage-1 reward was
+# designed around; for stage 2+ the same factor equalises varied bays. Terminals
+# (+50 / -25 / -10) are NOT scaled by it.
+PROGRESS_TARGET = 39.0
+
+# Floor on the per-episode start potential |phi(start)| used as the reward
+# normaliser. Progress and the graded timeout penalty are divided by
+# max(|phi(start)|, PHI_NORM_FLOOR) so a spawn very close to its bay
+# (|phi(start)| -> 0) cannot blow the normalised reward up.
+PHI_NORM_FLOOR = 5.0
+
 # Graded timeout penalty coefficients. The penalty at truncation is
 # -(TIMEOUT_POS_COEF * final_pos_error + TIMEOUT_YAW_COEF * final_orientation_error),
 # normalised by the per-episode start potential and clamped to
@@ -146,24 +165,10 @@ OUT_OF_BOUNDS_THRESHOLD = 20.0
 TIMEOUT_POS_COEF = 1.5
 TIMEOUT_YAW_COEF = 2.5
 
-# Floor on the NORMALISED graded timeout penalty. The penalty is transformed by
-# /max(|phi(start)|, PHI_NORM_FLOOR) * PROGRESS_TARGET so it lives on the dense
-# progress scale; the floor keeps the ordering success(+50) > timeout(>= -11) >
-# ego collision(-25) so the policy never crashes deliberately to escape a timeout.
-TIMEOUT_PENALTY_FLOOR_NORM = -11.0
-
-# Floor on the per-episode start potential |phi(start)| used as the reward
-# normaliser. Progress and the graded timeout penalty are divided by
-# max(|phi(start)|, PHI_NORM_FLOOR) so a spawn very close to its bay
-# (|phi(start)| -> 0) cannot blow the normalised reward up.
-PHI_NORM_FLOOR = 5.0
-
-# Per-episode progress target. progress = (phi(curr) - phi(prev)) /
-# max(|phi(start)|, PHI_NORM_FLOOR) * PROGRESS_TARGET. The /|phi(start)| factor
-# equalises bays so a far bay offers no larger shaping pool than a near one;
-# PROGRESS_TARGET sets the dense scale so the +50-to-dense ratio (~4.6x) is one
-# the value function can fit. Terminals are NOT scaled by it.
-PROGRESS_TARGET = 11.0
+# Floor of the graded timeout penalty. Sized below the worst graded value but above
+# the ego collision penalty so the ordering success(+50) > timeout > ego
+# collision(-25) holds and the policy never crashes deliberately to escape a timeout.
+TIMEOUT_PENALTY_FLOOR_NORM = -24.0
 
 # ---------------------------------------------------------------------------
 # Soft Out-of-Bounds Boundary (sim training)
@@ -174,13 +179,15 @@ PROGRESS_TARGET = 11.0
 OOB_INFLATION_MARGIN = 5.0
 
 # Reward applied each policy decision the ego centre is outside the inflated
-# polygon. Applied RAW (never divided by the per-episode normaliser): the lot edge
-# is a bay-independent world boundary, so its cost must not shrink for far bays. It
+# polygon. Applied RAW (never divided by the per-episode normaliser): the lot edge is
+# a bay-independent world boundary, so its cost must not shrink for far bays. It
 # accumulates so a sustained run-out terminates the episode.
 OOB_STEP_PENALTY = -0.5
 
 # Accumulated out-of-bounds cost (sum of |OOB_STEP_PENALTY|) at which the episode
 # terminates with no extra crash penalty - the accrued per-step penalties are the
-# cost. Sized below the ego collision penalty so leaving the lot is never punished
-# harder than a real collision.
+# cost. At OOB_STEP_PENALTY = -0.5 this is reached after ~20 consecutive outside
+# decisions, so a committed run-out terminates while a momentary clip does not. Sized
+# below the ego collision penalty so leaving the lot is never punished harder than a
+# real collision.
 OOB_TERMINATION_PENALTY_LIMIT = 10.0
