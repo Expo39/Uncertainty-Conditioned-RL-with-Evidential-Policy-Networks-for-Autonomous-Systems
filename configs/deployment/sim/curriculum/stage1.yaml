@@ -24,8 +24,9 @@ training_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
-  # ent_coef sized against the normalised reward so the entropy bonus stays near
-  # parity with the per-decision reward gradient at the operating std, decaying to a
-  # low floor so the converged policy holds. Matches stage 2 (same reward scale).
-  ent_coef: 0.006
-  ent_coef_final: 0.001
+  # ent_coef: early exploration nudge decaying to a low floor so the converged policy
+  # commits. The entropy bonus ent_coef*H is reward-scale-independent, so the start
+  # gives a genuine exploration push at the operating std and the floor lets the
+  # policy hold late. Matches the stable known-good stage-1 run.
+  ent_coef: 0.003
+  ent_coef_final: 0.0005
