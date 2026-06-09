@@ -1,6 +1,6 @@
-# Curriculum Stage 9 - full occupancy + drift rising. Resume from Stage 8.
-# Primary axis: GNSS drift. Recommended HPO checkpoint (near-final operating point,
-# before the Stage 10 full-drift capstone).
+# Curriculum Stage 9 - occupancy to its busiest. Resume from Stage 8.
+# Primary axis: bay occupancy (max 0.8). The GNSS degradation process is fixed across
+# all stages (see configs/deployment/sim/gnss_noise_profiles.yaml), not a curriculum axis.
 
 use_extra_spawns: false
 bay_margin: -0.25  # Strict, held.
@@ -8,7 +8,6 @@ bay_margin: -0.25  # Strict, held.
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  drift_scale: 0.55
   bay_occupancy_min: 0.2
   bay_occupancy_max: 0.8
 

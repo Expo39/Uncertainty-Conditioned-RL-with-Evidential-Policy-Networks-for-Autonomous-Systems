@@ -281,10 +281,6 @@ class CARLAParkingEnv(gym.Env):
         )
         self._fixed_gnss_tier: Optional[str] = scenarios.get("fixed_gnss_tier", None)
 
-        # Per-stage mid-episode Markov-drift margin in [0, 1], signalled to the GNSS
-        # relay each reset (0 = the start tier holds; 1 = the full transition chain).
-        self._drift_scale: float = float(scenarios.get("drift_scale", 1.0))
-
         # Optional whitelist restricting which bays the per-episode sampler may
         # target. None (default) samples from every eligible bay in the layout.
         # A non-empty list restricts the target pool to those bay ids, used by
@@ -1921,7 +1917,6 @@ class CARLAParkingEnv(gym.Env):
                     tier_name=str(tier.get("name", "")),
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,
-                    drift_scale=self._drift_scale,
                 )
 
         if reuse_vehicle:

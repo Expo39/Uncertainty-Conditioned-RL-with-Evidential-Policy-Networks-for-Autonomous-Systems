@@ -176,9 +176,11 @@ make docker-eval
 make docker-down
 ```
 
-Training follows a single-phase ADR curriculum (10 stages): every observation
+Training follows a single-phase ADR curriculum (9 stages): every observation
 channel is live in every stage, and one axis's range ramps per stage (bays + margin
--> obstacle occupancy -> GNSS uncertainty). Each stage resumes from the previous
+-> obstacle occupancy). The GNSS degradation process is a fixed, stage-invariant
+Markov chain (always-on mid-episode drift), so localisation uncertainty is present
+from stage 1 rather than being a ramped axis. Each stage resumes from the previous
 stage's checkpoint. See
 [documentation/CURRICULUM_PLAN.md](documentation/CURRICULUM_PLAN.md).
 

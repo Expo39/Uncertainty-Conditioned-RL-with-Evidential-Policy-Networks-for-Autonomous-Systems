@@ -84,8 +84,9 @@ gnss_noise_relay:
   input_topic: "/carla/ego_vehicle/gnss"
   output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
   odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
-  enable_gnss_noise: true  # GNSS noise / dropout master switch. On globally; per-stage intensity via drift_scale.
-  enable_markov_transitions: true  # Mid-episode RTK tier transitions. On globally; scaled per stage by drift_scale.
+  enable_gnss_noise: true  # GNSS noise / dropout master switch. On globally.
+  enable_markov_transitions: true  # Mid-episode RTK tier transitions (the GNSS
+  # degradation process). On globally; the transition matrix is stage-invariant.
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.
