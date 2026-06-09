@@ -35,11 +35,16 @@ def generate() -> Dict[str, Any]:
     )
     # Bays
     centre_perp = _centre_perp_row(lot)
+    # Runs from the right end of the original centred cluster leftward to the
+    # corner clearance, covering the full left portion of the top wall.
+    # start_along is measured from corners[WALL_TOP] (the right corner, x=DEPTH);
+    # 19.55 keeps the rightmost bay near the centred row's right edge while the
+    # leftmost bay clears the corner by the full wall_gap.
     top_perp = lot.row_along_perimeter(
         "perpendicular",
-        n=8,
+        n=13,
         wall=WALL_TOP,
-        centred=True,
+        start_along=19.55,
     )
     # Start 2 bay-widths from the left corner so the gap near spawn 1 is empty.
     # Spawn 1 is hardcoded below to its original position (midpoint of
@@ -55,30 +60,28 @@ def generate() -> Dict[str, Any]:
         n=5,
         wall=WALL_BOTTOM,
         pack_from="end",
-    )
-    left_perp = lot.row_along_perimeter(
-        "perpendicular",
-        n=7,
-        wall=WALL_LEFT,
-        start_along=2.0,  # Start near top wall, respecting perimeter gap.
+        # Default end clearance (bay_w/2 + wall_gap = 2.05) plus a 7 m inset, so
+        # the cluster sits 7 m left of the bottom-right corner.
+        start_along=10.05,
     )
     right_perp = lot.row_along_perimeter(
         "perpendicular",
-        n=5,
+        n=9,
         wall=WALL_RIGHT,
-        # Clear the bottom-wall row's footprint at the corner.
+        # Clear the bottom-wall row's footprint at the corner; runs up to the
+        # top-right corner (now free of the relocated motorcycle bays).
         start_along=14.0,
     )
-    moto_first, _ = _motorcycle_corner_bays(lot)
+    _motorcycle_corner_bays(lot)
 
     # Spawns
     # Spawn 2: midpoint of the last bottom-left bay and the last bottom-right bay.
-    # Spawn 3: midpoint of the first top-wall bay and the upper motorcycle bay.
-    # Spawn 1: original midpoint of left_perp.bays[-1] and the removed first
-    # bottom bay; hardcoded so the gap left by the removed bays does not shift it.
+    # Spawn 3: midpoint of the top-wall row's right end and the right-wall row's
+    # top end, i.e. the open top-right corner (now free of the motorcycle bays).
+    # Spawn 1: fixed point in the open left aisle, facing into the lot.
     s1_x, s1_y = -2.3, 12.625
     s2_x, s2_y = _midpoint(bottom_perp.bays[-1], bottom_right_perp.bays[-1])
-    s3_x, s3_y = _midpoint(top_perp.bays[0], moto_first)
+    s3_x, s3_y = _midpoint(top_perp.bays[0], right_perp.bays[-1])
     lot.spawn(x=s1_x, y=s1_y, yaw_deg=0.0, primary=True)
     lot.spawn(x=s2_x, y=s2_y, yaw_deg=90.0)
     lot.spawn(x=s3_x, y=s3_y, yaw_deg=270.0)
@@ -91,7 +94,8 @@ def generate() -> Dict[str, Any]:
     patrol = PatrolPath()
     y_lower = patrol.aisle_y(below=[bottom_perp, bottom_right_perp], above=centre_perp)
     y_upper = patrol.aisle_y(below=centre_perp, above=top_perp)
-    x_left = patrol.aisle_x(left=left_perp, right=centre_perp)
+    # Left wall now has no bay row; anchor the left aisle just inside the wall.
+    x_left = patrol.aisle_x(left=LEFT_X + 1.5, right=centre_perp)
     x_right = patrol.aisle_x(left=centre_perp, right=right_perp)
     patrol.add(x_left, y_lower)
     patrol.add(x_right, y_lower)
@@ -102,7 +106,6 @@ def generate() -> Dict[str, Any]:
     # Pedestrian zones
     lot.add_zone(PedestrianZone.along_row(bottom_perp, side="north"))
     lot.add_zone(PedestrianZone.along_row(bottom_right_perp, side="north"))
-    lot.add_zone(PedestrianZone.along_row(left_perp, side="east"))
     lot.add_zone(PedestrianZone.between_rows(centre_perp, top_perp))
     # Top row sits flush against the top wall, noses facing south into the lot;
     # the walkway hugs its nose face.
@@ -136,11 +139,13 @@ def _motorcycle_corner_bays(
     lot: LotBuilder,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """
-    @brief Place the two always-empty motorcycle bays in the top-right corner.
-    @return The (upper, lower) motorcycle bay dicts in placement order.
+    @brief Place the two always-empty motorcycle bays in the bottom-left corner.
+    @return The (lower, upper) motorcycle bay dicts in placement order.
     """
-    cx = DEPTH - 3.0 / 2.0 - lot.wall_gap
-    cy_top = WIDTH - 1.5 / 2.0 - lot.wall_gap - 1.0
+    # Backs to the left wall (nose east into the lot), stacked just above the
+    # bottom-left corner clearance.
+    cx = LEFT_X + 3.0 / 2.0 + lot.wall_gap
+    cy_bottom = 1.5 / 2.0 + lot.wall_gap + 1.0
     groups = [
         lot.place_bay(
             bay_type="motorcycle",
@@ -152,8 +157,8 @@ def _motorcycle_corner_bays(
             bay_extras={"always_empty": True, "occupant": occupant},
         )
         for cy, occupant in (
-            (cy_top, "Kawasaki Ninja"),
-            (cy_top - 1.5, "Yamaha YZF-R"),
+            (cy_bottom, "Kawasaki Ninja"),
+            (cy_bottom + 1.5, "Yamaha YZF-R"),
         )
     ]
     return groups[0].bays[0], groups[1].bays[0]

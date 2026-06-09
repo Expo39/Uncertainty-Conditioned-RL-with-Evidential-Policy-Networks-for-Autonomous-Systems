@@ -14,6 +14,34 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+# Motorcycle bays render in a neutral grey rather than their palette hue so the
+# always-empty bays read as distinct from drivable perpendicular/angled bays.
+MOTORCYCLE_DRAW_HEX = "#888888"
+
+# Bay-type legend entries in stable display order. Only the types actually
+# present in a layout are emitted (see plot_layout), so a lot with no angled or
+# motorcycle bays never lists them.
+_BAY_LEGEND_ORDER: List[Tuple[str, str]] = [
+    ("perpendicular", "Perpendicular bays"),
+    ("angled", "Angled (45 deg) bays"),
+    ("parallel", "Parallel bays"),
+    ("motorcycle", "Motorcycle bays"),
+]
+
+
+def _bay_legend_colour(bay_type: str) -> str:
+    """
+    @brief Resolve the plot colour for a bay type (drawing and legend share this).
+    @param bay_type: Bay type key (e.g. "perpendicular", "motorcycle").
+    @return Hex colour string; motorcycle bays use the neutral draw grey.
+    """
+    from scripts.colours import BAY_HEX
+
+    if bay_type == "motorcycle":
+        return MOTORCYCLE_DRAW_HEX
+    return BAY_HEX.get(bay_type, "grey")
+
+
 # ---------------------------------------------------------------------------
 # World-frame transformation
 # ---------------------------------------------------------------------------
@@ -237,7 +265,6 @@ def plot_layout(
         return
 
     from scripts.colours import (
-        BAY_HEX,
         HEX_LOT,
         HEX_OOB_BOUNDARY,
         HEX_PATROL_PATH,
@@ -288,9 +315,7 @@ def plot_layout(
 
     for bay in world_layout["bays"]:
         bay_type = bay["bay_type"]
-        colour = (
-            "#888888" if bay_type == "motorcycle" else BAY_HEX.get(bay_type, "grey")
-        )
+        colour = _bay_legend_colour(bay_type)
         bx, by = bay["x"], bay["y"]
         yaw_rad = math.radians(bay["yaw_deg"])
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
@@ -413,13 +438,17 @@ def plot_layout(
         )
 
     # Build the legend from only the elements that were actually drawn, so it
-    # never lists a disabled patrol path or pedestrian zone.
+    # never lists a bay type, patrol path, or pedestrian zone absent from this
+    # layout. Bay-type entries follow _BAY_LEGEND_ORDER for a stable order.
+    present_types = {bay["bay_type"] for bay in world_layout["bays"]}
     handles: List[Any] = [
-        mpatches.Patch(color=BAY_HEX["perpendicular"], label="Perpendicular bays"),
-        mpatches.Patch(color=BAY_HEX["angled"], label="Angled (45 deg) bays"),
-        mpatches.Patch(color=BAY_HEX["motorcycle"], label="Motorcycle bays"),
-        mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
+        mpatches.Patch(color=_bay_legend_colour(bay_type), label=label)
+        for bay_type, label in _BAY_LEGEND_ORDER
+        if bay_type in present_types
     ]
+    handles.append(
+        mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary")
+    )
     if oob_inflation_margin is not None:
         handles.append(
             Line2D(
