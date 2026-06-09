@@ -462,8 +462,6 @@ class GnssNoiseRelayNode(Node):
             self._config_seq = seq
 
             tier_name: Optional[str] = data.get("tier_name")
-            if not self._markov_enabled:
-                tier_name = "rtk_fixed"
             if tier_name and tier_name in _TIER_ORDER:
                 self._apply_tier(tier_name)
                 self._write_active_tier(tier_name)

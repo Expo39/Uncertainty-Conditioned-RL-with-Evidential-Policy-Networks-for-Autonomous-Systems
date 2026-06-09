@@ -55,5 +55,5 @@ tiers:
 transition_matrix:
   rtk_fixed:  [0.9920, 0.0080, 0.0000, 0.0000]   # leave fix ~0.8%/step (excursion onset)
   rtk_float:  [0.0400, 0.9550, 0.0050, 0.0000]   # recover 0.040 >> degrade 0.005
-  standalone: [0.0000, 0.0350, 0.9600, 0.0050]   # recover 0.035 >> degrade 0.005
-  degraded:   [0.0000, 0.0000, 0.0600, 0.9400]   # climb back out 0.060
+  standalone: [0.0000, 0.0175, 0.9800, 0.0025]   # recover 0.0175 >> degrade 0.0025 (dwell ~2.5s)
+  degraded:   [0.0000, 0.0000, 0.0300, 0.9700]   # climb back out 0.030 (dwell ~1.7s)
