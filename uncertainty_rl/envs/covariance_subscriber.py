@@ -336,7 +336,6 @@ class _CovarianceSubscriber:
         tier_name: str,
         datum_lat: Optional[float] = None,
         datum_lon: Optional[float] = None,
-        drift_scale: Optional[float] = None,
     ) -> None:
         """
         @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
@@ -344,11 +343,6 @@ class _CovarianceSubscriber:
                           the episode STARTS in.
         @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
         @param datum_lon: Longitude (degrees) of vehicle spawn.
-        @param drift_scale: Per-stage mid-episode Markov-drift margin in [0, 1].
-                            The relay scales the base transition matrix's
-                            off-diagonals by this factor (0 = no drift, the tier
-                            holds; 1 = full realistic chain). Omitted -> relay
-                            keeps its configured matrix.
         """
         self._episode_config_seq += 1
         data: Dict[str, Any] = {
@@ -359,8 +353,6 @@ class _CovarianceSubscriber:
             data["datum_lat"] = datum_lat
         if datum_lon is not None:
             data["datum_lon"] = datum_lon
-        if drift_scale is not None:
-            data["drift_scale"] = drift_scale
         try:
             with open(self._episode_config_tmp, "w") as f:
                 json.dump(data, f)
