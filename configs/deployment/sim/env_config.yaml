@@ -14,9 +14,15 @@ max_steps: 1750  # Episode length (steps).
 action_repeat: 4  # Sim ticks per policy action. Policy runs at carla_timestep * action_repeat seconds per decision.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
 
-# Per-stage difficulty (use_extra_spawns, bay_margin, fixed_floor_plan,
-# fixed_gnss_tier, bay_occupancy_*, lidar noise.enabled) lives ONLY in the
-# curriculum stage files - not here. See configs/deployment/sim/curriculum/.
+# Per-stage difficulty (bay_margin, fixed_floor_plan, fixed_gnss_tier,
+# bay_occupancy_*, lidar noise.enabled) lives in the curriculum stage files -
+# see configs/deployment/sim/curriculum/. They override the base values here.
+#
+# Base default for the extra (non-primary) spawn points. Every stage overrides
+# this, so training/eval always use the stage value; the base exists so the
+# layout generator (which applies no stage) honours the same setting when
+# drawing the PNGs.
+use_extra_spawns: false
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
 no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active).
 
