@@ -1,11 +1,11 @@
 # GNSS Fix-State Markov Chain - Design and Sim-to-Real Rationale
 
-> **Updated 8 June 2026 - single-phase curriculum.** Mid-episode Markov drift is now ON from
-> Stage 1 (master switches in `ros2_config.yaml` enabled globally). Each episode STARTS in
-> `rtk_fixed` and the chain wanders from there, scaled per stage by `drift_scale` in [0,1]:
-> the relay rebuilds its effective transition matrix as base-off-diagonals x `drift_scale`
-> (`uncertainty_rl/utils/gnss_drift.py`), so early stages drift gently and the capstone uses
-> the full chain. The base matrix and tiers below are unchanged.
+> **Single-phase curriculum.** Mid-episode Markov drift is ON from Stage 1 (master switches
+> in `ros2_config.yaml` enabled globally). Each episode STARTS in `rtk_fixed` and the chain
+> wanders from there. The chain is a FIXED, stage-invariant process - it is loaded once at
+> node startup from `configs/deployment/sim/gnss_noise_profiles.yaml` and is identical in
+> every curriculum stage (the GNSS degradation is not a ramped axis). The transition matrix
+> shown below is the one in that config.
 
 Extracted from the GNSS noise relay pipeline in `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`.
 
@@ -43,27 +43,30 @@ to metre-level accuracy -- it degrades through float first.
 
 ```
              to: fixed   float   standalone  degraded
-from: fixed      0.9950  0.0050  0.0000      0.0000
-from: float      0.0030  0.9920  0.0050      0.0000
-from: standalone 0.0000  0.0040  0.9930      0.0030
-from: degraded   0.0000  0.0000  0.0050      0.9950
+from: fixed      0.9920  0.0080  0.0000      0.0000
+from: float      0.0400  0.9550  0.0050      0.0000
+from: standalone 0.0000  0.0350  0.9600      0.0050
+from: degraded   0.0000  0.0000  0.0600      0.9400
 ```
 
-### Mean Dwell Times
+### Behaviour
 
-At 20 Hz with the probabilities above:
+The chain is **upward-biased**: at every off-fixed rung the recovery
+probability (toward `rtk_fixed`) is far larger than the degradation
+probability (deeper). This makes it fixed-dominant and self-recovering.
 
-| State      | p(leave) per step | Mean dwell (steps) | Mean dwell (seconds) |
-|------------|-------------------|--------------------|----------------------|
-| rtk_fixed  | 0.0050            | 200                | 10 s                 |
-| rtk_float  | 0.0080            | 125                | 6.3 s                |
-| standalone | 0.0070            | 143                | 7.1 s                |
-| degraded   | 0.0050            | 200                | 10 s                 |
+| Property | Value |
+|----------|-------|
+| Stationary distribution | fixed ~0.81, float ~0.16, standalone ~0.02, degraded ~0.002 |
+| Mean recovery to fixed   | float ~1.4 s, standalone ~3 s, degraded ~3.8 s |
+| Leave-fixed rate         | 0.008/step -> a degradation event begins every ~6 s of fixed |
 
-A typical parking manoeuvre runs 45-200 seconds (max_steps=1000 at 5 Hz agent
-decision rate). With mean dwell times of 6-10 seconds, the agent will
-experience 5-20 tier transitions per episode on average, covering the full
-range of covariance magnitudes mid-manoeuvre.
+The `_step_markov()` call runs on every GNSS callback (20 Hz); with
+`action_repeat=4` that is 4 chain steps per agent decision. Over a typical
+~150 s parking approach the agent experiences ~20 excursions from fixed,
+reaching standalone in ~90% of approaches and the (rare, brief) degraded tier
+in ~25%, covering the full covariance range mid-manoeuvre while the fix is
+clean the majority of the time.
 
 ---
 
@@ -73,21 +76,24 @@ range of covariance magnitudes mid-manoeuvre.
 
 The probabilities were chosen to satisfy three constraints:
 
-1. **Stationarity matches training tier weights.** At stationarity, the
-   Markov chain stationary distribution should approximate the per-episode
-   sampling weights in `gnss_noise_profiles.yaml`:
-   fixed=0.4, float=0.3, standalone=0.2, degraded=0.1.
-   The current matrix produces approximate stationarity:
-   pi ~ [0.39, 0.31, 0.22, 0.08] -- close enough for training purposes.
+1. **Fixed-dominant, like a healthy open-sky RTK receiver.** A correctly
+   operating RTK rover with sky view holds fix the large majority of the time;
+   fix loss is a discrete, transient event (cycle slip, a passing vehicle
+   blocking the antenna, a multipath burst), not the baseline. The stationary
+   distribution (~81% fixed) reflects this. An earlier matrix that diffused
+   freely (~30% fixed, recovery in minutes) modelled a chronically degraded
+   urban-canyon receiver and made degraded episodes effectively unwinnable.
 
-2. **Dwell times are physically plausible.** Real RTK fix changes on a scale
-   of seconds to tens of seconds (satellite acquisition ~30 s, multipath burst
-   ~2-5 s). Mean dwells of 6-10 s are conservative but within range.
+2. **Excursions recover within an approach.** Recovery to fixed in a few
+   seconds (not minutes) is what makes "wait for the fix to recover" a
+   learnable behaviour rather than a frozen, unwinnable episode: the policy can
+   hold while uncertain and then commit once the EKF target sharpens.
 
-3. **Degradation is more likely than recovery.** The float->standalone (0.005)
-   rate is higher than standalone->float (0.004), and standalone->degraded
-   (0.003) is non-zero. This reflects that once RTK starts degrading it tends
-   to continue degrading rather than recovering immediately.
+3. **Recovery outweighs degradation at every rung.** The upward (toward fixed)
+   probability is ~7-8x the downward (deeper) probability in each off-fixed row,
+   so the chain is pulled back toward fixed. The degraded tier is reachable only
+   by several downward steps against this bias, making it rare and brief - the
+   abort/handoff regime, present for training but not dominating the episode.
 
 ### IMU process noise covariance
 

@@ -7,7 +7,6 @@ bay_margin: -0.45
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  drift_scale: 0.16
   allowed_bay_ids:  # ~6 per cluster (capped at cluster size), all 4 orientations.
     - perpendicular_0
     - perpendicular_2

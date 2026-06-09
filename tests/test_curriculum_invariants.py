@@ -5,7 +5,8 @@
 CPU-only, no CARLA / ROS 2 / GPU - parses YAML only. Encodes the non-negotiable
 "all observation channels live in every stage" rule so a future edit that
 re-degenerates a channel (the original Stage 1 -> 2 failure mode) fails CI:
-  - covariance channel: drift_scale > 0 (mid-episode drift is always on);
+  - covariance channel: the GNSS Markov chain is enabled and non-degenerate, so
+    mid-episode drift is always on (the process is stage-invariant - not a stage key);
   - LiDAR channel: bay_occupancy_max > 0 and LiDAR noise enabled;
   - target-pose channel: the bay set spans >= 2 approach orientations.
 Also checks the per-policy override blocks are allowlisted and start identical.
@@ -20,7 +21,9 @@ import yaml
 _REPO = Path(__file__).resolve().parents[1]
 _CURRICULUM = _REPO / "configs" / "deployment" / "sim" / "curriculum"
 _LAYOUT = _REPO / "configs" / "layouts" / "rectangle.yaml"
-_N_STAGES = 10
+_GNSS_PROFILES = _REPO / "configs" / "deployment" / "sim" / "gnss_noise_profiles.yaml"
+_ROS2_CONFIG = _REPO / "configs" / "ros2_config.yaml"
+_N_STAGES = 9
 
 # Mirrors _STAGE_TRAINING_OVERRIDE_ALLOWLIST in train_ppo.py (kept in sync so a
 # stage can never set an architecture key and break weight loading on resume).
@@ -54,11 +57,24 @@ def _stage(n: int) -> Dict:
 _STAGES = list(range(1, _N_STAGES + 1))
 
 
-@pytest.mark.parametrize("n", _STAGES)
-def test_covariance_channel_live(n: int) -> None:
-    """drift_scale > 0 so the covariance features are never near-constant."""
-    ds = _stage(n)["parking_scenarios"].get("drift_scale")
-    assert isinstance(ds, (int, float)) and ds > 0.0, f"stage{n}: drift_scale={ds}"
+def test_covariance_channel_live() -> None:
+    """The GNSS degradation process is stage-invariant and always on: the Markov
+    master switch is enabled and the transition matrix has live off-diagonals, so
+    the covariance features are never near-constant in any stage."""
+    enabled = (
+        yaml.safe_load(open(_ROS2_CONFIG))
+        .get("gnss_noise_relay", {})
+        .get("enable_markov_transitions")
+    )
+    assert enabled is True, "enable_markov_transitions must be on globally"
+    matrix = yaml.safe_load(open(_GNSS_PROFILES))["transition_matrix"]
+    # Every tier must have a non-zero probability of leaving (off-diagonal mass),
+    # so the chain genuinely drifts rather than holding the start tier forever.
+    tiers = list(matrix)
+    for i, tier in enumerate(tiers):
+        row = matrix[tier]
+        off_diag = sum(row) - row[i]
+        assert off_diag > 0.0, f"tier {tier}: no transitions out (off-diag mass 0)"
 
 
 @pytest.mark.parametrize("n", _STAGES)
@@ -107,10 +123,3 @@ def test_override_blocks_allowlisted_and_identical(n: int) -> None:
         assert not bad, f"stage{n}: {name}_overrides has non-allowlisted keys {bad}"
     # Initialised identical (fairness by default; split only on observed instability).
     assert std == evi, f"stage{n}: standard/evidential overrides must start identical"
-
-
-def test_drift_scale_is_monotonic_nondecreasing() -> None:
-    """The drift margin ramps gentle -> full and never steps back down."""
-    scales = [_stage(n)["parking_scenarios"]["drift_scale"] for n in _STAGES]
-    assert scales == sorted(scales), f"drift_scale not non-decreasing: {scales}"
-    assert scales[-1] == pytest.approx(1.0), "final stage should reach full drift (1.0)"

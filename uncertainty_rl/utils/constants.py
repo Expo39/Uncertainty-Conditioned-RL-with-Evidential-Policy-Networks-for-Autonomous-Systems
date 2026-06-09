@@ -125,7 +125,7 @@ TOTAL_OBS_DIM = (
 # vehicle. Generous physical bounds; the clip guards outliers, not the working range.
 OBS_SPEED_SCALE = 5.0  # m/s - forward parking speed cap (speed is non-negative)
 OBS_YAW_RATE_SCALE = np.pi  # rad/s - vyaw is wrapped to [-pi, pi] in build_observation
-OBS_STD_POS_SCALE = 5.0  # m - EKF position-std ceiling (degraded GNSS tier ~5 m)
+OBS_STD_POS_SCALE = 1.0  # m - EKF position-std ceiling (RTK-float/standalone band)
 OBS_STD_YAW_SCALE = 0.5  # rad - EKF heading-std ceiling (~29 deg)
 OBS_TARGET_POS_SCALE = (
     40.0  # m - relative target offset scale over the lot (65 x 42.5 m)

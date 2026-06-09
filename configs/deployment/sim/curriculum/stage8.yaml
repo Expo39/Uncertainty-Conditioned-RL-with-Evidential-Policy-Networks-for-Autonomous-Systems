@@ -7,7 +7,6 @@ bay_margin: -0.25  # Strict, held.
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  drift_scale: 0.25
   bay_occupancy_min: 0.2  # Moderate-to-busy occupancy.
   bay_occupancy_max: 0.6
 

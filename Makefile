@@ -84,7 +84,9 @@ docker-build-no-cache-core: ## Build core + env-worker images without cache (car
 	bash scripts/multi_workers/workers_build.sh docker-compose.env_workers.yml --no-cache
 
 docker-build-no-cache-inspect: ## Build inspect-stack images without cache (ros2-bridge-inspect, training-inspect-*)
-	$(DOCKER_COMPOSE_INSPECT) build --no-cache
+	@# Inspect services are profile-gated; activate every profile so build --no-cache
+	@# does not skip them.
+	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-sensors --profile inspect-live --profile inspect-dryrun build --no-cache
 
 docker-build-ros2: ## Rebuild only the ros2-bridge images without cache
 	$(DOCKER_COMPOSE_WORKERS) build --no-cache ros2-bridge
@@ -457,6 +459,15 @@ clean-all: ## Remove everything including checkpoints and logs (preserves .xodr 
 
 clean-venv: ## Remove the local virtual environment (re-create with make install)
 	rm -rf $(VENV)
+
+# ----------------------------------------------------------------------
+# TensorBoard scalar inspection (host-side; reads a run's event file)
+# ----------------------------------------------------------------------
+
+tb-scalars: ## Print scalar trajectories from a run log dir. Usage: make tb-scalars LOG=logs/<run_dir>
+	$(call ensure-venv)
+	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
+	$(PYTHON) $(SCRIPTS_DIR)/inspect/tb_read.py $(LOG)
 
 # ----------------------------------------------------------------------
 # Config Backup

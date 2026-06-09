@@ -18,7 +18,6 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 | `bay_success.py` | Per-bay episode accounting for success-rate reporting |
 | `config_merge.py` | Config merge hierarchy: `deep_merge`, `apply_baseline`, `BASELINE_KEYS` |
 | `covariance_utils.py` | EKF covariance extraction and validation helpers |
-| `gnss_drift.py` | `scale_transition_matrix` - pure helper (no ROS 2) scaling a GNSS Markov transition matrix by the per-stage `drift_scale`; used by the ros2-bridge relay, host/CI-testable |
 | `geometry.py` | Coordinate transforms, polygon tests, angle wrapping |
 | `logging.py` | `DebugLogger` - zero-overhead per-step diagnostics |
 | `visualisation.py` | `VisStateWriter` - atomic JSON writer for the detachable visualiser |

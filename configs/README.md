@@ -51,8 +51,8 @@ unified env config passed to `CARLAParkingEnv`. `merge_configs()` then layers
 down the chain. The two exceptions are deliberate:
 - **Curriculum stages** each spell out the *full* difficulty key set (`use_extra_spawns`,
   `bay_margin`, `fixed_floor_plan`, `fixed_gnss_tier` (= `rtk_fixed` start tier),
-  `drift_scale` (per-stage GNSS drift margin), `bay_occupancy_min/max`,
-  `lidar noise.enabled`, `allowed_bay_ids`) plus two per-policy schedule blocks
+  `bay_occupancy_min/max`, `lidar noise.enabled`, `allowed_bay_ids`) plus two per-policy
+  schedule blocks
   (`standard_overrides` / `evidential_overrides`). These knobs are NOT in `env_config` -
   they are owned by the stages.
 - **Baselines** each set the ablation cell flags (`include_covariance`,

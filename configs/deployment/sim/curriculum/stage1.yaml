@@ -7,7 +7,6 @@ bay_margin: -0.75  # Loosest acceptance box (negative inflates it outward).
 parking_scenarios:
   fixed_floor_plan: rectangle  # Training layout; trapezoid/irregular held out for OOD eval.
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  drift_scale: 0.10  # Mid-episode Markov-drift margin in [0,1].
   allowed_bay_ids:  # One bay per cluster, all 4 orientations.
     - perpendicular_5    # yaw 270, north row
     - perpendicular_26   # yaw 270, upper row

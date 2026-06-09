@@ -7,7 +7,6 @@ bay_margin: -0.65
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed
-  drift_scale: 0.12
   allowed_bay_ids:  # Two per cluster, all 4 orientations.
     - perpendicular_3
     - perpendicular_8     # yaw 270, north row
