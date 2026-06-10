@@ -8,7 +8,12 @@
 # ---------------------------------------------------------------------------
 # Policy safety parameters
 # ---------------------------------------------------------------------------
-max_ego_speed_ms: 8.0  # Speed limit (m/s).
+# Hard speed governor (throttle is cut at or above this speed, brake unaffected).
+# Sized for the manoeuvre, not the road: at the 5 Hz decision rate with the
+# steering slew below, the turn-in window must span several policy decisions -
+# 3.5 m/s gives ~0.7 m per decision and a ~2.5 m steering ramp, versus 1.6 m and
+# 8 m at 8 m/s, where the corridor turn passes in 1-2 decisions.
+max_ego_speed_ms: 3.5  # Speed limit (m/s).
 
 # ---------------------------------------------------------------------------
 # Actuator model

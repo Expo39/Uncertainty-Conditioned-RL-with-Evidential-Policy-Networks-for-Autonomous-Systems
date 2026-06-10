@@ -57,6 +57,7 @@ from uncertainty_rl.utils.constants import (
     OOB_TERMINATION_PENALTY_LIMIT,
     PHI_NORM_FLOOR,
     PROGRESS_TARGET,
+    STALL_TRUNCATION_DECISIONS,
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
     TIMEOUT_PENALTY_FLOOR_NORM,
@@ -76,10 +77,6 @@ logger = logging.getLogger(__name__)
 
 # Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
-
-# Shared empty info dict for intermediate action-repeat steps - avoids
-# allocating a new dict on each of the (action_repeat - 1) hot-path calls.
-_EMPTY_STEP_INFO: Dict[str, Any] = {}
 
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
@@ -380,6 +377,10 @@ class CARLAParkingEnv(gym.Env):
         _obs_dim = self._compute_obs_dim()
         self._obs_dim: int = _obs_dim
         self._obs_buffer: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
+        # Most recent normalised observation returned to the agent; reused as
+        # the safe return value when a mid-decision CARLA failure aborts the
+        # episode before a fresh observation can be built.
+        self._last_norm_obs: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
         self._obstacle_features_buffer: np.ndarray = np.zeros(
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
@@ -479,7 +480,6 @@ class CARLAParkingEnv(gym.Env):
 
         self._action_repeat: int = action_repeat
         self._no_rendering_mode: bool = no_rendering_mode
-        self._action_repeat_counter: int = 0
 
         self._success_dwell_steps: int = max(1, success_dwell_steps)
 
@@ -488,6 +488,10 @@ class CARLAParkingEnv(gym.Env):
         self.steps = 0
         self._actors_frozen: bool = False
         self._success_counter: int = 0
+        # Consecutive decisions below the success speed threshold while outside
+        # the acceptance box; truncates the episode as a stall at
+        # STALL_TRUNCATION_DECISIONS. @see step().
+        self._stall_counter: int = 0
         # Previous corridor potential phi for the potential-based progress term
         # in _compute_reward. progress = phi(curr) - phi(prev) telescopes to zero
         # over any loiter, so a stationary car earns nothing from it.
@@ -1012,11 +1016,14 @@ class CARLAParkingEnv(gym.Env):
         @param heading_err: Absolute heading error from the bay axis (radians).
         @return Potential phi (always <= 0); 0 at the perfectly parked pose.
 
-        phi = -(W_ALONG*|along| + W_CROSS*|cross| + W_HEAD*heading_err). The
+        phi = -(W_ALONG*|along| + W_CROSS*|cross| + W_HEAD*heading_err). Linear and
+        monotone in each coordinate, so reducing any of depth, cross-track, or
+        heading error always raises phi (no traps, and driving in always pays). The
         cross-track and heading weights exceed the along-track weight so the
         gradient pulls the car onto the centreline and square before advancing in
         depth: a crooked short-cut accrues cross/heading cost en route and scores
         below an aligned arc that ends at the same parked pose.
+        @see CORRIDOR_W_ALONG/CROSS/HEAD.
         """
         return -(
             self._w_along * abs(along)
@@ -1785,6 +1792,9 @@ class CARLAParkingEnv(gym.Env):
 
         self._episode_id += 1
         self.steps = 0
+        # Reset here, before any early-return path (CARLA unavailable /
+        # reconnect failure), so a stall can never leak into the next episode.
+        self._stall_counter = 0
         self._trajectory_buffer.clear()
         # Force signal-file recheck at episode start so new episodes don't
         # inherit a stale cached value from the previous episode's final step.
@@ -2004,6 +2014,7 @@ class CARLAParkingEnv(gym.Env):
             self._phi_start = PHI_NORM_FLOOR
 
         state = self._get_state()
+        self._last_norm_obs = state
 
         # Emit debug reset summary (no-op when debug=False)
         self._debug_logger.log_reset(
@@ -2038,146 +2049,143 @@ class CARLAParkingEnv(gym.Env):
         action: np.ndarray,
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
-        @brief Execute one environment step with optional action_repeat.
+        @brief Execute one policy decision (action_repeat sim ticks).
 
-        When action_repeat > 1, the same action is applied for multiple sim-steps.
-        Observations are only constructed on the final step of the repeat sequence,
-        reducing EKF covariance reads and state construction by action_repeat factor.
+        One step() call is one agent transition: the rate-limited command is
+        held constant while CARLA advances action_repeat fixed timesteps, then
+        the observation and reward are built once from the post-tick state.
+        The agent never sees intermediate sim ticks, so every transition pairs
+        the decision with the normalised observation that resulted from it,
+        and SB3 timesteps count policy decisions, not sim ticks.
 
         @param action: 3-dim action vector [steer, throttle, brake] in the
                 policy's normalised command space. Steer in [-1, 1], throttle
-                and brake in [0, 1]. The env rate-limits the command on the
-                policy decision boundary via the actuator model before
-                forwarding to CARLA, so what the policy commands and what the
-                vehicle physically receives may differ.
+                and brake in [0, 1]. The env rate-limits the command via the
+                actuator model before forwarding to CARLA, so what the policy
+                commands and what the vehicle physically receives may differ.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
-        # On the policy decision boundary, rate-limit the raw policy command
-        # so the action delivered to CARLA matches a physical actuator. The
-        # post-clamp values are persisted via _prev_*_cmd and reused for all
-        # action_repeat ticks of this decision; CARLA evolves under the
-        # constant setpoint for ~0.2 s.
-        if self._action_repeat_counter == 0:
-            # Policy axes are uniformly [-1, 1] (tanh-squashed). Steer passes
-            # through. Throttle / brake fold the negative half to zero so the
-            # symmetric prior gamma = 0 maps to pedal-off; only the positive
-            # half engages the pedal. A linear (a + 1) / 2 remap put both
-            # pedals at 0.5 at init, which triggered the brake-overrides-
-            # throttle override and prevented any movement at training start.
-            steer_cmd = float(np.clip(action[0], -1.0, 1.0))
-            throttle_cmd = float(np.clip(action[1], 0.0, 1.0))
-            brake_cmd = float(np.clip(action[2], 0.0, 1.0))
+        # Rate-limit the raw policy command so the action delivered to CARLA
+        # matches a physical actuator. The post-clamp values are persisted via
+        # _prev_*_cmd and held constant for the action_repeat sim ticks of this
+        # decision (~0.2 s).
+        # Policy axes are uniformly [-1, 1] (tanh-squashed). Steer passes
+        # through. Throttle / brake fold the negative half to zero so the
+        # symmetric prior gamma = 0 maps to pedal-off; only the positive
+        # half engages the pedal. A linear (a + 1) / 2 remap put both
+        # pedals at 0.5 at init, which triggered the brake-overrides-
+        # throttle override and prevented any movement at training start.
+        steer_cmd = float(np.clip(action[0], -1.0, 1.0))
+        throttle_cmd = float(np.clip(action[1], 0.0, 1.0))
+        brake_cmd = float(np.clip(action[2], 0.0, 1.0))
 
-            steer_cmd = float(
-                np.clip(
-                    steer_cmd,
-                    self._prev_steer_cmd - self._steer_max_delta,
-                    self._prev_steer_cmd + self._steer_max_delta,
-                )
+        steer_cmd = float(
+            np.clip(
+                steer_cmd,
+                self._prev_steer_cmd - self._steer_max_delta,
+                self._prev_steer_cmd + self._steer_max_delta,
             )
-            brake_cmd = float(
-                np.clip(
-                    brake_cmd,
-                    self._prev_brake_cmd - self._brake_max_delta,
-                    self._prev_brake_cmd + self._brake_max_delta,
-                )
+        )
+        brake_cmd = float(
+            np.clip(
+                brake_cmd,
+                self._prev_brake_cmd - self._brake_max_delta,
+                self._prev_brake_cmd + self._brake_max_delta,
             )
+        )
 
-            # Brake-overrides-throttle. A real driver-assistance system cuts
-            # throttle whenever the brake is meaningfully pressed; modelling
-            # the same here keeps the policy from learning to fight itself.
-            # Apply the override BEFORE the throttle rate limit so the cut
-            # itself still respects the actuator rate (a real throttle plate
-            # cannot slam closed faster than its slew rate).
-            if brake_cmd > self._brake_override_throttle_threshold:
-                throttle_cmd = 0.0
-            throttle_cmd = float(
-                np.clip(
-                    throttle_cmd,
-                    self._prev_throttle_cmd - self._throttle_max_delta,
-                    self._prev_throttle_cmd + self._throttle_max_delta,
-                )
+        # Brake-overrides-throttle. A real driver-assistance system cuts
+        # throttle whenever the brake is meaningfully pressed; modelling
+        # the same here keeps the policy from learning to fight itself.
+        # Apply the override BEFORE the throttle rate limit so the cut
+        # itself still respects the actuator rate (a real throttle plate
+        # cannot slam closed faster than its slew rate).
+        if brake_cmd > self._brake_override_throttle_threshold:
+            throttle_cmd = 0.0
+        throttle_cmd = float(
+            np.clip(
+                throttle_cmd,
+                self._prev_throttle_cmd - self._throttle_max_delta,
+                self._prev_throttle_cmd + self._throttle_max_delta,
             )
+        )
 
-            self._prev_steer_cmd = steer_cmd
-            self._prev_throttle_cmd = throttle_cmd
-            self._prev_brake_cmd = brake_cmd
+        self._prev_steer_cmd = steer_cmd
+        self._prev_throttle_cmd = throttle_cmd
+        self._prev_brake_cmd = brake_cmd
 
-            self._last_action[0] = steer_cmd
-            self._last_action[1] = throttle_cmd
-            self._last_action[2] = brake_cmd
+        self._last_action[0] = steer_cmd
+        self._last_action[1] = throttle_cmd
+        self._last_action[2] = brake_cmd
 
-        # Execute one sim-step
-        self.steps += 1
-        self._action_repeat_counter += 1
-
-        # post-tick transform and velocity (fetched once, shared with
-        # _compute_reward and _write_vis_state to avoid duplicate CARLA RPCs).
+        # Advance the simulation under the held setpoint. The post-tick
+        # transform and velocity of the last tick are shared with
+        # _compute_reward and _write_vis_state to avoid duplicate CARLA RPCs.
         _post_transform: Optional[Any] = None
         _post_velocity: Optional[Any] = None
 
-        if self.vehicle is not None:
-            steer = float(self._last_action[0])
-            throttle = float(self._last_action[1])
-            brake = float(self._last_action[2])
+        for _ in range(self._action_repeat):
+            self.steps += 1
+
+            if self.vehicle is None:
+                continue
 
             vel = self.vehicle.get_velocity()
             current_speed = math.hypot(vel.x, vel.y)
 
             control = carla.VehicleControl()
-            control.steer = steer
+            control.steer = float(self._last_action[0])
             control.reverse = False
             # Cut throttle above the speed limit; brake is forwarded as-is.
             control.throttle = (
-                0.0 if current_speed >= self._max_ego_speed_ms else throttle
+                0.0
+                if current_speed >= self._max_ego_speed_ms
+                else float(self._last_action[1])
             )
-            control.brake = brake
+            control.brake = float(self._last_action[2])
 
             self.vehicle.apply_control(control)
 
-            if self.world is not None:
-                self._update_patrol_npcs()
-                self._update_pedestrians()
-                # 10s timeout surfaces a frozen CARLA server as an error rather
-                # than hanging the process indefinitely. CARLA 0.9.16 segfaults
-                # on long headless runs; a crash here is recoverable - flag the
-                # env for reconnect on the next reset() and abort the episode as
-                # a truncation so SB3 ends it cleanly rather than the whole
-                # multi-hour run dying on the exception. @see _reconnect_to_carla.
-                try:
-                    self.world.tick(10.0)
-                except RuntimeError as exc:
-                    logger.error(
-                        "CARLA tick failed (server crash?): %s. Aborting episode "
-                        "and scheduling reconnect on next reset.",
-                        exc,
-                    )
-                    self._needs_reconnect = True
-                    self._actors_frozen = True
-                    return (
-                        self._obs_buffer,
-                        0.0,
-                        False,
-                        True,
-                        {"carla_reconnect": True},
-                    )
+            if self.world is None:
+                continue
 
-                # Fetch transform + velocity once post-tick; reused by
-                # _compute_reward and _write_vis_state below.
-                _post_transform = self.vehicle.get_transform()
-                _post_velocity = self.vehicle.get_velocity()
-                self._trajectory_buffer.append(
-                    (_post_transform.location.x, _post_transform.location.y)
+            self._update_patrol_npcs()
+            self._update_pedestrians()
+            # 10s timeout surfaces a frozen CARLA server as an error rather
+            # than hanging the process indefinitely. CARLA 0.9.16 segfaults
+            # on long headless runs; a crash here is recoverable - flag the
+            # env for reconnect on the next reset() and abort the episode as
+            # a truncation so SB3 ends it cleanly rather than the whole
+            # multi-hour run dying on the exception. @see _reconnect_to_carla.
+            try:
+                self.world.tick(10.0)
+            except RuntimeError as exc:
+                logger.error(
+                    "CARLA tick failed (server crash?): %s. Aborting episode "
+                    "and scheduling reconnect on next reset.",
+                    exc,
+                )
+                self._needs_reconnect = True
+                self._actors_frozen = True
+                return (
+                    self._last_norm_obs,
+                    0.0,
+                    False,
+                    True,
+                    {"carla_reconnect": True},
                 )
 
-        # Only construct observations and compute rewards on the final repeat step.
-        # Intermediate steps return the last-built obs buffer directly.
-        if self._action_repeat_counter < self._action_repeat:
-            return self._obs_buffer, 0.0, False, False, _EMPTY_STEP_INFO
+            # Fetch transform + velocity once post-tick; reused by
+            # _compute_reward and _write_vis_state below.
+            _post_transform = self.vehicle.get_transform()
+            _post_velocity = self.vehicle.get_velocity()
+            self._trajectory_buffer.append(
+                (_post_transform.location.x, _post_transform.location.y)
+            )
 
-        # Final repeat step: construct full observation and reward
-        self._action_repeat_counter = 0  # Reset for next action
+        # Construct the observation and reward once per decision.
         state = self._get_state()
+        self._last_norm_obs = state
         reward, terminated, success, reward_diag = self._compute_reward(
             transform=_post_transform, velocity=_post_velocity
         )
@@ -2211,6 +2219,26 @@ class CARLAParkingEnv(gym.Env):
             )
 
         truncated = self.steps >= self.max_steps
+
+        # Stall truncation: a car holding a near-stop OUTSIDE the acceptance box
+        # for STALL_TRUNCATION_DECISIONS consecutive decisions is parked in the
+        # wrong place and (forward-only, no reverse) almost never recovers -
+        # truncate through the same path as the clock running out, so the graded
+        # timeout penalty below applies identically. _success_counter > 0 means
+        # the car is slow INSIDE the box (the success dwell), which must not
+        # count as a stall. The window is sized above the GNSS Markov chain's
+        # full recovery time, so stopping to wait out a degraded fix is never
+        # cut short. @see STALL_TRUNCATION_DECISIONS.
+        if not terminated:
+            if (
+                reward_diag["speed"] < SUCCESS_THRESHOLD_VELOCITY
+                and self._success_counter == 0
+            ):
+                self._stall_counter += 1
+            else:
+                self._stall_counter = 0
+            if self._stall_counter >= STALL_TRUNCATION_DECISIONS:
+                truncated = True
 
         # Graded timeout penalty: judge the final state when the clock runs out
         # without a park. Scaled by how far and how misaligned the car ended, so
