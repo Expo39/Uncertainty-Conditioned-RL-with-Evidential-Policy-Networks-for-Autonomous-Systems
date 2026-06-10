@@ -10,8 +10,8 @@ inspect:
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
-max_steps: 1750  # Episode length (steps).
-action_repeat: 4  # Sim ticks per policy action. Policy runs at carla_timestep * action_repeat seconds per decision.
+max_steps: 1750  # Episode length in sim ticks (max_steps / action_repeat policy decisions).
+action_repeat: 4  # Sim ticks per policy decision. One env.step() (= one SB3 timestep) advances this many ticks; the policy acts every carla_timestep * action_repeat seconds.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
 
 # Per-stage difficulty (bay_margin, fixed_floor_plan, fixed_gnss_tier,

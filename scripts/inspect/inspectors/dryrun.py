@@ -24,6 +24,14 @@ from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
     OBSTACLE_FEATURES_DIM,
+    OBS_OBSTACLE_BEARING_SCALE,
+    OBS_OBSTACLE_DIST_SCALE,
+    OBS_SPEED_SCALE,
+    OBS_STD_POS_SCALE,
+    OBS_STD_YAW_SCALE,
+    OBS_TARGET_POS_SCALE,
+    OBS_TARGET_YAW_SCALE,
+    OBS_YAW_RATE_SCALE,
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
 )
@@ -170,7 +178,7 @@ class DryRunInspector(_Inspector):
            forward action or keyboard control, no model.  Spectator follows the ego.
     """
 
-    _LOG_INTERVAL: int = 50  # steps between console obs prints
+    _LOG_INTERVAL: int = 50  # env steps between console obs prints
 
     def __init__(
         self,
@@ -345,7 +353,12 @@ class DryRunInspector(_Inspector):
         Layout: [speed, vyaw] (+[std_x, std_y, std_yaw] if include_covariance)
         + [dx, dy, dyaw] (+5 hemispheric obstacle dims if include_obstacle_obs).
 
-        @param obs: Observation array from env.step() or env.reset().
+        Every WHITE line shows the NORMALISED values exactly as the model
+        receives them (the env returns the obs already scaled by the
+        constants.py OBS_*_SCALE divisors and clipped to +/-OBS_NORM_CLIP),
+        followed by the descaled physical equivalent in brackets.
+
+        @param obs: Normalised observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
         @param info: Optional info dict from env.step().
@@ -377,10 +390,14 @@ class DryRunInspector(_Inspector):
             + "-" * 28
         )
 
-        # Model inputs: speed + vyaw (the first two slots of the obs vector).
+        # Model inputs: speed + vyaw (the first two slots of the obs vector),
+        # normalised value first, physical equivalent in brackets.
+        _spd = float(obs[0])
+        _vyaw = float(obs[1])
         lines.append(
-            W + f"vel  spd={float(obs[0]):+.2f}m/s  "
-            f"vyaw={math.degrees(float(obs[1])):+.1f}deg/s" + X
+            W + f"vel  spd={_spd:+.3f} ({_spd * OBS_SPEED_SCALE:+.2f}m/s)  "
+            f"vyaw={_vyaw:+.3f} "
+            f"({math.degrees(_vyaw * OBS_YAW_RATE_SCALE):+.1f}deg/s)" + X
         )
 
         gt_speed = 0.0
@@ -428,17 +445,25 @@ class DryRunInspector(_Inspector):
         # Covariance block is in the obs ONLY when include_covariance is set; for
         # vanilla_ppo / output_uncertainty it is absent, so do not print it.
         if inc_cov and len(obs) >= cov_start + COVARIANCE_FEATURES_DIM:
+            _sx = float(obs[cov_start])
+            _sy = float(obs[cov_start + 1])
+            _syaw = float(obs[cov_start + 2])
             lines.append(
-                W + f"cov  std=({float(obs[cov_start]):.3f},"
-                f"{float(obs[cov_start + 1]):.3f},"
-                f"{float(obs[cov_start + 2]):.3f})" + X
+                W + f"cov  std=({_sx:.3f},{_sy:.3f},{_syaw:.3f}) "
+                f"({_sx * OBS_STD_POS_SCALE:.2f}m,"
+                f"{_sy * OBS_STD_POS_SCALE:.2f}m,"
+                f"{math.degrees(_syaw * OBS_STD_YAW_SCALE):.1f}deg)" + X
             )
 
         if len(obs) >= tgt_start + TARGET_POSE_DIM:
+            _dx = float(obs[tgt_start])
+            _dy = float(obs[tgt_start + 1])
+            _dyaw = float(obs[tgt_start + 2])
             lines.append(
-                W + f"tgt  dx={float(obs[tgt_start]):+.2f}m"
-                f"  dy={float(obs[tgt_start + 1]):+.2f}m"
-                f"  dyaw={math.degrees(float(obs[tgt_start + 2])):+.1f}deg" + X
+                W + f"tgt  dx={_dx:+.3f} ({_dx * OBS_TARGET_POS_SCALE:+.2f}m)"
+                f"  dy={_dy:+.3f} ({_dy * OBS_TARGET_POS_SCALE:+.2f}m)"
+                f"  dyaw={_dyaw:+.3f} "
+                f"({math.degrees(_dyaw * OBS_TARGET_YAW_SCALE):+.1f}deg)" + X
             )
 
         gt = self._env._target_bay
@@ -463,12 +488,19 @@ class DryRunInspector(_Inspector):
         lines.append(bay_line)
 
         if inc_obs and len(obs) >= obstacle_start + OBSTACLE_FEATURES_DIM:
+            _ld = float(obs[obstacle_start])
+            _lb = float(obs[obstacle_start + 1])
+            _rd = float(obs[obstacle_start + 2])
+            _rb = float(obs[obstacle_start + 3])
+            _fd = float(obs[obstacle_start + 4])
             lines.append(
-                W + f"obs  L={float(obs[obstacle_start]):.2f}m"
-                f"({math.degrees(float(obs[obstacle_start + 1])):+.1f}deg)"
-                f"  R={float(obs[obstacle_start + 2]):.2f}m"
-                f"({math.degrees(float(obs[obstacle_start + 3])):+.1f}deg)"
-                f"  F={float(obs[obstacle_start + 4]):.2f}m" + X
+                W + f"obs  L=({_ld:.3f},{_lb:+.3f}) "
+                f"({_ld * OBS_OBSTACLE_DIST_SCALE:.1f}m,"
+                f"{math.degrees(_lb * OBS_OBSTACLE_BEARING_SCALE):+.1f}deg)"
+                f"  R=({_rd:.3f},{_rb:+.3f}) "
+                f"({_rd * OBS_OBSTACLE_DIST_SCALE:.1f}m,"
+                f"{math.degrees(_rb * OBS_OBSTACLE_BEARING_SCALE):+.1f}deg)"
+                f"  F={_fd:.3f} ({_fd * OBS_OBSTACLE_DIST_SCALE:.1f}m)" + X
             )
 
         print("\n" + "\n".join(lines))
@@ -551,6 +583,9 @@ class DryRunInspector(_Inspector):
                 f"\n  [{i}-{i + OBSTACLE_FEATURES_DIM - 1}]  obs: "
                 "L(dist, bear)  R(dist, bear)  F(dist)"
             )
+        legend.append(
+            "\n  white lines: normalised model input, physical value in brackets"
+        )
         legend.append("\n  bay/EKF lines are diagnostic only (not fed to model)")
         print("".join(legend))
 
@@ -611,7 +646,11 @@ class DryRunInspector(_Inspector):
                             _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
-                    time.sleep(self._env._carla_timestep)
+                    # One env.step() spans action_repeat sim ticks; sleep the
+                    # matching wall time so manual driving stays real-time.
+                    time.sleep(
+                        self._env._carla_timestep * self._env._action_repeat
+                    )
                     self._update_spectator()
 
                     if step % self._LOG_INTERVAL == 0:

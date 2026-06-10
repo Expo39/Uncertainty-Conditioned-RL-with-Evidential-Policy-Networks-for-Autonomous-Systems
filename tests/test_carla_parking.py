@@ -33,6 +33,7 @@ from uncertainty_rl.utils.constants import (
     OBSTACLE_FEATURES_DIM,
     PHI_NORM_FLOOR,
     PROGRESS_TARGET,
+    STALL_TRUNCATION_DECISIONS,
     TARGET_POSE_DIM,
     TIMEOUT_PENALTY_FLOOR_NORM,
     TIMEOUT_POS_COEF,
@@ -402,6 +403,121 @@ class TestGymnasiumAPIContract:
                 break
         assert env.steps <= 3
         env.close()
+
+
+class TestActionRepeatDecisionStep:
+    """
+    @class TestActionRepeatDecisionStep
+    @brief One env.step() call is one policy decision spanning action_repeat
+           sim ticks; the agent never receives intermediate-tick placeholders.
+    """
+
+    def test_step_advances_action_repeat_ticks(self) -> None:
+        """
+        @brief A single step() call advances the tick counter by action_repeat.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=40, action_repeat=4)
+            env.reset()
+            env.step(env.action_space.sample())
+            assert env.steps == 4
+            env.step(env.action_space.sample())
+            assert env.steps == 8
+            env.close()
+
+    def test_every_step_returns_full_obs_and_info(self) -> None:
+        """
+        @brief Every step() return carries the full observation vector and a
+               populated info dict, so SB3 stores one real transition per
+               decision rather than raw-buffer placeholders between decisions.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=40, action_repeat=4)
+            env.reset()
+            for _ in range(3):
+                obs, _, _, _, info = env.step(env.action_space.sample())
+                assert obs.shape[0] == TOTAL_OBS_DIM
+                assert "success" in info
+                assert "timeout" in info
+            env.close()
+
+    def test_truncates_at_max_steps_in_ticks(self) -> None:
+        """
+        @brief max_steps counts sim ticks: with action_repeat=4 an 8-tick
+               episode truncates on the second decision.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=8, action_repeat=4)
+            env.reset()
+            _, _, _, truncated, _ = env.step(env.action_space.sample())
+            assert not truncated
+            _, _, _, truncated, _ = env.step(env.action_space.sample())
+            assert truncated
+            env.close()
+
+
+class TestStallTruncation:
+    """
+    @class TestStallTruncation
+    @brief A car holding a near-stop outside the acceptance box truncates after
+           STALL_TRUNCATION_DECISIONS consecutive decisions. With no CARLA
+           vehicle the reward path reports speed 0.0 every decision, which
+           exercises the stall counter deterministically.
+    """
+
+    def test_stall_truncates_after_threshold(self) -> None:
+        """
+        @brief Exactly STALL_TRUNCATION_DECISIONS stationary decisions outside
+               the bay truncate the episode as a timeout, well before max_steps.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=400, action_repeat=1)
+            env.reset()
+            truncated = False
+            info: dict = {}
+            for i in range(STALL_TRUNCATION_DECISIONS):
+                _, _, _, truncated, info = env.step(env.action_space.sample())
+                if i < STALL_TRUNCATION_DECISIONS - 1:
+                    assert not truncated
+            assert truncated
+            assert info["timeout"] is True
+            assert env.steps < 400
+            env.close()
+
+    def test_stall_counter_resets_on_reset(self) -> None:
+        """
+        @brief The stall counter must not leak across episodes: after a stall
+               truncation, a fresh episode runs the full window again.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=400, action_repeat=1)
+            env.reset()
+            for _ in range(STALL_TRUNCATION_DECISIONS):
+                env.step(env.action_space.sample())
+            env.reset()
+            _, _, _, truncated, _ = env.step(env.action_space.sample())
+            assert not truncated
+            env.close()
 
 
 # ---------------------------------------------------------------------------
@@ -2174,6 +2290,28 @@ class TestExtractObstacleFeatures:
         """
         out = self._empty_out()
         result = extract_obstacle_features(np.empty((0, 2), dtype=np.float32), out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_none_scan_clears_stale_buffer(self) -> None:
+        """
+        @brief A None scan must CLEAR previous readings, not preserve them -
+               otherwise a stale obstacle follows the car through empty space
+               (in both the observation and the clearance penalty).
+        """
+        out = np.array([1.1, 0.6, 2.0, -0.3, 3.0], dtype=np.float32)
+        result = extract_obstacle_features(None, out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_no_valid_returns_clears_stale_buffer(self) -> None:
+        """
+        @brief A scan with only rear-hemisphere / self returns (no valid
+               forward returns) must clear previous readings to the
+               clear-space convention (all zeros).
+        """
+        out = np.array([1.1, 0.6, 2.0, -0.3, 3.0], dtype=np.float32)
+        # One rear-hemisphere point and one sub-1m self-return: both invalid.
+        scan = np.array([[-5.0, 0.0], [0.5, 0.1]], dtype=np.float32)
+        result = extract_obstacle_features(scan, out)
         np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
 
     def test_forward_point_populates_forward_dist(self) -> None:

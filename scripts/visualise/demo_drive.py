@@ -106,14 +106,13 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-# Trace CSV column order. One row per POLICY DECISION (not per sim tick): with
-# action_repeat > 1 the env returns an empty info dict on the intermediate
-# repeat ticks, and those are skipped (see the step loop) so every logged row
-# carries real state. Columns cover parking quality (speed, position and
-# orientation error), the post-clamp commands actually delivered to CARLA, the
-# total reward, the episode outcome, and the evidential policy uncertainty
-# (epistemic and aleatoric, mean over action axes) - the calibration signal
-# that is the point of the project.
+# Trace CSV column order. One row per POLICY DECISION: env.step() spans the
+# full action_repeat tick window and returns one real transition per decision,
+# so every logged row carries real state. Columns cover parking quality
+# (speed, position and orientation error), the post-clamp commands actually
+# delivered to CARLA, the total reward, the episode outcome, and the
+# evidential policy uncertainty (epistemic and aleatoric, mean over action
+# axes) - the calibration signal that is the point of the project.
 _TRACE_COLUMNS = [
     "step",
     # Episode routing, constant per episode but logged per row so each trace is
@@ -359,15 +358,11 @@ def main() -> None:
                 infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
-                # With action_repeat > 1 the env returns its empty info dict on
-                # the intermediate repeat ticks (no observation is built and no
-                # reward is computed there); only the final tick of each repeat
-                # carries real state. The VecEnv wrapper can inject its own keys
-                # (terminal_observation, TimeLimit.truncated) into that dict, so
-                # an emptiness test is unreliable - key on "pos_error", which the
-                # env writes only on real steps. This logs one row per policy
-                # decision and drops the all-zero filler rows that made earlier
-                # traces 75% noise at action_repeat=4.
+                # Every env.step() is one policy decision carrying real state.
+                # The VecEnv wrapper can inject its own keys
+                # (terminal_observation, TimeLimit.truncated) into the dict, so
+                # key on "pos_error", which only the env's own info carries,
+                # to log exactly one row per policy decision.
                 info0 = infos[0]
                 # The target bay id and spawn id are written per row in the
                 # episode CSV (see _TRACE_COLUMNS), so run_info.txt no longer

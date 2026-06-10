@@ -303,6 +303,13 @@ def main() -> None:
         apply_baseline(dryrun_cfg, load_config(baseline_path))
         # Windowed CARLA for visual inspection (training runs headless).
         dryrun_cfg["no_rendering_mode"] = False
+        # Tick-level stepping (inspection-only override): the spectator camera,
+        # keyboard input, and console readout all run per env.step(), so the
+        # training action_repeat would drop them to the policy's decision rate
+        # and make manual driving feel like a slideshow. The observation build
+        # path is identical either way; training keeps action_repeat from
+        # env_config.
+        dryrun_cfg["action_repeat"] = 1
         print(
             f"Dryrun: stage {stage}, baseline "
             f"'{dryrun_cfg.get('baseline_name', baseline_path)}' "
