@@ -62,6 +62,9 @@ APPROACH_INNER_ALIGNMENT_CUTOFF = np.pi / 4
 # W_HEAD*heading_err). Cross-track and heading outweigh along-track so the gradient
 # pulls the car onto the centreline and square before advancing in depth; W_HEAD is
 # the alignment lever (at 3.0 a 20 deg heading error costs ~1.05 m of along-track).
+# Kept moderate: large cross/heading weights make every S-correction locally
+# expensive (the heading term must be paid before the cross term pays back), which
+# stalls a forward-only car in aligned-but-offset poses.
 CORRIDOR_W_ALONG = 1.0
 CORRIDOR_W_CROSS = 2.0
 CORRIDOR_W_HEAD = 3.0
@@ -162,6 +165,17 @@ ACTION_DIM = 3
 # Used on the real-world inference path only; the sim path uses the soft
 # polygon boundary below.
 OUT_OF_BOUNDS_THRESHOLD = 20.0
+
+# Consecutive policy decisions below SUCCESS_THRESHOLD_VELOCITY while NOT inside
+# the acceptance box before the episode truncates as a stall (same graded
+# timeout penalty as the clock running out). A stalled policy otherwise sits
+# motionless for the remaining episode, flooding the rollout buffer with
+# identical zero-advantage frames. Sized at 10 s of standstill: above the
+# expected full GNSS Markov recovery ladder (~6 s from the worst tier), so the
+# legitimate wait-for-recovery behaviour is never cut short, while a terminal
+# freeze still releases the episode early. Discounting makes an early stall
+# strictly worse than a late one, so this cannot be gamed to escape an episode.
+STALL_TRUNCATION_DECISIONS = 50
 
 # ---------------------------------------------------------------------------
 # Dense reward scale
