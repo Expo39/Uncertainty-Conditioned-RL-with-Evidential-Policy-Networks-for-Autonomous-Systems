@@ -1,6 +1,12 @@
-# Curriculum Stage 1 - bootstrap: one bay per cluster (5 clusters, 3 orientations),
-# light occupancy, loosest margin, gentle drift. See documentation/CURRICULUM_PLAN.md.
-# Later stages keep these same 5 clusters and only raise the bays-per-cluster count.
+# Curriculum Stage 1 - bootstrap the perpendicular corridor approach. Drops the bay
+# (perpendicular_25) where a greedy radial drive-at-the-centre accidentally lands, since
+# that crutch lets the policy skip learning to get onto the bay centreline and run in
+# square. Keeps four bays for gradient breadth and success-seeding: a 2-bay set went
+# entropy/std-unstable AND stuck near 0%, so the count stays up. The straight-in east
+# column (perpendicular_40, no 90-deg turn) is retained as an easy success anchor while
+# the three turn-in bays force the corridor skill. dx/dy/dyaw are all exercised (dy both
+# signs, dyaw spans yaw 90 and 270). Loosest margin to seed the first successes. The GNSS
+# Markov chain keeps the covariance channel live from stage 1. See CURRICULUM_PLAN.md.
 
 use_extra_spawns: false  # Single primary spawn (off in every stage).
 bay_margin: -0.75  # Loosest acceptance box (negative inflates it outward).
@@ -8,12 +14,11 @@ bay_margin: -0.75  # Loosest acceptance box (negative inflates it outward).
 parking_scenarios:
   fixed_floor_plan: rectangle  # Training layout; trapezoid/irregular held out for OOD eval.
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  allowed_bay_ids:  # One forward-reachable bay per cluster (nearest, side-approach avoided).
-    - perpendicular_0    # cluster 0-11,  yaw 270, lower row
-    - perpendicular_22   # cluster 12-24, yaw 90,  south row
-    - perpendicular_25   # cluster 25-32, yaw 270, upper row (left)
-    - perpendicular_37   # cluster 33-37, yaw 270, upper row (right)
-    - perpendicular_40   # cluster 38-46, yaw 180, east column
+  allowed_bay_ids:  # Drop the radial-homing crutch (25); keep a straight-in anchor (40).
+    - perpendicular_0    # cluster 0-11,  yaw 270, lower row (turn-in, right of spawn)
+    - perpendicular_22   # cluster 12-24, yaw 90,  south row (turn-in, opposite orientation)
+    - perpendicular_37   # cluster 33-37, yaw 270, upper row (far - forces corridor setup)
+    - perpendicular_40   # cluster 38-46, yaw 180, east column (straight-in success anchor)
   bay_occupancy_min: 0.1
   bay_occupancy_max: 0.1
 
