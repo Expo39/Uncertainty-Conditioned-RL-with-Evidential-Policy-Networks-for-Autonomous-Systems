@@ -7,9 +7,11 @@ import argparse
 import csv
 import os
 import re
+import signal
 import time
 from datetime import datetime
 from pathlib import Path
+from types import FrameType
 from typing import Any, Dict, List, Optional, TextIO, cast
 
 import numpy as np
@@ -20,6 +22,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import make_env
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
+from uncertainty_rl.utils.bay_success import BaySuccessTracker
 from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
 
 
@@ -97,7 +100,8 @@ def _parse_args() -> argparse.Namespace:
         dest="trace",
         action="store_false",
         help="Disable per-step CSV trace logging. By default each policy "
-        "decision is traced to outputs/demo_traces/<timestamp>/episode_<N>.csv "
+        "decision is traced to "
+        "outputs/demo_traces/<baseline>/<checkpoint_leaf>/<demo_stamp>/episode_<N>.csv "
         "(step, speed, pos / orientation error, delivered commands, reward, "
         "success, and the evidential policy uncertainty) for offline "
         "behaviour and calibration analysis.",
@@ -178,49 +182,20 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
     )
 
 
-def _write_run_info(trace_dir: Path, checkpoint: str, demo_stamp: str) -> None:
+def _sigterm_to_keyboard_interrupt(signum: int, frame: Optional[FrameType]) -> None:
     """
-    @brief Write provenance metadata for a demo trace run.
+    @brief Convert SIGTERM into KeyboardInterrupt for a graceful shutdown.
+    @param signum: Received signal number (unused).
+    @param frame: Interrupted stack frame (unused).
 
-    Parses the seed and training-run start time from the checkpoint directory
-    name (format <baseline>_seed<N>_<DDMMYYYY-HHMM>) and writes them, alongside
-    the checkpoint path and the demo run timestamp, to run_info.txt in the
-    trace directory. Fields that cannot be parsed are recorded as "unknown" so
-    the file is always written.
-
-    @param trace_dir: Directory where episode CSVs are written.
-    @param checkpoint: Path to the loaded model checkpoint.
-    @param demo_stamp: DD-MM-YYYY-HHMMSS timestamp of this demo run.
-    @return None.
+    The demo runs as the container's init process, where SIGTERM (what
+    `docker stop` / `docker compose down` send) has no default disposition and
+    the daemon escalates to SIGKILL after the grace period - skipping the
+    finally block that flushes bay_successes.csv and closes the CARLA env.
+    Raising KeyboardInterrupt routes a stop through the same graceful path as
+    Ctrl+C.
     """
-    # The checkpoint path is e.g. checkpoints/<run_name>/final_model; the run
-    # name is the parent directory.
-    run_name = Path(checkpoint).parent.name
-
-    seed = "unknown"
-    run_start = "unknown"
-    seed_match = re.search(r"seed(\d+)", run_name)
-    if seed_match:
-        seed = seed_match.group(1)
-    # Training run start stamp is the trailing DDMMYYYY-HHMM block.
-    stamp_match = re.search(r"(\d{8})-(\d{4})$", run_name)
-    if stamp_match:
-        d, t = stamp_match.group(1), stamp_match.group(2)
-        # DDMMYYYY-HHMM -> DD-MM-YYYY HH:MM (European, human-readable).
-        run_start = f"{d[0:2]}-{d[2:4]}-{d[4:8]} {t[0:2]}:{t[2:4]}"
-
-    lines = [
-        f"checkpoint: {checkpoint}",
-        f"run_name: {run_name}",
-        f"seed: {seed}",
-        f"training_run_started: {run_start}",
-        f"demo_run: {demo_stamp}",
-    ]
-    (trace_dir / "run_info.txt").write_text("\n".join(lines) + "\n")
-    print(
-        f"Run info written: {trace_dir}/run_info.txt (seed={seed}, "
-        f"trained {run_start})"
-    )
+    raise KeyboardInterrupt
 
 
 def main() -> None:
@@ -258,14 +233,16 @@ def main() -> None:
     apply_baseline(env_config, baseline_override)
     print(
         f"Stage {stage}, baseline "
-        f"'{baseline_override.get('baseline_name', baseline_path)}': "
+        f"'{baseline_override.get('baseline_name', Path(baseline_path).stem)}': "
         f"policy_type={train_config.get('policy_type')}, "
         f"include_covariance={env_config.get('include_covariance')}, "
         f"include_obstacle_obs={env_config.get('include_obstacle_obs')}"
     )
 
     # Load model: match the class used during training so the policy type is correct.
-    print(f"Loading model from {args.checkpoint}...")
+    # Show only the trailing <baseline>/<leaf>/file tail rather than the full path.
+    _checkpoint_label = "/".join(Path(args.checkpoint).parts[-3:])
+    print(f"Loading model from {_checkpoint_label}...")
     policy_type = train_config.get("policy_type", "evidential")
     if policy_type == "evidential":
         model: PPO = EvidentialPPO.load(args.checkpoint)
@@ -293,18 +270,40 @@ def main() -> None:
 
     episode = 0
 
-    # Per-step trace logging. One timestamped folder per demo run, one CSV
-    # per episode. Written under outputs/ (the rw-mounted volume) so the
-    # traces survive the --rm container exit.
+    # Output dirs mirror the checkpoint tree and add a per-demo-run level:
+    # <baseline>/<checkpoint_leaf>/<demo_stamp>/. The checkpoint leaf carries the
+    # TRAINING run identity (seed + training timestamp), so repeated demos of the
+    # same checkpoint group under one folder, each run in its own <demo_stamp>
+    # subfolder (so two runs of the same checkpoint never collide). The baseline
+    # and leaf come from the checkpoint's <baseline>/<leaf> path; a bare checkpoint
+    # with no such structure falls back to a flat <demo_stamp>/. Written under
+    # outputs/ (the rw-mounted volume) so they survive the --rm container exit.
+    run_stamp = datetime.now().strftime("%d-%m-%Y-%H%M%S")
+    _ckpt_leaf = Path(args.checkpoint).parent.name
+    _ckpt_baseline = Path(args.checkpoint).parent.parent.name
+    if _ckpt_baseline and re.search(r"seed(\d+)", _ckpt_leaf):
+        _run_subtree = Path(_ckpt_baseline) / _ckpt_leaf / run_stamp
+    else:
+        _run_subtree = Path(run_stamp)
+
+    # Per-step trace logging (one CSV per episode), enabled by default.
     trace_dir: Optional[Path] = None
     if args.trace:
-        run_stamp = datetime.now().strftime("%d-%m-%Y-%H%M%S")
-        trace_dir = Path("outputs") / "demo_traces" / run_stamp
+        trace_dir = Path("outputs") / "demo_traces" / _run_subtree
         trace_dir.mkdir(parents=True, exist_ok=True)
         print(f"Trace logging enabled: {trace_dir}/episode_<N>.csv")
-        # Provenance so the CSVs are not anonymous (checkpoint, seed, start
-        # time parsed from the checkpoint directory name).
-        _write_run_info(trace_dir, args.checkpoint, run_stamp)
+
+    # Per-bay success accounting, mirroring the evaluate.py eval tree so any
+    # visualiser-driven run (2D or 3D) leaves a bay_successes.csv. The demo runs
+    # a single fixed condition, so unlike evaluate.py there is no per-condition
+    # split - one tracker for the whole run, dumped in the finally block (the
+    # demo loops until Ctrl+C, so the dump must survive interruption).
+    bay_tracker = BaySuccessTracker()
+    bay_dir = Path("outputs") / "bay_successes" / "eval" / _run_subtree
+
+    # Installed only once the trackers exist, so a stop during setup (where
+    # there is nothing to flush) keeps the daemon's plain kill behaviour.
+    signal.signal(signal.SIGTERM, _sigterm_to_keyboard_interrupt)
 
     print("Driving. Close the visualiser or Ctrl+C to stop.")
 
@@ -420,7 +419,22 @@ def main() -> None:
             if trace_file is not None:
                 trace_file.close()
 
-            success = infos[0].get("success", False)
+            # Record this terminated episode against its target bay. Read the bay
+            # id from the nested target_bay dict, falling back to the flat
+            # target_bay_id key (the same robust read as evaluate.py); an empty id
+            # is ignored by record().
+            terminal_info = infos[0].get("terminal_info", infos[0])
+            success = bool(terminal_info.get("success", False))
+            target_bay = terminal_info.get("target_bay", {})
+            bay_id = target_bay.get("bay_id", "") or terminal_info.get(
+                "target_bay_id", ""
+            )
+            bay_tracker.record(
+                bay_id=str(bay_id),
+                success=success,
+                bay_type=str(target_bay.get("bay_type", "")),
+            )
+
             result = "SUCCESS" if success else "FAIL"
             print(f"  Episode {episode}: {result} ({steps} steps)")
 
@@ -431,6 +445,24 @@ def main() -> None:
         # mid-episode (the normal per-episode close happens in the loop above).
         if trace_file is not None and not trace_file.closed:
             trace_file.close()
+        # Flush per-bay success counts. In the finally block so Ctrl+C (the normal
+        # way to stop the demo) still writes whatever episodes completed. Skipped
+        # when no episode terminated, so an immediately-killed run writes nothing.
+        if bay_tracker.total_attempts > 0:
+            bay_tracker.dump(
+                bay_dir,
+                run_info={
+                    "checkpoint": args.checkpoint,
+                    "demo_run": run_stamp,
+                    "episodes_completed": bay_tracker.total_attempts,
+                },
+            )
+            print(f"Bay successes written: {bay_dir}/bay_successes.csv")
+        else:
+            print(
+                "No bay successes recorded (no episode completed, or the env "
+                "info carried no target bay id)."
+            )
         env.close()
 
 
