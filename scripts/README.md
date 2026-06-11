@@ -78,10 +78,10 @@ See [inspect/README.md](inspect/README.md) for the full argument reference.
 Detachable 2D bird's-eye visualiser and checkpoint demo driver. The viewer runs on the host - no CARLA connection needed.
 
 ```bash
-make visualise                                         # Live 2D view during training
-make eval-visualise-2d                                 # Checkpoint + headless CARLA + 2D view
-make eval-visualise-2d CHECKPOINT=path/to/model.zip    # Custom checkpoint
-make docker-eval-visualise-3d                          # Checkpoint + CARLA 3D spectator view
+make visualise                                                   # Live 2D view during training
+make eval-visualise-2d                                           # Checkpoint + headless CARLA + 2D view
+make eval-visualise-2d BASELINE=full_method CHECKPOINT=seed42_11062026-0628  # Custom checkpoint (bare names)
+make docker-eval-visualise-3d                                    # Checkpoint + CARLA 3D spectator view
 ```
 
 The env writes frames only when `outputs/.vis_active` exists (created by the visualiser on start, removed on close). See [visualise/README.md](visualise/README.md) for the signal file protocol and JSONL schema.
