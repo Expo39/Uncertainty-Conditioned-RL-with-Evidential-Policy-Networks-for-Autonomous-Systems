@@ -11,6 +11,7 @@ tiers:
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
     metric_stddev_m: 0.020
+    doppler_stddev_ms: 0.05  # m/s - ZED-F9P data-sheet velocity accuracy
     weight: 0.3
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
@@ -21,6 +22,7 @@ tiers:
     lon_stddev_deg: 0.0000032
     alt_stddev_m: 0.5
     metric_stddev_m: 0.360
+    doppler_stddev_ms: 0.08  # m/s - mild jitter from correlated signal environment
     weight: 0.3
     description: "RTK float (~36 cm). Marginal accuracy for 2.5 m bays."
 
@@ -31,6 +33,7 @@ tiers:
     lon_stddev_deg: 0.0000162
     alt_stddev_m: 5.0
     metric_stddev_m: 1.802
+    doppler_stddev_ms: 0.15  # m/s - conservative for suboptimal sky view
     weight: 0.25
     description: "Standalone GNSS (~1.8 m). RTK lost; parking unsafe."
 
@@ -40,6 +43,7 @@ tiers:
     lon_stddev_deg: 0.0000449
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
+    doppler_stddev_ms: 0.40  # m/s - heavy multipath degrades tracking loops
     weight: 0.15
     description: "Degraded GNSS (~5 m). Policy must abort/handoff."
 
