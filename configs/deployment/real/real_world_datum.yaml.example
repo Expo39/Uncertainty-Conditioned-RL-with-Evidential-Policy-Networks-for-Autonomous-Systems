@@ -1,7 +1,7 @@
 # Real-world deployment datum configuration.
 #
-# Used by calibrate_ekf_frame_offset() when
-# real_world_deployment: true in env_config.yaml.
+# Loaded by calibrate_ekf_frame_offset() via the real_world_datum path in
+# configs/deployment/agent_config.yaml.
 #
 # Procedure (once per deployment site):
 #   1. Choose a clearly marked reference point in the parking lot

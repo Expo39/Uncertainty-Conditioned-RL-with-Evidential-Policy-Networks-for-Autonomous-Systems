@@ -29,10 +29,16 @@ from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 from uncertainty_rl.utils.constants import (
     OBSTACLE_FEATURES_DIM,
     OUT_OF_BOUNDS_THRESHOLD,
-    SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_POSITION,
     SUCCESS_THRESHOLD_VELOCITY,
 )
+
+# Scalar success thresholds used only by the real-world inference loop as a
+# placeholder until a measured vehicle bounding box and bay polygon are wired
+# in to mirror the sim's polygon-fit check (car_fully_inside_bay).
+# @todo(AG) replace with car_fully_inside_bay once deployment vehicle extents
+# are surveyed and added to the deployment config.
+_REAL_WORLD_POS_THRESHOLD_M = 0.5
+_REAL_WORLD_YAW_THRESHOLD_RAD = math.radians(15.0)
 
 logger = logging.getLogger("uncertainty_rl.envs.real.inference_loop")
 
@@ -93,8 +99,8 @@ class RealWorldInferenceLoop:
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
 
-        # Pre-allocated world pose buffer [wx, wy, wyaw, vyaw]
-        self._world_pose_buffer = np.zeros(4, dtype=np.float32)
+        # Pre-allocated world pose buffer [x, y, yaw, vyaw, vx_body].
+        self._world_pose_buffer = np.zeros(5, dtype=np.float32)
         # True once the buffer contains valid data (set after first successful EKF read).
         self._world_pose_valid: bool = False
 
@@ -153,6 +159,16 @@ class RealWorldInferenceLoop:
         with open(agent_config_path) as f:
             agent_cfg: Dict[str, Any] = _yaml.safe_load(f) or {}
 
+        # Observation flags live ONLY in the baseline files (single source of
+        # truth, shared with sim training). Deployment names the baseline the
+        # checkpoint was trained as via agent_config `baseline`; its
+        # include_covariance / include_obstacle_obs must match the weights.
+        baseline_path: str = agent_cfg.get(
+            "baseline", "configs/baselines/full_method.yaml"
+        )
+        with open(baseline_path) as f:
+            baseline_cfg: Dict[str, Any] = _yaml.safe_load(f) or {}
+
         model_path: str = agent_cfg.get("model_path", "checkpoints/final_model")
         logger.info("Loading model from %s", model_path)
         model = EvidentialPPO.load(model_path)
@@ -172,14 +188,14 @@ class RealWorldInferenceLoop:
                 "handoff_threshold": agent_cfg.get("safety_handoff_threshold", 5.0),
             },
             ros2_cfg=agent_cfg.get("ros2", {}),
-            include_covariance=bool(agent_cfg.get("include_covariance", True)),
-            include_obstacle_obs=bool(agent_cfg.get("include_obstacle_obs", True)),
+            include_covariance=bool(baseline_cfg.get("include_covariance", True)),
+            include_obstacle_obs=bool(baseline_cfg.get("include_obstacle_obs", True)),
             max_steps=int(agent_cfg.get("max_steps", 500)),
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Mission startup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def prepare(self) -> None:
         """
@@ -223,9 +239,9 @@ class RealWorldInferenceLoop:
         self._target_y = float(self._target_bay["y"])
         self._target_yaw = float(self._target_bay["yaw"])
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Sensor reads (partially implemented)
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _get_lidar_scan(self) -> Optional[np.ndarray]:
         """
@@ -241,11 +257,11 @@ class RealWorldInferenceLoop:
 
     def _odom_to_world(
         self, raw_ekf_pose: np.ndarray
-    ) -> Tuple[float, float, float, float]:
+    ) -> Tuple[float, float, float, float, float]:
         """
         @brief Apply the stored odom-to-world transform to a raw EKF pose.
-        @param raw_ekf_pose: Array [odom_x, odom_y, odom_yaw, vyaw].
-        @return Tuple (world_x, world_y, world_yaw, vyaw).
+        @param raw_ekf_pose: Array [odom_x, odom_y, odom_yaw, vyaw, vx_body].
+        @return Tuple (world_x, world_y, world_yaw, vyaw, vx_body).
         """
         # ROS REP-103 y is negated relative to lot layout y (same as sim).
         ox = float(raw_ekf_pose[0])
@@ -256,12 +272,15 @@ class RealWorldInferenceLoop:
         wy = sin_r * ox + cos_r * oy + ty
         wyaw = oyaw + r
         vyaw = float(raw_ekf_pose[3])
+        # vx is body-frame, so invariant under the rigid odom-to-world transform.
+        vx_body = float(raw_ekf_pose[4]) if len(raw_ekf_pose) > 4 else 0.0
         self._world_pose_buffer[0] = wx
         self._world_pose_buffer[1] = wy
         self._world_pose_buffer[2] = wyaw
         self._world_pose_buffer[3] = vyaw
+        self._world_pose_buffer[4] = vx_body
         self._world_pose_valid = True
-        return wx, wy, wyaw, vyaw
+        return wx, wy, wyaw, vyaw, vx_body
 
     def _get_observation(self) -> np.ndarray:
         """
@@ -277,8 +296,8 @@ class RealWorldInferenceLoop:
 
         world_pose: Optional[np.ndarray] = None
         if raw_ekf_pose is not None:
-            wx, wy, wyaw, vyaw = self._odom_to_world(raw_ekf_pose)
-            world_pose = np.array([wx, wy, wyaw, vyaw], dtype=np.float32)
+            wx, wy, wyaw, vyaw, vx_body = self._odom_to_world(raw_ekf_pose)
+            world_pose = np.array([wx, wy, wyaw, vyaw, vx_body], dtype=np.float32)
         else:
             self._world_pose_valid = False
             logger.debug("EKF pose unavailable - obs will use zero pose.")
@@ -298,20 +317,22 @@ class RealWorldInferenceLoop:
             self._obs_buffer,
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Actuation and termination (stubs)
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
-    def _apply_action(self, steering: float, drive: float) -> None:
+    def _apply_action(self, steering: float, throttle: float, brake: float) -> None:
         """
         @brief Publish a calibrated action to the vehicle via geometry_msgs/Twist.
         @param steering: Calibrated steering command in [-1, 1]; mapped to angular.z.
-        @param drive: Calibrated drive command in [-1, 1]; positive = throttle,
-                      negative = brake. Mapped to linear.x; the downstream
-                      actuation node interprets sign.
+        @param throttle: Calibrated throttle command in [0, 1].
+        @param brake: Calibrated brake command in [0, 1].
 
-        Publishes on the topic configured by ros2.actuation_topic (default: /cmd_vel).
-        The node and publisher are initialised lazily on the first call inside run().
+        throttle and brake combine into a single signed longitudinal command
+        (linear.x = throttle - brake) for the downstream /cmd_vel actuation node;
+        forward-only, so the result is clamped to [-1, 1]. Publishes on the topic
+        configured by ros2.actuation_topic (default: /cmd_vel). The node and
+        publisher are initialised lazily on the first call inside run().
         """
         if self._twist_publisher is None:
             raise RuntimeError(
@@ -319,6 +340,8 @@ class RealWorldInferenceLoop:
                 "Call run() rather than invoking _apply_action() directly."
             )
 
+        # throttle drives forward, brake decelerates: combine into one signed axis.
+        drive = throttle - brake
         # Scalar clamping is faster than np.clip for individual floats.
         assert self._twist_msg is not None
         self._twist_msg.linear.x = (
@@ -349,7 +372,9 @@ class RealWorldInferenceLoop:
         world_x = float(self._world_pose_buffer[0])
         world_y = float(self._world_pose_buffer[1])
         world_yaw = float(self._world_pose_buffer[2])
-        yaw_rate = float(self._world_pose_buffer[3])
+        # Body-frame longitudinal velocity (m/s); compared to the same
+        # SUCCESS_THRESHOLD_VELOCITY the sim env checks.
+        vx_body = float(self._world_pose_buffer[4])
 
         pos_error = math.hypot(world_x - self._target_x, world_y - self._target_y)
         yaw_error = abs(
@@ -368,18 +393,20 @@ class RealWorldInferenceLoop:
             )
             return True, False
 
-        # Success: all three criteria met simultaneously.
+        # Success: all three criteria met simultaneously. Scalar placeholder
+        # for the polygon-fit check used in sim - replace once deployment
+        # vehicle extents are surveyed and the bay polygon is loaded.
         success = (
-            pos_error < SUCCESS_THRESHOLD_POSITION
-            and yaw_error < SUCCESS_THRESHOLD_ORIENTATION
-            and abs(yaw_rate) < SUCCESS_THRESHOLD_VELOCITY
+            pos_error < _REAL_WORLD_POS_THRESHOLD_M
+            and yaw_error < _REAL_WORLD_YAW_THRESHOLD_RAD
+            and abs(vx_body) < SUCCESS_THRESHOLD_VELOCITY
         )
         if success:
             logger.info(
-                "Parking success: pos_error=%.3f m  yaw_error=%.2f deg  yaw_rate=%.3f rad/s",
+                "Parking success: pos_error=%.3f m  yaw_error=%.2f deg  speed=%.3f m/s",
                 pos_error,
                 math.degrees(yaw_error),
-                yaw_rate,
+                vx_body,
             )
             return True, False
 
@@ -456,9 +483,9 @@ class RealWorldInferenceLoop:
         self._twist_msg = None
         self._twist_stop_msg = None
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Safety
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _apply_safety_wrapper(
         self,
@@ -468,7 +495,7 @@ class RealWorldInferenceLoop:
     ) -> Tuple[np.ndarray, bool]:
         """
         @brief Apply SafetyWrapper interception logic to a raw policy action.
-        @param action: Raw policy action [steering, longitudinal].
+        @param action: Raw policy action [steering, throttle, brake].
         @param epistemic: Epistemic uncertainty from evidential actor.
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @return Tuple (modulated_action, handoff_triggered).
@@ -489,9 +516,9 @@ class RealWorldInferenceLoop:
             )
         return modulated, handoff
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Mission loop
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def run(self) -> Dict[str, Any]:
         """
@@ -542,11 +569,12 @@ class RealWorldInferenceLoop:
                     if handoff:
                         handoff_count += 1
 
-                    steering, drive = self._deployment.calibrate_action(
+                    steering, throttle, brake = self._deployment.calibrate_action(
                         float(modulated_action[0]),
                         float(modulated_action[1]),
+                        float(modulated_action[2]),
                     )
-                    self._apply_action(steering, drive)
+                    self._apply_action(steering, throttle, brake)
 
                     steps += 1
                     terminated, truncated = self._is_done()

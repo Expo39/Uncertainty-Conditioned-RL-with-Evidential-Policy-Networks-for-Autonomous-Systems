@@ -1,6 +1,5 @@
 # ROS 2 Configuration for the RTK-GNSS + IMU localisation pipeline.
 # EKF fuses GNSS odometry (odom0), COG heading (pose0), and IMU yaw rate (imu0).
-# See detailed_notes/ekf_pipeline.md for pipeline architecture and tuning rationale.
 
 carla_topics:
   imu: "/carla/ego_vehicle/imu"
@@ -14,7 +13,8 @@ ekf:
   world_frame: "odom"
   odom_frame: "odom"
   base_link_frame: "ego_vehicle"
-  # IMU: vyaw prediction step only. Orientation and linear accel disabled.
+  # IMU: vyaw (index 11) only. Linear acceleration is not fused (the 20 Hz GNSS
+  # velocity update covers velocity prediction).
   imu0: "/carla/ego_vehicle/imu/stamped"
   # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   imu0_config: [false, false, false, false, false, false,
@@ -23,8 +23,9 @@ ekf:
   imu0_differential: false
   imu0_relative: false
 
-  # Initial state covariance (15x15). Active states: x, y, yaw, vx, vy, vyaw = 0.25.
-  # Non-zero required to avoid singular Cholesky on first prediction step.
+  # Initial state covariance (15x15), reloaded at every /set_pose. Active pose
+  # states (x, y, yaw) use 0.25, velocity states 4.0 so the first correction
+  # dominates a stale value; inert states use 1.0e-9 to stay positive-definite.
   initial_estimate_covariance: [
     0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
@@ -32,19 +33,19 @@ ekf:
     0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  4.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  4.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,  0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.25, 0.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,  0.0,
-    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  4.0,  0.0,  0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,  0.0,
+    0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9, 0.0,
     0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  0.0,  1.0e-9
   ]
 
   # Process noise covariance (15x15). Controls covariance inflation between updates.
-  # Active: x/y=1e-2, yaw=1e-4, vyaw=1e-3.
+  # Active: x/y=1e-2, yaw=1e-4, vyaw=1e-3. ax/ay rows inert (accel fusion off).
   process_noise_covariance: [
     1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
     0.0,    1.0e-2, 0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,    0.0,
@@ -70,32 +71,36 @@ ekf:
   pose0_differential: false
   pose0_relative: false
 
-  # GNSS flat-earth odometry from GnssNoiseRelayNode (x, y correction step).
+  # GNSS flat-earth odometry from GnssNoiseRelayNode. Fuses position (x, y) and
+  # body-frame longitudinal speed (vx); vy is not fused (the relay publishes
+  # scalar GNSS speed as vx only).
   odom0: "/odometry/gps"
   # [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
   odom0_config: [true, true, false, false, false, false,
-                 false, false, false, false, false, false,
+                 true, false, false, false, false, false,
                  false, false, false]
 
 gnss_noise_relay:
   input_topic: "/carla/ego_vehicle/gnss"
   output_topic: "/gnss/noisy"  # NavSatFix with noise (diagnostics only).
   odom_output_topic: "/odometry/gps"  # Odometry with flat-earth XY for EKF odom0.
-  enable_gnss_noise: true  # true = inject per-episode tier noise. false = pure flat-earth projector (no covariance variation).
-  enable_markov_transitions: true  # true = per-episode random starting tier with mid-episode Markov transitions. false = pinned to rtk_fixed always.
+  enable_gnss_noise: true  # GNSS noise / dropout master switch. On globally.
+  enable_markov_transitions: true  # Mid-episode RTK tier transitions (the GNSS
+  # degradation process). On globally; the transition matrix is stage-invariant.
   base_metric_stddev_m: 0.02  # 1-sigma position error for RTK-fixed tier (metres).
   heading_output_topic: /gnss/heading
   cog_min_displacement_m: 0.05  # Min per-step GNSS displacement (m) to accept a COG heading update.
   enable_cog_heading: true  # false = suppress all COG publication (diagnostic: isolate IMU prediction error).
-  enable_gnss_anisotropy: true  # Per-episode east/north sigma asymmetry (models satellite-geometry DOP).
+  enable_gnss_anisotropy: true # Per-episode east/north sigma asymmetry (models satellite-geometry DOP).
   aniso_ratio_max: 1.5  # Maximum variance ratio between major and minor axes (1.0 = isotropic).
   gnss_dropout_probability: 0.02  # Per-callback probability of skipping a fix (cycle slips / occlusions).
   noise_profiles_path: "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"  # Path inside ros2-bridge container; transition_matrix loaded from this YAML at startup.
+  seed: 42  # RNG seed for GNSS noise. Separate process from training, so seeded independently; match the training seed for reproducible runs.
 
 imu_noise_relay:
   imu_input_topic: "/carla/ego_vehicle/imu"
   imu_output_topic: "/carla/ego_vehicle/imu/stamped"
-  enable_imu_noise: true  # Single master flag: covariance stamping + value noise + per-episode bias.
+  enable_imu_noise: true  # IMU noise injection (covariance stamping always active). On globally (constant realism floor).
   imu_gyro_variance: 7.4631e-8  # (rad/s)^2
   imu_accel_variance: 3.77245e-5  # (m/s^2)^2
   zupt_threshold_rad_s: 0.015
@@ -104,6 +109,7 @@ imu_noise_relay:
   imu_accel_bias_limit_ms2: 3.924e-4  # m/s^2
   imu_gyro_scale_factor_limit: 0.005  # +-0.5% multiplicative gyro scale error (VN-100 calibration-residual bound).
   imu_accel_scale_factor_limit: 0.005  # +-0.5% accel scale error, independent per axis.
+  seed: 42  # RNG seed for IMU noise. Separate process from training, so seeded independently; match the training seed for reproducible runs.
 
 # CovarianceExtractorNode: subscribes to EKF output and writes ekf_state.json.
 odom_topic: "/odometry/filtered"

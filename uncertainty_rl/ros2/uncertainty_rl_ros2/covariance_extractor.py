@@ -95,7 +95,7 @@ class CovarianceExtractorNode(Node):
         # Latest extracted state: pose tuple + pre-serialised covariance list.
         # Both updated atomically at the end of odom_callback so publish_covariance
         # never sees a partially-updated state.
-        self._latest_pose: Optional[Tuple[float, float, float, float]] = None
+        self._latest_pose: Optional[Tuple[float, float, float, float, float]] = None
         self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
         # Monotonically increasing counter written into ekf_state.json so the
@@ -114,7 +114,7 @@ class CovarianceExtractorNode(Node):
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
-        # --- /set_pose file watcher -------------------------------------------
+        # /set_pose file watcher
         # The training container (Humble) writes initial_pose.json at episode
         # reset. This node watches the file and publishes on /set_pose so the
         # EKF resets its state to the vehicle spawn pose.
@@ -145,7 +145,7 @@ class CovarianceExtractorNode(Node):
         populates with EKF-filtered linear and angular velocity estimates.
         @param msg: Odometry message from robot_localization.
         """
-        # -- Pose ---------------------------------------------------------------
+        # Pose
         x = msg.pose.pose.position.x
         # Negate y: CARLA uses a left-handed coordinate system (y increases
         # rightward / southward) while ROS uses right-handed
@@ -164,17 +164,22 @@ class CovarianceExtractorNode(Node):
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
         yaw = -math.atan2(siny_cosp, cosy_cosp)
 
-        # -- Velocity -----------------------------------------------------------
-        # vyaw negated for y-axis flip (left-hand to right-hand convention).
-        vyaw = -msg.twist.twist.angular.z
+        # Velocity
+        # vyaw stays in REP-103 (left turn positive) to match the rest of the
+        # codebase (LiDAR bearing, target dyaw, reward signs). Position y and
+        # yaw above are negated to recover CARLA's left-handed world frame.
+        vyaw = msg.twist.twist.angular.z
+        # Body-frame longitudinal velocity. The EKF publishes twist in
+        # base_link, so no rotation is needed.
+        vx = msg.twist.twist.linear.x
 
-        # -- Covariance ---------------------------------------------------------
+        # Covariance
         # Extract the 3x3 [x, y, yaw] submatrix directly from the flat 36-element
         # pose covariance using pre-computed indices.
         raw_cov = msg.pose.covariance
         cov_flat: List[float] = [raw_cov[i] for i in self._COV_FLAT_IDX]
 
-        # -- Atomic shared-file write ------------------------------------------
+        # Atomic shared-file write
         # Cross-distro access: training container (Humble) reads this file since
         # DDS wire protocol is incompatible between Jazzy and Humble containers.
         self._write_seq += 1
@@ -184,6 +189,7 @@ class CovarianceExtractorNode(Node):
             "y": float(y),
             "yaw": float(yaw),
             "vyaw": float(vyaw),
+            "vx": float(vx),
             "covariance": cov_flat,
         }
         # Log a one-shot warning when the EKF first produces NaN so the
@@ -201,12 +207,12 @@ class CovarianceExtractorNode(Node):
             json.dump(data, f)
         os.replace(self._TMP_PATH, self._SHARED_PATH)
 
-        # -- Update state atomically -------------------------------------------
+        # Update state atomically
         # Both attributes are written here; publish_covariance only reads them.
-        self._latest_pose = (x, y, yaw, vyaw)
+        self._latest_pose = (x, y, yaw, vyaw, vx)
         self._latest_cov_flat = cov_flat
 
-        # -- Periodic log -------------------------------------------------------
+        # Periodic log
         self._log_counter += 1
         if self._log_counter >= self._LOG_EVERY_N:
             self._log_counter = 0
@@ -231,7 +237,9 @@ class CovarianceExtractorNode(Node):
         if self._latest_pose is None or self._latest_cov_flat is None:
             return
 
-        x, y, yaw, vyaw = self._latest_pose
+        # vx is written to ekf_state.json only; the DDS message carries
+        # pose + vyaw + covariance.
+        x, y, yaw, vyaw, _vx = self._latest_pose
 
         msg = CovarianceEstimate()
         msg.header.stamp = self.get_clock().now().to_msg()
@@ -269,6 +277,16 @@ class CovarianceExtractorNode(Node):
             return
 
         seq = int(data.get("seq", 0))
+        # A regression in seq indicates the training container's subscriber
+        # was reconstructed (e.g. new Optuna trial). Reset the counter so
+        # the first reset of the new session is honoured rather than dropped.
+        if seq < self._initial_pose_last_seq:
+            self.get_logger().info(
+                f"initial_pose seq regression ({seq} < "
+                f"{self._initial_pose_last_seq}): new training session, "
+                "resetting counter."
+            )
+            self._initial_pose_last_seq = 0
         if seq <= self._initial_pose_last_seq:
             return
         self._initial_pose_last_seq = seq

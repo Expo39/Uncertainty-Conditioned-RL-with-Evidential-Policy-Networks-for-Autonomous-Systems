@@ -51,7 +51,7 @@ flowchart TB
     end
 
     subgraph train["training"]
-        ENV["CARLAParkingEnv\n12-dim obs"]
+        ENV["CARLAParkingEnv"]
         PPO["EvidentialPPO"]
         POL["EvidentialActorCriticPolicy\nNIG actor + critic"]
     end
@@ -160,18 +160,29 @@ make install   # one-time setup: creates .venv/ and installs the package + dev d
 # 1. Start the full stack
 make docker-up
 
-# 2. Run training (1M steps)
-make docker-train
+# 2. Train a curriculum stage (STAGE defaults to 1, the curriculum head)
+make docker-train STAGE=1
 
-# 3. Attach the 2D visualiser at any time (host terminal, non-blocking)
+# 3. Resume the next stage from the previous stage's checkpoint
+make docker-train STAGE=2 CHECKPOINT=path/to/stage1/checkpoint
+
+# 4. Attach the 2D visualiser at any time (host terminal, non-blocking)
 make visualise
 
-# 4. Run evaluation across all 9 uncertainty conditions
+# 5. Run evaluation across all 9 uncertainty conditions
 make docker-eval
 
-# 5. Stop when done
+# 6. Stop when done
 make docker-down
 ```
+
+Training follows a single-phase ADR curriculum (6 stages): every observation
+channel is live in every stage, and one axis's range ramps per stage (bays + margin
+-> obstacle occupancy). The GNSS degradation process is a fixed, stage-invariant
+Markov chain (always-on mid-episode drift), so localisation uncertainty is present
+from stage 1 rather than being a ramped axis. Each stage resumes from the previous
+stage's checkpoint. See
+[documentation/CURRICULUM_PLAN.md](documentation/CURRICULUM_PLAN.md).
 
 ---
 
@@ -189,7 +200,8 @@ Uncertainty-Conditioned-RL.../
 |   |                                  EvidentialActorCriticPolicy, EvidentialPPO
 |   |
 |   |-- envs/                          Gymnasium environments
-|   |   |-- sim/carla_parking.py       CARLAParkingEnv (12-dim obs, 2-dim action)
+|   |   |-- sim/carla_parking.py       CARLAParkingEnv (Gymnasium parking env)
+|   |   |-- factory.py                 Env factory (training vs eval bay margin)
 |   |   |-- real/deployment_utils.py   RealWorldDeployment
 |   |   |-- real/inference_loop.py     RealWorldInferenceLoop
 |   |   |-- _parking_core.py           Shared pure logic: obs build, reward,
@@ -217,10 +229,12 @@ Uncertainty-Conditioned-RL.../
 |   |                                  robot_localisation
 |   |
 |   +-- utils/                         Shared utilities (no CARLA or ROS 2 deps)
-|       |-- constants.py               VEHICLE_STATE_DIM=1, ACTION_DIM=2, thresholds
+|       |-- constants.py               Structural dims and success thresholds
+|       |-- config_merge.py            deep_merge, apply_baseline (config precedence)
 |       |-- covariance_utils.py        extract_2d_covariance_features
-|       |-- geometry.py                point_in_polygon, wrap_angle_symmetric,
-|       |                              _compute_relative_target_pose
+|       |-- geometry.py                point_in_polygon, car_fully_inside_bay,
+|       |                              inflate_polygon, wrap_angle_symmetric
+|       |-- bay_success.py             Geometric in-bay success test helpers
 |       |-- logging.py                 DebugLogger (per-step structured output)
 |       |-- visualisation.py           Matplotlib plots, VisStateWriter
 |       +-- actuation_calibration.py   Real-vehicle gain / deadband / bias mapping
@@ -230,8 +244,9 @@ Uncertainty-Conditioned-RL.../
 |   |-- eval_config.yaml               9-condition evaluation sweep
 |   |-- ros2_config.yaml               EKF topics and QoS settings
 |   |-- deployment/sim/env_config.yaml CARLA env, sensors, GNSS noise profiles
+|   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage6)
 |   |-- deployment/sensor_config.yaml  Physical sensor mounts and specs
-|   |-- deployment/agent_config.yaml   include_covariance, safety thresholds
+|   |-- deployment/agent_config.yaml   safety thresholds, actuator model, baseline
 |   |-- layouts/                       Pre-computed lot YAMLs (do not edit by hand)
 |   |-- baselines/                     4 ablation override configs (2x2 study)
 |   +-- training/tuning_config.yaml    Optuna study settings and search bounds
@@ -268,9 +283,12 @@ Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
 
 | Layout | Bays | OOD | Training use | Description |
 |--------|------|-----|-------------|-------------|
-| `rectangle` | 54 | No | Training + evaluation | Rectangular lot with 7 left-wall perp bays, centred heterogeneous cluster, 12 bottom perp, 7 bottom angled, 6 right-wall angled, 2 motorcycle bays. 3 spawns: left, bottom-centre, top-right. |
-| `trapezoid` | 49 | No | Training + evaluation | Trapezoid lot (front=60 m, rear=40 m, depth=50 m). Two central perp clusters, angled perimeter bays, left-wall angled and perp groups. |
-| `irregular_a` | 56 | Yes | OOD evaluation only | Irregular polygon lot (held out from training). |
+| `rectangle` | 47 | No | Training + evaluation | Rectangular lot, perpendicular bays across a centre row, top row, bottom rows, and left and right walls, plus two always-empty motorcycle bays in the top-right corner. Three spawns: left, bottom-centre, top-right. |
+| `trapezoid` | 39 | No | Training + evaluation | Trapezoid lot, perpendicular bays in central clusters plus perimeter rows along the tapered walls. |
+| `irregular_a` | 36 | Yes | OOD evaluation only | Irregular polygon lot (held out from training), perpendicular bays around a central obstacle and the perimeter. |
+
+Bay counts come from the generated `configs/layouts/*.yaml`; regenerate with
+`make generate-layouts` if a floor plan module changes.
 
 ### Verify Layout in CARLA
 
@@ -295,7 +313,7 @@ make visualise           # open viewer (close window to detach - training unaffe
 make eval-visualise-2d   # load checkpoint + demo drive + 2D viewer
 ```
 
-Shows: lot boundary, bay outlines (blue = perpendicular, yellow = angled, violet = parallel),
+Shows: lot boundary, bay outlines (blue = perpendicular, grey = motorcycle),
 target bay (green), parked NPCs (orange), patrol NPC (red), pedestrians (magenta),
 ego vehicle (cyan) with heading arrow and 50-step trail.
 
@@ -320,17 +338,27 @@ make docker-inspect-dryrun MANUAL=true                # drive manually through t
 
 ## Configuration
 
-All hyperparameters live in `configs/` YAML files - never hardcoded in source.
+All tuneable hyperparameters live in `configs/` YAML files - never hardcoded
+in source. Structural constants (obs / action dims, success thresholds) live
+in [`uncertainty_rl/utils/constants.py`](uncertainty_rl/utils/constants.py).
 
-| File | Purpose | Key parameters |
-|------|---------|---------------|
-| `train_config.yaml` | PPO + evidential training | `learning_rate` (3e-4), `n_steps` (2048), `batch_size` (256), `net_arch` ([256,256]), `evidential.lambda_reg` (0.001), `total_timesteps` (1,000,000) |
-| `eval_config.yaml` | 9-condition sweep | `eval_conditions`, `n_episodes` (100), `success_criteria` |
-| `deployment/sim/env_config.yaml` | CARLA env settings | `max_steps` (1750), `success_dwell_steps` (5), `carla_sensors.*`, `gnss_noise_profiles` path |
-| `deployment/agent_config.yaml` | Agent behaviour | `include_covariance`, `include_obstacle_obs`, safety thresholds |
-| `deployment/sim/gnss_noise_profiles.yaml` | RTK fix-state tiers + Markov transition matrix | `rtk_fixed` (2 cm, 30%), `rtk_float` (36 cm, 30%), `standalone` (1.8 m, 25%), `degraded` (5 m, 15%) |
-| `training/tuning_config.yaml` | Optuna search | `n_trials` (40), `timesteps_per_trial` (100,000), `eval_metric` (`env/success_rate`) |
-| `baselines/*.yaml` | Ablation overrides | 4 configs for the 2x2 ablation study |
+Settings change as the project iterates (reward coefficients, curriculum
+overrides, success thresholds, RTK tier sampling weights). Rather than
+duplicate concrete values here - which would rot the moment a checkpoint
+is reached - the table below points at the file that owns each setting.
+Read the YAML directly to see the live values.
+
+| File | What it owns |
+|------|--------------|
+| [`train_config.yaml`](configs/train_config.yaml) | PPO hyperparameters, evidential settings, training schedule |
+| [`eval_config.yaml`](configs/eval_config.yaml) | Evaluation condition sweep |
+| [`ros2_config.yaml`](configs/ros2_config.yaml) | EKF, GNSS relay, IMU relay node parameters |
+| [`deployment/sim/env_config.yaml`](configs/deployment/sim/env_config.yaml) | CARLA env: episode length, sensors, parking scenarios, curriculum overrides |
+| [`deployment/agent_config.yaml`](configs/deployment/agent_config.yaml) | Observation flags, safety thresholds (shared sim and real) |
+| [`deployment/sensor_config.yaml`](configs/deployment/sensor_config.yaml) | Physical sensor mounts and specs (shared sim and real) |
+| [`deployment/sim/gnss_noise_profiles.yaml`](configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers + Markov transition matrix |
+| [`training/tuning_config.yaml`](configs/training/tuning_config.yaml) | Optuna study and search-space bounds |
+| [`baselines/*.yaml`](configs/baselines/) | Override files for the 2x2 ablation study |
 
 > **Further reading:** [configs/deployment/sim/README.md](configs/deployment/sim/README.md) - full breakdown of the sim config files and what consumes each key.
 
@@ -356,15 +384,20 @@ make docker-train
 
 Four baselines controlled by `configs/baselines/` override files:
 
-| Baseline | obs_dim | Policy | Uncertainty input | Policy output |
-|----------|---------|--------|------------------|--------------|
-| `vanilla_ppo` | 9 | Standard MLP | None | Gaussian |
-| `input_uncertainty` | 12 | Standard MLP | EKF covariance | Gaussian |
-| `output_uncertainty` | 9 | Evidential NIG | None | NIG |
-| `full_method` | 12 | Evidential NIG | EKF covariance | NIG |
+| Baseline | Uncertainty input (covariance in obs) | Policy output |
+|----------|---------------------------------------|---------------|
+| `vanilla_ppo` | No | Gaussian (standard MLP) |
+| `input_uncertainty` | Yes | Gaussian (standard MLP) |
+| `output_uncertainty` | No | Evidential NIG |
+| `full_method` | Yes | Evidential NIG |
 
+Actual observation dimensions are derived at runtime from
+`include_covariance` / `include_obstacle_obs` via `compute_obs_dim()`. Read
+[`uncertainty_rl/utils/constants.py`](uncertainty_rl/utils/constants.py)
+for the structural dims and the
+[baselines README](configs/baselines/README.md) for the override matrix.
 
-> **Further reading:** [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md) - all 9 eval conditions, metrics definitions, output plots.
+> **Further reading:** [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md) - eval conditions, metrics definitions, output plots.
 
 ---
 

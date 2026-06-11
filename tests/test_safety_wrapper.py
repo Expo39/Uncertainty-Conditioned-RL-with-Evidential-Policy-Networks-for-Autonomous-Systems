@@ -6,8 +6,9 @@ CPU-only, no CARLA or ROS 2 required. The underlying env is mocked so
 all tests run without a live simulation.
 """
 
-from unittest.mock import MagicMock
+from typing import Any, Dict, Optional, Tuple
 
+import gymnasium as gym
 import numpy as np
 import pytest
 
@@ -18,19 +19,50 @@ from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 # ---------------------------------------------------------------------------
 
 
-def _make_mock_env(obs_shape: int = 12) -> MagicMock:
-    """Return a minimal mock Gymnasium env for wrapping."""
-    env = MagicMock()
-    env.observation_space = MagicMock()
-    env.action_space = MagicMock()
-    obs = np.zeros(obs_shape, dtype=np.float32)
-    env.reset.return_value = (obs, {})
-    env.step.return_value = (obs, 0.5, False, False, {})
-    return env
+class _StubEnv(gym.Env):
+    """
+    @class _StubEnv
+    @brief Minimal real Gymnasium env for wrapping in SafetyWrapper tests.
+
+    gymnasium.Wrapper asserts the wrapped env is a genuine gymnasium.Env, so a
+    MagicMock cannot be used directly. This stub returns fixed reset()/step()
+    values without requiring CARLA or ROS 2.
+    """
+
+    def __init__(self, obs_shape: int = 12) -> None:
+        self._obs = np.zeros(obs_shape, dtype=np.float32)
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(obs_shape,), dtype=np.float32
+        )
+        self.action_space = gym.spaces.Box(
+            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
+            dtype=np.float32,
+        )
+
+    def reset(
+        self,
+        *,
+        seed: Optional[int] = None,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        return self._obs.copy(), {}
+
+    def step(
+        self, action: np.ndarray
+    ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+        return self._obs.copy(), 0.5, False, False, {}
 
 
-def _make_action(steer: float = 0.0, lon: float = 0.5) -> np.ndarray:
-    return np.array([steer, lon], dtype=np.float32)
+def _make_mock_env(obs_shape: int = 12) -> _StubEnv:
+    """Return a minimal real Gymnasium env for wrapping."""
+    return _StubEnv(obs_shape)
+
+
+def _make_action(
+    steer: float = 0.0, throttle: float = 0.5, brake: float = 0.0
+) -> np.ndarray:
+    return np.array([steer, throttle, brake], dtype=np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -48,7 +80,7 @@ class TestSafetyWrapperApply:
         """
         @brief Zero uncertainty should leave the action unchanged.
         """
-        action = _make_action(steer=0.3, lon=0.8)
+        action = _make_action(steer=0.3, throttle=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -60,11 +92,11 @@ class TestSafetyWrapperApply:
         assert modulated[0] == pytest.approx(0.3)
         assert modulated[1] == pytest.approx(0.8)
 
-    def test_aleatoric_caps_drive(self) -> None:
+    def test_aleatoric_caps_throttle(self) -> None:
         """
-        @brief High aleatoric uncertainty caps the drive component.
+        @brief High aleatoric uncertainty caps the throttle component.
         """
-        action = _make_action(lon=1.0)
+        action = _make_action(throttle=1.0)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -81,7 +113,7 @@ class TestSafetyWrapperApply:
         """
         @brief Aleatoric uncertainty must not change the steering component.
         """
-        action = _make_action(steer=0.9, lon=0.5)
+        action = _make_action(steer=0.9, throttle=0.5)
         modulated, _, _s = SafetyWrapper.apply(
             action,
             epistemic=0.0,
@@ -93,9 +125,10 @@ class TestSafetyWrapperApply:
 
     def test_epistemic_above_threshold_triggers_handoff(self) -> None:
         """
-        @brief Epistemic >= handoff_threshold must zero the action and return handoff=True.
+        @brief Epistemic >= handoff_threshold must command a full stop (zero
+               steering and throttle, full brake) and return handoff=True.
         """
-        action = _make_action(steer=0.5, lon=0.9)
+        action = _make_action(steer=0.5, throttle=0.9)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=5.0,
@@ -104,13 +137,15 @@ class TestSafetyWrapperApply:
             handoff_threshold=5.0,
         )
         assert handoff
-        np.testing.assert_array_equal(modulated, np.zeros(2))
+        np.testing.assert_array_equal(
+            modulated, np.array([0.0, 0.0, 1.0], dtype=action.dtype)
+        )
 
     def test_epistemic_below_threshold_no_handoff(self) -> None:
         """
         @brief Epistemic just below threshold must not trigger handoff.
         """
-        action = _make_action(lon=0.8)
+        action = _make_action(throttle=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
             epistemic=4.99,
@@ -125,7 +160,7 @@ class TestSafetyWrapperApply:
         """
         @brief apply() must return a copy, not modify the input array in place.
         """
-        action = _make_action(steer=0.3, lon=0.7)
+        action = _make_action(steer=0.3, throttle=0.7)
         original = action.copy()
         SafetyWrapper.apply(
             action,
@@ -136,19 +171,20 @@ class TestSafetyWrapperApply:
         )
         np.testing.assert_array_equal(action, original)
 
-    def test_negative_drive_clipped_to_minus_one(self) -> None:
+    def test_brake_passes_through_unchanged(self) -> None:
         """
-        @brief Large reverse drive commands are still clamped to -1.0.
+        @brief apply() only caps the throttle; the brake axis passes through
+               untouched (the cap reduces speed, it does not suppress braking).
         """
-        action = np.array([0.0, -2.0, 0.0], dtype=np.float32)
+        action = _make_action(throttle=0.0, brake=0.7)
         modulated, _, _s = SafetyWrapper.apply(
             action,
             epistemic=0.0,
-            aleatoric=0.0,
+            aleatoric=4.0,
             aleatoric_scaling=0.5,
             handoff_threshold=5.0,
         )
-        assert modulated[1] >= -1.0
+        assert modulated[2] == pytest.approx(0.7)
 
 
 # ---------------------------------------------------------------------------
@@ -201,8 +237,8 @@ class TestSafetyWrapperStep:
         """
         @brief When epistemic < threshold the underlying truncated value is preserved.
         """
+        # _StubEnv.step() returns truncated=False; the wrapper must preserve it.
         env = _make_mock_env()
-        env.step.return_value = (np.zeros(12), 0.0, False, False, {})
         wrapper = SafetyWrapper(env, handoff_threshold=5.0)
         wrapper.set_uncertainty(epistemic=0.0, aleatoric=0.0)
         _, _, terminated, truncated, _ = wrapper.step(_make_action())

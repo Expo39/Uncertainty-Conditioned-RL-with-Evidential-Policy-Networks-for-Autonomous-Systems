@@ -1,19 +1,9 @@
 # Evaluation Configuration
 # Condition sweep across GNSS noise tiers and traffic densities.
-# gnss_noise_multiplier scales the base RTK-fixed noise (0.02 m stddev).
-# See detailed_notes/ekf_pipeline.md for tier-to-multiplier mapping.
+# Connection, timing and ROS 2 settings come from env_config.yaml (single source
+# of truth); this file holds only the condition sweep and eval-specific options.
 
 model_path: "checkpoints/final_model"
-
-carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name.
-carla_port: 2000
-town: "FlatPlane"
-max_steps: 1500  # Must match env_config.yaml max_steps.
-map_load_sleep: 5.0
-
-ros2:
-  covariance_topic: "/odometry/filtered"
-  covariance_timeout: 10.0
 
 n_episodes: 100  # Episodes per condition.
 deterministic: true  # Use deterministic (mean) actions.
@@ -89,6 +79,26 @@ eval_conditions:
     bay_occupancy_rate: 0.6
     floor_plan: "irregular_a"
 
+  # Held-out layout evaluation - trapezoid is excluded from training (rectangle
+  # only), so success here measures generalisation to an unseen geometry.
+  - name: "heldout_trapezoid"
+    description: "Held-out floor plan (trapezoid), RTK fixed"
+    gnss_noise_multiplier: 1.0
+    imu_noise_multiplier: 1.0
+    num_patrol_vehicles: 0
+    pedestrian_spawn_probability: 0.0
+    bay_occupancy_rate: 0.6
+    floor_plan: "trapezoid"
+
+  - name: "heldout_trapezoid_degraded"
+    description: "Held-out floor plan (trapezoid), RTK float"
+    gnss_noise_multiplier: 15.0
+    imu_noise_multiplier: 1.5
+    num_patrol_vehicles: 0
+    pedestrian_spawn_probability: 0.0
+    bay_occupancy_rate: 0.6
+    floor_plan: "trapezoid"
+
   # Safety handoff demonstration - beyond training distribution
   - name: "worst_case"
     description: "Degraded GNSS + max IMU noise - safety handoff demo"
@@ -98,10 +108,3 @@ eval_conditions:
     pedestrian_spawn_probability: 1.0
     bay_occupancy_rate: 0.0
     floor_plan: "rectangle"
-
-output_dir: "evaluation_results"
-
-success_criteria:
-  position_threshold: 0.5  # metres
-  orientation_threshold: 10.0  # degrees
-  velocity_threshold: 0.1  # m/s

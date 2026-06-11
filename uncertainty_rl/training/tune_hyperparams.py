@@ -7,15 +7,11 @@ hyperparameters. Each trial runs a short training session and evaluates
 env/success_rate (primary), with env/mean_progress_reward as a tiebreaker
 before any success has been observed. Best params are written back to
 train_config.yaml.
-
-@see documentation/detailed_notes/hyperparameter_search.md for search space
-     design rationale and literature references.
 """
 
 import argparse
 import copy
 import logging
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -38,6 +34,7 @@ except ImportError:
 
 try:
     from stable_baselines3.common.callbacks import BaseCallback
+    from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 except ImportError:
     raise ImportError(
         "stable_baselines3 is required. "
@@ -45,11 +42,15 @@ except ImportError:
     )
 
 from uncertainty_rl.training.train_ppo import (
+    DEFAULT_BASELINE,
+    DEFAULT_STAGE,
     load_config,
     load_env_config,
+    make_env,
     merge_configs,
     train,
 )
+from uncertainty_rl.utils.config_merge import apply_baseline
 
 logger = logging.getLogger("uncertainty_rl.training.tune_hyperparams")
 
@@ -73,9 +74,9 @@ def _composite_objective(
     return float(success_rate)
 
 
-# ------------------------------------------------------------------
-# sample_hyperparams: Tuning search space (10 active parameters)
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# sample_hyperparams: Tuning search space (8 structural PPO parameters)
+# ---------------------------------------------------------------------------
 
 
 def sample_hyperparams(
@@ -90,22 +91,14 @@ def sample_hyperparams(
     """
     space = tuning_config.get("search_space", {})
 
-    # Cache each range once to avoid duplicate .get() calls and list allocations.
-    lr_range = space.get("learning_rate", [1e-5, 1e-3])
+    # Structural PPO params only: learning_rate / ent_coef are stage-owned and
+    # evidential.* is ablation-specific, so neither is tuned.
+    # @see documentation/detailed_notes/ablation_hpo_methodology.md
     gamma_range = space.get("gamma", [0.98, 0.999])
     gae_range = space.get("gae_lambda", [0.90, 0.98])
     clip_range_bounds = space.get("clip_range", [0.1, 0.3])
-    ent_range = space.get("ent_coef", [1e-6, 0.05])
-    lreg_range = space.get("lambda_reg", [1e-5, 0.01])
-    warmup_range = space.get("lambda_reg_warmup_steps", [10000, 100000])
-
-    # PPO Hyperparameters
-    learning_rate = trial.suggest_float(
-        "learning_rate",
-        float(lr_range[0]),
-        float(lr_range[1]),
-        log=True,
-    )
+    vf_coef_range = space.get("vf_coef", [0.25, 1.0])
+    grad_norm_range = space.get("max_grad_norm", [0.3, 2.0])
 
     n_steps = trial.suggest_categorical(
         "n_steps",
@@ -146,48 +139,33 @@ def sample_hyperparams(
         float(clip_range_bounds[1]),
     )
 
-    ent_coef = trial.suggest_float(
-        "ent_coef",
-        float(ent_range[0]),
-        float(ent_range[1]),
-        log=True,
+    vf_coef = trial.suggest_float(
+        "vf_coef",
+        float(vf_coef_range[0]),
+        float(vf_coef_range[1]),
     )
 
-    # Evidential parameters - always enabled (lambda_reg > 0).
-    # Disabling evidential regularisation defeats the architecture's purpose.
-    lambda_reg = trial.suggest_float(
-        "lambda_reg",
-        float(lreg_range[0]),
-        float(lreg_range[1]),
-        log=True,
-    )
-
-    lambda_reg_warmup_steps = trial.suggest_float(
-        "lambda_reg_warmup_steps",
-        float(warmup_range[0]),
-        float(warmup_range[1]),
-        log=True,
+    max_grad_norm = trial.suggest_float(
+        "max_grad_norm",
+        float(grad_norm_range[0]),
+        float(grad_norm_range[1]),
     )
 
     return {
-        "learning_rate": learning_rate,
         "n_steps": n_steps,
         "batch_size": batch_size,
         "n_epochs": n_epochs,
         "gamma": gamma,
         "gae_lambda": gae_lambda,
         "clip_range": clip_range,
-        "ent_coef": ent_coef,
-        "evidential": {
-            "lambda_reg": lambda_reg,
-            "lambda_reg_warmup_steps": int(lambda_reg_warmup_steps),
-        },
+        "vf_coef": vf_coef,
+        "max_grad_norm": max_grad_norm,
     }
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # TrialEvalCallback: Read metrics from training for trial evaluation
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 class TrialEvalCallback(BaseCallback):
@@ -234,9 +212,9 @@ class TrialEvalCallback(BaseCallback):
             raise optuna.TrialPruned()
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # apply_best_params: Write best trial params back to train_config.yaml
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def apply_best_params(
@@ -303,9 +281,9 @@ def apply_best_params(
         raise
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # objective: Optuna objective function
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def objective(
@@ -314,6 +292,7 @@ def objective(
     tuning_config: Dict[str, Any],
     train_config_path: str,
     env_config_path: str,
+    shared_env: Optional[VecNormalize] = None,
 ) -> float:
     """
     @brief Optuna objective function for a single trial.
@@ -327,6 +306,8 @@ def objective(
     @param tuning_config: Tuning configuration with study settings.
     @param train_config_path: Path to train_config.yaml.
     @param env_config_path: Path to env_config.yaml.
+    @param shared_env: Pre-built VecNormalize env reused across all trials.
+           Avoids the CARLA destroy/respawn cycle that breaks the EKF.
     @return Composite objective value for this trial.
     """
     try:
@@ -337,24 +318,28 @@ def objective(
         trial_config = copy.deepcopy(base_config)
         trial_config.update(sampled_params)
 
-        # Set trial-specific training budget and directories
+        # Set trial-specific training budget and directories. train() nests every
+        # run as <root>/<baseline_name>/<run_leaf>/, so the tuning roots plus a
+        # deterministic per-trial leaf give logs/tuning/<baseline>/trial_<N>/ (and
+        # the matching checkpoints/tuning subtree) - the same per-baseline layout
+        # as a normal training run.
         trial_config["total_timesteps"] = tuning_config.get(
             "timesteps_per_trial", 100000
         )
-        trial_config["log_dir"] = os.path.join(
-            "logs/tuning",
-            f"trial_{trial.number}",
-        )
-        trial_config["checkpoint_dir"] = os.path.join(
-            "checkpoints/tuning",
-            f"trial_{trial.number}",
-        )
+        trial_config["log_dir"] = "logs/tuning"
+        trial_config["checkpoint_dir"] = "checkpoints/tuning"
+        trial_config["run_leaf"] = f"trial_{trial.number}"
 
         # Create trial eval callback
         trial_callback = TrialEvalCallback(trial)
 
-        # Run training
-        result = train(trial_config, extra_callbacks=[trial_callback])
+        # Run training with the shared env (env stays alive between trials so
+        # CARLA sensors + EKF do not need to re-warm).
+        result = train(
+            trial_config,
+            extra_callbacks=[trial_callback],
+            env=shared_env,
+        )
 
         success_rate = float(result.final_metrics.get("env/success_rate", 0.0))
         progress = float(result.final_metrics.get("env/mean_progress_reward", 0.0))
@@ -383,9 +368,9 @@ def objective(
         raise optuna.TrialPruned()
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # run_study: Execute the Optuna study
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def run_study(
@@ -393,37 +378,64 @@ def run_study(
     base_config: Dict[str, Any],
     train_config_path: str,
     env_config_path: str,
+    baseline_name: Optional[str] = None,
 ) -> None:
     """
     @brief Run the Optuna hyperparameter tuning study.
 
     Uses TPESampler (multivariate) + MedianPruner. Results are stored in
-    SQLite for persistence and resume capability. Best params are written
-    back to train_config.yaml after the study completes.
+    SQLite for persistence and resume capability.
+
+    When `baseline_name` is set, the study name, storage DB, and best-params
+    output are all suffixed with the baseline name, so the four ablation
+    baselines each get an INDEPENDENT study and an independent best-params file
+    (logs/tuning/results/best_params_<baseline>.yaml) - the per-baseline tuning
+    the ablation methodology requires. The shared train_config.yaml is left
+    untouched in that case. When `baseline_name` is None, the single study tunes
+    the train_config defaults and writes best params back into train_config.yaml
+    (the legacy single-study path).
 
     @param tuning_config: Tuning configuration with study settings.
-    @param base_config: Base training config (merged train + env configs).
+    @param base_config: Base training config (merged train + env [+ baseline]).
     @param train_config_path: Path to train_config.yaml.
     @param env_config_path: Path to env_config.yaml.
+    @param baseline_name: Ablation baseline this study tunes, or None for the
+                          shared-defaults single study.
     """
     # Create tuning results directory (in logs/ which is writable in Docker)
     results_dir = Path("logs/tuning/results")
     results_dir.mkdir(parents=True, exist_ok=True)
 
+    # Per-baseline study name, storage DB, and best-params filename so the four
+    # ablation studies never collide in one Optuna DB.
+    suffix = f"_{baseline_name}" if baseline_name else ""
+
     # SQLite storage path
     storage_path = Path(
         tuning_config.get("storage_path", "logs/tuning/optuna_study.db")
     )
+    if baseline_name:
+        storage_path = storage_path.with_name(
+            f"{storage_path.stem}{suffix}{storage_path.suffix}"
+        )
     storage_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Sampler and pruner settings from tuning_config.yaml
     sampler_cfg = tuning_config.get("sampler", {})
     pruner_cfg = tuning_config.get("pruner", {})
 
-    # Create study
-    study_name = tuning_config.get("study_name", "uncertainty_rl_tuning")
+    # Create study. The sampler seed is `tuning_seed` - the single source, distinct
+    # from train_config's `seed` (final training + evaluation) so the tuning split
+    # is disjoint from the evaluation split, as the ablation methodology requires.
+    # Required (no hardcoded fallback) so a missing seed fails loud rather than
+    # silently using a magic number.
+    if "tuning_seed" not in tuning_config:
+        raise KeyError(
+            "tuning_config.yaml must define 'tuning_seed' (the Optuna sampler seed)."
+        )
+    study_name = tuning_config.get("study_name", "uncertainty_rl_tuning") + suffix
     sampler = optuna.samplers.TPESampler(
-        seed=tuning_config.get("seed", 42),
+        seed=tuning_config["tuning_seed"],
         multivariate=sampler_cfg.get("multivariate", True),
         n_startup_trials=sampler_cfg.get("n_startup_trials", 10),
     )
@@ -446,21 +458,57 @@ def run_study(
     # Run optimisation
     n_trials = tuning_config.get("n_trials", 40)
     logger.info(
-        "Starting Optuna study: %d trials, %dk steps/trial, 10 params",
+        "Starting Optuna study '%s': %d trials, %dk steps/trial",
+        study_name,
         n_trials,
         tuning_config.get("timesteps_per_trial", 100000) // 1000,
     )
 
-    study.optimize(
-        lambda trial: objective(
-            trial,
-            base_config,
-            tuning_config,
-            train_config_path,
-            env_config_path,
-        ),
-        n_trials=n_trials,
+    # Build the env once and share it across every trial. A destroy+respawn
+    # cycle of CARLA sensors between trials breaks the ROS bridge so the EKF
+    # stops publishing /odometry/filtered and every subsequent trial times
+    # out in _wait_for_covariance.
+    n_workers = base_config.get("parallel_workers", 1)
+    logger.info(
+        "Creating shared training environment (%d worker(s)) for all trials...",
+        n_workers,
     )
+    # bay_margin comes from env_config (single source of truth); .get guards a
+    # missing key with the env's own constructor default.
+    tune_bay_margin = float(base_config.get("bay_margin", 0.0))
+    shared_vec_env = DummyVecEnv(
+        [
+            make_env(base_config, bay_margin=tune_bay_margin, rank=i)
+            for i in range(n_workers)
+        ]
+    )
+    # norm_reward=False here, so VecNormalize's gamma (which only scales the
+    # reward-normalisation running std) is inert; passed for parity with the
+    # train_ppo construction. The per-trial PPO gamma is sampled by Optuna, so
+    # the base default is the right value for this shared, reward-unnormalised env.
+    shared_env = VecNormalize(
+        shared_vec_env,
+        norm_obs=True,
+        norm_reward=False,
+        clip_obs=10.0,
+        gamma=base_config.get("gamma", 0.99),
+    )
+
+    try:
+        study.optimize(
+            lambda trial: objective(
+                trial,
+                base_config,
+                tuning_config,
+                train_config_path,
+                env_config_path,
+                shared_env=shared_env,
+            ),
+            n_trials=n_trials,
+        )
+    finally:
+        logger.info("Closing shared training environment.")
+        shared_env.close()
 
     # Print summary
     logger.info("Study complete. Best trial:")
@@ -491,21 +539,33 @@ def run_study(
     for key, value in best_trial.params.items():
         logger.info("    %s: %s", key, value)
 
-    # Write best params back to train_config.yaml
     best_params = best_trial.params
-    apply_best_params(best_params, train_config_path)
 
-    # Also save standalone copy to logs/tuning/results/best_params.yaml
-    best_params_path = results_dir / "best_params.yaml"
+    # For a per-baseline study, write the best params to a per-baseline file and
+    # leave the shared train_config.yaml untouched - otherwise four baselines
+    # would overwrite each other's hyperparameters in one file, defeating the
+    # point of per-baseline tuning. The single-study (no-baseline) path keeps the
+    # legacy behaviour of writing back into train_config.yaml.
+    if baseline_name:
+        logger.info(
+            "Per-baseline study: leaving %s untouched; writing best params to a "
+            "baseline-specific file.",
+            train_config_path,
+        )
+    else:
+        apply_best_params(best_params, train_config_path)
+
+    # Save standalone copy (per-baseline filename when tuning a baseline).
+    best_params_path = results_dir / f"best_params{suffix}.yaml"
     with open(best_params_path, "w") as f:
         yaml.dump(best_params, f, default_flow_style=False)
     logger.info("Saved best params to %s", best_params_path)
     logger.info("Tuning results saved to %s", results_dir)
 
 
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # main: CLI entry point
-# ------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 
 def main() -> None:
@@ -533,6 +593,31 @@ def main() -> None:
         default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config",
     )
+    parser.add_argument(
+        "--stage",
+        type=int,
+        default=None,
+        help=(
+            "Curriculum stage (1..N). Deep-merges "
+            "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
+            "so tuning runs at that stage's difficulty. The curriculum plan tunes "
+            "at the Phase A -> B boundary, so pass --stage 6 (or via STAGE= in the "
+            "Makefile). Omit to default to stage 1."
+        ),
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Path to a baseline override config (configs/baselines/*.yaml). When "
+            "set, the study tunes that baseline's observation/policy configuration "
+            "and writes its best params to a per-baseline file, giving the 2x2 "
+            "ablation one independent study each. Omit to tune the shared "
+            "hyperparameters at the full-method observation space and write back to "
+            "train_config.yaml."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -546,15 +631,48 @@ def main() -> None:
     # Load configs. load_env_config merges sensor_config.yaml (shared keys)
     # with env_config.yaml (CARLA-specific keys) so all shared params have
     # a single source of truth.
+    # Resolve effective stage / baseline the same way train_ppo.py does: difficulty
+    # lives only in the stage files and obs/policy flags only in the baseline files,
+    # so omitting a flag defaults to the curriculum head (stage 1) and the full
+    # method. The Makefile forwards STAGE= / BASELINE= into --stage / --baseline.
+    stage = args.stage if args.stage is not None else DEFAULT_STAGE
+    baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+
     train_config = load_config(args.train_config)
-    env_config = load_env_config(args.env_config)
+    env_config = load_env_config(args.env_config, stage=stage)
     tuning_config = load_config(args.tuning_config)
 
     # Merge train + env configs
     base_config = merge_configs(train_config, env_config)
 
+    # Overlay the baseline flags so the study tunes against the correct observation
+    # space. The write-back target depends on whether --baseline was EXPLICIT: an
+    # explicit baseline gets its own study and a per-baseline best-params file
+    # (baseline_name set); the default full-method case tunes the shared
+    # hyperparameters and writes back to train_config.yaml (baseline_name None).
+    baseline_override = load_config(baseline_path)
+    apply_baseline(base_config, baseline_override)
+    baseline_name: Optional[str] = (
+        baseline_override.get("baseline_name", Path(baseline_path).stem)
+        if args.baseline is not None
+        else None
+    )
+    logger.info(
+        "Tuning stage %d, baseline '%s' (include_covariance=%s, policy_type=%s)",
+        stage,
+        baseline_override.get("baseline_name", Path(baseline_path).stem),
+        base_config.get("include_covariance"),
+        base_config.get("policy_type"),
+    )
+
     # Run study
-    run_study(tuning_config, base_config, args.train_config, args.env_config)
+    run_study(
+        tuning_config,
+        base_config,
+        args.train_config,
+        args.env_config,
+        baseline_name=baseline_name,
+    )
 
 
 if __name__ == "__main__":

@@ -117,13 +117,13 @@ At each episode reset the training container writes `episode_config.json` to the
 ```json
 {
   "seq": 42,
-  "tier_name": "rtk_float",
+  "tier_name": "rtk_fixed",
   "datum_lat": 0.0,
   "datum_lon": 0.0
 }
 ```
 
-`GnssNoiseRelayNode` polls this file on every GNSS callback (gated by `seq` and mtime), applies the noise tier, re-latches the datum, and resamples per-episode east/north anisotropy factors. This allows per-episode RTK fix-state variation without restarting ROS 2 nodes. COG heading is no longer seeded from the spawn yaw - the node initialises COG from the first GNSS fix pair that passes the displacement, ZUPT, and variance-ceiling gates.
+`GnssNoiseRelayNode` polls this file on every GNSS callback (gated by `seq` and mtime), applies the START noise tier (`tier_name`, always `rtk_fixed` under the single-phase curriculum), re-latches the datum, and resamples per-episode east/north anisotropy factors. From the start tier the fix state wanders mid-episode via a fixed 4-state Markov chain (`transition_matrix` in `configs/deployment/sim/gnss_noise_profiles.yaml`), which is stage-invariant - loaded once and never rescaled per episode. The chain is upward-biased (recovery toward `rtk_fixed` outweighs degradation at every rung), so it is fixed-dominant and any excursion recovers within a few seconds. The master switches (`enable_gnss_noise`, `enable_imu_noise`, `enable_markov_transitions`) are on globally from curriculum Stage 1. COG heading is no longer seeded from the spawn yaw - the node initialises COG from the first GNSS fix pair that passes the displacement, ZUPT, and variance-ceiling gates.
 
 ## TF tree
 
@@ -174,4 +174,4 @@ make docker-shell-ros2  # interactive shell in ros2-bridge
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [envs/README.md](../envs/README.md) - `_CovarianceSubscriber` that reads `ekf_state.json`
 - [docs/detailed_notes/ros2_architecture.md](../../docs/detailed_notes/ros2_architecture.md) - pipeline design rationale
-- [docs/detailed_notes/sensor_noise_models.md](../../docs/detailed_notes/sensor_noise_models.md) - GNSS and IMU noise model derivation
+- [docs/detailed_notes/localisation/sensor_noise_models.md](../../docs/detailed_notes/localisation/sensor_noise_models.md) - GNSS and IMU noise model derivation

@@ -7,13 +7,17 @@ ROS 2, or a GPU. The main training entry point is excluded (requires full
 Docker stack).
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
+import yaml
 
 from uncertainty_rl.training.train_ppo import (
     EnvDiagnosticsCallback,
+    _apply_stage_training_overrides,
     linear_schedule,
+    load_env_config,
     make_env,
 )
 
@@ -95,14 +99,15 @@ class TestEnvDiagnosticsCallback:
 
     def test_on_step_accumulates_pos_error(self) -> None:
         """
-        @brief _on_step() appends pos_error values from each info dict.
+        @brief _on_step() accumulates pos_error into a running sum and step count.
         """
         cb = EnvDiagnosticsCallback()
         cb.locals = {"infos": [{"pos_error": 3.0}, {"pos_error": 7.0}]}
         mock_property = property(lambda self: MagicMock())
         with patch.object(type(cb), "logger", new_callable=lambda: mock_property):
             cb._on_step()
-        assert cb._ep_pos_errors == [3.0, 7.0]
+        assert cb._pos_sum == pytest.approx(10.0)
+        assert cb._step_count == 2
 
     def test_on_rollout_end_records_mean_pos_error(self) -> None:
         """
@@ -140,7 +145,7 @@ class TestEnvDiagnosticsCallback:
 
     def test_on_rollout_end_clears_accumulators(self) -> None:
         """
-        @brief After _on_rollout_end(), all accumulators are empty.
+        @brief After _on_rollout_end(), all running accumulators are reset to zero.
         """
         cb = EnvDiagnosticsCallback()
         cb.locals = {
@@ -160,10 +165,11 @@ class TestEnvDiagnosticsCallback:
             cb._on_step()
             cb._on_rollout_end()
 
-        assert cb._ep_pos_errors == []
-        assert cb._ep_orientation_errors == []
-        assert cb._ep_speeds == []
-        assert cb._ep_progress_rewards == []
+        assert cb._pos_sum == 0.0
+        assert cb._ori_sum == 0.0
+        assert cb._spd_sum == 0.0
+        assert cb._prog_sum == 0.0
+        assert cb._step_count == 0
 
     def test_episode_outcome_rates_logged_on_terminal_step(self) -> None:
         """
@@ -291,9 +297,9 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=0)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=0)()
 
         assert captured["carla_port"] == 2000
 
@@ -308,9 +314,9 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=1)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=1)()
 
         assert captured["carla_port"] == 3000
 
@@ -325,9 +331,9 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=2)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=2)()
 
         assert captured["carla_port"] == 4000
 
@@ -345,9 +351,9 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=0)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=0)()
 
         assert "ekf_state_file" not in captured["ros2_config"]
 
@@ -362,9 +368,9 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=1)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=1)()
 
         assert (
             captured["ros2_config"]["ekf_state_file"]
@@ -382,11 +388,267 @@ class TestMakeEnvParallel:
             return MagicMock()
 
         with patch(
-            "uncertainty_rl.training.train_ppo.CARLAParkingEnv", side_effect=_fake_env
+            "uncertainty_rl.envs.factory.CARLAParkingEnv", side_effect=_fake_env
         ):
-            make_env(self._BASE_CONFIG, rank=2)()
+            make_env(self._BASE_CONFIG, bay_margin=0.0, rank=2)()
 
         assert (
             captured["ros2_config"]["ekf_state_file"]
             == "/workspace/outputs/ekf_state_2.json"
         )
+
+
+# ===========================================================================
+# TestLoadEnvConfigStage
+# ===========================================================================
+
+
+class TestLoadEnvConfigStage:
+    """
+    @class TestLoadEnvConfigStage
+    @brief Tests the curriculum stage override deep-merge in load_env_config().
+    """
+
+    def _write_base(self, sim_dir: Path) -> Path:
+        """@brief Write a minimal env_config.yaml and return its path."""
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(
+            yaml.safe_dump(
+                {
+                    "use_extra_spawns": True,
+                    "bay_margin": -0.25,
+                    "parking_scenarios": {
+                        "fixed_floor_plan": "rectangle",
+                        "bay_occupancy_min": 0.2,
+                        "bay_occupancy_max": 0.8,
+                    },
+                }
+            )
+        )
+        return env_path
+
+    def test_no_stage_leaves_base_config(self, tmp_path: Path) -> None:
+        """
+        @brief Without a stage, the base env_config values are unchanged.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_base(sim_dir)
+
+        cfg = load_env_config(str(env_path), stage=None)
+
+        assert cfg["use_extra_spawns"] is True
+        assert cfg["bay_margin"] == -0.25
+        assert cfg["parking_scenarios"]["bay_occupancy_max"] == 0.8
+
+    def test_stage_override_deep_merges_and_wins(self, tmp_path: Path) -> None:
+        """
+        @brief A stage file overrides top-level and nested keys (deep merge),
+               while leaving non-overridden nested keys intact.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_base(sim_dir)
+        curr_dir = sim_dir / "curriculum"
+        curr_dir.mkdir()
+        (curr_dir / "stage1.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "use_extra_spawns": False,
+                    "bay_margin": -0.75,
+                    "parking_scenarios": {
+                        "fixed_target_bay_id": "perpendicular_5",
+                        "bay_occupancy_min": 0.0,
+                        "bay_occupancy_max": 0.0,
+                    },
+                }
+            )
+        )
+
+        cfg = load_env_config(str(env_path), stage=1)
+
+        # Overridden keys take the stage value.
+        assert cfg["use_extra_spawns"] is False
+        assert cfg["bay_margin"] == -0.75
+        assert cfg["parking_scenarios"]["bay_occupancy_max"] == 0.0
+        assert cfg["parking_scenarios"]["fixed_target_bay_id"] == "perpendicular_5"
+        # Non-overridden nested key from the base survives the deep merge.
+        assert cfg["parking_scenarios"]["fixed_floor_plan"] == "rectangle"
+
+    def test_missing_stage_file_raises(self, tmp_path: Path) -> None:
+        """
+        @brief Requesting a stage with no matching file raises FileNotFoundError.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_base(sim_dir)
+
+        with pytest.raises(FileNotFoundError):
+            load_env_config(str(env_path), stage=99)
+
+
+# ===========================================================================
+# TestStageTrainingOverrides
+# ===========================================================================
+
+
+class TestStageTrainingOverrides:
+    """
+    @class TestStageTrainingOverrides
+    @brief Tests the per-stage training_overrides application + allowlist.
+    """
+
+    def _write_stage(self, sim_dir: Path, stage: int, overrides: dict) -> str:
+        """@brief Write a stage file with a training_overrides block; return env path."""
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        curr = sim_dir / "curriculum"
+        curr.mkdir(exist_ok=True)
+        (curr / f"stage{stage}.yaml").write_text(
+            yaml.safe_dump({"training_overrides": overrides})
+        )
+        return str(env_path)
+
+    def test_allowlisted_overrides_applied(self, tmp_path: Path) -> None:
+        """
+        @brief Allowlisted keys (stage_timesteps, learning_rate, ent_coef) override
+               the merged config.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_stage(
+            sim_dir,
+            1,
+            {
+                "stage_timesteps": 2000000,
+                "learning_rate": 0.0003,
+                "ent_coef": 0.02,
+            },
+        )
+        config = {"learning_rate": 0.0001, "ent_coef": 0.005}  # train_config values
+
+        _apply_stage_training_overrides(config, env_path, stage=1)
+
+        assert config["stage_timesteps"] == 2000000
+        assert config["learning_rate"] == 0.0003
+        assert config["ent_coef"] == 0.02
+
+    def test_architecture_key_rejected(self, tmp_path: Path) -> None:
+        """
+        @brief A non-allowlisted (architecture) key in training_overrides raises,
+               so a stage cannot break weight loading on resume.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = self._write_stage(sim_dir, 2, {"net_arch": [512, 512]})
+        config: dict = {}
+
+        with pytest.raises(ValueError, match="not allowed"):
+            _apply_stage_training_overrides(config, env_path, stage=2)
+
+    def test_absent_block_is_noop(self, tmp_path: Path) -> None:
+        """
+        @brief A stage with no training_overrides block leaves config unchanged.
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        curr = sim_dir / "curriculum"
+        curr.mkdir()
+        (curr / "stage3.yaml").write_text(yaml.safe_dump({"bay_margin": -0.35}))
+        config = {"learning_rate": 0.0001}
+
+        _apply_stage_training_overrides(config, str(env_path), stage=3)
+
+        assert config == {"learning_rate": 0.0001}
+
+    def test_training_overrides_stripped_from_env(self, tmp_path: Path) -> None:
+        """
+        @brief load_env_config() strips training_overrides so it never reaches the
+               env dict (it is a training-side block, applied separately).
+        """
+        sim_dir = tmp_path / "deployment" / "sim"
+        sim_dir.mkdir(parents=True)
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        curr = sim_dir / "curriculum"
+        curr.mkdir()
+        (curr / "stage1.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "bay_margin": -0.75,
+                    "training_overrides": {"stage_timesteps": 2000000},
+                }
+            )
+        )
+
+        env_cfg = load_env_config(str(env_path), stage=1)
+
+        assert "training_overrides" not in env_cfg
+        assert env_cfg["bay_margin"] == -0.75
+
+
+class TestBaselineOverlay:
+    """
+    @class TestBaselineOverlay
+    @brief The --baseline overlay flips the train_config defaults to the named
+           ablation baseline.
+
+    main() merges train_config (whose defaults ARE the full method) then overlays
+    the baseline file with {**config, **baseline} so the run trains that baseline.
+    These tests pin the overlay semantics against the real config files - notably
+    that the vanilla pathfinder baseline switches the policy to standard PPO and
+    drops the covariance observation.
+    """
+
+    _REPO = Path(__file__).parent.parent
+    _TRAIN_CONFIG = _REPO / "configs" / "train_config.yaml"
+    _BASELINES = _REPO / "configs" / "baselines"
+
+    def _overlay(self, baseline_file: str) -> dict:
+        """
+        @brief Reproduce main()'s {**train_config, **baseline} overlay.
+        """
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        baseline = yaml.safe_load((self._BASELINES / baseline_file).read_text())
+        return {**train_cfg, **baseline}
+
+    def test_train_config_default_is_evidential_head(self) -> None:
+        """
+        @brief The DEFAULT baseline (full_method) is the evidential head - which is
+               why an explicit baseline overlay is needed to run the standard-head
+               baselines. policy_type is owned by the baseline files, not
+               train_config, so the default is asserted via the default overlay.
+        """
+        assert self._overlay("full_method.yaml")["policy_type"] == "evidential"
+
+    def test_dual_encoder_off_for_clean_ablation(self) -> None:
+        """
+        @brief use_uncertainty_conditioning must be False so covariance enters
+               identically (as obs dims) for both heads - no dual-encoder confound
+               on the covariance axis of the 2x2 ablation.
+        """
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        assert train_cfg["evidential"]["use_uncertainty_conditioning"] is False
+
+    def test_vanilla_overlay_selects_standard_no_covariance(self) -> None:
+        """
+        @brief vanilla_ppo.yaml flips policy_type to standard and covariance off.
+        """
+        cfg = self._overlay("vanilla_ppo.yaml")
+        assert cfg["policy_type"] == "standard"
+        assert cfg["include_covariance"] is False
+        assert cfg["include_obstacle_obs"] is True
+        assert cfg["baseline_name"] == "vanilla_ppo"
+
+    def test_baseline_inherits_ppo_hyperparams(self) -> None:
+        """
+        @brief The baseline overlay leaves the shared PPO hyperparameters from
+               train_config intact (the baseline files override only obs/policy).
+        """
+        cfg = self._overlay("vanilla_ppo.yaml")
+        train_cfg = yaml.safe_load(self._TRAIN_CONFIG.read_text())
+        assert cfg["learning_rate"] == train_cfg["learning_rate"]
+        assert cfg["n_steps"] == train_cfg["n_steps"]
+        assert cfg["gamma"] == train_cfg["gamma"]

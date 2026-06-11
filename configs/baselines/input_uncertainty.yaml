@@ -1,5 +1,5 @@
 # Baseline: Input Uncertainty Only
-# 12-dim obs: EKF yaw rate (1) + covariance stds (3) + relative target pose (3) + obstacle clearance (5).
+# Observation: vehicle state + EKF covariance + relative target pose + obstacle clearance.
 # The agent sees localisation uncertainty but uses a standard Gaussian policy.
 
 baseline_name: "input_uncertainty"
@@ -7,6 +7,5 @@ baseline_name: "input_uncertainty"
 include_covariance: true
 include_obstacle_obs: true
 policy_type: "standard"
-
-log_dir: "./logs/input_uncertainty"
-checkpoint_dir: "./checkpoints/input_uncertainty"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.

@@ -25,17 +25,17 @@ as four contiguous blocks of `output_dim` elements: `[gamma | nu | alpha | beta]
 |-----------|-----------|-----------|----------------|----------------|
 | gamma | 0.0 | none | 0.0 | Zero mean action at init |
 | nu | 0.9 | softplus + 1e-6 | ~1.241 | Reasonable initial precision |
-| alpha | 0.9 | softplus + 1.0 | ~2.241 | Well-defined finite variance (alpha > 1 required) |
+| alpha | 0.9 | softplus + 1.5 | ~2.741 | Well-defined finite variance; 1.5 offset prevents aleatoric collapse |
 | beta | 0.0 | softplus + 1e-6 | ~0.693 | Moderate scale |
 
 `softplus(0.9) = log(1 + exp(0.9)) = log(1 + 2.460) = log(3.460) ~ 1.241`.
 So:
 - nu bias 0.9 => softplus(0.9) + 1e-6 ~ 1.241
-- alpha bias 0.9 => softplus(0.9) + 1.0 ~ 2.241
+- alpha bias 0.9 => softplus(0.9) + 1.5 ~ 2.741
 - beta bias 0.0 => softplus(0.0) + 1e-6 = log(2) + 1e-6 ~ 0.693
 
 The NIG log-penalty prior targets in `EvidentialPPO.train` use these values:
-`nu_prior = 1.24`, `alpha_prior = 2.24` (rounded to two decimal places from the above).
+`nu_prior = 1.24`, `alpha_prior = 2.741`.
 
 ### Weight scaling
 

@@ -45,9 +45,9 @@ class _CovarianceSubscriber:
     that file on demand - no DDS subscription needed.
     """
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Construction
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -129,9 +129,9 @@ class _CovarianceSubscriber:
             self._initial_pose_path,
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # EKF state read interface
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def invalidate(self) -> None:
         """
@@ -203,8 +203,16 @@ class _CovarianceSubscriber:
                 return False
             cov_3x3 = np.asarray(data["covariance"], dtype=np.float64).reshape(3, 3)
             features = extract_2d_covariance_features(cov_3x3)
+            # vx defaults to 0.0 for compatibility with stale ekf_state.json
+            # files written by older extractor versions that omit the field.
             pose = np.array(
-                [data["x"], data["y"], data["yaw"], data["vyaw"]],
+                [
+                    data["x"],
+                    data["y"],
+                    data["yaw"],
+                    data["vyaw"],
+                    data.get("vx", 0.0),
+                ],
                 dtype=np.float64,
             )
         except (KeyError, ValueError):
@@ -238,7 +246,7 @@ class _CovarianceSubscriber:
         redundant stat + JSON parse when both values are needed (e.g. _get_state).
 
         @return Tuple of (pose, uncertainty) where:
-                pose: shape (4,) = [x, y, yaw, vyaw], or None.
+                pose: shape (5,) = [x, y, yaw, vyaw, vx], or None.
                 uncertainty: shape (COVARIANCE_FEATURES_DIM,) feature vector, or None.
         """
         self._read_file()
@@ -275,7 +283,7 @@ class _CovarianceSubscriber:
 
         @note Use get_latest_state() when uncertainty is also needed to avoid
               a second file read.
-        @return Array of shape (4,) = [x, y, yaw, vyaw] or None.
+        @return Array of shape (5,) = [x, y, yaw, vyaw, vx] or None.
         """
         self._read_file()
         with self._lock:
@@ -283,9 +291,9 @@ class _CovarianceSubscriber:
                 return cast(np.ndarray, self._latest_pose.copy())
             return None
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Episode signal writers
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def publish_initial_pose(self, x: float, y: float, yaw: float) -> None:
         """
@@ -331,7 +339,8 @@ class _CovarianceSubscriber:
     ) -> None:
         """
         @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
-        @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed').
+        @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed') - the tier
+                          the episode STARTS in.
         @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
         @param datum_lon: Longitude (degrees) of vehicle spawn.
         """

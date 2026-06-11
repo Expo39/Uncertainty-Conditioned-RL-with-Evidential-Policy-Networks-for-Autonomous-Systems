@@ -29,7 +29,6 @@ Requires a windowed CARLA session (X11 display) and the `carla-server-demo` cont
 | `inspectors/__init__.py` | Subpackage exports |
 | `_drawing.py` | Free functions for CARLA debug geometry (dots, arcs, labels) |
 | `dryrun.sh` | Shell driver: streams logs and tears down inspect containers on exit |
-| `markov_analyser.py` | Offline diagnostic for the GNSS tier Markov chain. CPU-only (no CARLA). Run via `make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]`; reports stationary distribution, mean dwell, and time to first contiguous good window for episodes starting in a bad tier. |
 
 ## Modes
 
@@ -106,7 +105,7 @@ Keyboard controls (dryrun, `MANUAL=true`): Up = throttle, Down = brake, Left/Rig
 | `--layout` | `rectangle`, `trapezoid`, `irregular_a` | `rectangle` | Floor plan to spawn |
 | `--view` | `birds_eye`, `side`, `front` | `birds_eye` | Camera view (sensors mode only) |
 | `--zoom` | `close`, `wide` | `close` | Camera height (birds-eye only) |
-| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free` | `third_person` | Spectator view (dryrun only) |
+| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free`, `birds_eye` | `third_person` | Spectator view (dryrun only) |
 | `--termination-pause` | float (seconds) | `3.0` | Hold scene after episode end (dryrun only) |
 | `--episodes` | int | unlimited | Max episodes (dryrun only) |
 | `--duration` | int (seconds) | `86400` | Max run time (24 h) |

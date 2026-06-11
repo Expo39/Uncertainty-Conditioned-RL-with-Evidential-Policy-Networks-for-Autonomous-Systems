@@ -11,6 +11,8 @@ import argparse
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -40,6 +42,9 @@ except ImportError:
     CARLAParkingEnv = None  # type: ignore[assignment,misc]
     SafetyWrapper = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
+
+from uncertainty_rl.utils.bay_success import BaySuccessTracker
+from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
 
@@ -182,17 +187,20 @@ def make_eval_env(
     # debug: per-step DebugLogger diagnostics - off by default, same as training.
     debug: bool = config.get("debug", False)
 
-    # SafetyWrapper parameters from agent_config.yaml
-    aleatoric_scaling: float = float(config.get("safety_aleatoric_scaling", 0.5))
-    handoff_threshold: float = float(config.get("safety_handoff_threshold", 5.0))
+    # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
+    aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 0.5))
+    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 5.0))
 
+    # Connection / timing / ROS 2 come from env_config so evaluation runs the same
+    # environment the policy was trained in (single source of truth - eval_config
+    # holds only the condition sweep, not env settings).
     def _init() -> Any:
         base_env: Any = CARLAParkingEnv(
-            carla_host=config.get("carla_host", "localhost"),
-            carla_port=config.get("carla_port", 2000),
-            town=config.get("town", "FlatPlane"),
-            max_steps=config.get("max_steps", 500),
-            ros2_config=config.get("ros2", {}),
+            carla_host=_ec.get("carla_host", "localhost"),
+            carla_port=_ec.get("carla_port", 2000),
+            town=_ec.get("town", "FlatPlane"),
+            max_steps=_ec.get("max_steps", 500),
+            ros2_config=_ec.get("ros2", {}),
             carla_sensors_config=scaled_sensors,
             parking_scenarios_config=parking_config,
             include_covariance=include_covariance,
@@ -200,8 +208,10 @@ def make_eval_env(
             use_extra_spawns=use_extra_spawns,
             gnss_noise_profiles_path=gnss_profiles_path,
             gnss_noise_multiplier_override=gnss_override,
+            # Evaluation is judged at the strict published criterion, not the
+            # env default (0.0) or any relaxed training/curriculum margin.
+            bay_margin=STRICT_BAY_MARGIN,
             debug=debug,
-            success_dwell_steps=config.get("success_dwell_steps", 5),
         )
         return SafetyWrapper(
             base_env,
@@ -219,6 +229,7 @@ def evaluate_agent(
     n_episodes: int = 100,
     deterministic: bool = True,
     render: bool = False,
+    bay_tracker: Optional[BaySuccessTracker] = None,
 ) -> EvaluationMetrics:
     """
     @brief Evaluate agent performance.
@@ -227,6 +238,9 @@ def evaluate_agent(
     @param n_episodes: Number of evaluation episodes.
     @param deterministic: Use deterministic actions.
     @param render: Render episodes.
+    @param bay_tracker: Optional per-bay success tracker. When supplied, each
+           terminated episode is recorded against its target bay so the caller
+           can dump a per-bay success CSV across the whole condition sweep.
     @return EvaluationMetrics object with results.
 
     @note For EvidentialPPO models, uses get_action_with_uncertainty() to
@@ -253,9 +267,10 @@ def evaluate_agent(
             model.policy.get_action_with_uncertainty  # type: ignore[union-attr]
         )
         _set_uncertainty = env.env_method
+        _policy_device = model.policy.device
 
         def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
-            obs_tensor = th.as_tensor(obs)
+            obs_tensor = th.as_tensor(obs, device=_policy_device)
             action_tensor, uncertainty_dict = _get_action_with_uncertainty(
                 obs_tensor, deterministic=deterministic
             )
@@ -287,7 +302,26 @@ def evaluate_agent(
             steps += 1
             if done[0]:
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
-                success_flags[episode] = infos[0].get("success", False)
+                # On the terminal step DummyVecEnv has already auto-reset the
+                # wrapped env, so read the terminal info from terminal_info when
+                # present (Gymnasium auto-reset stashes the pre-reset info there)
+                # and fall back to the live info dict otherwise.
+                terminal_info = infos[0].get("terminal_info", infos[0])
+                episode_success = bool(terminal_info.get("success", False))
+                success_flags[episode] = episode_success
+                if bay_tracker is not None:
+                    # The bay id lives in the nested target_bay dict; fall back to
+                    # the flat target_bay_id key so recording survives any wrapper
+                    # that drops the nested dict. An empty id is ignored by record().
+                    target_bay = terminal_info.get("target_bay", {})
+                    bay_id = target_bay.get("bay_id", "") or terminal_info.get(
+                        "target_bay_id", ""
+                    )
+                    bay_tracker.record(
+                        bay_id=str(bay_id),
+                        success=episode_success,
+                        bay_type=str(target_bay.get("bay_type", "")),
+                    )
                 if render:
                     env.render()
 
@@ -308,19 +342,28 @@ def evaluate_across_conditions(
     train_config_path: str,
     n_episodes: int = 0,
     output_dir: str = "./evaluation_results",
+    baseline_path: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     @brief Evaluate agent across different physical conditions.
     @param model_path: Path to trained model.
     @param eval_config_path: Path to evaluation configuration file.
     @param env_config_path: Path to environment config (sensors, parking scenarios).
-    @param train_config_path: Path to training config (policy_type for model loading).
+    @param train_config_path: Path to training config (shared hyperparameters).
     @param n_episodes: Episodes per condition. 0 means read from eval_config
         (n_episodes key), falling back to 100.
     @param output_dir: Directory to save results.
+    @param baseline_path: Baseline config naming the evaluated ablation cell. Its
+        include_covariance / include_obstacle_obs / policy_type drive the obs shape
+        and model class. None defaults to the full method (DEFAULT_BASELINE).
     @return DataFrame with evaluation results.
     """
-    from uncertainty_rl.training.train_ppo import load_env_config
+    from uncertainty_rl.training.train_ppo import (
+        DEFAULT_BASELINE,
+        load_config,
+        load_env_config,
+    )
+    from uncertainty_rl.utils.config_merge import apply_baseline
 
     # Load configurations
     with open(eval_config_path, "r") as f:
@@ -330,8 +373,11 @@ def evaluate_across_conditions(
     # (CARLA-specific keys) so env_config is the single unified config for the env.
     env_config: Dict[str, Any] = load_env_config(env_config_path)
 
-    with open(train_config_path, "r") as f:
-        train_config: Dict[str, Any] = yaml.safe_load(f)
+    # Obs flags and policy_type live only in the baseline files. Overlay the
+    # evaluated baseline (full method by default) so the eval env builds the obs
+    # shape and loads the policy class the checkpoint was trained as.
+    baseline_cfg = load_config(baseline_path or DEFAULT_BASELINE)
+    apply_baseline(env_config, baseline_cfg)
 
     base_sensors = env_config.get("carla_sensors", {})
     conditions = eval_config.get("eval_conditions", [])
@@ -339,10 +385,10 @@ def evaluate_across_conditions(
     n_episodes = n_episodes or int(eval_config.get("n_episodes", 100))
 
     # Load model
-    logger.info("Loading model from %s...", model_path)
-    # Load model: use EvidentialPPO when train_config specifies policy_type=evidential
+    logger.info("Loading model from %s...", "/".join(Path(model_path).parts[-3:]))
+    # Load model: use EvidentialPPO when the baseline specifies policy_type=evidential
     # so that isinstance(model, EvidentialPPO) is True and uncertainty is collected.
-    policy_type = train_config.get("policy_type", "evidential")
+    policy_type = baseline_cfg.get("policy_type", "evidential")
     if policy_type == "evidential":
         model: PPO = EvidentialPPO.load(model_path)
     else:
@@ -361,10 +407,27 @@ def evaluate_across_conditions(
         )
     deterministic: bool = eval_config.get("deterministic", True)
 
+    # Per-bay success accounting. Each condition gets its own tracker dumped to
+    # outputs/bay_successes/eval/<baseline>/<leaf>/<condition>/, mirroring the
+    # training tree, because a bay's success at RTK-fixed and RTK-degraded are
+    # distinct questions and must not be conflated. The leaf is the checkpoint's
+    # parent directory name (seed<N>_<timestamp>); the baseline comes from the
+    # evaluated baseline config, falling back to the checkpoint's grandparent so
+    # the path is unambiguous even for ad-hoc checkpoints.
+    _eval_leaf = Path(model_path).parent.name or datetime.now().strftime(
+        "%d-%m-%Y-%H%M%S"
+    )
+    _eval_baseline = baseline_cfg.get(
+        "baseline_name", Path(model_path).parent.parent.name
+    )
+    _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
+    _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_baseline / _eval_leaf
+
     for condition in conditions:
         name = condition.get("name", "unknown")
         description = condition.get("description", "")
         logger.info("Evaluating condition: %s - %s", name, description)
+        bay_tracker = BaySuccessTracker()
 
         # Create environment for this condition
         base_env = make_eval_env(condition, eval_config, base_sensors, env_config)
@@ -382,6 +445,21 @@ def evaluate_across_conditions(
             env=eval_env,
             n_episodes=n_episodes,
             deterministic=deterministic,
+            bay_tracker=bay_tracker,
+        )
+
+        # Dump this condition's per-bay success counts.
+        bay_tracker.dump(
+            _bay_eval_root / name,
+            run_info={
+                "run_name": _eval_run_name,
+                "model_path": model_path,
+                "condition": name,
+                "description": description,
+                "n_episodes": n_episodes,
+                "gnss_noise_multiplier": condition.get("gnss_noise_multiplier", 1.0),
+                "evaluated": datetime.now().strftime("%d-%m-%Y %H:%M"),
+            },
         )
 
         # Store results: merge metrics dict with condition metadata in one pass
@@ -536,7 +614,18 @@ def main() -> None:
         "--train-config",
         type=str,
         default="configs/train_config.yaml",
-        help="Path to training config (for policy_type used in model loading)",
+        help="Path to training config (shared hyperparameters)",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Baseline config naming the evaluated ablation cell "
+            "(configs/baselines/*.yaml). Its include_covariance / "
+            "include_obstacle_obs / policy_type drive the obs shape and model "
+            "class. Omit to evaluate the full method."
+        ),
     )
     parser.add_argument(
         "--n-episodes",
@@ -572,6 +661,7 @@ def main() -> None:
         train_config_path=args.train_config,
         n_episodes=args.n_episodes,
         output_dir=args.output_dir,
+        baseline_path=args.baseline,
     )
 
     # Create plots

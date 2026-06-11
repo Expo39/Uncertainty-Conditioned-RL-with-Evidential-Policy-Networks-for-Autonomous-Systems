@@ -7,8 +7,6 @@ The CARLA ROS bridge publishes sensor_msgs/Imu with zero covariance on all
 fields. robot_localization interprets zero covariance as infinite sensor
 reliability, which pins the EKF state to the IMU measurement with no
 uncertainty growth between GNSS fixes.
-
-See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 """
 
 import json
@@ -69,6 +67,11 @@ class ImuNoiseRelayNode(Node):
         # Per-episode accelerometer scale-factor error, per axis. Each axis
         # has independent residual scale after factory calibration.
         self.declare_parameter("imu_accel_scale_factor_limit", 0.005)
+        # Seed for the noise RNG. This node runs in the ros2-bridge container,
+        # a separate process from training, so it cannot inherit the training
+        # seed; it must be seeded independently. Matches the training seed (42)
+        # by default so a fixed-seed training run sees reproducible IMU noise.
+        self.declare_parameter("seed", 42)
 
         imu_input_topic: str = str(
             self.get_parameter("imu_input_topic").get_parameter_value().string_value
@@ -123,18 +126,25 @@ class ImuNoiseRelayNode(Node):
         self._accel_bias_limit: float = accel_bias_limit
         self._gyro_scale_limit: float = gyro_scale_limit
         self._accel_scale_limit: float = accel_scale_limit
+        # Dedicated seeded RNG instance, isolated from the global random module.
+        seed = int(self.get_parameter("seed").get_parameter_value().integer_value)
+        self._rng: random.Random = random.Random(seed)
         # Per-episode in-run bias offsets. Resampled when episode_config.json seq increments.
-        self._gyro_bias: float = random.uniform(-gyro_bias_limit, gyro_bias_limit)
-        self._accel_bias_x: float = random.uniform(-accel_bias_limit, accel_bias_limit)
-        self._accel_bias_y: float = random.uniform(-accel_bias_limit, accel_bias_limit)
+        self._gyro_bias: float = self._rng.uniform(-gyro_bias_limit, gyro_bias_limit)
+        self._accel_bias_x: float = self._rng.uniform(
+            -accel_bias_limit, accel_bias_limit
+        )
+        self._accel_bias_y: float = self._rng.uniform(
+            -accel_bias_limit, accel_bias_limit
+        )
         # Per-episode multiplicative scale factors. 1.0 == perfect.
-        self._gyro_scale_factor: float = 1.0 + random.uniform(
+        self._gyro_scale_factor: float = 1.0 + self._rng.uniform(
             -gyro_scale_limit, gyro_scale_limit
         )
-        self._accel_scale_factor_x: float = 1.0 + random.uniform(
+        self._accel_scale_factor_x: float = 1.0 + self._rng.uniform(
             -accel_scale_limit, accel_scale_limit
         )
-        self._accel_scale_factor_y: float = 1.0 + random.uniform(
+        self._accel_scale_factor_y: float = 1.0 + self._rng.uniform(
             -accel_scale_limit, accel_scale_limit
         )
         # Episode config file watching - same file written by _CovarianceSubscriber at reset.
@@ -225,22 +235,22 @@ class ImuNoiseRelayNode(Node):
             if seq <= self._episode_config_seq:
                 return
             self._episode_config_seq = seq
-            self._gyro_bias = random.uniform(
+            self._gyro_bias = self._rng.uniform(
                 -self._gyro_bias_limit, self._gyro_bias_limit
             )
-            self._accel_bias_x = random.uniform(
+            self._accel_bias_x = self._rng.uniform(
                 -self._accel_bias_limit, self._accel_bias_limit
             )
-            self._accel_bias_y = random.uniform(
+            self._accel_bias_y = self._rng.uniform(
                 -self._accel_bias_limit, self._accel_bias_limit
             )
-            self._gyro_scale_factor = 1.0 + random.uniform(
+            self._gyro_scale_factor = 1.0 + self._rng.uniform(
                 -self._gyro_scale_limit, self._gyro_scale_limit
             )
-            self._accel_scale_factor_x = 1.0 + random.uniform(
+            self._accel_scale_factor_x = 1.0 + self._rng.uniform(
                 -self._accel_scale_limit, self._accel_scale_limit
             )
-            self._accel_scale_factor_y = 1.0 + random.uniform(
+            self._accel_scale_factor_y = 1.0 + self._rng.uniform(
                 -self._accel_scale_limit, self._accel_scale_limit
             )
             self.get_logger().debug(
@@ -307,18 +317,18 @@ class ImuNoiseRelayNode(Node):
                 # way: scale * truth + bias + noise.
                 out.angular_velocity.z = (
                     out.angular_velocity.z * self._gyro_scale_factor
-                    + random.gauss(0.0, self._gyro_noise_stddev)
+                    + self._rng.gauss(0.0, self._gyro_noise_stddev)
                     + self._gyro_bias
                 )
             if not accel_zupt:
                 out.linear_acceleration.x = (
                     out.linear_acceleration.x * self._accel_scale_factor_x
-                    + random.gauss(0.0, self._accel_noise_stddev)
+                    + self._rng.gauss(0.0, self._accel_noise_stddev)
                     + self._accel_bias_x
                 )
                 out.linear_acceleration.y = (
                     out.linear_acceleration.y * self._accel_scale_factor_y
-                    + random.gauss(0.0, self._accel_noise_stddev)
+                    + self._rng.gauss(0.0, self._accel_noise_stddev)
                     + self._accel_bias_y
                 )
 

@@ -10,9 +10,37 @@ PNG.
 
 import math
 from pathlib import Path
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
+
+# Motorcycle bays render in a neutral grey rather than their palette hue so the
+# always-empty bays read as distinct from drivable perpendicular/angled bays.
+MOTORCYCLE_DRAW_HEX = "#888888"
+
+# Bay-type legend entries in stable display order. Only the types actually
+# present in a layout are emitted (see plot_layout), so a lot with no angled or
+# motorcycle bays never lists them.
+_BAY_LEGEND_ORDER: List[Tuple[str, str]] = [
+    ("perpendicular", "Perpendicular bays"),
+    ("angled", "Angled (45 deg) bays"),
+    ("parallel", "Parallel bays"),
+    ("motorcycle", "Motorcycle bays"),
+]
+
+
+def _bay_legend_colour(bay_type: str) -> str:
+    """
+    @brief Resolve the plot colour for a bay type (drawing and legend share this).
+    @param bay_type: Bay type key (e.g. "perpendicular", "motorcycle").
+    @return Hex colour string; motorcycle bays use the neutral draw grey.
+    """
+    from scripts.colours import BAY_HEX
+
+    if bay_type == "motorcycle":
+        return MOTORCYCLE_DRAW_HEX
+    return BAY_HEX.get(bay_type, "grey")
+
 
 # ---------------------------------------------------------------------------
 # World-frame transformation
@@ -200,17 +228,31 @@ def plot_layout(
     world_layout: Dict[str, Any],
     plot_path: Path,
     legend_loc: str = "upper right",
+    show_patrol: bool = True,
+    show_pedestrians: bool = True,
+    show_extra_spawns: bool = True,
+    oob_inflation_margin: Optional[float] = None,
 ) -> None:
     """
     @brief Render a bird's-eye PNG of the lot layout.
 
     Layers (back to front): grey lot polygon, bay rectangles (colour-coded by
-    type), yaw arrows, spawn triangles, patrol path, pedestrian zone overlays.
+    type), yaw arrows, spawn triangles, patrol path, pedestrian zone overlays,
+    and an optional soft out-of-bounds boundary. The patrol path, pedestrian
+    zones, and extra spawns are drawn only when the corresponding flags are set,
+    so the PNG reflects the environment the agent actually trains in. The primary
+    spawn is always drawn.
 
     @param shape: Floor plan shape name for title.
     @param world_layout: World-frame layout dict.
     @param plot_path: Path to save the PNG.
     @param legend_loc: Legend location (default: 'upper right').
+    @param show_patrol: Draw the patrol path and its legend entry.
+    @param show_pedestrians: Draw the pedestrian zones and their legend entry.
+    @param show_extra_spawns: Draw the extra (non-primary) spawn triangles. The
+           primary spawn is always drawn regardless of this flag.
+    @param oob_inflation_margin: When not None, draw the lot polygon inflated by
+           this many metres as a dashed soft out-of-bounds boundary.
     """
     try:
         import matplotlib.patches as mpatches
@@ -223,12 +265,13 @@ def plot_layout(
         return
 
     from scripts.colours import (
-        BAY_HEX,
         HEX_LOT,
+        HEX_OOB_BOUNDARY,
         HEX_PATROL_PATH,
         HEX_PEDESTRIAN_ZONE,
         HEX_PEDESTRIAN_ZONE_EDGE,
     )
+    from uncertainty_rl.utils.geometry import inflate_polygon
 
     fig, ax = plt.subplots(figsize=(10, 10))
     ax.set_aspect("equal")
@@ -256,11 +299,23 @@ def plot_layout(
     )
     ax.add_patch(perim_patch)
 
+    # Soft out-of-bounds boundary: the lot polygon inflated outward by the margin.
+    if oob_inflation_margin is not None:
+        oob_pts = inflate_polygon(corner_pts, oob_inflation_margin)
+        ax.add_patch(
+            MPoly(
+                oob_pts,
+                closed=True,
+                facecolor="none",
+                edgecolor=HEX_OOB_BOUNDARY,
+                linewidth=1.5,
+                linestyle="--",
+            )
+        )
+
     for bay in world_layout["bays"]:
         bay_type = bay["bay_type"]
-        colour = (
-            "#888888" if bay_type == "motorcycle" else BAY_HEX.get(bay_type, "grey")
-        )
+        colour = _bay_legend_colour(bay_type)
         bx, by = bay["x"], bay["y"]
         yaw_rad = math.radians(bay["yaw_deg"])
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
@@ -281,25 +336,40 @@ def plot_layout(
                 zorder=3,
             )
         )
-
-    for zone in world_layout.get("pedestrian_zones", []):
-        ax.add_patch(
-            mpatches.FancyBboxPatch(
-                (
-                    zone["centre_x"] - zone["half_width"],
-                    zone["centre_y"] - zone["half_height"],
-                ),
-                zone["half_width"] * 2.0,
-                zone["half_height"] * 2.0,
-                boxstyle="round,pad=0.4",
-                facecolor=HEX_PEDESTRIAN_ZONE,
-                edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
-                alpha=0.40,
-                linewidth=1.5,
-                linestyle="--",
-                zorder=4,
-            )
+        # Add bay ID label at the centre of the bay
+        bay_id = bay.get("id", "").split("_")[-1]  # Extract just the number
+        ax.text(
+            bx,
+            by,
+            bay_id,
+            ha="center",
+            va="center",
+            fontsize=10,
+            color="black",
+            weight="bold",
+            path_effects=[withStroke(linewidth=1, foreground="white")],
+            zorder=4,
         )
+
+    if show_pedestrians:
+        for zone in world_layout.get("pedestrian_zones", []):
+            ax.add_patch(
+                mpatches.FancyBboxPatch(
+                    (
+                        zone["centre_x"] - zone["half_width"],
+                        zone["centre_y"] - zone["half_height"],
+                    ),
+                    zone["half_width"] * 2.0,
+                    zone["half_height"] * 2.0,
+                    boxstyle="round,pad=0.4",
+                    facecolor=HEX_PEDESTRIAN_ZONE,
+                    edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
+                    alpha=0.40,
+                    linewidth=1.5,
+                    linestyle="--",
+                    zorder=4,
+                )
+            )
 
     for obs in world_layout.get("obstacles", []):
         ax.add_patch(
@@ -319,10 +389,11 @@ def plot_layout(
 
     stroke_effect = [withStroke(linewidth=2, foreground="black")]
     tri_local = [(1.2, 0.0), (-0.72, 0.72), (-0.72, -0.72)]
-    for idx, sp in enumerate(
-        [world_layout["spawn_transform"]]
-        + world_layout.get("extra_spawn_transforms", [])
-    ):
+    # The primary spawn is always drawn; extras only when show_extra_spawns is set.
+    spawns = [world_layout["spawn_transform"]]
+    if show_extra_spawns:
+        spawns += world_layout.get("extra_spawn_transforms", [])
+    for idx, sp in enumerate(spawns):
         yaw_rad = math.radians(sp["yaw_deg"])
         cos_y, sin_y = math.cos(yaw_rad), math.sin(yaw_rad)
         tri_world = [
@@ -353,7 +424,7 @@ def plot_layout(
         )
 
     patrol = world_layout["patrol_waypoints"]
-    if patrol:
+    if show_patrol and patrol:
         px = [wp["x"] for wp in patrol] + [patrol[0]["x"]]
         py = [wp["y"] for wp in patrol] + [patrol[0]["y"]]
         ax.plot(
@@ -366,36 +437,76 @@ def plot_layout(
             label="Patrol path",
         )
 
-    handles = [
-        mpatches.Patch(color=BAY_HEX["perpendicular"], label="Perpendicular bays"),
-        mpatches.Patch(color=BAY_HEX["angled"], label="Angled (45 deg) bays"),
-        mpatches.Patch(color=BAY_HEX["motorcycle"], label="Motorcycle bays"),
-        mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary"),
-        Line2D(
-            [0],
-            [0],
-            color=HEX_PATROL_PATH,
-            linestyle="--",
-            linewidth=1.5,
-            label="Patrol path",
-        ),
-        mpatches.FancyBboxPatch(
-            (0, 0),
-            1,
-            1,
-            boxstyle="round,pad=0.2",
-            facecolor=HEX_PEDESTRIAN_ZONE,
-            edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
-            alpha=0.5,
-            linestyle="--",
-            label="Pedestrian zones",
-        ),
+    # Build the legend from only the elements that were actually drawn, so it
+    # never lists a bay type, patrol path, or pedestrian zone absent from this
+    # layout. Bay-type entries follow _BAY_LEGEND_ORDER for a stable order.
+    present_types = {bay["bay_type"] for bay in world_layout["bays"]}
+    handles: List[Any] = [
+        mpatches.Patch(color=_bay_legend_colour(bay_type), label=label)
+        for bay_type, label in _BAY_LEGEND_ORDER
+        if bay_type in present_types
     ]
+    handles.append(
+        mpatches.Patch(color=HEX_LOT, edgecolor="black", label="Lot boundary")
+    )
+    if oob_inflation_margin is not None:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=HEX_OOB_BOUNDARY,
+                linestyle="--",
+                linewidth=1.5,
+                label=f"OOB boundary (lot + {oob_inflation_margin:g} m)",
+            )
+        )
+    if show_patrol:
+        handles.append(
+            Line2D(
+                [0],
+                [0],
+                color=HEX_PATROL_PATH,
+                linestyle="--",
+                linewidth=1.5,
+                label="Patrol path",
+            )
+        )
+    if show_pedestrians:
+        handles.append(
+            mpatches.FancyBboxPatch(
+                (0, 0),
+                1,
+                1,
+                boxstyle="round,pad=0.2",
+                facecolor=HEX_PEDESTRIAN_ZONE,
+                edgecolor=HEX_PEDESTRIAN_ZONE_EDGE,
+                alpha=0.5,
+                linestyle="--",
+                label="Pedestrian zones",
+            )
+        )
     ax.legend(handles=handles, loc=legend_loc, fontsize=9)
     ax.grid(True, alpha=0.3)
 
+    # Pin the data limits to the lot extent (plus a fixed margin) so the saved
+    # canvas is well-defined. Legend handles such as the pedestrian-zone
+    # FancyBboxPatch carry a data-space footprint at (0, 0); without explicit
+    # limits, bbox_inches="tight" expands the figure to enclose that footprint
+    # and produces a runaway multi-gigapixel PNG. Fixed limits + a fixed bbox
+    # avoid that entirely. The Y axis is left inverted (set above).
+    #
+    # The padding clears the soft OOB skirt (which extends oob_inflation_margin
+    # beyond the lot) with extra headroom, so the dashed boundary is never drawn
+    # against the axis edge.
+    pad = 5.0
+    if oob_inflation_margin is not None:
+        pad = oob_inflation_margin + 5.0
+    xs = [p[0] for p in corner_pts]
+    ys = [p[1] for p in corner_pts]
+    ax.set_xlim(min(xs) - pad, max(xs) + pad)
+    ax.set_ylim(max(ys) + pad, min(ys) - pad)
+
     plot_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.tight_layout()
-    plt.savefig(plot_path, dpi=150, bbox_inches="tight")
+    plt.savefig(plot_path, dpi=150)
     plt.close()
     print(f"  Plot:    {plot_path}")

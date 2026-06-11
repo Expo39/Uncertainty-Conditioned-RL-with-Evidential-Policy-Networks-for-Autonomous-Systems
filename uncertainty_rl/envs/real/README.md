@@ -6,7 +6,7 @@ inference scaffolding needed to run a trained policy on a physical instrumented 
 
 **Status:** Stubs complete. LiDAR hardware callback (`_get_lidar_scan`) requires
 hardware-specific implementation before closed-loop testing. See
-`docs/detailed_notes/real_world_deployment.md` for the pre-deployment checklist.
+`docs/detailed_notes/deployment/real_world_deployment.md` for the pre-deployment checklist.
 
 ---
 
@@ -72,8 +72,10 @@ deployment = RealWorldDeployment.from_mission(
     calibration_path="configs/deployment/real/actuation_calibration.yaml",
 )
 
-# Map policy action to physical command (drive is bipolar: + = throttle, - = brake)
-steering, drive = deployment.calibrate_action(raw_action[0], raw_action[1])
+# Map policy action to physical command (steering, throttle, brake)
+steering, throttle, brake = deployment.calibrate_action(
+    raw_action[0], raw_action[1], raw_action[2]
+)
 
 # Reference pose in lot frame (used for EKF frame calibration)
 lot_x, lot_y, heading_rad = deployment.reference_pose()
@@ -113,7 +115,7 @@ frame and the surveyed lot frame, using the datum coordinates from `real_world_d
 The transform is applied at every step so that `dx/dy/dyaw` (obs indices 4-6) point to
 the correct target bay.
 
-See `docs/detailed_notes/real_world_deployment.md` for the full calibration
+See `docs/detailed_notes/deployment/real_world_deployment.md` for the full calibration
 derivation and the EKF convergence loop parameters.
 
 ---
@@ -132,5 +134,5 @@ obstacle avoidance relies on the human safety operator during initial testing.
 - `uncertainty_rl/envs/sim/` - CARLA training environment (shared `_parking_core.py`)
 - `uncertainty_rl/envs/safety_wrapper.py` - `SafetyWrapper.apply()` static method
 - `uncertainty_rl/utils/actuation_calibration.py` - `ActuationCalibration` class
-- `docs/detailed_notes/real_world_deployment.md` - full deployment guide
+- `docs/detailed_notes/deployment/real_world_deployment.md` - full deployment guide
 - `documentation/extras/design/sim_to_real_transfer.md` - sim-to-real gap analysis

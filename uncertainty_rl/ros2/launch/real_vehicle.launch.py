@@ -74,7 +74,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
-    # -- Static TF nodes ---------------------------------------------------
+    # Static TF nodes
     # Real vehicle uses ROS-conventional frame names (base_link, imu_link, etc.)
     # rather than CARLA's ego_vehicle/* names.
     sensor_tf_nodes = build_sensor_tf_nodes(
@@ -90,7 +90,7 @@ def generate_launch_description() -> LaunchDescription:
         static_tf("map_to_odom_tf", "map", "odom", 0.0, 0.0, 0.0)
     )
 
-    # -- Sensor relay node -------------------------------------------------
+    # Sensor relay node
     # Same executable as sim, with all noise injection disabled. The relays
     # do flat-earth projection (GNSS), COG heading derivation, IMU covariance
     # stamping and ZUPT clamping. Real receiver/IMU values flow through
@@ -146,7 +146,7 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    # -- EKF node ----------------------------------------------------------
+    # EKF node
     # Same EKF params as sim, including pose0=/gnss/heading so the COG-derived
     # yaw correction is available in real deployment too. Only frame names,
     # topic names, and use_sim_time differ from the sim launch.
@@ -167,7 +167,7 @@ def generate_launch_description() -> LaunchDescription:
         remappings=[("odometry/filtered", odom_filtered_topic)],
     )
 
-    # -- CovarianceExtractorNode -------------------------------------------
+    # CovarianceExtractorNode
     # Identical config to sim: subscribes to /odometry/filtered, writes ekf_state.json.
     covariance_extractor = Node(
         package="uncertainty_rl_ros2",

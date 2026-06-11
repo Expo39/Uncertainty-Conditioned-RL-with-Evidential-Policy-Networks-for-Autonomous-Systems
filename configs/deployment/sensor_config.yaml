@@ -23,8 +23,7 @@ sensors:
       z: 1.6 
 
   lidar:
-    # 2D LiDAR: Obstacle detection only (NOT localisation).
-    # See documentation/detailed_notes/sensor_noise_models.md for full derivation.
+    # 2D LiDAR: obstacle detection only (not localisation).
     range: 25.0  # Max range (metres)
     channels: 1  # Single horizontal scan plane
     fov_deg: 270.0  # Physical FOV (rear 90 deg blocked by car body)

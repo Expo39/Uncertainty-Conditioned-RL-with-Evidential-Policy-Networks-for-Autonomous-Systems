@@ -5,18 +5,33 @@
 debug: false  # Emit per-step diagnostics and extra HUD line in the visualiser.
 
 inspect:
-  dryrun_action: [0.0, 0.5]  # [steer, drive] applied each step in dryrun mode. drive bipolar: +ve = throttle, -ve = brake.
+  dryrun_action: [0.0, 0.5, 0.0]  # Policy-space [steer, throttle, brake]. Env clips throttle/brake to [0, 1]; negative values are pedal-off.
 
 carla_host: "uncertainty-rl-carla-0"  # Worker 0 container name. Use "localhost" for local dev.
 carla_port: 2000
 town: "FlatPlane"  # Custom OpenDRIVE world loaded via generate_opendrive_world().
-max_steps: 1750  # Episode length (steps). 1750 * 0.05s = 87.5s sim time.
-success_dwell_steps: 5  # Consecutive steps all success criteria must hold before episode ends as success.
-action_repeat: 1  # Policy runs at 1/carla_timestep = 20 Hz. See detailed_notes/ekf_pipeline.md.
-use_extra_spawns: true  # Include extra spawn transforms from layout YAMLs.
+max_steps: 1750  # Episode length in sim ticks (max_steps / action_repeat policy decisions).
+action_repeat: 4  # Sim ticks per policy decision. One env.step() (= one SB3 timestep) advances this many ticks; the policy acts every carla_timestep * action_repeat seconds.
 carla_timestep: 0.05  # Simulation timestep (seconds), 20 Hz.
+
+# Per-stage difficulty (bay_margin, fixed_floor_plan, fixed_gnss_tier,
+# bay_occupancy_*, lidar noise.enabled) lives in the curriculum stage files -
+# see configs/deployment/sim/curriculum/. They override the base values here.
+#
+# Base default for the extra (non-primary) spawn points. Every stage overrides
+# this, so training/eval always use the stage value; the base exists so the
+# layout generator (which applies no stage) honours the same setting when
+# drawing the PNGs.
+use_extra_spawns: false
 map_load_sleep: 1.0  # Seconds to wait after map load before continuing.
-no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active). ~3-4x speedup.
+no_rendering_mode: true  # Disable Unreal rendering (cameras empty, physics active).
+
+# Simulation-only CARLA crash recovery; lets the env reconnect after a headless
+# CARLA segfault. Deep-merged onto the ros2 block from agent_config.yaml.
+ros2:
+  carla_recovery:
+    max_reconnect_attempts: 30  # Reconnect tries before giving up (fails loud).
+    reconnect_poll_interval_s: 5.0  # Seconds between RPC-port readiness probes.
 
 gnss_noise_profiles: configs/deployment/sim/gnss_noise_profiles.yaml
 
@@ -24,21 +39,19 @@ gnss_datum_lat: 0.0  # degrees north. 0.0 = auto-latch from first GNSS reading.
 gnss_datum_lon: 0.0  # degrees east.  0.0 = auto-latch from first GNSS reading.
 
 carla_sensors:
-  imu: 
+  imu:
     sensor_tick: 0.05  # Publish rate (seconds). IMU noise injected by ImuNoiseRelayNode.
 
-  lidar:  # 2D LiDAR (SICK TiM571). Obstacle detection only - not used for localisation.
-    # Values match real TiM571 hardware. See documentation/detailed_notes/sensor_noise_models.md.
-    channels: 1  # Single horizontal scan plane.
-    range: 25.0  # Max range (metres).
+  lidar:  # 2D LiDAR (SICK TiM571). CARLA spawn keys only - range/channels come
+    # from sensor_config.yaml (the physical sensor suite source), injected by
+    # load_env_config.
     points_per_second: 12150  # ~810 pts/scan at 15 Hz. Min-distance features are density-invariant.
     rotation_frequency: 15.0  # Native scan rate (Hz). CARLA flushes on scan boundary.
     upper_fov: 0.0  # Flat 2D plane.
     lower_fov: 0.0  # Flat 2D plane.
     sensor_tick: 0.067  # 1/15 Hz. Rear 180 deg discarded in _get_obstacle_features().
 
-    noise:
-      enabled: true
+    noise:  # enabled flag is stage-owned (Phase B); parameters are structural.
       range_random_stddev_m: 0.020  # m 1-sigma - see sensor_noise_models.md
       range_bias_limit_m: 0.060     # m half-range - see sensor_noise_models.md
       dropout_rate: 0.0             # no datasheet basis for non-zero value
@@ -48,18 +61,21 @@ carla_sensors:
     sensor_tick: 0.05  # Publish rate (seconds).
 
 parking_scenarios:
+  # Structural scenario settings only. The per-stage difficulty knobs
+  # (fixed_floor_plan, fixed_gnss_tier, fixed_target_bay_id, allowed_bay_ids,
+  # bay_occupancy_min/max) live in the curriculum stage files, not here.
+
   # CARLA blueprint for perimeter markers.
-  perimeter_marker_blueprint: "static.prop.constructioncone"  # CARLA cone blueprint used as perimeter
+  perimeter_marker_blueprint: "static.prop.constructioncone"
   perimeter_cone_spacing: 2.0  # Metres between perimeter markers.
-  bay_occupancy_min: 0.3  # Lower bound for per-episode bay occupancy.
-  bay_occupancy_max: 0.8  # Upper bound for per-episode bay occupancy.
-  num_patrol_vehicles_max: 1  # NPC patrol vehicles per episode.
+  spawn_perimeter_cones: false  # false = soft OOB penalty enforces the lot edge.
+  num_patrol_vehicles_max: 0  # NPC patrol vehicles per episode.
   patrol_obstacle_stop_distance: 5.0  # Metres - patrol brakes for vehicles in forward cone.
   patrol_pedestrian_stop_distance: 4.0  # Metres - patrol brakes for pedestrians in range.
   patrol_max_speed_ms: 3.0  # Patrol speed (m/s), applied via kinematic control.
   patrol_heading_gain: 0.8  # Proportional gain for patrol heading controller.
   pedestrian_speed_ms: 1.4  # Walk speed (m/s), applied via WalkerControl.
-  pedestrian_spawn_probability: 0.8  # Per-zone spawn probability each episode (0.0-1.0).
+  pedestrian_spawn_probability: 0.0  # Per-zone spawn probability each episode.
   pedestrian_heading_resample_steps: 30  # Steps between direction changes.
   pedestrian_max_lifetime_steps: 200  # Steps before despawn and respawn in zone.
   floor_plans:

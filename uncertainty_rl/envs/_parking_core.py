@@ -19,6 +19,15 @@ import yaml
 
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
+    OBS_NORM_CLIP,
+    OBS_OBSTACLE_BEARING_SCALE,
+    OBS_OBSTACLE_DIST_SCALE,
+    OBS_SPEED_SCALE,
+    OBS_STD_POS_SCALE,
+    OBS_STD_YAW_SCALE,
+    OBS_TARGET_POS_SCALE,
+    OBS_TARGET_YAW_SCALE,
+    OBS_YAW_RATE_SCALE,
     OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
@@ -31,6 +40,70 @@ logger = logging.getLogger(__name__)
 # Left: bearing > _SECTOR_BOUNDARY; forward: |bearing| <= _SECTOR_BOUNDARY;
 # right: < -_SECTOR_BOUNDARY.
 _SECTOR_BOUNDARY: float = math.radians(15.0)
+
+# Cache of fixed observation-scale vectors keyed by the (include_covariance,
+# include_obstacle_obs) ablation flags, so the per-step hot path reuses one
+# array per layout instead of rebuilding it.
+_obs_scale_cache: Dict[Tuple[bool, bool], np.ndarray] = {}
+
+
+def _obs_scale_vector(
+    include_covariance: bool,
+    include_obstacle_obs: bool,
+) -> np.ndarray:
+    """
+    @brief Per-dimension fixed scale vector matching the build_observation layout.
+    @param include_covariance: Whether covariance dims (2-4) are present.
+    @param include_obstacle_obs: Whether obstacle dims (last 5) are present.
+    @return float32 array of divisors, one per active observation dimension, in
+            the order [speed, vyaw, (std_x, std_y, std_yaw), dx, dy, dyaw,
+            (left_dist, left_bearing, right_dist, right_bearing, forward_dist)].
+    """
+    key = (include_covariance, include_obstacle_obs)
+    cached = _obs_scale_cache.get(key)
+    if cached is not None:
+        return cached
+    parts = [OBS_SPEED_SCALE, OBS_YAW_RATE_SCALE]
+    if include_covariance:
+        parts += [OBS_STD_POS_SCALE, OBS_STD_POS_SCALE, OBS_STD_YAW_SCALE]
+    parts += [OBS_TARGET_POS_SCALE, OBS_TARGET_POS_SCALE, OBS_TARGET_YAW_SCALE]
+    if include_obstacle_obs:
+        parts += [
+            OBS_OBSTACLE_DIST_SCALE,
+            OBS_OBSTACLE_BEARING_SCALE,
+            OBS_OBSTACLE_DIST_SCALE,
+            OBS_OBSTACLE_BEARING_SCALE,
+            OBS_OBSTACLE_DIST_SCALE,
+        ]
+    vec = np.array(parts, dtype=np.float32)
+    _obs_scale_cache[key] = vec
+    return vec
+
+
+def normalise_observation(
+    raw_obs: np.ndarray,
+    include_covariance: bool,
+    include_obstacle_obs: bool,
+) -> np.ndarray:
+    """
+    @brief Scale a raw observation by fixed physical ranges and clip.
+
+    Divides each component by its fixed physical scale (see constants.py
+    OBS_*_SCALE) and clips to [-OBS_NORM_CLIP, OBS_NORM_CLIP]. The scales are
+    stage- and layout-invariant, so the mapping is identical in training,
+    evaluation, OOD layouts, and on the real vehicle. Returns a NEW array; the
+    input is not mutated (callers reuse a raw buffer for internal diagnostics).
+
+    @param raw_obs: Raw (unscaled) observation vector.
+    @param include_covariance: Whether covariance dims are present.
+    @param include_obstacle_obs: Whether obstacle dims are present.
+    @return New float32 array of the same shape, scaled and clipped.
+    """
+    scale = _obs_scale_vector(include_covariance, include_obstacle_obs)
+    out = np.asarray(raw_obs, dtype=np.float32) / scale
+    np.clip(out, -OBS_NORM_CLIP, OBS_NORM_CLIP, out=out)
+    return np.asarray(out, dtype=np.float32)
+
 
 # Shared layout cache: keyed by resolved absolute path string so multiple env
 # instances in the same process share the parsed YAML without re-reading disk.
@@ -47,9 +120,9 @@ def compute_obs_dim(
     @param include_obstacle_obs: Whether hemispheric LiDAR features are included.
     @return Integer observation dimension.
 
-    Base: VEHICLE_STATE_DIM (1) + TARGET_POSE_DIM (3) = 4
-    With include_covariance: +COVARIANCE_FEATURES_DIM (3) -> 7
-    With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) -> 12 (or 9 without cov)
+    Base: VEHICLE_STATE_DIM (2) + TARGET_POSE_DIM (3) = 5
+    With include_covariance: +COVARIANCE_FEATURES_DIM (3) -> 8
+    With include_obstacle_obs: +OBSTACLE_FEATURES_DIM (5) -> 13 (or 10 without cov)
     """
     dim = VEHICLE_STATE_DIM + TARGET_POSE_DIM
     if include_covariance:
@@ -71,15 +144,19 @@ def build_observation(
     """
     @brief Construct the policy observation vector.
 
-    Fills obs_buffer in-place and returns a copy. The caller is responsible
-    for providing a pre-allocated buffer of the correct shape.
+    Fills obs_buffer in-place with RAW (physical-unit) values, then returns a
+    NORMALISED copy (see normalise_observation): the returned vector is what the
+    policy consumes, while obs_buffer retains the raw values for the caller's
+    internal diagnostics/visualisation. The caller is responsible for providing
+    a pre-allocated buffer of the correct shape.
 
     When ekf_pose is None (EKF not yet initialised), all pose-derived dims
-    (velocity, target) are set to zero. When uncertainty is None, covariance
+    (speed, vyaw, target) are set to zero. When uncertainty is None, covariance
     dims remain zero. When uncertainty is present but all-zero, a debug log
     is emitted (EKF may still be initialising).
 
-    @param ekf_pose: 4-element array [x, y, yaw, vyaw] in world frame,
+    @param ekf_pose: 5-element array [x, y, yaw, vyaw, vx] in world frame
+                     (vx is signed body-frame longitudinal velocity, m/s),
                      or None if EKF is not yet available.
     @param uncertainty: COVARIANCE_FEATURES_DIM-element array of covariance
                         features, or None if unavailable.
@@ -102,6 +179,10 @@ def build_observation(
             if -math.pi <= raw_vyaw <= math.pi
             else max(-math.pi, min(math.pi, raw_vyaw))
         )
+        # Clip body-frame speed at zero - the vehicle is forward-only, so a
+        # negative EKF reading (transient filter ringing at hard decel) is
+        # never physically valid.
+        speed = max(0.0, float(ekf_pose[4]))
 
         dx, dy, dyaw = _compute_relative_target_pose(
             x,
@@ -112,46 +193,52 @@ def build_observation(
             float(target_bay["yaw"]),
         )
     else:
+        speed = 0.0
         vyaw = 0.0
         dx = dy = dyaw = 0.0
 
     if not include_covariance:
-        obs_buffer[0] = vyaw
-        obs_buffer[1] = dx
-        obs_buffer[2] = dy
-        obs_buffer[3] = dyaw
+        # Layout: [speed(1), vyaw(1), target(3), obstacle(5)] -> 10 dims max
+        obs_buffer[0] = speed
+        obs_buffer[1] = vyaw
+        obs_buffer[2] = dx
+        obs_buffer[3] = dy
+        obs_buffer[4] = dyaw
         if include_obstacle_obs:
-            obs_buffer[4 : 4 + OBSTACLE_FEATURES_DIM] = obstacle_features
+            obs_buffer[5 : 5 + OBSTACLE_FEATURES_DIM] = obstacle_features
         else:
-            obs_buffer[4 : 4 + OBSTACLE_FEATURES_DIM] = 0.0
-        return np.asarray(obs_buffer.copy())
+            obs_buffer[5 : 5 + OBSTACLE_FEATURES_DIM] = 0.0
+        return normalise_observation(
+            obs_buffer, include_covariance, include_obstacle_obs
+        )
 
-    # With covariance: [vyaw(1), cov(3), target(3), obstacle(5)]
-    obs_buffer[0] = vyaw
+    # With covariance: [speed(1), vyaw(1), cov(3), target(3), obstacle(5)] -> 13 dims
+    obs_buffer[0] = speed
+    obs_buffer[1] = vyaw
 
+    cov_start = VEHICLE_STATE_DIM  # index 2
     if uncertainty is not None:
         # asarray avoids a copy when already float32
         unc = np.asarray(uncertainty, dtype=np.float32)
         if not np.any(unc):
             logger.debug("[obs] EKF covariance all-zeros - policy sees no uncertainty")
-        obs_buffer[1 : 1 + COVARIANCE_FEATURES_DIM] = unc
+        obs_buffer[cov_start : cov_start + COVARIANCE_FEATURES_DIM] = unc
     else:
         # Covariance dims remain zero (EKF not yet publishing)
-        obs_buffer[1 : 1 + COVARIANCE_FEATURES_DIM] = 0.0
+        obs_buffer[cov_start : cov_start + COVARIANCE_FEATURES_DIM] = 0.0
 
-    cov_end = 1 + COVARIANCE_FEATURES_DIM  # index 4
+    cov_end = cov_start + COVARIANCE_FEATURES_DIM  # index 5
     obs_buffer[cov_end] = dx
     obs_buffer[cov_end + 1] = dy
     obs_buffer[cov_end + 2] = dyaw
 
+    tgt_end = cov_end + TARGET_POSE_DIM  # index 8
     if include_obstacle_obs:
-        tgt_end = cov_end + TARGET_POSE_DIM  # index 7
         obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = obstacle_features
     else:
-        tgt_end = cov_end + TARGET_POSE_DIM
         obs_buffer[tgt_end : tgt_end + OBSTACLE_FEATURES_DIM] = 0.0
 
-    return np.asarray(obs_buffer.copy())
+    return normalise_observation(obs_buffer, include_covariance, include_obstacle_obs)
 
 
 def extract_obstacle_features(
@@ -172,6 +259,13 @@ def extract_obstacle_features(
     @note Self-returns closer than 1.0 m and the rear hemisphere (x <= 0) are
           discarded - matching the ~270 deg FOV of a front-bumper-mounted LiDAR.
     """
+    # Zero unconditionally: a missing scan or a scan with no valid returns
+    # means clear space (0.0 = infinite clearance by convention). Returning
+    # early without clearing would leave the previous frame's readings in the
+    # buffer, so a stale obstacle would follow the car through empty space -
+    # both in the observation and in the clearance penalty that reads this
+    # buffer.
+    out[:] = 0.0
     if scan is None or len(scan) == 0:
         return out
 
@@ -183,9 +277,6 @@ def extract_obstacle_features(
     valid = (sq >= 1.0) & (x > 0.0)
     if not valid.any():
         return out
-
-    # Only zero the buffer once we know we have valid returns to write
-    out[:] = 0.0
 
     x = x[valid]
     y = y[valid]
@@ -222,6 +313,8 @@ def load_floor_plan(
     floor_plans_config: Dict[str, Any],
     eval_mode: bool,
     layout_cache: Dict[str, Any],
+    fixed_name: Optional[str] = None,
+    rng: Optional[np.random.Generator] = None,
 ) -> Tuple[str, Dict[str, Any]]:
     """
     @brief Select and load a floor plan layout YAML for one episode.
@@ -233,15 +326,29 @@ def load_floor_plan(
                                parking_scenarios.floor_plans in train_config.yaml.
     @param eval_mode: If True, OOD plans are included.
     @param layout_cache: Mutable dict used as a read-through cache.
+    @param fixed_name: If set, force selection of this plan (curriculum stages).
+                       Must exist in floor_plans_config; eligibility checks
+                       are bypassed for explicit selection.
+    @param rng: Seeded NumPy Generator for plan selection (the env's np_random).
+                When None, falls back to the unseeded stdlib random module.
     @return Tuple (plan_name, layout_dict).
     @raises RuntimeError if no eligible plans are configured.
     @raises FileNotFoundError if the chosen layout YAML does not exist.
     """
-    eligible = {
-        name: cfg
-        for name, cfg in floor_plans_config.items()
-        if eval_mode or not cfg.get("ood", False)
-    }
+    if fixed_name is not None:
+        if fixed_name not in floor_plans_config:
+            raise RuntimeError(
+                f"fixed_floor_plan='{fixed_name}' not found in "
+                f"parking_scenarios.floor_plans. Available: "
+                f"{list(floor_plans_config.keys())}"
+            )
+        eligible = {fixed_name: floor_plans_config[fixed_name]}
+    else:
+        eligible = {
+            name: cfg
+            for name, cfg in floor_plans_config.items()
+            if eval_mode or not cfg.get("ood", False)
+        }
 
     if not eligible:
         raise RuntimeError(
@@ -249,7 +356,11 @@ def load_floor_plan(
             "Check parking_scenarios.floor_plans in train_config.yaml."
         )
 
-    name = random.choice(list(eligible.keys()))
+    eligible_names = list(eligible.keys())
+    if rng is not None:
+        name = eligible_names[int(rng.integers(len(eligible_names)))]
+    else:
+        name = random.choice(eligible_names)
     layout_file = eligible[name].get("layout_file", "")
     layout_path = Path(layout_file)
 
@@ -296,8 +407,6 @@ def calibrate_ekf_frame_offset(
     @param min_stable_readings: Consecutive stable readings required.
     @return (tx, ty, cos_r, sin_r, r) offset tuple, or identity if timed out
             before any pose was received.
-
-    @note See documentation/detailed_notes/ekf_pipeline.md for derivation.
     """
     start = time.monotonic()
     prev_tx: Optional[float] = None
@@ -322,10 +431,8 @@ def calibrate_ekf_frame_offset(
             time.sleep(tick_interval)
             continue
 
-        # ekf_state.json y is negated relative to CARLA world y (ROS REP-103
-        # vs CARLA left-handed axes). Negate here to match _get_state().
         ekf_x = float(ekf_pose[0])
-        ekf_y = -float(ekf_pose[1])
+        ekf_y = float(ekf_pose[1])
         ekf_yaw = float(ekf_pose[2])
 
         r = math.atan2(

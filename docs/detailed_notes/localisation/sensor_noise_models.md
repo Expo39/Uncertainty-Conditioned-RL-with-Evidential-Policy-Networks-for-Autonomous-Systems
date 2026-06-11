@@ -8,6 +8,14 @@ This note documents the derivation of all sensor noise parameters used in simula
 with explicit references to the source datasheets. It exists here rather than in the
 source files to keep inline comments concise.
 
+## Target hardware
+
+- **IMU**: VectorNav VN-100 Rugged (tactical-grade MEMS AHRS)
+- **GNSS**: u-blox ZED-F9P-05B (multi-band RTK module)
+- **LiDAR**: SICK TiM571 (obstacle detection only; not in the EKF localisation pipeline)
+
+All noise injection in the simulator is gated by master flags (`enable_gnss_noise`, `enable_imu_noise`). In real deployment both flags are false and every mechanism below becomes a pass-through.
+
 ---
 
 ## 1. SICK TiM571 2D LiDAR (P/N 1075091)
@@ -137,8 +145,6 @@ Variance at 20 Hz: 3.73157e-9 * 20 = 7.46314e-8 (rad/s)^2
 The code computes this exactly: `(0.0035 * pi/180)**2 * 20`.
 Config key: `imu_noise_relay.imu_gyro_variance = 7.4631e-8`
 
-Previous value was 1.0e-7 - not derived from the datasheet.
-
 **Accel covariance:**
 
 Noise density: 0.14 mg/sqrt(Hz)                                     (Table 2)
@@ -148,8 +154,6 @@ Variance at 20 Hz: 1.88623e-6 * 20 = 3.77246e-5 (m/s^2)^2
 
 The code computes this exactly: `(0.14e-3 * 9.81)**2 * 20`.
 Config key: `imu_noise_relay.imu_accel_variance = 3.77245e-5`
-
-Previous value was 3.76e-5 - a rough approximation.
 
 **Diagonal covariance matrices** (3x3) are pre-built once at node init and
 assigned to the published message. `orientation_covariance` uses the -1.0

@@ -10,10 +10,12 @@ import argparse
 import dataclasses
 import logging
 import os
+import random
 import warnings
+from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional
 
 import numpy as np
 
@@ -21,6 +23,7 @@ try:
     from yaml import CSafeLoader as _YamlLoader
 except ImportError:
     from yaml import SafeLoader as _YamlLoader  # type: ignore[assignment]
+
 import yaml
 
 try:
@@ -53,18 +56,55 @@ except ImportError:
     PPO = None  # type: ignore[assignment,misc]
     EvalCallback = None  # type: ignore[assignment,misc]
 
+from uncertainty_rl.utils.bay_success import BaySuccessTracker
+from uncertainty_rl.utils.config_merge import apply_baseline, deep_merge
+
+# Re-exported under the historical private name so existing imports
+# (`from ...train_ppo import _deep_merge`) keep working; the canonical owner is
+# uncertainty_rl.utils.config_merge.
+_deep_merge = deep_merge
+
 try:
-    from uncertainty_rl.envs import CARLAParkingEnv
+    # make_env is re-exported here so existing imports
+    # (`from uncertainty_rl.training.train_ppo import make_env`) keep
+    # working; the canonical owner is uncertainty_rl.envs.factory.
+    from uncertainty_rl.envs import CARLAParkingEnv, make_env  # noqa: F401
     from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+    from uncertainty_rl.networks.sb3_integration import (
+        LayerNormActorCriticPolicy,
+        ScheduledEntCoefPPO,
+    )
 except ImportError:
     CARLAParkingEnv = None  # type: ignore[assignment,misc]
+    make_env = None  # type: ignore[assignment,misc]
     EvidentialActorCriticPolicy = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
+    LayerNormActorCriticPolicy = None  # type: ignore[assignment,misc]
+    ScheduledEntCoefPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 
+# Defaults used when --stage / --baseline are omitted. Difficulty knobs live only
+# in the stage files and obs/policy flags only in the baseline files, so a run with
+# neither flag still needs one of each: start at the curriculum head, full method.
+DEFAULT_STAGE = 1
+DEFAULT_BASELINE = "configs/baselines/full_method.yaml"
+
+
+def _short_path(path: str) -> str:
+    """
+    @brief Trim a run path to its trailing <baseline>/<leaf>[/file] tail for display.
+    @param path: A checkpoint, log, or model path under one of the output roots.
+    @return The last up-to-three path components joined with "/", so log lines
+            show e.g. "full_method/seed42_11062026-0628/final_model" rather than
+            the full path. Shortening is cosmetic only; callers keep the original
+            path for filesystem operations.
+    """
+    return "/".join(Path(path).parts[-3:])
+
+
 # Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
-# spaces.Box with low/high=±inf always triggers this; it is harmless.
+# spaces.Box with low/high=+/-inf always triggers this; it is harmless.
 warnings.filterwarnings(
     "ignore",
     message=".*Box.*precision lowered.*",
@@ -91,90 +131,28 @@ class TrainResult:
     log_dir: str
     """Absolute path to the TensorBoard logs directory."""
 
+    env: Optional["VecNormalize"] = None
+    """Training environment (only populated when the caller passed an external
+    env in, so it can be reused across trials). None when train() created and
+    closed the env itself."""
 
-def linear_schedule(initial_value: float) -> Callable[[float], float]:
+
+def linear_schedule(
+    initial_value: float, final_value: float = 0.0
+) -> Callable[[float], float]:
     """
-    @brief Linear learning rate schedule decaying to zero.
-    @param initial_value: Initial learning rate.
-    @return Callable that takes progress_remaining (1.0 -> 0.0) and returns LR.
+    @brief Linear schedule decaying from initial_value to final_value.
+    @param initial_value: Value at the start of training (progress_remaining=1.0).
+    @param final_value: Value at the end of training (progress_remaining=0.0).
+           Defaults to 0.0.
+    @return Callable that takes progress_remaining (1.0 -> 0.0) and returns the
+            interpolated value.
     """
 
     def func(progress_remaining: float) -> float:
-        return progress_remaining * initial_value
+        return final_value + progress_remaining * (initial_value - final_value)
 
     return func
-
-
-def make_env(
-    config: Dict[str, Any],
-    rank: int = 0,
-    carla_sensors_override: Optional[Dict[str, Any]] = None,
-    host_override: Optional[str] = None,
-    port_override: Optional[int] = None,
-) -> Callable[[], gym.Env]:
-    """
-    @brief Create a callable that returns a new environment instance.
-    @param config: Configuration dictionary.
-    @param rank: Environment rank for seeding.
-    @param carla_sensors_override: Override sensor noise config (for evaluation).
-    @param host_override: Override the per-worker CARLA host (e.g. for the
-           dryrun inspector which connects to carla-server-demo). When None,
-           the per-rank training host is used.
-    @param port_override: Override the per-worker CARLA port. When None, the
-           per-rank training port is used.
-    @return Callable that creates and returns a CARLAParkingEnv instance.
-    """
-
-    # Compute per-worker connection params.
-    worker_port = (
-        port_override
-        if port_override is not None
-        else config.get("carla_port", 2000) + rank * 1000
-    )
-    worker_host = (
-        host_override if host_override is not None else f"uncertainty-rl-carla-{rank}"
-    )
-
-    ros2_config = config.get("ros2", {}).copy()
-    if rank > 0:
-        base_ekf = ros2_config.get(
-            "ekf_state_file", "/workspace/outputs/ekf_state.json"
-        )
-        p = Path(base_ekf)
-        ros2_config["ekf_state_file"] = str(p.parent / f"{p.stem}_{rank}{p.suffix}")
-
-    vis_path: Optional[str] = None if rank == 0 else f"outputs/vis_history_{rank}.jsonl"
-
-    def _init() -> gym.Env:
-        env = CARLAParkingEnv(
-            carla_host=worker_host,
-            carla_port=worker_port,
-            town=config.get("town", "FlatPlane"),
-            max_steps=config.get("max_steps", 500),
-            ros2_config=ros2_config,
-            carla_sensors_config=(
-                carla_sensors_override
-                if carla_sensors_override is not None
-                else config.get("carla_sensors", {})
-            ),
-            parking_scenarios_config=config.get("parking_scenarios", {}),
-            include_covariance=config.get("include_covariance", True),
-            include_obstacle_obs=config.get("include_obstacle_obs", True),
-            carla_timestep=config.get("carla_timestep", 0.05),
-            debug=config.get("debug", False),
-            map_load_sleep=config.get("map_load_sleep", 5.0),
-            action_repeat=config.get("action_repeat", 1),
-            no_rendering_mode=config.get("no_rendering_mode", False),
-            max_ego_speed_ms=config.get("max_ego_speed_ms", 6.0),
-            use_extra_spawns=config.get("use_extra_spawns", False),
-            gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
-            vis_output_path=vis_path,
-            uncertainty_std_max=config.get("uncertainty_std_max", 2.0),
-            success_dwell_steps=config.get("success_dwell_steps", 5),
-        )
-        return env
-
-    return _init
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -202,16 +180,36 @@ def merge_configs(
     return merged
 
 
-def load_env_config(env_config_path: str) -> Dict[str, Any]:
+def load_env_config(
+    env_config_path: str, stage: Optional[int] = None
+) -> Dict[str, Any]:
     """
     @brief Load and merge the environment config with shared deployment configs.
 
-
     @param env_config_path: Path to the CARLA environment config YAML.
+    @param stage: Optional curriculum stage. When set, deep-merges
+           configs/deployment/sim/curriculum/stage<N>.yaml over the env config
+           (the stage override wins on conflict), setting the per-stage
+           difficulty (bay, spawns, occupancy, margin). The stage file lives in a
+           sibling `curriculum/` directory next to the env config.
     @return Fully merged environment configuration dictionary.
     """
     with open(env_config_path) as f:
         env_config: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+
+    # Stage override deep-merged onto the env config (stage wins on conflict), so
+    # later sensor/agent merging still sees the staged parking_scenarios values.
+    if stage is not None:
+        stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
+        if not stage_path.exists():
+            raise FileNotFoundError(
+                f"Curriculum stage config not found: {stage_path}. "
+                f"Expected configs/deployment/sim/curriculum/stage{stage}.yaml."
+            )
+        with open(stage_path) as f:
+            stage_cfg: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+        _deep_merge(env_config, stage_cfg)
+        logger.info("Curriculum stage %d applied from %s", stage, stage_path)
 
     deployment_dir = Path(env_config_path).parent.parent
 
@@ -228,34 +226,142 @@ def load_env_config(env_config_path: str) -> Dict[str, Any]:
             agent_cfg = yaml.load(f, Loader=_YamlLoader) or {}
 
     # Merge: sensor_config < agent_config < env_config (env wins on conflict).
-    merged: Dict[str, Any] = {**sensor_cfg, **agent_cfg, **env_config}
+    # Deep merge so a higher-precedence file can override individual keys inside
+    # a shared nested block (e.g. env_config's ros2.carla_recovery layered onto
+    # agent_config's ros2.covariance_timeout) instead of replacing the whole
+    # block. A shallow {**a, **b} would silently drop the agent_config ros2 keys.
+    merged: Dict[str, Any] = {}
+    _deep_merge(merged, sensor_cfg)
+    _deep_merge(merged, agent_cfg)
+    _deep_merge(merged, env_config)
 
-    # Inject sensor mounts into carla_sensors so the CARLA spawner gets them.
+    # Inject the physical sensor spec from sensor_config.yaml (the single source of
+    # the physical sensor suite) into carla_sensors, which the CARLA spawner reads.
+    # `mount` for every sensor, plus the shared physical LiDAR spec (range, channels)
+    # so those values live ONLY in sensor_config - env_config's carla_sensors holds
+    # the CARLA-only spawn keys (points_per_second, sensor_tick, fov, noise).
+    _SENSOR_SPEC_KEYS = ("mount", "range", "channels")
     for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
-        if "mount" in sensor_data and sensor_name in merged.get("carla_sensors", {}):
-            merged["carla_sensors"][sensor_name]["mount"] = sensor_data["mount"]
+        if sensor_name not in merged.get("carla_sensors", {}):
+            continue
+        for spec_key in _SENSOR_SPEC_KEYS:
+            if spec_key in sensor_data:
+                merged["carla_sensors"][sensor_name][spec_key] = sensor_data[spec_key]
+
+    # `training_overrides` is a stage-file-only block of TRAINING hyperparameters
+    # (stage_timesteps, learning_rate, ent_coef, ...). It is not an environment
+    # setting, so strip it here - it is applied separately via
+    # _apply_stage_training_overrides() after the train/env merge, with an
+    # allowlist. Leaving it in would pass an unknown kwarg path into the env dict.
+    merged.pop("training_overrides", None)
 
     return merged
+
+
+# Stage `training_overrides` keys a curriculum stage is allowed to set. Excludes
+# every architecture key (net_arch, activation, policy_type, include_covariance,
+# include_obstacle_obs) so a stage can never change the policy shape and break
+# weight loading on resume across the curriculum.
+_STAGE_TRAINING_OVERRIDE_ALLOWLIST = frozenset(
+    {
+        "stage_timesteps",
+        "learning_rate",
+        "learning_rate_final",
+        "ent_coef",
+        "ent_coef_final",
+        "clip_range",
+        "n_epochs",
+        "batch_size",
+        "n_steps",
+        "target_kl",
+    }
+)
+
+
+def _apply_stage_training_overrides(
+    config: Dict[str, Any], env_config_path: str, stage: int
+) -> None:
+    """
+    @brief Apply a curriculum stage's per-policy override block onto config.
+    @param config: The merged train+env config (mutated in place). Carries the
+           baseline's `policy_type` (apply_baseline runs first).
+    @param env_config_path: Path to env_config.yaml (the stage file sits in a
+           sibling `curriculum/` directory).
+    @param stage: Curriculum stage number.
+
+    The stage file carries `standard_overrides` and `evidential_overrides`, selected
+    by `policy_type` (a single `training_overrides` block is accepted as a fallback).
+    Only allowlisted keys (@see _STAGE_TRAINING_OVERRIDE_ALLOWLIST) are copied onto
+    config; a non-allowlisted key raises. An absent block is a no-op.
+    """
+    stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
+    with open(stage_path) as f:
+        stage_cfg: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
+
+    policy_type = str(config.get("policy_type", "evidential"))
+    block_key = (
+        "standard_overrides" if policy_type == "standard" else "evidential_overrides"
+    )
+    overrides = stage_cfg.get(block_key)
+    if overrides is None:
+        # Fallback: a single shared block (pre-split schema).
+        block_key = "training_overrides"
+        overrides = stage_cfg.get(block_key, {})
+    if not overrides:
+        return
+    for key, value in overrides.items():
+        if key not in _STAGE_TRAINING_OVERRIDE_ALLOWLIST:
+            raise ValueError(
+                f"Stage {stage} {block_key} key '{key}' is not allowed. "
+                f"Permitted keys: {sorted(_STAGE_TRAINING_OVERRIDE_ALLOWLIST)}. "
+                f"Architecture keys must stay constant across the curriculum."
+            )
+        config[key] = value
+    logger.info(
+        "Stage %d %s applied (policy_type=%s): %s",
+        stage,
+        block_key,
+        policy_type,
+        {k: overrides[k] for k in overrides},
+    )
 
 
 class EnvDiagnosticsCallback(BaseCallback):
     """
     @class EnvDiagnosticsCallback
     @brief SB3 callback that logs per-episode environment diagnostics to TensorBoard.
+
+    The per-step means (pos/orientation/speed/progress) are averaged over every
+    step in a rollout, so they are already smooth. The terminal rates (success,
+    collision, out-of-bounds, timeout) are sparse - one PPO rollout holds only a
+    handful of terminal episodes (~n_steps / max_steps), so a per-rollout rate
+    has a noise band of tens of percentage points and cannot be read as policy
+    quality. To make the rates legible, terminal outcomes are kept in a rolling
+    window of the last `outcome_window` episodes and the logged rate is the mean
+    over that window. This is a logging change only - it does not touch training
+    dynamics.
     """
 
-    def __init__(self) -> None:
-        """@brief Initialise accumulators."""
+    def __init__(self, outcome_window: int = 50) -> None:
+        """
+        @brief Initialise accumulators.
+        @param outcome_window: Number of most-recent terminal episodes the
+               success/collision/oob/timeout rates are averaged over. Larger
+               values trade reporting latency for a tighter noise band on the rate.
+        """
         super().__init__(verbose=0)
         self._pos_sum = 0.0
         self._ori_sum = 0.0
         self._spd_sum = 0.0
         self._prog_sum = 0.0
         self._step_count = 0
-        self._success_sum = 0.0
-        self._collision_sum = 0.0
-        self._timeout_sum = 0.0
-        self._terminal_count = 0
+        # Rolling per-episode terminal outcomes (1.0 / 0.0 flags) over the last
+        # `outcome_window` episodes, so the logged rate reflects policy quality
+        # rather than the handful of episodes that happened to end this rollout.
+        self._success_hist: Deque[float] = deque(maxlen=outcome_window)
+        self._collision_hist: Deque[float] = deque(maxlen=outcome_window)
+        self._oob_hist: Deque[float] = deque(maxlen=outcome_window)
+        self._timeout_hist: Deque[float] = deque(maxlen=outcome_window)
 
     def _on_step(self) -> bool:
         """
@@ -271,12 +377,13 @@ class EnvDiagnosticsCallback(BaseCallback):
             # Read each flag once and reuse for both is_terminal and individual recording.
             success = info.get("success", False)
             collision = info.get("collision", False)
+            oob = info.get("oob", False)
             timeout = info.get("timeout", False)
-            if success or collision or timeout:
-                self._success_sum += success
-                self._collision_sum += collision
-                self._timeout_sum += timeout
-                self._terminal_count += 1
+            if success or collision or oob or timeout:
+                self._success_hist.append(float(success))
+                self._collision_hist.append(float(collision))
+                self._oob_hist.append(float(oob))
+                self._timeout_hist.append(float(timeout))
         return True
 
     def _on_rollout_end(self) -> None:
@@ -290,27 +397,101 @@ class EnvDiagnosticsCallback(BaseCallback):
             self.logger.record("env/mean_speed_ms", self._spd_sum * inv)
             self.logger.record("env/mean_progress_reward", self._prog_sum * inv)
 
-        if self._terminal_count:
-            inv_t = 1.0 / self._terminal_count
-            self.logger.record("env/success_rate", self._success_sum * inv_t)
-            self.logger.record("env/collision_rate", self._collision_sum * inv_t)
-            self.logger.record("env/timeout_rate", self._timeout_sum * inv_t)
+        # Terminal rates are averaged over the rolling window (the deques retain
+        # the last `outcome_window` episodes across rollouts), so they are not
+        # reset here - only the per-step sums below are.
+        if self._success_hist:
+            inv_t = 1.0 / len(self._success_hist)
+            self.logger.record("env/success_rate", sum(self._success_hist) * inv_t)
+            self.logger.record("env/collision_rate", sum(self._collision_hist) * inv_t)
+            self.logger.record("env/oob_rate", sum(self._oob_hist) * inv_t)
+            self.logger.record("env/timeout_rate", sum(self._timeout_hist) * inv_t)
 
-        # Reset accumulators for the next rollout window.
+        # Reset per-step accumulators for the next rollout window.
         self._pos_sum = 0.0
         self._ori_sum = 0.0
         self._spd_sum = 0.0
         self._prog_sum = 0.0
         self._step_count = 0
-        self._success_sum = 0.0
-        self._collision_sum = 0.0
-        self._timeout_sum = 0.0
-        self._terminal_count = 0
+
+
+class BaySuccessCallback(BaseCallback):
+    """
+    @class BaySuccessCallback
+    @brief Accumulates per-bay success counts over training and dumps to CSV.
+
+    Unlike the rolling-window rates in EnvDiagnosticsCallback, this tracks
+    cumulative attempts and successes per target bay across the whole run, so a
+    run on the random-bay curriculum (Stage 2 onwards) can be inspected for
+    which specific bays the policy can and cannot park in. Output goes to
+    outputs/bay_successes/training/<run_name>/ as bay_successes.csv plus a
+    run_info.txt header. This is a logging change only - it does not touch
+    training dynamics.
+    """
+
+    def __init__(
+        self,
+        output_dir: Path,
+        run_info: Dict[str, Any],
+        dump_freq_steps: int = 50000,
+    ) -> None:
+        """
+        @brief Initialise the per-bay tracker.
+        @param output_dir: Directory to write bay_successes.csv + run_info.txt.
+        @param run_info: Key/value pairs written to run_info.txt.
+        @param dump_freq_steps: Flush the CSV to disk every N env steps so a
+               run can be inspected mid-training; a final dump also runs on end.
+        """
+        super().__init__(verbose=0)
+        self._tracker = BaySuccessTracker()
+        self._output_dir = output_dir
+        self._run_info = run_info
+        self._dump_freq_steps = dump_freq_steps
+        self._next_dump = dump_freq_steps
+
+    def _on_step(self) -> bool:
+        """
+        @brief Record terminal episodes against their target bay.
+        @return Always True (training continues).
+        """
+        for info in self.locals.get("infos", []):
+            success = info.get("success", False)
+            collision = info.get("collision", False)
+            timeout = info.get("timeout", False)
+            if not (success or collision or timeout):
+                continue
+            target_bay = info.get("target_bay", {})
+            self._tracker.record(
+                bay_id=str(target_bay.get("bay_id", "")),
+                success=bool(success),
+                bay_type=str(target_bay.get("bay_type", "")),
+            )
+        if self.num_timesteps >= self._next_dump:
+            self._dump()
+            self._next_dump += self._dump_freq_steps
+        return True
+
+    def _on_training_end(self) -> None:
+        """
+        @brief Final flush of per-bay counts at the end of training.
+        """
+        self._dump()
+
+    def _dump(self) -> None:
+        """
+        @brief Write the running per-bay counts and run_info to disk.
+        """
+        info = dict(self._run_info)
+        info["total_attempts"] = self._tracker.total_attempts
+        info["timesteps_at_dump"] = self.num_timesteps
+        self._tracker.dump(self._output_dir, run_info=info)
 
 
 def train(
     config: Dict[str, Any],
     extra_callbacks: Optional[List[BaseCallback]] = None,
+    env: Optional["VecNormalize"] = None,
+    resume_from: Optional[str] = None,
 ) -> TrainResult:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
@@ -319,17 +500,40 @@ def train(
            this dict. CLI arguments override YAML values before this is called.
     @param extra_callbacks: Optional list of additional callbacks to append to
            the training callback list (e.g. for Optuna trial evaluation).
+    @param env: Pre-built VecNormalize env to reuse across calls. When None,
+           train() creates and closes its own env. Optuna tuning passes a
+           shared env so the CARLA actors and ROS bridge stay warm between
+           trials (a destroy+respawn cycle breaks the EKF, see
+           tune_hyperparams.run_study).
+    @param resume_from: Optional path to checkpoint directory (contains
+           final_model.zip and vec_normalize.pkl). When provided, loads the
+           saved model and environment normalisation from this checkpoint and
+           continues training with reset_num_timesteps=False. If None, trains
+           from scratch.
     @return TrainResult containing final metrics, model path, and log directory.
     """
     # Resolve operational settings from config
     seed = config.get("seed", 42)
-    total_timesteps = config.get("total_timesteps", 1000000)
+    # A curriculum stage may set `stage_timesteps`: the number of steps to run in
+    # THIS stage, with its LR / ent_coef schedules restarting from the stage's own
+    # initial values over that budget (see the reset_num_timesteps logic below).
+    # When set, it takes precedence over the global `total_timesteps`. This is what
+    # lets each stage own a fresh, full-range schedule instead of sharing one
+    # decay stretched across the whole curriculum.
+    stage_timesteps = config.get("stage_timesteps", None)
+    total_timesteps = (
+        int(stage_timesteps)
+        if stage_timesteps is not None
+        else config.get("total_timesteps", 1000000)
+    )
 
-    # Build a run name that uniquely identifies this configuration so each
-    # training run gets its own TensorBoard subdirectory under logs/.
-    # Format: <baseline_name>_seed<N>_<DDMMYYYY-HHMM>
-    # baseline_name is set explicitly in baseline override configs; for ad-hoc
-    # runs it is derived from policy_type and observation flags.
+    # Each run gets its own subtree nested by baseline so the ablation grid is
+    # navigable: <root>/<baseline_name>/<run_leaf>/, where run_leaf is
+    # seed<N>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/, and
+    # outputs/bay_successes/training/. The seed<N>_ prefix on the leaf is load-
+    # bearing: demo_drive.py parses the seed and start timestamp back out of the
+    # leaf directory name. baseline_name is set explicitly in baseline override
+    # configs; for ad-hoc runs it is derived from policy_type and observation flags.
     policy_type = config.get("policy_type", "evidential")
     include_cov = config.get("include_covariance", True)
     include_obs = config.get("include_obstacle_obs", True)
@@ -340,20 +544,30 @@ def train(
     )
     baseline_name = config.get("baseline_name", _default_run_name)
     _timestamp = datetime.now().strftime("%d%m%Y-%H%M")
-    run_name = f"{baseline_name}_seed{seed}_{_timestamp}"
+    # run_leaf defaults to seed<N>_<timestamp>; callers that need a deterministic
+    # leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may override it so
+    # the on-disk tree stays <baseline>/<leaf>/ in both cases.
+    run_leaf = config.get("run_leaf", f"seed{seed}_{_timestamp}")
+    # Provenance label mirroring the on-disk tree (<baseline>/<leaf>).
+    run_name = f"{baseline_name}/{run_leaf}"
 
     _base_log_dir = config.get("log_dir", "./logs")
     _base_checkpoint_dir = config.get("checkpoint_dir", "./checkpoints")
-    log_dir = os.path.join(_base_log_dir, run_name)
-    checkpoint_dir = os.path.join(_base_checkpoint_dir, run_name)
+    log_dir = os.path.join(_base_log_dir, baseline_name, run_leaf)
+    checkpoint_dir = os.path.join(_base_checkpoint_dir, baseline_name, run_leaf)
     # eval_freq and n_eval_episodes are read here for when eval_env is re-enabled.
     # Currently eval_env is always None (see comment below).
     eval_freq = config.get("eval_freq", 10000)
     n_eval_episodes = config.get("n_eval_episodes", 10)
 
-    # Set random seeds
+    # Set random seeds. All three global RNGs are seeded: torch (network
+    # init + action sampling), numpy (module-level np.random), and the stdlib
+    # random module. SB3's PPO(seed=seed) additionally seeds each vectorised
+    # env's Gymnasium np_random (with a per-rank offset), which drives the
+    # per-episode task selection (spawn point, target bay, NPC placement).
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
 
     # Create directories
     os.makedirs(log_dir, exist_ok=True)
@@ -361,18 +575,32 @@ def train(
 
     # Create training environment - one worker per CARLA instance.
     # parallel_workers > 1 requires docker-compose.parallel.yml (see make docker-train-parallel).
-    n_workers: int = config.get("parallel_workers", 1)
-    logger.info(f"Creating training environment ({n_workers} worker(s))...")
-    train_vec_env = DummyVecEnv([make_env(config, rank=i) for i in range(n_workers)])
+    own_env: bool = env is None
+    if own_env:
+        n_workers: int = config.get("parallel_workers", 1)
+        logger.info(f"Creating training environment ({n_workers} worker(s))...")
+        # bay_margin comes from env_config (its single source of truth), relaxed
+        # per stage by a curriculum override merged in via --stage. The .get guard
+        # falls back to the env's own constructor default if the key is absent.
+        bay_margin = float(config.get("bay_margin", 0.0))
+        train_vec_env = DummyVecEnv(
+            [make_env(config, bay_margin=bay_margin, rank=i) for i in range(n_workers)]
+        )
 
-    # Normalise observations but not rewards - reward components will be
-    # manually scaled via potential-based shaping
-    env = VecNormalize(
-        train_vec_env,
-        norm_obs=True,
-        norm_reward=False,
-        clip_obs=10.0,
-    )
+        # Reward normalisation only. Observations are normalised by fixed physical
+        # ranges in build_observation (constants.py OBS_*_SCALE), so norm_obs is off.
+        # norm_reward divides rewards by the running discounted-return std (unit-variance
+        # critic target); clip_reward keeps the +50 terminal unclipped; gamma matches
+        # the PPO discount.
+        env = VecNormalize(
+            train_vec_env,
+            norm_obs=False,
+            norm_reward=True,
+            clip_reward=20.0,
+            gamma=config.get("gamma", 0.99),
+        )
+    else:
+        logger.info("Reusing existing training environment (caller-owned).")
 
     # Evaluation environment is disabled when using a single CARLA instance
     # in synchronous mode.  Two clients calling world.tick() on the same
@@ -390,17 +618,38 @@ def train(
     activation_fn = _activation_map.get(
         config.get("activation", "relu").lower(), torch.nn.ReLU
     )
+    # log_std_init sets the initial Gaussian action log-std (std = exp(log_std_init)).
+    # Shared across all baselines so it is not an ablation variable. It only affects
+    # the standard (Gaussian) head; the evidential head ignores it (its std comes from
+    # the NIG aleatoric), but it is passed uniformly so the construction path is
+    # identical. A value below the SB3 default (0.0 -> std 1.0) starts the policy
+    # committed so the entropy bonus cannot inflate the std into a non-committing
+    # circling policy.
     policy_kwargs = dict(
         net_arch=dict(
             pi=config.get("net_arch", [256, 256]),
             vf=config.get("net_arch", [256, 256]),
         ),
         activation_fn=activation_fn,
+        log_std_init=config.get("log_std_init", 0.0),
     )
 
-    # Shared PPO hyperparameters
+    # Shared PPO hyperparameters. learning_rate decays linearly to
+    # learning_rate_final (default 0.0). The optional floor exists for
+    # experiments that need late-stage updates, but the recommended schedule
+    # is decay-to-zero so a converged policy stops being perturbed by noise.
     lr_initial = config.get("learning_rate", 3e-4)
-    lr_schedule = linear_schedule(lr_initial)
+    lr_final = config.get("learning_rate_final", 0.0)
+    lr_schedule = linear_schedule(lr_initial, lr_final)
+
+    # ent_coef is a linear DECAY schedule, not a constant. In the evidential
+    # policy the action sampling std IS sqrt(aleatoric), so the entropy bonus
+    # is a direct pressure on the action std. A constant value cannot allow
+    # the policy to both explore early and commit late, so we decay to a small
+    # non-zero floor.
+    ent_coef_initial = config.get("ent_coef", 0.01)
+    ent_coef_final = config.get("ent_coef_final", 0.0005)
+    ent_coef_schedule = linear_schedule(ent_coef_initial, ent_coef_final)
 
     ppo_kwargs = dict(
         env=env,
@@ -412,7 +661,7 @@ def train(
         gae_lambda=config.get("gae_lambda", 0.95),
         clip_range=config.get("clip_range", 0.2),
         clip_range_vf=config.get("clip_range_vf", None),
-        ent_coef=config.get("ent_coef", 0.0),
+        ent_coef=ent_coef_schedule,
         vf_coef=config.get("vf_coef", 0.5),
         max_grad_norm=config.get("max_grad_norm", 0.5),
         target_kl=config.get("target_kl", 0.02),
@@ -426,36 +675,164 @@ def train(
     logger.info("Initialising %s PPO agent...", policy_type)
 
     model: PPO
-    if policy_type == "evidential":
-        evidential_config = config.get("evidential", {})
-        lambda_reg = evidential_config.get("lambda_reg", 0.01)
-        lambda_reg_warmup_steps = evidential_config.get(
-            "lambda_reg_warmup_steps", 50000
-        )
-        use_uncertainty_conditioning = evidential_config.get(
-            "use_uncertainty_conditioning", False
-        )
-        # Forward conditioning flag into policy_kwargs so the policy can wire the
-        # dual-encoder actor (UncertaintyConditionedActor) when requested.
-        ppo_kwargs["policy_kwargs"][
-            "use_uncertainty_conditioning"
-        ] = use_uncertainty_conditioning
-        model = EvidentialPPO(
-            policy=EvidentialActorCriticPolicy,
-            lambda_reg=lambda_reg,
-            lambda_reg_warmup_steps=lambda_reg_warmup_steps,
-            **ppo_kwargs,
-        )
-    elif policy_type == "standard":
-        model = PPO(
-            policy="MlpPolicy",
-            **ppo_kwargs,
-        )
+    if resume_from is not None:
+        # Load model from checkpoint. Resume path may point to:
+        # 1. final_model (from a completed training run)
+        # 2. A directory containing periodic checkpoints (ppo_*.zip files)
+        logger.info("Resuming from checkpoint: %s", _short_path(resume_from))
+
+        # Find the latest checkpoint (either final_model or the highest-step
+        # intermediate checkpoint).
+        checkpoint_model_path: Optional[str] = None
+        checkpoint_vec_norm_path: Optional[str] = None
+
+        final_model = os.path.join(resume_from, "final_model")
+        final_vec_norm = os.path.join(resume_from, "vec_normalize.pkl")
+
+        # SB3 saves models as <name>.zip, so the on-disk file is
+        # final_model.zip even though SB3's load() takes the extension-less
+        # path. Test for the .zip explicitly: os.path.exists("final_model")
+        # is False when only "final_model.zip" is present, which would
+        # otherwise silently skip the final model and fall through to a
+        # (lexically mis-sorted) periodic checkpoint.
+        if os.path.exists(final_model + ".zip") or os.path.exists(final_model):
+            checkpoint_model_path = final_model
+            checkpoint_vec_norm_path = (
+                final_vec_norm if os.path.exists(final_vec_norm) else None
+            )
+            logger.info("Found final_model checkpoint")
+        else:
+            # Look for the latest periodic checkpoint by step count. Sort
+            # numerically on the embedded step integer, NOT lexically: a
+            # lexical sort ranks "950000" above "4000000" (because "9" > "4")
+            # and would resume from a far earlier checkpoint than intended.
+            import glob
+
+            pattern = os.path.join(resume_from, "ppo_uncertainty_rl_*_steps.zip")
+
+            def _step_of(path: str) -> int:
+                return int(path.split("_steps.zip")[0].split("_")[-1])
+
+            checkpoints = sorted(glob.glob(pattern), key=_step_of)
+            if checkpoints:
+                checkpoint_model_path = checkpoints[-1]
+                step_count = str(_step_of(checkpoint_model_path))
+                vec_norm_path = os.path.join(
+                    resume_from,
+                    f"ppo_uncertainty_rl_vecnormalize_{step_count}_steps.pkl",
+                )
+                checkpoint_vec_norm_path = (
+                    vec_norm_path if os.path.exists(vec_norm_path) else None
+                )
+                logger.info(
+                    "Found periodic checkpoint at %s steps: %s",
+                    step_count,
+                    _short_path(checkpoint_model_path),
+                )
+            else:
+                raise ValueError(
+                    f"No checkpoint found in {resume_from}. "
+                    f"Expected either final_model or ppo_uncertainty_rl_*_steps.zip"
+                )
+
+        # Determine which model class to load based on policy_type. The standard
+        # path loads ScheduledEntCoefPPO (not bare PPO) so the ent_coef schedule
+        # re-bound below stays a resolvable callable on the resumed run - bare
+        # PPO.train() would crash multiplying a callable ent_coef by the loss.
+        if policy_type == "evidential":
+            model = EvidentialPPO.load(checkpoint_model_path)
+        elif policy_type == "standard":
+            model = ScheduledEntCoefPPO.load(checkpoint_model_path)
+        else:
+            raise ValueError(
+                f"Unknown policy_type '{policy_type}'. "
+                f"Expected 'evidential' or 'standard'."
+            )
+
+        # Load environment normalisation statistics if we have a new env to wrap.
+        if (
+            own_env
+            and checkpoint_vec_norm_path
+            and os.path.exists(checkpoint_vec_norm_path)
+        ):
+            logger.info(
+                "Loading VecNormalize from checkpoint: %s",
+                _short_path(checkpoint_vec_norm_path),
+            )
+            env = VecNormalize.load(checkpoint_vec_norm_path, env)
+        elif not own_env:
+            logger.warning(
+                "VecNormalize not reloaded - caller-owned env is being used."
+            )
+        elif not checkpoint_vec_norm_path:
+            logger.warning("VecNormalize checkpoint not found")
+
+        # Attach the environment to the model for continued training
+        model.set_env(env)
+
+        # Re-bind the decay schedules from the current config. ent_coef is
+        # not a first-class SB3 schedule, so PPO.load() does not restore the
+        # original closure; without this re-bind a resumed run keeps a stale
+        # ent_coef that never reaches the decay floor.
+        model.lr_schedule = lr_schedule
+        model.ent_coef = ent_coef_schedule
     else:
-        raise ValueError(
-            f"Unknown policy_type '{policy_type}'. "
-            f"Expected 'evidential' or 'standard'."
-        )
+        # Create fresh agent
+        if policy_type == "evidential":
+            evidential_config = config.get("evidential", {})
+            lambda_reg = evidential_config.get("lambda_reg", 0.01)
+            lambda_reg_warmup_steps = evidential_config.get(
+                "lambda_reg_warmup_steps", 50000
+            )
+            use_uncertainty_conditioning = evidential_config.get(
+                "use_uncertainty_conditioning", False
+            )
+            # The dual-encoder actor routes the covariance block (obs indices
+            # VEHICLE_STATE_DIM..VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM) into a
+            # dedicated uncertainty encoder. With include_covariance=False that
+            # block does not exist, so the slice would silently capture the
+            # relative target pose instead and starve the actor of its goal
+            # direction. The two are mutually exclusive: fall back to the flat
+            # evidential MLP (which is exactly the output_uncertainty baseline:
+            # evidential policy head, no covariance input).
+            if use_uncertainty_conditioning and not include_cov:
+                logger.warning(
+                    "use_uncertainty_conditioning=True requires "
+                    "include_covariance=True; no covariance block is present, "
+                    "so disabling uncertainty conditioning and using the flat "
+                    "evidential MLP actor."
+                )
+                use_uncertainty_conditioning = False
+            # Forwarded into policy_kwargs so the policy can wire the
+            # dual-encoder actor when requested.
+            ppo_kwargs["policy_kwargs"][
+                "use_uncertainty_conditioning"
+            ] = use_uncertainty_conditioning
+            model = EvidentialPPO(
+                policy=EvidentialActorCriticPolicy,
+                lambda_reg=lambda_reg,
+                lambda_reg_warmup_steps=lambda_reg_warmup_steps,
+                **ppo_kwargs,
+            )
+        elif policy_type == "standard":
+            # ScheduledEntCoefPPO (not bare PPO): the shared ppo_kwargs pass a
+            # CALLABLE ent_coef decay schedule, which stock PPO.train() cannot
+            # multiply (it stores ent_coef verbatim). The subclass resolves the
+            # callable per update, so the standard baselines share the identical
+            # ent_coef schedule as the evidential ones.
+            # LayerNormActorCriticPolicy (not "MlpPolicy"): matches the evidential
+            # policy's LayerNorm backbone and default-forward action prior so the
+            # ONLY differences between the standard and evidential baselines are the
+            # actor head and the observation - the 2x2 ablation axes.
+            model = ScheduledEntCoefPPO(
+                policy=LayerNormActorCriticPolicy,
+                **ppo_kwargs,
+            )
+        else:
+            raise ValueError(
+                f"Unknown policy_type '{policy_type}'. "
+                f"Expected 'evidential' or 'standard'."
+            )
 
     # Set up SB3 logger (TensorBoard + stdout). Named sb3_logger to avoid
     # shadowing the module-level Python logger.
@@ -470,7 +847,30 @@ def train(
         save_vecnormalize=True,
     )
 
-    callbacks = [checkpoint_callback, EnvDiagnosticsCallback()]
+    # Per-bay success accounting. Cumulative attempts/successes per target bay
+    # over the whole run, dumped to
+    # outputs/bay_successes/training/<baseline>/<leaf>/ so a random-bay run can
+    # be inspected for which bays the policy can park.
+    _bay_output_dir = (
+        Path("./outputs/bay_successes/training") / baseline_name / run_leaf
+    )
+    _bay_run_info: Dict[str, Any] = {
+        "run_name": run_name,
+        "seed": seed,
+        "total_timesteps": total_timesteps,
+        "resumed_from": resume_from if resume_from is not None else "(fresh)",
+        "started": datetime.now().strftime("%d-%m-%Y %H:%M"),
+    }
+
+    callbacks = [
+        checkpoint_callback,
+        EnvDiagnosticsCallback(outcome_window=config.get("success_rate_window", 50)),
+        BaySuccessCallback(
+            output_dir=_bay_output_dir,
+            run_info=_bay_run_info,
+            dump_freq_steps=config.get("checkpoint_freq", 50000),
+        ),
+    ]
     if eval_env is not None:
         eval_callback = EvalCallback(
             eval_env,
@@ -492,23 +892,42 @@ def train(
     # Train the agent (wrapped in try/finally for CARLA crash safety)
     try:
         logger.info("Starting training for %d timesteps...", total_timesteps)
+        # Disable progress bar when env is caller-owned (e.g. Optuna tuning).
+        # tqdm[rich] leaks a "live display" between trials when model.learn()
+        # is called repeatedly in one process, so the second call onwards
+        # raises "Only one live display may be active at once".
+        # Reset the step counter for a fresh run, OR when a curriculum stage
+        # defines its own budget: a per-stage `stage_timesteps` means the LR /
+        # ent_coef schedules should restart from this stage's initial values and
+        # decay over this stage's budget (progress_remaining = 1 -
+        # num_timesteps/total_timesteps needs num_timesteps to start at 0 for the
+        # schedule to span the full stage). The model weights and VecNormalize
+        # statistics are still carried over from the resumed checkpoint; only the
+        # step counter (and hence the schedule clock) restarts.
+        reset_num_ts = (resume_from is None) or (stage_timesteps is not None)
         model.learn(
             total_timesteps=total_timesteps,
             callback=callback_list,
             log_interval=config.get("log_interval", 10),
-            progress_bar=True,
+            progress_bar=own_env,
+            reset_num_timesteps=reset_num_ts,
         )
 
         # Save final model
         final_model_path = os.path.join(checkpoint_dir, "final_model")
         model.save(final_model_path)
+        assert env is not None
         env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
 
-        logger.info("Training complete. Model saved to %s", final_model_path)
+        logger.info(
+            "Training complete. Model saved to %s", _short_path(final_model_path)
+        )
 
     finally:
-        # Clean up (always runs, even if CARLA crashes during training)
-        env.close()
+        # Clean up (always runs, even if CARLA crashes during training).
+        if own_env:
+            assert env is not None
+            env.close()
         if eval_env is not None:
             eval_env.close()
 
@@ -519,6 +938,7 @@ def train(
         final_metrics=final_metrics,
         model_path=final_model_path,
         log_dir=log_dir,
+        env=None if own_env else env,
     )
 
 
@@ -547,6 +967,18 @@ def main() -> None:
         type=str,
         default="configs/deployment/sim/env_config.yaml",
         help="Path to environment config (CARLA, sensors, parking scenarios)",
+    )
+    parser.add_argument(
+        "--stage",
+        type=int,
+        default=None,
+        help=(
+            "Curriculum stage (1..N). Deep-merges "
+            "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
+            "to set the per-stage difficulty (bay, spawns, occupancy, margin). "
+            "Difficulty lives only in the stage files - omit to default to stage 1 "
+            "(the curriculum head)."
+        ),
     )
     parser.add_argument(
         "--total-timesteps",
@@ -584,15 +1016,53 @@ def main() -> None:
         default=None,
         help="Override random seed from config",
     )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint directory (contains final_model.zip and vec_normalize.pkl)",
+    )
+    parser.add_argument(
+        "--baseline",
+        type=str,
+        default=None,
+        help=(
+            "Path to a baseline override config (configs/baselines/*.yaml). Its keys "
+            "(baseline_name, include_covariance, include_obstacle_obs, policy_type, "
+            "log_dir, checkpoint_dir) set the ablation cell. These flags live only in "
+            "the baseline files - omit to default to the full method "
+            "(configs/baselines/full_method.yaml)."
+        ),
+    )
 
     args = parser.parse_args()
 
+    # Resolve the effective stage and baseline. Difficulty knobs live ONLY in the
+    # curriculum stage files and the observation/policy flags ONLY in the baseline
+    # files - neither has a default in env_config / train_config - so every run must
+    # pick one of each. Omitting --stage starts at the curriculum head (stage 1);
+    # omitting --baseline runs the full method. This keeps each value in exactly one
+    # place (no base defaults shadowing the stage/baseline) with no hidden code
+    # fallback.
+    stage = args.stage if args.stage is not None else DEFAULT_STAGE
+    baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+
     # Load and merge configs, then apply CLI overrides.
-    # load_env_config() merges sensor_config.yaml (shared keys) with env_config.yaml
-    # (CARLA-specific keys) so all consumers see a single unified dict.
+    # load_env_config() merges sensor_config.yaml + agent_config.yaml + env_config.yaml
+    # and deep-merges the stage difficulty over them, so all consumers see one dict.
     config = merge_configs(
-        load_config(args.train_config), load_env_config(args.env_config)
+        load_config(args.train_config),
+        load_env_config(args.env_config, stage=stage),
     )
+    # Overlay the baseline so the run trains that baseline's observation/policy
+    # configuration. apply_baseline is the single overlay shared with
+    # tune_hyperparams.py and demo_drive.py; it accepts only BASELINE_KEYS so a
+    # baseline can never reshape a hyperparameter.
+    apply_baseline(config, load_config(baseline_path))
+    # Apply the stage's `training_overrides` block (stage_timesteps, learning_rate,
+    # ent_coef, ...) AFTER merge_configs, restricted to an allowlist so a stage can
+    # never change an architecture key and break weight loading across the curriculum.
+    _apply_stage_training_overrides(config, args.env_config, stage)
     if args.total_timesteps is not None:
         config["total_timesteps"] = args.total_timesteps
     if args.log_dir is not None:
@@ -614,7 +1084,16 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    train(config)
+    logger.info(
+        "Training stage %d, baseline '%s' (include_covariance=%s, policy_type=%s)",
+        stage,
+        config.get("baseline_name", Path(baseline_path).stem),
+        config.get("include_covariance"),
+        config.get("policy_type"),
+    )
+
+    # Pass resume checkpoint path if provided.
+    train(config, resume_from=args.resume_from)
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 - 9 evaluation conditions sweep GNSS noise from $1\times$ (RTK fixed, ~2 cm) to $250\times$ (~5 m)
 - Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()`
-- Success: position error $< 0.5$ m, orientation $< 10$ deg, speed $< 0.1$ m/s
+- Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `STRICT_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `SUCCESS_DWELL_STEPS`
 - `n_episodes = 100` per condition, deterministic (mean) actions
 - OOD conditions use `irregular_a` floor plan (never seen during training)
 - No weather variation - FlatPlane does not render weather effects
@@ -90,12 +90,18 @@ GNSS noise escalation (base stddev = 0.02 m at 1x):
 | `rtk_standalone` | $100.0\times$ | $1.0\times$ | 1 | 0.8 | 0.6 | Policy should decline |
 | `rtk_lost` | $250.0\times$ | $2.0\times$ | 1 | 1.0 | 0.8 | Safety handoff expected |
 
-### OOD calibration (epistemic uncertainty check)
+### Held-out layout generalisation (unseen geometries)
 
-Tests whether epistemic uncertainty rises on the `irregular_a` floor plan (56 bays, nine-sided irregular polygon), which is never seen during training.
+Training uses the `rectangle` floor plan only, so the `trapezoid` (moderate OOD)
+and `irregular_a` (strong OOD, nine-sided irregular polygon) layouts are never
+seen during training. Success here measures generalisation; the `irregular_a`
+conditions additionally test whether epistemic uncertainty rises on the strongly
+out-of-distribution geometry.
 
 | Condition | Floor plan | GNSS mult | IMU mult | Patrol | Ped. prob | Bay occ. |
 |-----------|-----------|-----------|----------|--------|-----------|----------|
+| `heldout_trapezoid` | `trapezoid` | $1.0\times$ | $1.0\times$ | 0 | 0.0 | 0.6 |
+| `heldout_trapezoid_degraded` | `trapezoid` | $15.0\times$ | $1.5\times$ | 0 | 0.0 | 0.6 |
 | `ood_layout` | `irregular_a` | $1.0\times$ | $1.0\times$ | 1 | 1.0 | 0.6 |
 | `ood_layout_degraded` | `irregular_a` | $15.0\times$ | $1.5\times$ | 1 | 1.0 | 0.6 |
 
@@ -117,15 +123,11 @@ Beyond the training distribution on all axes simultaneously.
 | Epistemic uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
 | Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
 
-**Success criteria** (from `configs/eval_config.yaml` `success_criteria`):
-
-```math
-\text{position error} < 0.5\,\text{m}
-\qquad
-\text{orientation error} < 10\,\text{deg}
-\qquad
-\text{speed} < 0.1\,\text{m/s}
-```
+**Success criteria**: judged geometrically in the env, not by scalar thresholds.
+Every corner of the ego bounding box must lie inside the target bay polygon
+(`car_fully_inside_bay()` with `STRICT_BAY_MARGIN` at evaluation) and speed must be
+below `SUCCESS_THRESHOLD_VELOCITY`, held for `SUCCESS_DWELL_STEPS` consecutive steps.
+See `uncertainty_rl/utils/constants.py`.
 
 ## Key interfaces
 
@@ -158,10 +160,10 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 
 | Config file | Keys |
 |-------------|------|
-| `configs/eval_config.yaml` | `model_path`, `carla_host`, `carla_port`, `n_episodes`, `deterministic`, `eval_conditions` (all 9), `output_dir`, `success_criteria.*` |
+| `configs/eval_config.yaml` | `model_path`, `n_episodes`, `deterministic`, `debug`, `eval_conditions`, `output_dir` (connection/timing come from env_config) |
 | `configs/deployment/sim/env_config.yaml` | `carla_sensors.gnss.*`, `carla_sensors.imu.*` (base noise, scaled by condition multipliers) |
 | `configs/train_config.yaml` | `policy_type` (selects evidential vs standard path for uncertainty logging) |
-| `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_POSITION` (0.5 m), `SUCCESS_THRESHOLD_ORIENTATION` (~0.175 rad), `SUCCESS_THRESHOLD_VELOCITY` (0.1 m/s) |
+| `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_VELOCITY`, `STRICT_BAY_MARGIN` (the strict margin applied during evaluation/demo/inspector; training reads `bay_margin` from config, relaxed per curriculum stage). Success is tested geometrically via `car_fully_inside_bay()` in `utils/geometry.py`. |
 
 <!-- gif:placeholder name="eval_degradation" caption="Success rate and epistemic uncertainty across the 9 evaluation conditions" -->
 ![Evaluation degradation placeholder](docs/media/eval_degradation.gif)
@@ -171,4 +173,4 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [training/README.md](../training/README.md) - training the model evaluated here
 - [networks/README.md](../networks/README.md) - evidential policy providing uncertainty estimates
-- [docs/detailed_notes/observation_space.md](../../docs/detailed_notes/observation_space.md) - observation design that underpins the evaluation metrics
+- [docs/detailed_notes/envs/observation_space.md](../../docs/detailed_notes/envs/observation_space.md) - observation design that underpins the evaluation metrics
