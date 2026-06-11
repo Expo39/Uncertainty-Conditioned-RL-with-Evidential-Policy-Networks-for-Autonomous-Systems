@@ -17,7 +17,7 @@ spawn into.
 | File | Layout | OOD | Description |
 |------|--------|-----|-------------|
 | `rectangle.yaml` | `rectangle` | No | 47 perpendicular bays + 2 always-empty motorcycle bays, axis-aligned lot |
-| `trapezoid.yaml` | `trapezoid` | No | 39 perpendicular bays, tapered (front-wide) lot |
+| `trapezoid.yaml` | `trapezoid` | Yes | 39 perpendicular bays, tapered (front-wide) lot |
 | `irregular_a.yaml` | `irregular_a` | Yes | 36 perpendicular bays, five-sided lot with a diagonal top wall (held out from training) |
 | `flat_plane.xodr` | - | - | OpenDRIVE world geometry loaded into CARLA via `generate_opendrive_world()` |
 
