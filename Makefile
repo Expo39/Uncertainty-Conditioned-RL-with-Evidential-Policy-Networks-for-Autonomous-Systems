@@ -464,14 +464,17 @@ clean-venv: ## Remove the local virtual environment (re-create with make install
 # Config Backup
 # ----------------------------------------------------------------------
 
-backup-configs: ## Pack all CLAUDE.md, TODO.md and documentation/ into project_configs.tar.gz
+backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
 	@echo "TODO.md" >> /tmp/_backup_files.txt
 	@find ./documentation -type f >> /tmp/_backup_files.txt 2>/dev/null || true
+	@# Site-specific RTK datum (gitignored, hand-measured, not reproducible from code).
+	@[ -f configs/deployment/real/real_world_datum.yaml ] && \
+		echo "configs/deployment/real/real_world_datum.yaml" >> /tmp/_backup_files.txt || true
 	tar -czf project_configs.tar.gz -T /tmp/_backup_files.txt
 	@rm -f /tmp/_backup_files.txt
 	@echo "Backed up to project_configs.tar.gz ($$(du -h project_configs.tar.gz | cut -f1))"
 
-restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and .github/ from project_configs.tar.gz
+restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-world datum from project_configs.tar.gz
 	tar -xzf project_configs.tar.gz
 	@echo "Restored configs from project_configs.tar.gz"
