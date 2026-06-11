@@ -1,14 +1,16 @@
-# Curriculum Stage 6 - margin to strict (still clean). Resume from Stage 5.
-# Primary axis: bay_margin tightens to the strict criterion (-0.25), held hereafter.
+# Curriculum Stage 6 - occupancy to its busiest (final operating point). Resume from
+# Stage 5. Primary axis: bay occupancy (max 0.8). The GNSS degradation process is fixed
+# across all stages (see configs/deployment/sim/gnss_noise_profiles.yaml), not a
+# curriculum axis.
 
 use_extra_spawns: false
-bay_margin: -0.25  # Strict criterion (STRICT_BAY_MARGIN), held hereafter.
+bay_margin: -0.25  # Strict, held.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  bay_occupancy_min: 0.1
-  bay_occupancy_max: 0.1
+  bay_occupancy_min: 0.2
+  bay_occupancy_max: 0.8
 
 carla_sensors:
   lidar:
@@ -17,14 +19,14 @@ carla_sensors:
 
 # Identical standard/evidential blocks - see Stage 1.
 standard_overrides:
-  stage_timesteps: 1500000
-  learning_rate: 0.0002
-  learning_rate_final: 0.00004
+  stage_timesteps: 2500000
+  learning_rate: 0.0001
+  learning_rate_final: 0.00002
   ent_coef: 0.001
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 1500000
-  learning_rate: 0.0002
-  learning_rate_final: 0.00004
+  stage_timesteps: 2500000
+  learning_rate: 0.0001
+  learning_rate_final: 0.00002
   ent_coef: 0.001
   ent_coef_final: 0.0005

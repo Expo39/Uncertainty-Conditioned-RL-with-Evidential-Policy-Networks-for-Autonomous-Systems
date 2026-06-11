@@ -176,7 +176,7 @@ make docker-eval
 make docker-down
 ```
 
-Training follows a single-phase ADR curriculum (9 stages): every observation
+Training follows a single-phase ADR curriculum (6 stages): every observation
 channel is live in every stage, and one axis's range ramps per stage (bays + margin
 -> obstacle occupancy). The GNSS degradation process is a fixed, stage-invariant
 Markov chain (always-on mid-episode drift), so localisation uncertainty is present
@@ -244,7 +244,7 @@ Uncertainty-Conditioned-RL.../
 |   |-- eval_config.yaml               9-condition evaluation sweep
 |   |-- ros2_config.yaml               EKF topics and QoS settings
 |   |-- deployment/sim/env_config.yaml CARLA env, sensors, GNSS noise profiles
-|   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage7)
+|   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage6)
 |   |-- deployment/sensor_config.yaml  Physical sensor mounts and specs
 |   |-- deployment/agent_config.yaml   safety thresholds, actuator model, baseline
 |   |-- layouts/                       Pre-computed lot YAMLs (do not edit by hand)

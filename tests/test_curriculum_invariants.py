@@ -23,7 +23,7 @@ _CURRICULUM = _REPO / "configs" / "deployment" / "sim" / "curriculum"
 _LAYOUT = _REPO / "configs" / "layouts" / "rectangle.yaml"
 _GNSS_PROFILES = _REPO / "configs" / "deployment" / "sim" / "gnss_noise_profiles.yaml"
 _ROS2_CONFIG = _REPO / "configs" / "ros2_config.yaml"
-_N_STAGES = 9
+_N_STAGES = 6
 
 # Mirrors _STAGE_TRAINING_OVERRIDE_ALLOWLIST in train_ppo.py (kept in sync so a
 # stage can never set an architecture key and break weight loading on resume).
