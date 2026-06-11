@@ -21,10 +21,10 @@ import yaml
 # which transitively pins the relay's own _TIER_DEFAULTS to the same values.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
-    "rtk_fixed":  {"metric_stddev_m": 0.020, "doppler_stddev_ms": 0.05},
-    "rtk_float":  {"metric_stddev_m": 0.360, "doppler_stddev_ms": 0.08},
+    "rtk_fixed": {"metric_stddev_m": 0.020, "doppler_stddev_ms": 0.05},
+    "rtk_float": {"metric_stddev_m": 0.360, "doppler_stddev_ms": 0.08},
     "standalone": {"metric_stddev_m": 1.802, "doppler_stddev_ms": 0.15},
-    "degraded":   {"metric_stddev_m": 5.000, "doppler_stddev_ms": 0.40},
+    "degraded": {"metric_stddev_m": 5.000, "doppler_stddev_ms": 0.40},
 }
 
 # Path to the YAML mirror file, resolved relative to this test file.
@@ -69,9 +69,9 @@ class TestTierDefaults:
         @brief Every tier in _TIER_ORDER must carry doppler_stddev_ms.
         """
         for tier in _TIER_ORDER:
-            assert "doppler_stddev_ms" in _TIER_DEFAULTS[tier], (
-                f"Tier '{tier}' missing doppler_stddev_ms in _TIER_DEFAULTS"
-            )
+            assert (
+                "doppler_stddev_ms" in _TIER_DEFAULTS[tier]
+            ), f"Tier '{tier}' missing doppler_stddev_ms in _TIER_DEFAULTS"
 
     def test_doppler_stddev_monotonically_nondecreasing(self) -> None:
         """
@@ -105,12 +105,10 @@ class TestTierDefaults:
             _TIER_DEFAULTS["degraded"]["metric_stddev_m"]
             / _TIER_DEFAULTS["rtk_fixed"]["metric_stddev_m"]
         )
-        assert doppler_ratio < 20.0, (
-            f"Doppler ratio {doppler_ratio:.1f}x unexpectedly large"
-        )
-        assert pos_ratio > 50.0, (
-            f"Position ratio {pos_ratio:.1f}x unexpectedly small"
-        )
+        assert (
+            doppler_ratio < 20.0
+        ), f"Doppler ratio {doppler_ratio:.1f}x unexpectedly large"
+        assert pos_ratio > 50.0, f"Position ratio {pos_ratio:.1f}x unexpectedly small"
         assert doppler_ratio < pos_ratio
 
 
@@ -183,18 +181,18 @@ class TestYamlMirror:
         This makes the mirror convention an enforced invariant rather than a
         documentation note: if you change one, the test fails until you change both.
         """
-        assert _PROFILES_PATH.exists(), (
-            f"gnss_noise_profiles.yaml not found at {_PROFILES_PATH}"
-        )
+        assert (
+            _PROFILES_PATH.exists()
+        ), f"gnss_noise_profiles.yaml not found at {_PROFILES_PATH}"
         with open(_PROFILES_PATH, "r") as f:
             data = yaml.safe_load(f)
 
         tiers_section = data.get("tiers", {})
         for tier in _TIER_ORDER:
             yaml_tier = tiers_section.get(tier, {})
-            assert "doppler_stddev_ms" in yaml_tier, (
-                f"Tier '{tier}' missing doppler_stddev_ms in gnss_noise_profiles.yaml"
-            )
+            assert (
+                "doppler_stddev_ms" in yaml_tier
+            ), f"Tier '{tier}' missing doppler_stddev_ms in gnss_noise_profiles.yaml"
             expected = _TIER_DEFAULTS[tier]["doppler_stddev_ms"]
             actual = float(yaml_tier["doppler_stddev_ms"])
             assert actual == pytest.approx(expected), (
