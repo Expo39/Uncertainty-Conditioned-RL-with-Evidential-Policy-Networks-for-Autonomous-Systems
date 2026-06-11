@@ -23,7 +23,6 @@ from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.constants import (
     COVARIANCE_FEATURES_DIM,
-    OBSTACLE_FEATURES_DIM,
     OBS_OBSTACLE_BEARING_SCALE,
     OBS_OBSTACLE_DIST_SCALE,
     OBS_SPEED_SCALE,
@@ -32,6 +31,7 @@ from uncertainty_rl.utils.constants import (
     OBS_TARGET_POS_SCALE,
     OBS_TARGET_YAW_SCALE,
     OBS_YAW_RATE_SCALE,
+    OBSTACLE_FEATURES_DIM,
     TARGET_POSE_DIM,
     VEHICLE_STATE_DIM,
 )
@@ -648,9 +648,7 @@ class DryRunInspector(_Inspector):
 
                     # One env.step() spans action_repeat sim ticks; sleep the
                     # matching wall time so manual driving stays real-time.
-                    time.sleep(
-                        self._env._carla_timestep * self._env._action_repeat
-                    )
+                    time.sleep(self._env._carla_timestep * self._env._action_repeat)
                     self._update_spectator()
 
                     if step % self._LOG_INTERVAL == 0:

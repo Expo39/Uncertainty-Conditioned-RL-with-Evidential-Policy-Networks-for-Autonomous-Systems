@@ -288,7 +288,9 @@ class GnssNoiseRelayNode(Node):
 
         # Doppler-style velocity noise: set by _apply_tier from doppler_stddev_ms.
         # Initialised to rtk_fixed default; overwritten on first _apply_tier call.
-        self._doppler_stddev_ms: float = _TIER_DEFAULTS["rtk_fixed"]["doppler_stddev_ms"]
+        self._doppler_stddev_ms: float = _TIER_DEFAULTS["rtk_fixed"][
+            "doppler_stddev_ms"
+        ]
 
         # Previous noisy fix in local XY (metres) and its timestamp (seconds).
         self._prev_x: Optional[float] = None
@@ -748,7 +750,8 @@ class GnssNoiseRelayNode(Node):
         else:
             noisy_speed = max(
                 0.0,
-                clean_speed + float(self._rng.standard_normal() * self._doppler_stddev_ms),
+                clean_speed
+                + float(self._rng.standard_normal() * self._doppler_stddev_ms),
             )
             odom_msg.twist.twist.linear.x = noisy_speed
             twist_cov[0] = self._doppler_stddev_ms * self._doppler_stddev_ms
@@ -776,9 +779,7 @@ class GnssNoiseRelayNode(Node):
                 # REP-103 directly.
                 raw_heading = math.atan2(clean_dy, clean_dx)
                 if self._gnss_noise_enabled:
-                    raw_heading += float(
-                        self._rng.standard_normal() * course_std
-                    )
+                    raw_heading += float(self._rng.standard_normal() * course_std)
                 self._last_heading_rad = raw_heading
                 self._last_heading_var = candidate_var
 
