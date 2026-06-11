@@ -112,7 +112,7 @@ The full stack is N CARLA env workers (read from `parallel_workers` in
 Each stage of the single-phase ADR curriculum is selected with `STAGE=N` and resumes
 from the previous stage's checkpoint via `CHECKPOINT=<leaf>`. The first stage starts from
 a random init (no `CHECKPOINT`). See
-[documentation/CURRICULUM_PLAN.md](documentation/CURRICULUM_PLAN.md).
+[configs/deployment/sim/curriculum/README.md](configs/deployment/sim/curriculum/README.md).
 
 | Command | Purpose | GPU? |
 |---------|---------|------|

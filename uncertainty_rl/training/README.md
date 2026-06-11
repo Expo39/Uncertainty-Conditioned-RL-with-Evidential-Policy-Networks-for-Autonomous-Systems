@@ -59,7 +59,7 @@ and the Optuna tuner writes back into it.
 The structural choices that must stay stable across resumes
 (`net_arch`, `activation`, `policy_type`, `include_covariance`,
 `include_obstacle_obs`, action / observation dimensions) are documented
-in the [Curriculum Plan](../../documentation/CURRICULUM_PLAN.md).
+in the [curriculum stage README](../../configs/deployment/sim/curriculum/README.md).
 
 ## PPO objective
 
