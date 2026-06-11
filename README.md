@@ -163,8 +163,8 @@ make docker-up
 # 2. Train a curriculum stage (STAGE defaults to 1, the curriculum head)
 make docker-train STAGE=1
 
-# 3. Resume the next stage from the previous stage's checkpoint
-make docker-train STAGE=2 CHECKPOINT=path/to/stage1/checkpoint
+# 3. Resume the next stage from the previous stage's run leaf (bare name, not a path)
+make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=seed42_11062026-0628
 
 # 4. Attach the 2D visualiser at any time (host terminal, non-blocking)
 make visualise
@@ -320,8 +320,8 @@ ego vehicle (cyan) with heading arrow and 50-step trail.
 ### 3D CARLA Spectator View
 
 ```bash
-make docker-eval-visualise-3d                         # default checkpoint
-make docker-eval-visualise-3d CHECKPOINT=path/to/model
+make docker-eval-visualise-3d                                          # default checkpoint
+make docker-eval-visualise-3d BASELINE=full_method CHECKPOINT=seed42_11062026-0628
 ```
 
 ### Live Inspect Modes
