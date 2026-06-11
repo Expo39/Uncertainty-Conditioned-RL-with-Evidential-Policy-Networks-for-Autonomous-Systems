@@ -25,7 +25,10 @@ from uncertainty_rl.networks.sb3_integration import (  # noqa: E402
     EvidentialActorCriticPolicy,
     EvidentialDistribution,
     EvidentialPPO,
+    LayerNormActorCriticPolicy,
+    ScheduledEntCoefPPO,
 )
+from uncertainty_rl.training.train_ppo import linear_schedule  # noqa: E402
 from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -43,7 +46,7 @@ BATCH_SIZE = 8
 @pytest.fixture
 def obs_space() -> spaces.Box:
     """
-    @brief 15-dim continuous observation space.
+    @brief Full observation space (TOTAL_OBS_DIM, both ablation flags on).
     """
     return spaces.Box(
         low=-np.inf,
@@ -56,11 +59,13 @@ def obs_space() -> spaces.Box:
 @pytest.fixture
 def act_space() -> spaces.Box:
     """
-    @brief 2-dim continuous action space matching parking env [steering, longitudinal].
+    @brief 3-dim continuous action space matching parking env. All axes are
+           uniformly [-1, 1]: the env applies a tanh squash in the policy and
+           remaps throttle / brake to [0, 1] inside step().
     """
     return spaces.Box(
-        low=np.array([-1.0, -1.0], dtype=np.float32),
-        high=np.array([1.0, 1.0], dtype=np.float32),
+        low=np.array([-1.0, -1.0, -1.0], dtype=np.float32),
+        high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
         dtype=np.float32,
     )
 
@@ -147,15 +152,15 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief log_prob returns shape (batch_size,).
+        @brief log_prob returns shape (batch_size,). Actions must be in (-1, 1).
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = evidential_dist.sample()
         log_prob = evidential_dist.log_prob(actions)
         assert log_prob.shape == (BATCH_SIZE,)
 
-    def test_entropy_shape(
+    def test_entropy_returns_none(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -166,15 +171,13 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief entropy returns shape (batch_size,).
+        @brief entropy() returns None - squashed Gaussian has no closed form.
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        entropy = evidential_dist.entropy()
-        assert entropy is not None
-        assert entropy.shape == (BATCH_SIZE,)
+        assert evidential_dist.entropy() is None
 
-    def test_sample_shape(
+    def test_sample_shape_and_squashed(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -185,14 +188,16 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief sample returns shape (batch_size, action_dim).
+        @brief sample returns shape (batch_size, action_dim) and values in (-1, 1).
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
         sample = evidential_dist.sample()
         assert sample.shape == (BATCH_SIZE, ACTION_DIM)
+        assert torch.all(sample > -1.0)
+        assert torch.all(sample < 1.0)
 
-    def test_mode_equals_gamma(
+    def test_mode_equals_tanh_gamma(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -203,12 +208,44 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief mode() returns gamma (the NIG mean).
+        @brief mode() returns tanh(gamma) - squashed deterministic action.
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
         mode = evidential_dist.mode()
-        assert torch.allclose(mode, gamma)
+        assert torch.allclose(mode, torch.tanh(gamma))
+
+    def test_log_prob_includes_tanh_jacobian(
+        self,
+        evidential_dist: EvidentialDistribution,
+        nig_params: Tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ],
+    ) -> None:
+        """
+        @brief log_prob applies the tanh change-of-variables correction.
+        """
+        from torch.distributions import Normal
+
+        gamma, nu, alpha, beta = nig_params
+        evidential_dist.proba_distribution(gamma, nu, alpha, beta)
+        gaussian_actions = evidential_dist.sample()
+        # Reuse the cached pre-squash sample to avoid the atanh fallback.
+        pre_squash = evidential_dist._gaussian_actions
+        assert pre_squash is not None
+        log_prob = evidential_dist.log_prob(
+            gaussian_actions, gaussian_actions=pre_squash
+        )
+
+        # Manual reference: Normal log_prob minus the Jacobian term.
+        std = torch.sqrt(torch.clamp(beta / (alpha - 1), min=1e-6, max=1.0))
+        normal_lp = Normal(gamma, std).log_prob(pre_squash).sum(dim=-1)
+        jacobian = torch.log(1.0 - torch.tanh(pre_squash) ** 2 + 1e-6).sum(dim=-1)
+        expected = normal_lp - jacobian
+        assert torch.allclose(log_prob, expected, atol=1e-5)
 
     def test_nig_params_cached(
         self,
@@ -246,7 +283,7 @@ class TestEvidentialDistribution:
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = evidential_dist.sample()
         log_prob = evidential_dist.log_prob(actions)
         assert torch.all(torch.isfinite(log_prob))
 
@@ -303,15 +340,16 @@ class TestEvidentialActorCriticPolicy:
         self, policy: EvidentialActorCriticPolicy
     ) -> None:
         """
-        @brief evaluate_actions() returns correct shapes.
+        @brief evaluate_actions() returns correct shapes. Entropy is None for
+               the squashed Gaussian (no closed form).
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        # Squashed actions in (-1, 1); torch.tanh of randn keeps them off the boundary.
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         values, log_prob, entropy = policy.evaluate_actions(obs, actions)
         assert values.shape == (BATCH_SIZE, 1)
         assert log_prob.shape == (BATCH_SIZE,)
-        assert entropy is not None
-        assert entropy.shape == (BATCH_SIZE,)
+        assert entropy is None
 
     def test_evaluate_actions_caches_nig_params(
         self, policy: EvidentialActorCriticPolicy
@@ -320,7 +358,7 @@ class TestEvidentialActorCriticPolicy:
         @brief evaluate_actions() caches NIG params for evidential loss.
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         policy.evaluate_actions(obs, actions)
         assert policy._cached_nig_params is not None
         gamma, nu, alpha, beta = policy._cached_nig_params
@@ -336,7 +374,7 @@ class TestEvidentialActorCriticPolicy:
         @brief NIG constraints hold: nu > 0, alpha > 1, beta > 0.
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         policy.evaluate_actions(obs, actions)
         assert policy._cached_nig_params is not None
         _, nu, alpha, beta = policy._cached_nig_params
@@ -380,7 +418,7 @@ class TestEvidentialActorCriticPolicy:
         @brief Gradients reach the EvidentialLayer parameters.
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
-        actions = torch.randn(BATCH_SIZE, ACTION_DIM)
+        actions = torch.tanh(torch.randn(BATCH_SIZE, ACTION_DIM))
         values, log_prob, _ = policy.evaluate_actions(obs, actions)
         loss = log_prob.mean() + values.mean()
         loss.backward()
@@ -584,6 +622,153 @@ class TestEvidentialPPO:
 
 
 # ===========================================================================
+# TestScheduledEntCoefPPO
+# ===========================================================================
+
+
+class TestScheduledEntCoefPPO:
+    """
+    @class TestScheduledEntCoefPPO
+    @brief Tests the standard-PPO subclass that accepts a callable ent_coef.
+
+    This is the path the vanilla / input-uncertainty baselines take. Stock PPO
+    cannot multiply a callable ent_coef by the loss tensor; this subclass must
+    resolve the schedule per train() call and leave it callable afterwards.
+    """
+
+    @pytest.fixture
+    def dummy_env(self) -> gym.Env:
+        """
+        @brief Simple continuous-action environment for testing.
+        """
+        return gym.make("Pendulum-v1")
+
+    def test_train_runs_with_callable_ent_coef(self, dummy_env: gym.Env) -> None:
+        """
+        @brief A short run with a scheduled ent_coef completes without the
+               'function * Tensor' TypeError that bare PPO raises.
+        """
+        model = ScheduledEntCoefPPO(
+            policy="MlpPolicy",
+            env=dummy_env,
+            ent_coef=linear_schedule(0.02, 0.006),
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+        # ent_coef must remain the callable after training so the schedule keeps
+        # advancing on subsequent updates.
+        assert callable(model.ent_coef)
+
+    def test_constant_ent_coef_still_works(self, dummy_env: gym.Env) -> None:
+        """
+        @brief A plain float ent_coef is passed straight through (no regression
+               for the non-scheduled case).
+        """
+        model = ScheduledEntCoefPPO(
+            policy="MlpPolicy",
+            env=dummy_env,
+            ent_coef=0.01,
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+        assert model.ent_coef == 0.01
+
+    def test_bare_ppo_rejects_callable_ent_coef(self, dummy_env: gym.Env) -> None:
+        """
+        @brief Regression guard documenting WHY the subclass exists: stock PPO
+               raises on a callable ent_coef, which is what crashed the vanilla
+               curriculum run.
+        """
+        from stable_baselines3.ppo import PPO
+
+        model = PPO(
+            policy="MlpPolicy",
+            env=dummy_env,
+            ent_coef=linear_schedule(0.02, 0.006),
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        with pytest.raises(TypeError):
+            model.learn(total_timesteps=128)
+
+
+# ===========================================================================
+# TestLayerNormActorCriticPolicy
+# ===========================================================================
+
+
+class TestLayerNormActorCriticPolicy:
+    """
+    @class TestLayerNormActorCriticPolicy
+    @brief The standard-head policy must match the evidential backbone + prior.
+
+    The 2x2 ablation needs the standard and evidential baselines identical except
+    for the head and the observation. These tests pin the two non-head matches:
+    the LayerNorm-equipped MLP extractor, and the default-forward action-mean bias
+    (steer 0, throttle +0.5, brake -1.0) that the evidential head already sets.
+    """
+
+    def _policy(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> LayerNormActorCriticPolicy:
+        return LayerNormActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+        )
+
+    def test_mlp_extractor_has_layernorm(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief The policy/value MLPs must contain LayerNorm, matching the
+               evidential policy backbone (stock MlpPolicy has none).
+        """
+        from torch import nn
+
+        pol = self._policy(obs_space, act_space)
+        has_ln = any(isinstance(m, nn.LayerNorm) for m in pol.mlp_extractor.policy_net)
+        assert has_ln, "policy_net is missing LayerNorm"
+
+    def test_action_mean_bias_matches_evidential_prior(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief The Gaussian action-mean bias must be the same default-forward prior
+               the evidential head uses (steer 0, throttle +0.5, brake -1.0).
+        """
+        pol = self._policy(obs_space, act_space)
+        bias = pol.action_net.bias.detach()
+        assert float(bias[0]) == pytest.approx(0.0)
+        assert float(bias[1]) == pytest.approx(0.5)
+        assert float(bias[2]) == pytest.approx(-1.0)
+
+    def test_trains_with_scheduled_ent_coef(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief End-to-end: the policy runs under ScheduledEntCoefPPO on a 3-action
+               env without error (the real vanilla/input-uncertainty path).
+        """
+        env = gym.make("Pendulum-v1")  # 1-action smoke env; bias branch is no-op
+        model = ScheduledEntCoefPPO(
+            policy=LayerNormActorCriticPolicy,
+            env=env,
+            ent_coef=linear_schedule(0.02, 0.006),
+            n_steps=64,
+            batch_size=32,
+            n_epochs=2,
+        )
+        model.learn(total_timesteps=128)
+
+
+# ===========================================================================
 # TestNIGInit
 # ===========================================================================
 
@@ -686,7 +871,7 @@ class TestUncertaintyConditionedActorWiring:
     @pytest.fixture
     def obs_space(self) -> spaces.Box:
         """
-        @brief 12-dim observation space (full obs with covariance + obstacle dims).
+        @brief 13-dim observation space (full obs with covariance + obstacle dims).
         """
         return spaces.Box(
             low=-np.inf,
@@ -698,11 +883,11 @@ class TestUncertaintyConditionedActorWiring:
     @pytest.fixture
     def act_space(self) -> spaces.Box:
         """
-        @brief 2-dim action space [steering, longitudinal].
+        @brief 3-dim action space [steering, throttle, brake].
         """
         return spaces.Box(
-            low=np.array([-1.0, -1.0], dtype=np.float32),
-            high=np.array([1.0, 1.0], dtype=np.float32),
+            low=np.array([-1.0, 0.0, 0.0], dtype=np.float32),
+            high=np.array([1.0, 1.0, 1.0], dtype=np.float32),
             dtype=np.float32,
         )
 

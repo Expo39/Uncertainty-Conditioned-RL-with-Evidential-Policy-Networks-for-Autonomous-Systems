@@ -55,7 +55,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | `carla_timestep` | float | Effective CARLA timestep used for `sim_time` |
 | `floor_plan` | str | Layout name (`rectangle`, `trapezoid`, `irregular_a`) |
 | `ego` | dict | `{x, y, yaw, vx, vy, speed}` - ego pose and velocity |
-| `action` | dict | `{steer, drive}` - last action applied (drive bipolar) |
+| `action` | dict | `{steer, throttle, brake}` - last clamped action applied to the vehicle |
 | `trajectory` | list | `[[x, y], ...]` ego trail (last N steps) |
 | `actors` | list | NPC/static vehicles: `[{x, y, yaw, type}]` where `type` is `"npc"` or `"static"` |
 | `pedestrians` | list | `[{x, y}]` for each pedestrian |
@@ -76,8 +76,9 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 7. Ego trajectory trail (faded cyan, capped at 500 points)
 8. Ego vehicle (cyan rectangle + heading arrow)
 9. HUD bar (floor plan, episode, step, sim time)
-10. Debug HUD bar (position error, yaw error, speed, reward, covariance, actions) - only when `debug` key is present
-11. Legend panel (right-hand side, static)
+10. State HUD bar (speed, action vector `[steer, throttle, brake]`) - always shown; read from the `ego` and `action` keys the env writes every frame
+11. Debug HUD bar (position error, yaw error, reward, covariance, EKF drift) - only when the `debug` key is present (env `debug: true`)
+12. Legend panel (right-hand side, static)
 
 ## Controls
 
@@ -91,7 +92,8 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | File | Purpose |
 |------|---------|
 | `visualiser.py` | `LiveVisualiser` class + CLI entry point (`python scripts/visualise/visualiser.py`) |
-| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection |
+| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection. Per-decision trace logging is on by default: each episode is written to `outputs/demo_traces/<DD-MM-YYYY-HHMMSS>/episode_<N>.csv` with one row per policy decision (intermediate `action_repeat` ticks are skipped, so no all-zero filler rows). Columns: `step, speed_ms, pos_error_m, orientation_error_rad, steer_cmd, throttle_cmd, brake_cmd, reward, success, epistemic, aleatoric`. `*_cmd` are the post-clamp commands actually delivered to CARLA; `epistemic` / `aleatoric` are the evidential policy uncertainty (mean over action axes, `NaN` for a non-evidential policy). Written under `outputs/` because that is the directory bind-mounted into the demo container. Pass `--no-trace` to disable. |
+| `eval_visualise_2d.sh` | Orchestration for `make eval-visualise-2d`: starts the demo container detached, streams its logs with a `[demo]` prefix, runs the viewer in the foreground, and stops the demo with SIGTERM on exit so it flushes its eval `bay_successes.csv` before the container is removed. |
 | `__init__.py` | Package marker - sets non-interactive Matplotlib backend |
 
 ## Window dimensions

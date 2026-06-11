@@ -1,5 +1,5 @@
 # Baseline: Full Method (Main Contribution)
-# 12-dim obs: EKF yaw rate (1) + covariance stds (3) + relative target pose (3) + obstacle clearance (5).
+# Observation: vehicle state + EKF covariance + relative target pose + obstacle clearance.
 # The agent sees localisation uncertainty AND the policy quantifies its own
 # epistemic and aleatoric uncertainty.
 
@@ -8,6 +8,5 @@ baseline_name: "full_method"
 include_covariance: true
 include_obstacle_obs: true
 policy_type: "evidential"
-
-log_dir: "./logs/full_method"
-checkpoint_dir: "./checkpoints/full_method"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.

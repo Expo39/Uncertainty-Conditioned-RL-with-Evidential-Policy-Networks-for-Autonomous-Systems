@@ -4,17 +4,29 @@
 """
 
 from uncertainty_rl.utils.actuation_calibration import ActuationCalibration
+from uncertainty_rl.utils.config_merge import (
+    BASELINE_KEYS,
+    apply_baseline,
+    deep_merge,
+)
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
-    CLEARANCE_THRESHOLD,
+    ALONG_TRACK_SCALE,
+    APPROACH_INNER_ALIGNMENT_CUTOFF,
+    CORRIDOR_HALF_WIDTH,
     COVARIANCE_FEATURES_DIM,
-    MAX_PARKING_SPEED,
+    OBSTACLE_CLEARANCE_DANGER,
+    OBSTACLE_CLEARANCE_SAFE,
     OBSTACLE_FEATURES_DIM,
+    OOB_INFLATION_MARGIN,
+    OOB_STEP_PENALTY,
+    OOB_TERMINATION_PENALTY_LIMIT,
     OUT_OF_BOUNDS_THRESHOLD,
-    SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_POSITION,
+    PHI_NORM_FLOOR,
+    STRICT_BAY_MARGIN,
     SUCCESS_THRESHOLD_VELOCITY,
     TARGET_POSE_DIM,
+    TIMEOUT_PENALTY_FLOOR_NORM,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
@@ -26,6 +38,9 @@ from uncertainty_rl.utils.covariance_utils import (
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    bay_containment_fraction,
+    car_fully_inside_bay,
+    inflate_polygon,
     point_in_polygon,
     wrap_angle_symmetric,
     zone_bbox,
@@ -36,21 +51,32 @@ from uncertainty_rl.utils.visualisation import VisStateWriter
 __all__ = [
     # Actuation calibration
     "ActuationCalibration",
+    # Config merge hierarchy
+    "BASELINE_KEYS",
+    "apply_baseline",
+    "deep_merge",
     # Logging
     "DebugLogger",
     # Visualisation
     "VisStateWriter",
     # Constants
     "ACTION_DIM",
-    "CLEARANCE_THRESHOLD",
+    "ALONG_TRACK_SCALE",
+    "APPROACH_INNER_ALIGNMENT_CUTOFF",
+    "CORRIDOR_HALF_WIDTH",
     "COVARIANCE_FEATURES_DIM",
-    "MAX_PARKING_SPEED",
+    "OBSTACLE_CLEARANCE_DANGER",
+    "OBSTACLE_CLEARANCE_SAFE",
     "OBSTACLE_FEATURES_DIM",
+    "OOB_INFLATION_MARGIN",
+    "OOB_STEP_PENALTY",
+    "OOB_TERMINATION_PENALTY_LIMIT",
     "OUT_OF_BOUNDS_THRESHOLD",
-    "SUCCESS_THRESHOLD_ORIENTATION",
-    "SUCCESS_THRESHOLD_POSITION",
+    "PHI_NORM_FLOOR",
+    "STRICT_BAY_MARGIN",
     "SUCCESS_THRESHOLD_VELOCITY",
     "TARGET_POSE_DIM",
+    "TIMEOUT_PENALTY_FLOOR_NORM",
     "TOTAL_OBS_DIM",
     "VEHICLE_STATE_DIM",
     # Covariance utilities
@@ -58,6 +84,9 @@ __all__ = [
     "get_covariance_dimension",
     "validate_covariance_matrix",
     # Geometry utilities (private helpers re-exported for internal package use)
+    "bay_containment_fraction",
+    "car_fully_inside_bay",
+    "inflate_polygon",
     "zone_bbox",
     "point_in_polygon",
     "wrap_angle_symmetric",

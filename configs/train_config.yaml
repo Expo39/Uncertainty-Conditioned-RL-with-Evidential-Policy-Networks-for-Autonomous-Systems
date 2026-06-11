@@ -1,55 +1,49 @@
 # Training Configuration
 # PPO hyperparameters, network architecture, evidential settings, and training schedule.
 # Environment settings live in deployment/sim/env_config.yaml.
-# See detailed_notes/ekf_pipeline.md, reward_function.md, evidential_nig_initialisation.md.
 
 # PPO hyperparameters
-learning_rate: 0.0003  # Linear decay to 0 applied in train_ppo.py.
-n_steps: 2048  # Steps per PPO update (~4 episodes with a single CARLA env).
+learning_rate: 0.0003  # Initial LR; linear decay to learning_rate_final over the stage budget (stage_timesteps).
+learning_rate_final: 0.00001  # Non-zero LR floor so an early-converging run keeps a live LR.
+n_steps: 2048  # Steps per PPO update (~4.7 episodes at ~437 policy decisions each).
 batch_size: 256
 n_epochs: 5
-gamma: 0.99  # High gamma needed: success bonus at ~step 300 must propagate back.
+gamma: 0.997  # Discount; effective horizon 1/(1-gamma) ~= 333 steps.
 gae_lambda: 0.95
 clip_range: 0.2
 clip_range_vf: null  # No VF clipping (SB3 default).
-ent_coef: 0.02  # Higher entropy bonus to break the cold-start (gamma bias = 0)
+ent_coef: 0.02  # Entropy bonus at start; linear decay to ent_coef_final.
+ent_coef_final: 0.006  # Entropy floor (the action std is sqrt(aleatoric)).
 vf_coef: 0.5
 max_grad_norm: 0.5
-target_kl: 0.02  # Early-stop epochs when KL divergence exceeds this threshold.
+target_kl: 0.04  # Early-stop epochs above this KL; clip_range is the primary safety, this a backup.
 
 # Network architecture
 net_arch: [256, 256]  # Actor and critic hidden layers.
 activation: "relu"  # Options: relu, tanh, elu, leaky_relu.
-# LayerNorm inserted after each hidden layer via _build_mlp_extractor() in sb3_integration.py.
+log_std_init: -0.6  # Initial Gaussian action log-std (std ~= 0.55). Standard head only.
 
-# Evidential network settings. See detailed_notes/evidential_nig_initialisation.md.
+# Evidential network settings.
 evidential:
-  lambda_reg: 0.001  # Evidential regularisation coefficient (target after warmup).
+  lambda_reg: 0.005  # Evidential regularisation coefficient (target after warmup).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
-  use_uncertainty_conditioning: true  # Condition policy on EKF localisation uncertainty.
-
-
-policy_type: "evidential"  # evidential: EvidentialPPO + NIG actor. standard: PPO + MlpPolicy.
-
-# Reward function: uncertainty-scaled potential-based shaping. See detailed_notes/reward_function.md.
-uncertainty_std_max: 2.0  # EKF std (metres) at which progress reward reaches zero.
-
-# Observation normalisation: VecNormalize with norm_obs=True. Covariance features
-# are log1p-transformed before VecNormalize.
+  use_uncertainty_conditioning: false  # Route covariance through a dual-encoder pathway. False keeps the 2x2 ablation clean (covariance enters identically for both heads).
 
 # Logging and checkpointing
 checkpoint_freq: 50000  # Save checkpoint every N steps.
-log_interval: 10  # Log every N episodes.
+log_interval: 1  # Log every PPO update.
 verbose: 1  # SB3 verbosity: 0=silent, 1=info, 2=debug.
 log_dir: "./logs"
 checkpoint_dir: "./checkpoints"
 
 # Training schedule
-total_timesteps: 1000000
-seed: 42
-random_seeds: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # 10 seeds for ablation study.
+# The run budget is the active stage's stage_timesteps (curriculum file), which the
+# LR/ent_coef schedules decay over. A run with no stage falls back to train_ppo.py's
+# 1,000,000-step default.
+seed: 42  # Master RNG seed. The ablation runs multiple seeds via --seed / the Makefile, not a list here.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
 n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).
+success_rate_window: 50  # Episodes the logged terminal rates are averaged over (a per-rollout rate is too noisy).
 
 # Parallel workers. Each worker connects to a separate CARLA server on base_port + rank*1000.
 parallel_workers: 1

@@ -2,8 +2,9 @@
 @file actuation_calibration.py
 @brief Actuation calibration layer for sim-to-real transfer.
 
-Maps normalised policy actions [steering, drive] to physical actuator
-commands. drive is bipolar: positive = throttle, negative = brake.
+Maps normalised policy actions [steering, throttle, brake] to physical
+actuator commands. Steering is bipolar in [-1, 1]; throttle and brake are
+separate non-negative axes in [0, 1]. No reverse gear.
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -15,9 +16,9 @@ class ActuatorMap:
     @brief Single-actuator mapping from policy output to physical command.
     """
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Construction
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def __init__(self, params: Dict[str, Any]) -> None:
         """
@@ -54,26 +55,28 @@ class ActuatorMap:
 class ActuationCalibration:
     """
     @class ActuationCalibration
-    @brief Maps policy [steering, drive] outputs to physical actuator commands.
+    @brief Maps policy [steering, throttle, brake] outputs to physical commands.
     """
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Construction
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def __init__(
         self,
         steering: Optional[ActuatorMap] = None,
-        drive: Optional[ActuatorMap] = None,
+        throttle: Optional[ActuatorMap] = None,
+        brake: Optional[ActuatorMap] = None,
     ) -> None:
         """
         @brief Construct with per-actuator maps. Defaults to identity if None.
-        @param steering: Steering actuation map. None = identity.
-        @param drive: Drive actuation map. Bipolar: positive = throttle,
-                      negative = brake. None = identity.
+        @param steering: Steering actuation map (bipolar, [-1, 1]). None = identity.
+        @param throttle: Throttle actuation map (non-negative, [0, 1]). None = identity.
+        @param brake: Brake actuation map (non-negative, [0, 1]). None = identity.
         """
         self._steering = steering or ActuatorMap({})
-        self._drive = drive or ActuatorMap({})
+        self._throttle = throttle or ActuatorMap({})
+        self._brake = brake or ActuatorMap({})
 
     @classmethod
     def identity(cls) -> "ActuationCalibration":
@@ -99,21 +102,26 @@ class ActuationCalibration:
             with open(config_path, "r") as f:
                 doc = yaml.safe_load(f) or {}
             cal = doc.get("calibration", {})
-            steering_map = ActuatorMap(cal.get("steering", {}))
-            drive_map = ActuatorMap(cal.get("drive", {}))
-            return cls(steering=steering_map, drive=drive_map)
+            return cls(
+                steering=ActuatorMap(cal.get("steering", {})),
+                throttle=ActuatorMap(cal.get("throttle", {})),
+                brake=ActuatorMap(cal.get("brake", {})),
+            )
         except (OSError, KeyError):
             return cls.identity()
 
-    def apply(self, steering: float, drive: float) -> Tuple[float, float]:
+    def apply(
+        self, steering: float, throttle: float, brake: float
+    ) -> Tuple[float, float, float]:
         """
         @brief Apply calibration to policy action outputs.
         @param steering: Policy steering output in [-1, 1].
-        @param drive: Policy drive output in [-1, 1]; positive = throttle,
-                      negative = brake.
-        @return Tuple (steering_cmd, drive_cmd) mapped to physical range.
+        @param throttle: Policy throttle output in [0, 1].
+        @param brake: Policy brake output in [0, 1].
+        @return Tuple (steering_cmd, throttle_cmd, brake_cmd) in physical range.
         """
         return (
             self._steering.apply(steering),
-            self._drive.apply(drive),
+            self._throttle.apply(throttle),
+            self._brake.apply(brake),
         )

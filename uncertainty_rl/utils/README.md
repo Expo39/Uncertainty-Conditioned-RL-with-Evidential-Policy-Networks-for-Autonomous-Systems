@@ -5,8 +5,8 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 ## At a glance
 
 - `constants.py` is the single source of truth for all architectural dimensions and success thresholds - never hardcode these elsewhere
-- `ACTION_DIM = 2`: steering $\in [-1, 1]$, drive $\in [-1, 1]$ (drive is bipolar: positive = throttle, negative = brake; no reverse gear)
-- `TOTAL_OBS_DIM = 12` (default, both ablation flags true); use `compute_obs_dim()` in `_parking_core.py` at runtime
+- `ACTION_DIM = 3`: steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$ (throttle and brake are separate non-negative axes; no reverse gear)
+- `TOTAL_OBS_DIM = 13` (default, both ablation flags true); use `compute_obs_dim()` in `_parking_core.py` at runtime
 - `VisStateWriter` streams environment state for the detachable 2D bird's-eye visualiser via atomic JSON writes
 - No tuneable hyperparameters here - those live in `configs/*.yaml`
 
@@ -15,6 +15,8 @@ Shared structural constants, covariance processing, geometry helpers, debug logg
 | Module | Purpose |
 |--------|---------|
 | `constants.py` | Structural constants: dimensions, thresholds. Not tuneable. |
+| `bay_success.py` | Per-bay episode accounting for success-rate reporting |
+| `config_merge.py` | Config merge hierarchy: `deep_merge`, `apply_baseline`, `BASELINE_KEYS` |
 | `covariance_utils.py` | EKF covariance extraction and validation helpers |
 | `geometry.py` | Coordinate transforms, polygon tests, angle wrapping |
 | `logging.py` | `DebugLogger` - zero-overhead per-step diagnostics |
@@ -27,27 +29,43 @@ Structural constants fixed by system architecture. Changing any of these require
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `VEHICLE_STATE_DIM` | $1$ | Yaw rate only: $[\dot\psi]$. $v_x$/$v_y$ excluded - no EKF correction source. |
+| `VEHICLE_STATE_DIM` | $2$ | Signed body-frame longitudinal speed and yaw rate: $[v_x, \dot\psi]$. |
 | `COVARIANCE_FEATURES_DIM` | $3$ | EKF uncertainty features: $[\sigma_x, \sigma_y, \sigma_\psi]$. Off-diagonal terms dropped as redundant. |
 | `TARGET_POSE_DIM` | $3$ | Relative target bay pose: $[dx, dy, d\psi]$ in ego body frame. |
 | `OBSTACLE_FEATURES_DIM` | $5$ | Hemispheric clearance: $[d_\text{left}, \theta_\text{left}, d_\text{right}, \theta_\text{right}, d_\text{fwd}]$. |
-| `TOTAL_OBS_DIM` | $12$ | Full observation: $1 + 3 + 3 + 5$ (both ablation flags true). |
-| `ACTION_DIM` | $2$ | Steering $\in [-1, 1]$, drive $\in [-1, 1]$. drive is bipolar: positive = throttle, negative = brake. No reverse gear. |
-| `SUCCESS_THRESHOLD_POSITION` | $0.5$ m | Parking success position threshold. |
-| `SUCCESS_THRESHOLD_ORIENTATION` | $\approx 0.175$ rad | Parking success orientation threshold ($10$ deg). |
-| `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. |
-| `CLEARANCE_THRESHOLD` | $0.8$ m | Reserved; CARLA collision sensor used in practice. |
-| `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Distance from target above which episode terminates. |
-| `MAX_PARKING_SPEED` | $15.0$ m/s | Speed cap for parking manoeuvres. |
+| `TOTAL_OBS_DIM` | $13$ | Full observation: $2 + 3 + 3 + 5$ (both ablation flags true). |
+| `ACTION_DIM` | $3$ | Steering $\in [-1, 1]$, throttle $\in [0, 1]$, brake $\in [0, 1]$. Throttle and brake are separate non-negative axes. No reverse gear. |
+| `SUCCESS_THRESHOLD_VELOCITY` | $0.1$ m/s | Parking success velocity threshold. Combined with the geometric in-bay check to define a parked vehicle. |
+| `STRICT_BAY_MARGIN` | $-0.25$ m | Strict inward bay-polygon margin (negative inflates the bay by $0.25$ m per side). The published criterion used by evaluation, the demo driver, and the lot inspector. Training/tuning instead read `bay_margin` from `env_config.yaml`, relaxed per curriculum stage. |
+| `CORRIDOR_HALF_WIDTH` | $2.0$ m | Cross-track reference: the `on_line` reward factor is $1$ on the bay centreline and $0$ at this offset. |
+| `ALONG_TRACK_SCALE` | $6.0$ m | Along-track reference: the `near_depth` reward factor ramps from $1$ at the parked depth to $0$ over this distance. |
+| `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff in the corridor `aligned` term ($45$ deg). |
+| `OBSTACLE_CLEARANCE_SAFE` / `OBSTACLE_CLEARANCE_DANGER` | $0.8$ / $0.3$ m | Clearance-penalty ramp band; SAFE sits below the $\sim 0.98$ m gap a correctly parked car leaves beside an occupied neighbour, so a correct park pays $\sim 0$. |
+| `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Radial distance from the target above which the real-world inference loop aborts. The sim path uses the soft polygon boundary below instead. |
+| `OOB_INFLATION_MARGIN` | $5.0$ m | Metres the lot polygon is offset outward (uniformly, on every edge) to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
+| `OOB_STEP_PENALTY` | $-0.5$ | Reward applied each policy decision the ego centre is outside the inflated polygon. |
+| `OOB_TERMINATION_PENALTY_LIMIT` | $10.0$ | Accumulated out-of-bounds cost at which the episode terminates (no extra crash-magnitude penalty). |
+| `OBS_*_SCALE`, `OBS_NORM_CLIP` | various | Fixed physical-range observation scales (`OBS_SPEED_SCALE`, `OBS_YAW_RATE_SCALE`, `OBS_STD_POS_SCALE`, `OBS_STD_YAW_SCALE`, `OBS_TARGET_POS_SCALE`, `OBS_TARGET_YAW_SCALE`, `OBS_OBSTACLE_DIST_SCALE`, `OBS_OBSTACLE_BEARING_SCALE`) applied in `build_observation`, with clip `OBS_NORM_CLIP`. Stage- and layout-invariant: each obs dim is divided by its physical range, so weights transfer on resume and OOD eval is unconfounded (replaces VecNormalize obs-norm). |
+
+Success position and orientation are no longer scalar constants. The success
+gate is the geometric polygon-fit check (every corner of the ego bounding
+box must lie inside the target bay rectangle, via `car_fully_inside_bay()`)
+combined with the velocity threshold above. Any orientation that physically
+fits is accepted; the bay's rectangular geometry combined with the car's
+dimensions restricts feasible orientations to small yaw errors in practice.
+The margin used by the check is supplied at env construction time: training and
+tuning pass the `bay_margin` resolved from `env_config.yaml` (relaxed per
+curriculum stage), while the demo / inspector / evaluation pass
+`STRICT_BAY_MARGIN` - the env itself has no concept of "training vs eval" mode.
 
 Observation dimension as a function of ablation flags:
 
 | `include_covariance` | `include_obstacle_obs` | Obs dim |
 |---------------------|----------------------|---------|
-| True | True | $12$ (default) |
-| False | True | $9$ |
-| True | False | $7$ |
-| False | False | $4$ |
+| True | True | $13$ (default) |
+| False | True | $10$ |
+| True | False | $8$ |
+| False | False | $5$ |
 
 Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime rather than branching on these constants directly.
 
@@ -66,6 +84,8 @@ Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime r
 |----------|---------|
 | `zone_bbox` | Convert a pedestrian zone dict to $(x_\min, x_\max, y_\min, y_\max)$; handles explicit-extents and centre + half-extents YAML formats |
 | `point_in_polygon` | Ray-casting out-of-bounds test against the lot boundary polygon (with $10^{-12}$ division guard for horizontal edges) |
+| `inflate_polygon` | Inflate a polygon outward by `margin` metres per bounding-box side (bounding-box-centre scaling). Used to build the soft out-of-bounds boundary from the lot corners |
+| `car_fully_inside_bay` | Rectangle-in-rectangle containment: every corner of the ego bounding box must lie inside the bay rectangle (optional inward `margin`). Used by the geometric success gate |
 | `yaw_from_quaternion` | Extract yaw from a quaternion using ZYX Euler decomposition, wrapped to $[-\pi, \pi]$ |
 | `wrap_angle_symmetric` | Wrap heading error to $(-\pi, \pi]$ with 180-deg parking symmetry |
 | `_compute_relative_target_pose` | Target bay pose in ego body frame: returns $(dx, dy, d\psi)$ |
@@ -110,12 +130,17 @@ from uncertainty_rl.utils import (
     # Constants
     ACTION_DIM, TOTAL_OBS_DIM, VEHICLE_STATE_DIM,
     COVARIANCE_FEATURES_DIM, TARGET_POSE_DIM, OBSTACLE_FEATURES_DIM,
-    SUCCESS_THRESHOLD_POSITION, SUCCESS_THRESHOLD_ORIENTATION,
-    SUCCESS_THRESHOLD_VELOCITY, OUT_OF_BOUNDS_THRESHOLD,
+    SUCCESS_THRESHOLD_VELOCITY,
+    STRICT_BAY_MARGIN,
+    CORRIDOR_HALF_WIDTH, ALONG_TRACK_SCALE, APPROACH_INNER_ALIGNMENT_CUTOFF,
+    OBSTACLE_CLEARANCE_SAFE, OBSTACLE_CLEARANCE_DANGER,
+    OUT_OF_BOUNDS_THRESHOLD,
+    OOB_INFLATION_MARGIN, OOB_STEP_PENALTY, OOB_TERMINATION_PENALTY_LIMIT,
     # Covariance
     extract_2d_covariance_features, validate_covariance_matrix,
     # Geometry
-    zone_bbox, point_in_polygon, wrap_angle_symmetric,
+    zone_bbox, point_in_polygon, inflate_polygon, car_fully_inside_bay,
+    wrap_angle_symmetric,
     # Logging
     DebugLogger,
     # Visualisation

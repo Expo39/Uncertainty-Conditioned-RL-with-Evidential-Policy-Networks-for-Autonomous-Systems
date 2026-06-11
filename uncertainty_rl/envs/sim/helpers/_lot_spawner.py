@@ -10,7 +10,6 @@ delegates static spawning and cleanup to it.
 import itertools
 import logging
 import math
-import random
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -90,6 +89,27 @@ _EXCLUDED_BP_RE: re.Pattern = re.compile(
     re.IGNORECASE,
 )
 
+# CARLA tags taxis and emergency vehicles via the 'special_type' blueprint
+# attribute, not the blueprint id (e.g. the taxi is vehicle.ford.crown). The id
+# regex above cannot catch those, so the attribute is checked as well.
+_EXCLUDED_SPECIAL_TYPES: frozenset = frozenset({"taxi", "emergency"})
+
+
+def _is_special_type(bp: Any) -> bool:
+    """
+    @brief Whether a vehicle blueprint is a taxi or emergency vehicle.
+
+    Reads CARLA's 'special_type' attribute (absent on most blueprints), so taxis
+    such as vehicle.ford.crown are excluded even though their id carries no
+    'taxi' substring.
+
+    @param bp: CARLA vehicle blueprint.
+    @return True if the blueprint's special_type is excluded.
+    """
+    if not bp.has_attribute("special_type"):
+        return False
+    return bp.get_attribute("special_type").as_str() in _EXCLUDED_SPECIAL_TYPES
+
 
 class LotSpawner:
     """
@@ -112,9 +132,9 @@ class LotSpawner:
     # Motorcycle occupant name -> blueprint attribute (matches YAML 'occupant' field)
     _MOTORCYCLE_OCCUPANTS: Tuple[str, ...] = ("Kawasaki Ninja", "Yamaha YZF-R")
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Construction
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -122,6 +142,7 @@ class LotSpawner:
         marker_blueprint: str,
         bay_occupancy_min: float,
         bay_occupancy_max: float,
+        spawn_perimeter_cones: bool = True,
     ) -> None:
         """
         @brief Construct LotSpawner with fixed config parameters.
@@ -133,11 +154,20 @@ class LotSpawner:
                with parked cars [0, 1]. Resampled each episode.
         @param bay_occupancy_max: Maximum fraction of non-target bays to fill
                with parked cars [0, 1]. Resampled each episode.
+        @param spawn_perimeter_cones: When False, the perimeter cone ring is not
+               spawned - the lot boundary is enforced by the soft out-of-bounds
+               penalty instead. Interior obstacle cones are unaffected.
         """
         self._cone_spacing = cone_spacing
         self._marker_blueprint = marker_blueprint
         self._bay_occupancy_min = bay_occupancy_min
         self._bay_occupancy_max = bay_occupancy_max
+        self._spawn_perimeter_cones_enabled = spawn_perimeter_cones
+
+        # Per-episode RNG. Defaults to an unseeded generator for standalone /
+        # test use; the env injects its seeded Gymnasium np_random via set_rng()
+        # so static-actor placement is reproducible at a fixed training seed.
+        self._rng: np.random.Generator = np.random.default_rng()
 
         # Per-episode occupancy rate; resampled each episode in spawn_all().
         self._bay_occupancy_rate: float = bay_occupancy_max
@@ -157,9 +187,20 @@ class LotSpawner:
         # Prebuilt occupant map - populated in refresh_blueprints().
         self._occupant_bp: Dict[str, Optional[Any]] = {}
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Per-reset setup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+
+    def set_rng(self, rng: "np.random.Generator") -> None:
+        """
+        @brief Inject the seeded RNG used for all per-episode placement draws.
+        @param rng: NumPy Generator (the env's Gymnasium np_random).
+
+        Called by the env each reset so static-actor placement (occupancy
+        rate, blueprint and colour choice, flipped orientation) is reproducible
+        at a fixed training seed.
+        """
+        self._rng = rng
 
     def refresh_blueprints(self, world: Any) -> None:
         """
@@ -182,6 +223,7 @@ class LotSpawner:
             for bp in vehicle_bps
             if int(bp.get_attribute("number_of_wheels").as_int()) == 4
             and not _EXCLUDED_BP_RE.search(bp.id)
+            and not _is_special_type(bp)
         ]
 
         self._ninja_bp = bp_lib.find("vehicle.kawasaki.ninja")
@@ -192,9 +234,9 @@ class LotSpawner:
             self._MOTORCYCLE_OCCUPANTS[1]: self._yzf_bp,
         }
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Spawning
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def spawn_all(
         self,
@@ -216,8 +258,8 @@ class LotSpawner:
         if world is None:
             return
 
-        self._bay_occupancy_rate = random.uniform(
-            self._bay_occupancy_min, self._bay_occupancy_max
+        self._bay_occupancy_rate = float(
+            self._rng.uniform(self._bay_occupancy_min, self._bay_occupancy_max)
         )
 
         cones_already_spawned = (
@@ -238,9 +280,17 @@ class LotSpawner:
                     cone.destroy()
             self.spawned_cones.clear()
 
+            # The perimeter ring is optional: when disabled the lot edge is
+            # enforced by the soft out-of-bounds penalty, not a wall of cones.
+            # Interior obstacle cones are always spawned.
+            perimeter = (
+                self._spawn_perimeter_cones(world, current_layout, floor_contact_z)
+                if self._spawn_perimeter_cones_enabled
+                else ()
+            )
             cone_pending = list(
                 itertools.chain(
-                    self._spawn_perimeter_cones(world, current_layout, floor_contact_z),
+                    perimeter,
                     self._spawn_obstacle_cones(world, current_layout, floor_contact_z),
                 )
             )
@@ -259,9 +309,9 @@ class LotSpawner:
         self._settle_pending(world, vehicle_pending)
         self._freeze_pending(vehicle_pending, self.spawned_static_vehicles)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Cleanup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def cleanup(self) -> None:
         """
@@ -291,9 +341,21 @@ class LotSpawner:
         self.spawned_static_vehicles.clear()
         self._cached_cones_layout = ""
 
-    # ------------------------------------------------------------------
+    def forget_actors(self) -> None:
+        """
+        @brief Drop all static-actor handles WITHOUT issuing CARLA RPC calls.
+
+        Used after a CARLA server crash, when destroy() over RPC would time out
+        against a dead engine. Clears the cone cache so the next episode
+        respawns into the fresh world. @see LotSpawner.cleanup_all.
+        """
+        self.spawned_cones.clear()
+        self.spawned_static_vehicles.clear()
+        self._cached_cones_layout = ""
+
+    # -----------------------------------------------------------------------
     # Private helpers
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _freeze_pending(
         self,
@@ -499,16 +561,19 @@ class LotSpawner:
                     continue
                 if bay.get("always_empty", False):
                     continue
-                if random.random() > self._bay_occupancy_rate:
+                if self._rng.random() > self._bay_occupancy_rate:
                     continue
-                bp = random.choice(self._car_blueprints)
+                bp = self._car_blueprints[
+                    int(self._rng.integers(len(self._car_blueprints)))
+                ]
                 if bp.has_attribute("color"):
+                    colours = bp.get_attribute("color").recommended_values
                     bp.set_attribute(
                         "color",
-                        random.choice(bp.get_attribute("color").recommended_values),
+                        colours[int(self._rng.integers(len(colours)))],
                     )
                 yaw = _bay_yaw_deg(bay)
-                if random.random() < 0.5:
+                if self._rng.random() < 0.5:
                     yaw = (yaw + 180.0) % 360.0
 
             actor = world.try_spawn_actor(

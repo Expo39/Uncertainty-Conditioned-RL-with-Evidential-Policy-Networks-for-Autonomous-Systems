@@ -34,14 +34,14 @@ def tuning_config() -> Dict[str, Any]:
     """
     return {
         "search_space": {
-            "learning_rate": [1e-5, 1e-3],
             "n_steps": [1024, 2048, 4096],
             "batch_size": [64, 128, 256],
             "n_epochs": [3, 5, 10],
             "gamma": [0.98, 0.999],
-            "ent_coef": [1e-6, 0.01],
-            "lambda_reg": [1e-5, 0.01],
-            "lambda_reg_warmup_steps": [10000, 100000],
+            "gae_lambda": [0.90, 0.98],
+            "clip_range": [0.1, 0.3],
+            "vf_coef": [0.25, 1.0],
+            "max_grad_norm": [0.3, 2.0],
         },
     }
 
@@ -93,18 +93,26 @@ class TestSampleHyperparams:
         trial = study.ask()
         params = sample_hyperparams(trial, tuning_config)
 
+        # STRUCTURAL PPO params only.
         expected_keys = {
-            "learning_rate",
             "n_steps",
             "batch_size",
             "n_epochs",
             "gamma",
-            "ent_coef",
-            "evidential",
+            "gae_lambda",
+            "clip_range",
+            "vf_coef",
+            "max_grad_norm",
         }
         assert expected_keys.issubset(
             params.keys()
         ), f"Missing keys: {expected_keys - params.keys()}"
+        # learning_rate / ent_coef are stage-owned and evidential.* is
+        # ablation-specific - none of them must be in the tuned search.
+        excluded = {"learning_rate", "ent_coef", "evidential"}
+        assert not (
+            excluded & params.keys()
+        ), f"Tuned an excluded key: {excluded & params.keys()}"
 
     def test_sample_hyperparams_batch_size_le_n_steps(
         self, tuning_config: Dict[str, Any]
@@ -146,11 +154,12 @@ class TestSampleHyperparams:
             0.98 <= params["gamma"] <= 0.999
         ), f"Gamma {params['gamma']} outside [0.98, 0.999]"
 
-    def test_sample_hyperparams_lambda_reg_always_positive(
+    def test_sample_hyperparams_structural_ranges(
         self, tuning_config: Dict[str, Any]
     ) -> None:
         """
-        @brief lambda_reg is always positive (never disabled).
+        @brief The added structural params (vf_coef, max_grad_norm) are sampled
+               within their configured ranges.
         """
         for seed in range(20):
             study = optuna.create_study(
@@ -164,8 +173,11 @@ class TestSampleHyperparams:
             params = sample_hyperparams(trial, tuning_config)
 
             assert (
-                params["evidential"]["lambda_reg"] > 0.0
-            ), f"lambda_reg should always be positive, got {params['evidential']['lambda_reg']}"
+                0.25 <= params["vf_coef"] <= 1.0
+            ), f"vf_coef out of range: {params['vf_coef']}"
+            assert (
+                0.3 <= params["max_grad_norm"] <= 2.0
+            ), f"max_grad_norm out of range: {params['max_grad_norm']}"
 
 
 # ===========================================================================
@@ -288,16 +300,19 @@ class TestTrialEvalCallback:
     @brief Tests for the trial evaluation callback.
     """
 
-    def test_trial_eval_callback_reports_progress_reward(self) -> None:
+    def test_trial_eval_callback_reports_progress_tiebreaker(self) -> None:
         """
-        @brief TrialEvalCallback reports env/mean_progress_reward to trial.
+        @brief Before any success is observed, TrialEvalCallback reports the
+               progress-based tiebreaker (_TIEBREAK_SCALE * mean_progress_reward).
         """
+        from uncertainty_rl.training.tune_hyperparams import _TIEBREAK_SCALE
+
         # Mock trial and model logger
         trial = MagicMock()
         trial.should_prune.return_value = False  # Don't prune
         callback = TrialEvalCallback(trial)
 
-        # Mock model and logger
+        # Mock model and logger - no success_rate yet, only progress reward.
         callback.model = MagicMock()
         callback.model.logger = MagicMock()
         callback.model.logger.name_to_value = {"env/mean_progress_reward": 0.05}
@@ -306,10 +321,11 @@ class TestTrialEvalCallback:
         # Simulate rollout end
         callback._on_rollout_end()
 
-        # Verify trial.report was called with the metric
+        # Verify trial.report was called with the composite objective. With no
+        # success, the objective is the scaled progress tiebreaker.
         trial.report.assert_called_once()
         args, kwargs = trial.report.call_args
-        assert args[0] == 0.05  # The metric value
+        assert args[0] == pytest.approx(_TIEBREAK_SCALE * 0.05)
         assert kwargs["step"] == 10000  # num_timesteps as keyword arg
 
     def test_trial_eval_callback_handles_missing_metric(self) -> None:

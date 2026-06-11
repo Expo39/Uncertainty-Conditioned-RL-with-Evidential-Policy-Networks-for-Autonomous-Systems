@@ -59,7 +59,7 @@ def generate_launch_description() -> LaunchDescription:
     # The training container's world.tick() is the sole tick driver.
     bridge_sync_mode = "false"
 
-    # -- Launch arguments --------------------------------------------------
+    # Launch arguments
 
     launch_args = [
         DeclareLaunchArgument(
@@ -79,7 +79,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
-    # -- CARLA ROS bridge --------------------------------------------------
+    # CARLA ROS bridge
 
     try:
         from ament_index_python.packages import get_package_share_directory
@@ -113,7 +113,7 @@ def generate_launch_description() -> LaunchDescription:
     except Exception:
         carla_bridge = None
 
-    # -- EKF node ----------------------------------------------------------
+    # EKF node
 
     # Spread into a new dict to avoid mutating the live ros2_config object.
     ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": use_sim_time}
@@ -125,7 +125,7 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[ekf_params],
     )
 
-    # -- Static TF: sensor mount tree --------------------------------------
+    # Static TF: sensor mount tree
 
     static_tf_nodes = [
         # Anchors ego_vehicle at the map origin. The EKF will override this by
@@ -135,7 +135,7 @@ def generate_launch_description() -> LaunchDescription:
         static_tf("map_to_odom_tf", "map", "odom", 0.0, 0.0, 0.0),
     ]
 
-    # -- Sensor relay node -------------------------------------------------
+    # Sensor relay node
 
     gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
     imu_relay_cfg = ros2_config.get("imu_noise_relay", {})
@@ -206,11 +206,16 @@ def generate_launch_description() -> LaunchDescription:
                 "imu_accel_scale_factor_limit": imu_relay_cfg.get(
                     "imu_accel_scale_factor_limit", 0.005
                 ),
+                # Both co-spun relay nodes declare a "seed" parameter; this one
+                # value seeds each node's independent noise RNG. Defaults to the
+                # training seed so a fixed-seed run gets reproducible sensor
+                # noise from this separate-process container.
+                "seed": gnss_relay_cfg.get("seed", imu_relay_cfg.get("seed", 42)),
             }
         ],
     )
 
-    # -- Covariance extractor node -----------------------------------------
+    # Covariance extractor node
 
     covariance_extractor = Node(
         package="uncertainty_rl_ros2",
@@ -231,7 +236,7 @@ def generate_launch_description() -> LaunchDescription:
         ],
     )
 
-    # -- Pipeline diagnostic: log topic status after 20 s ------------------
+    # Pipeline diagnostic: log topic status after 20 s
     # Prints which key topics are publishing so stalls can be diagnosed from
     # the ros2-bridge container logs. Safe to leave in permanently.
     pipeline_diag = ExecuteProcess(
@@ -277,7 +282,7 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
-    # -- Assemble launch description ---------------------------------------
+    # Assemble launch description
     # Startup order: bridge first (so sensor topics exist and /clock publishes),
     # then static TFs (so the EKF can resolve sensor frames), then the rest.
 

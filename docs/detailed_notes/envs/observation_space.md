@@ -1,22 +1,30 @@
 # observation_space
 
+> **Updated 8 June 2026.** `build_observation` now RETURNS a copy normalised by FIXED
+> physical ranges (`constants.py` `OBS_*_SCALE`, clipped to `+/-OBS_NORM_CLIP`) via
+> `normalise_observation`; the raw buffer is retained for internal diagnostics. The scaler is
+> stage- and layout-invariant (weights transfer on resume; OOD eval unconfounded), so
+> `VecNormalize` does reward-norm only (`norm_obs=False`). The index layout below is unchanged.
+
 Extracted from `uncertainty_rl/envs/_parking_core.py`.
 
-## 12-dimensional default observation vector
+## 13-dimensional default observation vector
 
 Layout (`include_covariance=True`, `include_obstacle_obs=True`):
 
 | Index | Feature | Source | Description |
 |-------|---------|--------|-------------|
-| 0 | vyaw | EKF filtered | Yaw rate (rad/s), clipped to [-pi, pi] |
-| 1-3 | std_x, std_y, std_yaw | EKF covariance | Standard deviations from 3x3 [x, y, yaw] submatrix diagonal |
-| 4-6 | dx, dy, dyaw | Target bay (relative) | Target pose in ego body frame (forward, left, heading error) |
-| 7-8 | left_dist, left_bearing | LiDAR | Nearest return with bearing > +15 deg |
-| 9-10 | right_dist, right_bearing | LiDAR | Nearest return with bearing < -15 deg |
-| 11 | forward_dist | LiDAR | Nearest return with |bearing| <= 15 deg |
+| 0 | speed | EKF filtered twist | Linear speed magnitude (m/s) |
+| 1 | vyaw | EKF filtered twist | Yaw rate (rad/s) |
+| 2-4 | std_x, std_y, std_yaw | EKF covariance | Standard deviations from 3x3 [x, y, yaw] submatrix diagonal |
+| 5-7 | dx, dy, dyaw | Target bay (relative) | Target pose in ego body frame (forward, left, heading error) |
+| 8-9 | left_dist, left_bearing | LiDAR | Nearest return with bearing > +15 deg |
+| 10-11 | right_dist, right_bearing | LiDAR | Nearest return with bearing < -15 deg |
+| 12 | forward_dist | LiDAR | Nearest return with |bearing| <= 15 deg |
 
-Ablation dims: 12 (default), 9 (no covariance), 7 (no obstacle obs), 4 (neither).
-Use `compute_obs_dim()` from `_parking_core.py` - never hardcode.
+`VEHICLE_STATE_DIM=2` covers speed and vyaw (indices 0-1). Ablation dims: 13 (default),
+10 (no covariance), 8 (no obstacle obs), 5 (neither). Use `compute_obs_dim()` from
+`_parking_core.py` - never hardcode.
 
 ## Absolute position excluded by design
 

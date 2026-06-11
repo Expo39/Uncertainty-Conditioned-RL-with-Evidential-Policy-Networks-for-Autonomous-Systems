@@ -8,7 +8,7 @@ a SensorManager instance and delegates sensor lifecycle calls to it.
 
 Sensor roles:
   - RTK-GNSS + IMU: localisation via robot_localisation EKF.
-  - 2D LiDAR: obstacle detection only (obs indices 7-11). NOT localisation.
+  - 2D LiDAR: obstacle detection only (obs indices 8-12). NOT localisation.
   - Collision sensor: terminal reward signal.
 """
 
@@ -66,9 +66,9 @@ class SensorManager:
     # CARLA blueprint attribute zeroed for LiDAR; all noise applied in _apply_lidar_noise().
     _LIDAR_NOISE_ATTRS: Tuple[str, ...] = ("noise_stddev",)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Construction
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -113,9 +113,17 @@ class SensorManager:
         # sample_lidar_noise_bias() called from CARLAParkingEnv.reset().
         self._lidar_range_bias_m: float = 0.0
 
-    # ------------------------------------------------------------------
+        # Dedicated RNG for per-point LiDAR range noise. _apply_lidar_noise()
+        # runs in the CARLA sensor-callback thread, so it must NOT touch the
+        # env's np_random directly (that would race the main reset/step thread).
+        # Instead, sample_lidar_noise_bias() reseeds this generator each episode
+        # from a child seed drawn off np_random, keeping the per-point noise
+        # reproducible at a fixed training seed without cross-thread contention.
+        self._lidar_rng: np.random.Generator = np.random.default_rng()
+
+    # -----------------------------------------------------------------------
     # Public interface
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     @property
     def collision_detected(self) -> bool:
@@ -184,9 +192,9 @@ class SensorManager:
         self._spawn_lidar_2d(world, vehicle)
         self._spawn_collision_sensor(world, vehicle)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Cleanup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def cleanup(self) -> None:
         """
@@ -232,9 +240,22 @@ class SensorManager:
         with self._lidar_scan_lock:
             self._latest_lidar_scan = None
 
-    # ------------------------------------------------------------------
+    def forget_actors(self) -> None:
+        """
+        @brief Drop all sensor handles WITHOUT issuing CARLA RPC destroy calls.
+
+        Used after a CARLA server crash, when the actors live in a dead engine
+        and any destroy() RPC would itself time out. The fresh server starts
+        with no sensors, so the stale handles are simply abandoned. @see
+        SensorManager.cleanup for the normal RPC teardown.
+        """
+        self._spawned_sensors.clear()
+        self._ego_vehicle = None
+        self.reset_state()
+
+    # -----------------------------------------------------------------------
     # Sensor spawn helpers
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _spawn_imu(self, world: Any, vehicle: Any) -> None:
         """
@@ -360,9 +381,9 @@ class SensorManager:
         sensor.listen(self._on_collision)
         self._spawned_sensors.append(sensor)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Sensor callbacks
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _on_collision(self, event: Any) -> None:
         """
@@ -412,8 +433,13 @@ class SensorManager:
         CARLAParkingEnv.reset(). A no-op when noise is disabled or the limit is zero.
 
         @param rng: numpy Generator (np_random from CARLAParkingEnv) for reproducibility.
-        @see documentation/detailed_notes/sensor_noise_models.md
         """
+        # Reseed the per-point noise generator from a child seed drawn off the
+        # env RNG. This ties the sensor-thread noise stream to the training seed
+        # while keeping it independent of np_random's main-thread state.
+        child_seed = int(rng.integers(0, 2**32))
+        self._lidar_rng = np.random.default_rng(child_seed)
+
         if not self._lidar_noise_enabled or self._lidar_range_bias_limit == 0.0:
             self._lidar_range_bias_m = 0.0
         else:
@@ -436,7 +462,6 @@ class SensorManager:
         @param points_xyz: (N, 3) float32 array in vehicle frame (x-forward, y-left, z-up)
                            after _LIDAR_SIGN_FLIP has been applied.
         @return (M, 3) float32 array with M <= N after noise and range filtering.
-        @see documentation/detailed_notes/sensor_noise_models.md
         """
         if not self._lidar_noise_enabled or len(points_xyz) == 0:
             return points_xyz
@@ -448,7 +473,7 @@ class SensorManager:
         r = np.hypot(x, y)
         theta = np.arctan2(y, x)
 
-        rng = np.random.default_rng()
+        rng = self._lidar_rng
 
         # 1. Range noise: fixed per-episode bias + zero-mean Gaussian random per point.
         r_noisy = r + self._lidar_range_bias_m
