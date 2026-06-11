@@ -23,17 +23,30 @@ from uncertainty_rl.envs._parking_core import (
     load_floor_plan,
     wait_for_ekf,
 )
+from uncertainty_rl.envs.sim.helpers._lot_spawner import LotSpawner
 from uncertainty_rl.utils.constants import (
     ACTION_DIM,
+    CORRIDOR_W_HEAD,
     COVARIANCE_FEATURES_DIM,
+    ENDGAME_HOLD_COEF,
+    ENDGAME_MOVE_COEF,
     OBSTACLE_FEATURES_DIM,
+    PHI_NORM_FLOOR,
+    PROGRESS_TARGET,
+    STALL_TRUNCATION_DECISIONS,
     TARGET_POSE_DIM,
+    TIMEOUT_PENALTY_FLOOR_NORM,
+    TIMEOUT_POS_COEF,
+    TIMEOUT_YAW_COEF,
     TOTAL_OBS_DIM,
     VEHICLE_STATE_DIM,
 )
 from uncertainty_rl.utils.geometry import (
     _compute_relative_target_pose,
     _interpolate_cone_positions,
+    bay_containment_fraction,
+    car_fully_inside_bay,
+    inflate_polygon,
     point_in_polygon,
     wrap_angle_symmetric,
     yaw_from_quaternion,
@@ -143,9 +156,33 @@ class TestComputeRelativeTargetPose:
 
     def test_target_to_left(self) -> None:
         """
-        @brief Target 5m to the left (ego facing +x) -> dy > 0, dx ~ 0.
+        @brief Target 5 m to the left of an ego facing east -> dy > 0, dx ~ 0.
+
+        In CARLA's left-handed world (+x east, +y south), the body's left
+        when facing east is world -y (north). The function returns dy in
+        REP-103 body convention (left = positive), so a target at world
+        (0, -5) should yield dy = +5.
         """
         dx, dy, dyaw = _compute_relative_target_pose(
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.0,
+            x_target=0.0,
+            y_target=-5.0,
+            yaw_target=0.0,
+        )
+        assert abs(dx) < 1e-6
+        assert dy > 0.0
+        assert abs(dyaw) < 1e-6
+
+    def test_target_to_right(self) -> None:
+        """
+        @brief Target 5 m to the right of an ego facing east -> dy < 0.
+
+        CARLA world +y (south) is to the right when facing east, so a target
+        at world (0, +5) yields dy = -5 in the left-positive body frame.
+        """
+        dx, dy, _ = _compute_relative_target_pose(
             x_ego=0.0,
             y_ego=0.0,
             yaw_ego=0.0,
@@ -154,7 +191,26 @@ class TestComputeRelativeTargetPose:
             yaw_target=0.0,
         )
         assert abs(dx) < 1e-6
-        assert dy > 0.0
+        assert dy < 0.0
+
+    def test_dyaw_left_rotation_positive(self) -> None:
+        """
+        @brief Target heading requires a left rotation from ego -> dyaw > 0.
+
+        Ego at yaw=0 (facing east in CARLA). Target at yaw=-pi/4 (CARLA
+        convention - rotated 45 deg CCW = left turn from east). To align,
+        the vehicle must turn left, so dyaw should be positive under the
+        left-positive convention.
+        """
+        _, _, dyaw = _compute_relative_target_pose(
+            x_ego=0.0,
+            y_ego=0.0,
+            yaw_ego=0.0,
+            x_target=0.0,
+            y_target=0.0,
+            yaw_target=-math.pi / 4.0,
+        )
+        assert dyaw > 0.0
 
     def test_yaw_wrap_in_range(self) -> None:
         """
@@ -198,43 +254,43 @@ class TestObservationSpaceShape:
     @brief Verify obs space dim based on include_covariance flag.
     """
 
-    def test_12_dim_with_covariance(self) -> None:
+    def test_13_dim_with_covariance(self) -> None:
         """
-        @brief include_covariance=True -> 12-dim observation space (default).
+        @brief include_covariance=True -> 13-dim observation space (default).
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 12
+        assert env.observation_space.shape == (TOTAL_OBS_DIM,)  # 13
         env.close()
 
-    def test_9_dim_without_covariance(self) -> None:
+    def test_10_dim_without_covariance(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=True (default) -> 9-dim.
+        @brief include_covariance=False, include_obstacle_obs=True (default) -> 10-dim.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=False)
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 9
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM + OBSTACLE_FEATURES_DIM  # 10
         assert env.observation_space.shape == (expected,)
         env.close()
 
-    def test_4_dim_without_covariance_or_obstacles(self) -> None:
+    def test_5_dim_without_covariance_or_obstacles(self) -> None:
         """
-        @brief include_covariance=False, include_obstacle_obs=False -> 4-dim.
+        @brief include_covariance=False, include_obstacle_obs=False -> 5-dim.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(
             max_steps=5, include_covariance=False, include_obstacle_obs=False
         )
-        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 1 + 3 = 4
+        expected = VEHICLE_STATE_DIM + TARGET_POSE_DIM  # 2 + 3 = 5
         assert env.observation_space.shape == (expected,)
         env.close()
 
     def test_action_space_shape(self) -> None:
         """
-        @brief Action space must be 2-dim: [steering, drive].
+        @brief Action space must be 3-dim: [steering, throttle, brake].
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -244,14 +300,13 @@ class TestObservationSpaceShape:
 
     def test_action_space_bounds(self) -> None:
         """
-        @brief steering in [-1,1], drive in [-1,1] (positive=throttle,
-               negative=brake).
+        @brief All axes uniformly [-1, 1]. step() remaps throttle / brake to [0, 1].
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5)
-        np.testing.assert_array_equal(env.action_space.low, [-1.0, -1.0])
-        np.testing.assert_array_equal(env.action_space.high, [1.0, 1.0])
+        np.testing.assert_array_equal(env.action_space.low, [-1.0, -1.0, -1.0])
+        np.testing.assert_array_equal(env.action_space.high, [1.0, 1.0, 1.0])
         env.close()
 
 
@@ -281,9 +336,9 @@ class TestGymnasiumAPIContract:
         assert isinstance(info, dict)
         env.close()
 
-    def test_reset_obs_shape_21(self) -> None:
+    def test_reset_obs_shape_total(self) -> None:
         """
-        @brief reset() obs shape must be (21,) when include_covariance=True (default).
+        @brief reset() obs shape must be (TOTAL_OBS_DIM,) when include_covariance=True (default).
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -292,9 +347,9 @@ class TestGymnasiumAPIContract:
         assert obs.shape == (TOTAL_OBS_DIM,)
         env.close()
 
-    def test_reset_obs_shape_9_no_cov(self) -> None:
+    def test_reset_obs_shape_no_cov(self) -> None:
         """
-        @brief reset() observation shape must be (9,) when include_covariance=False.
+        @brief reset() observation shape matches compute_obs_dim() when include_covariance=False.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -350,6 +405,121 @@ class TestGymnasiumAPIContract:
         env.close()
 
 
+class TestActionRepeatDecisionStep:
+    """
+    @class TestActionRepeatDecisionStep
+    @brief One env.step() call is one policy decision spanning action_repeat
+           sim ticks; the agent never receives intermediate-tick placeholders.
+    """
+
+    def test_step_advances_action_repeat_ticks(self) -> None:
+        """
+        @brief A single step() call advances the tick counter by action_repeat.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=40, action_repeat=4)
+            env.reset()
+            env.step(env.action_space.sample())
+            assert env.steps == 4
+            env.step(env.action_space.sample())
+            assert env.steps == 8
+            env.close()
+
+    def test_every_step_returns_full_obs_and_info(self) -> None:
+        """
+        @brief Every step() return carries the full observation vector and a
+               populated info dict, so SB3 stores one real transition per
+               decision rather than raw-buffer placeholders between decisions.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=40, action_repeat=4)
+            env.reset()
+            for _ in range(3):
+                obs, _, _, _, info = env.step(env.action_space.sample())
+                assert obs.shape[0] == TOTAL_OBS_DIM
+                assert "success" in info
+                assert "timeout" in info
+            env.close()
+
+    def test_truncates_at_max_steps_in_ticks(self) -> None:
+        """
+        @brief max_steps counts sim ticks: with action_repeat=4 an 8-tick
+               episode truncates on the second decision.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=8, action_repeat=4)
+            env.reset()
+            _, _, _, truncated, _ = env.step(env.action_space.sample())
+            assert not truncated
+            _, _, _, truncated, _ = env.step(env.action_space.sample())
+            assert truncated
+            env.close()
+
+
+class TestStallTruncation:
+    """
+    @class TestStallTruncation
+    @brief A car holding a near-stop outside the acceptance box truncates after
+           STALL_TRUNCATION_DECISIONS consecutive decisions. With no CARLA
+           vehicle the reward path reports speed 0.0 every decision, which
+           exercises the stall counter deterministically.
+    """
+
+    def test_stall_truncates_after_threshold(self) -> None:
+        """
+        @brief Exactly STALL_TRUNCATION_DECISIONS stationary decisions outside
+               the bay truncate the episode as a timeout, well before max_steps.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=400, action_repeat=1)
+            env.reset()
+            truncated = False
+            info: dict = {}
+            for i in range(STALL_TRUNCATION_DECISIONS):
+                _, _, _, truncated, info = env.step(env.action_space.sample())
+                if i < STALL_TRUNCATION_DECISIONS - 1:
+                    assert not truncated
+            assert truncated
+            assert info["timeout"] is True
+            assert env.steps < 400
+            env.close()
+
+    def test_stall_counter_resets_on_reset(self) -> None:
+        """
+        @brief The stall counter must not leak across episodes: after a stall
+               truncation, a fresh episode runs the full window again.
+        """
+        from unittest.mock import patch
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        with patch.object(CARLAParkingEnv, "_connect_to_carla"):
+            env = CARLAParkingEnv(max_steps=400, action_repeat=1)
+            env.reset()
+            for _ in range(STALL_TRUNCATION_DECISIONS):
+                env.step(env.action_space.sample())
+            env.reset()
+            _, _, _, truncated, _ = env.step(env.action_space.sample())
+            assert not truncated
+            env.close()
+
+
 # ---------------------------------------------------------------------------
 # Bay sampling helpers (via mock layout)
 # ---------------------------------------------------------------------------
@@ -366,6 +536,18 @@ class TestBaySampling:
 
         env = CARLAParkingEnv(max_steps=5)
         env._current_layout = layout
+        # _sample_target_bay() reads _bays_by_type / _bay_type_keys, which are
+        # normally populated by _load_floor_plan(). Group the supplied bays here
+        # so the helper does not require a CARLA connection.
+        eligible = [
+            b for b in layout.get("bays", []) if not b.get("always_empty", False)
+        ]
+        bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
+        for bay in eligible:
+            bay_type_key = bay.get("bay_type", "perpendicular")
+            bays_by_type.setdefault(bay_type_key, []).append(bay)
+        env._bays_by_type = bays_by_type
+        env._bay_type_keys = list(bays_by_type.keys())
         return env
 
     def test_all_bay_types_reachable(self) -> None:
@@ -417,6 +599,162 @@ class TestBaySampling:
 
         assert seen_types == {"perpendicular", "angled", "parallel"}
         env.close()
+
+
+class TestAllowedBayIds:
+    """
+    @class TestAllowedBayIds
+    @brief Tests for the parking_scenarios.allowed_bay_ids target whitelist.
+
+    The whitelist filtering lives in _load_floor_plan(), so these tests patch
+    the module-level load_floor_plan() to return a synthetic layout (no CARLA,
+    no disk) and then drive the real filtering path.
+    """
+
+    def _layout(self) -> Dict[str, Any]:
+        """
+        @brief Synthetic 6-bay single-type layout for whitelist tests.
+        """
+        bays = [
+            {
+                "id": f"perpendicular_{i}",
+                "bay_type": "perpendicular",
+                "x": float(i * 3),
+                "y": 0.0,
+                "yaw_deg": 270.0,
+                "width": 3.1,
+                "depth": 5.7,
+            }
+            for i in range(6)
+        ]
+        return {
+            "spawn_transform": {"x": 0.0, "y": 5.0, "yaw_deg": 0.0},
+            "extra_spawn_transforms": [],
+            "bays": bays,
+        }
+
+    def _make_env(self, monkeypatch: Any, allowed: Any) -> Any:
+        from uncertainty_rl.envs.sim import carla_parking as cp
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        layout = self._layout()
+        monkeypatch.setattr(
+            cp, "load_floor_plan", lambda *a, **k: ("rectangle", layout)
+        )
+        scenarios: Dict[str, Any] = {"fixed_floor_plan": "rectangle"}
+        if allowed is not None:
+            scenarios["allowed_bay_ids"] = allowed
+        return CARLAParkingEnv(max_steps=5, parking_scenarios_config=scenarios)
+
+    def test_unset_whitelist_keeps_all_bays(self, monkeypatch: Any) -> None:
+        """
+        @brief No allowed_bay_ids -> every eligible bay is a target.
+        """
+        env = self._make_env(monkeypatch, allowed=None)
+        env._load_floor_plan()
+        ids = {b["id"] for bays in env._bays_by_type.values() for b in bays}
+        assert ids == {f"perpendicular_{i}" for i in range(6)}
+        env.close()
+
+    def test_whitelist_restricts_pool(self, monkeypatch: Any) -> None:
+        """
+        @brief allowed_bay_ids restricts the target pool to the listed ids.
+        """
+        allowed = ["perpendicular_0", "perpendicular_1", "perpendicular_2"]
+        env = self._make_env(monkeypatch, allowed=allowed)
+        env._load_floor_plan()
+        ids = {b["id"] for bays in env._bays_by_type.values() for b in bays}
+        assert ids == set(allowed)
+        env.close()
+
+    def test_whitelist_sampler_only_returns_allowed(self, monkeypatch: Any) -> None:
+        """
+        @brief Over many samples, the target bay id is always in the whitelist.
+        """
+        allowed = ["perpendicular_0", "perpendicular_3"]
+        env = self._make_env(monkeypatch, allowed=allowed)
+        env._load_floor_plan()
+        seen = set()
+        for _ in range(100):
+            env._sample_target_bay()
+            seen.add(env._target_bay["bay_id"])
+        assert seen <= set(allowed)
+        env.close()
+
+    def test_unknown_id_raises(self, monkeypatch: Any) -> None:
+        """
+        @brief An id absent from the layout fails loud at pool build.
+        """
+        env = self._make_env(monkeypatch, allowed=["perpendicular_0", "nope_99"])
+        with pytest.raises(RuntimeError, match="absent from floor plan"):
+            env._load_floor_plan()
+        env.close()
+
+
+class TestGradedTimeoutPenalty:
+    """
+    @class TestGradedTimeoutPenalty
+    @brief Invariants of the NORMALISED graded timeout penalty.
+
+    The penalty is -(TIMEOUT_POS_COEF*pos + TIMEOUT_YAW_COEF*yaw) DIVIDED by the
+    per-episode start potential |phi(start)| and clamped to
+    TIMEOUT_PENALTY_FLOOR_NORM. These tests pin the design invariants: the ordering
+    success(+50) > timeout > ego collision(-25) (floor strictly above -25), ending
+    closer/straighter is always less costly (a live gradient toward the bay), and -
+    the property that motivated normalisation - a far-bay timeout is NOT penalised
+    more heavily than a near-bay one purely for being far.
+    """
+
+    def _penalty(self, pos: float, yaw: float = 0.35, phi_start: float = 20.0) -> float:
+        return max(
+            -(TIMEOUT_POS_COEF * pos + TIMEOUT_YAW_COEF * yaw)
+            / phi_start
+            * PROGRESS_TARGET,
+            TIMEOUT_PENALTY_FLOOR_NORM,
+        )
+
+    def test_floor_above_collision(self) -> None:
+        """
+        @brief Floor must sit strictly above the -25 ego-crash penalty so the car
+               never crashes deliberately to escape a worse timeout.
+        """
+        assert TIMEOUT_PENALTY_FLOOR_NORM > -25.0
+
+    def test_penalty_never_below_floor(self) -> None:
+        """
+        @brief Even a far/badly-misaligned timeout is clamped to the floor.
+        """
+        assert self._penalty(50.0, 3.14) == TIMEOUT_PENALTY_FLOOR_NORM
+
+    def test_near_miss_cheaper_than_floor(self) -> None:
+        """
+        @brief A small residual error must cost clearly less than the floor, so
+               getting closer is always rewarded (a gradient toward the bay).
+        """
+        assert TIMEOUT_PENALTY_FLOOR_NORM < self._penalty(1.0, 0.05) < 0.0
+
+    def test_closer_is_always_better(self) -> None:
+        """
+        @brief Ending closer is monotonically less costly (until the floor clamps).
+        """
+        assert self._penalty(1.0) > self._penalty(2.0) >= self._penalty(9.0)
+
+    def test_far_bay_not_penalised_more_for_distance_alone(self) -> None:
+        """
+        @brief The regression guard for the normalisation: two episodes ending the
+               SAME proportion short of their bay (here, the full start distance,
+               i.e. the car never moved) cost the same after normalisation, even
+               though the far bay's raw metre error is far larger. Without dividing
+               by |phi(start)|, the far-bay timeout would be much harsher purely
+               because the bay is further away.
+        """
+        # Near bay: starts 6 m out; far bay: starts 30 m out. A car that never moves
+        # ends pos_error == start distance for each, and |phi(start)| scales with it.
+        near = self._penalty(pos=6.0, yaw=0.3, phi_start=6.0)
+        far = self._penalty(pos=30.0, yaw=0.3, phi_start=30.0)
+        # Both saturate at the floor here (never-moved is the worst case); the point
+        # is the far bay is not pushed BELOW the near one by distance alone.
+        assert far >= near
 
 
 # ---------------------------------------------------------------------------
@@ -524,23 +862,77 @@ class TestVisStateWriter:
 
 
 # ---------------------------------------------------------------------------
-# log1p covariance transform
+# Covariance features in the observation
 # ---------------------------------------------------------------------------
 
 
-class TestLog1pCovarianceTransform:
+class TestCovarianceObservation:
     """
-    @class TestLog1pCovarianceTransform
-    @brief Verify covariance features are log1p-transformed in _get_state().
+    @class TestCovarianceObservation
+    @brief Verify EKF covariance features are written to
+           obs[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM].
 
-    In simulation (no CARLA), _get_state() returns zeros because the vehicle
-    is None.  We test the transform by injecting a mock _cov_subscriber and
-    constructing the obs buffer directly via the env internals.
+    The EKF produces COVARIANCE_FEATURES_DIM (3) uncertainty features
+    (std_x, std_y, std_yaw). _get_state() writes them verbatim into the
+    observation immediately after the vehicle-state block (speed, vyaw).
     """
 
-    def test_log1p_applied_to_nonzero_covariance(self) -> None:
+    def test_covariance_features_written_to_obs(self) -> None:
         """
-        @brief Covariance features in obs[6:15] equal log1p(raw_uncertainty).
+        @brief Covariance features appear unchanged in the covariance block of
+               the observation vector.
+        """
+        from unittest.mock import MagicMock
+
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+        from uncertainty_rl.utils.constants import (
+            COVARIANCE_FEATURES_DIM,
+            VEHICLE_STATE_DIM,
+        )
+
+        env = CARLAParkingEnv(max_steps=5, include_covariance=True)
+
+        # Inject a mock subscriber that returns known covariance values.
+        raw = np.array([1.0, 4.0, 9.0], dtype=np.float32)
+        assert len(raw) == COVARIANCE_FEATURES_DIM
+
+        # The _read_ekf_state callable is bound at construction time, when the
+        # subscriber is still None. Override it directly so _get_state() reads
+        # the test's covariance values.
+        env._read_ekf_state = lambda: (None, raw.copy())
+
+        # Simulate a minimal vehicle mock so _get_state() doesn't early-return.
+        mock_vehicle = MagicMock()
+        mock_vehicle.get_transform.return_value = MagicMock(
+            location=MagicMock(x=0.0, y=0.0),
+            rotation=MagicMock(yaw=0.0),
+        )
+        mock_vehicle.get_velocity.return_value = MagicMock(x=0.0, y=0.0)
+        mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
+        env.vehicle = mock_vehicle
+        env.world = MagicMock()
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
+
+        env._get_state()
+
+        # _get_state() returns a fixed-physical-range NORMALISED copy; the raw
+        # buffer it fills holds the verbatim values. Positional placement is
+        # asserted on the raw buffer here; the scaling is covered by
+        # test_observation_norm.py.
+        cov_start = VEHICLE_STATE_DIM
+        np.testing.assert_allclose(
+            env._obs_buffer[cov_start : cov_start + COVARIANCE_FEATURES_DIM],
+            raw,
+            rtol=1e-5,
+            err_msg=(
+                "Covariance features must be written verbatim to "
+                "obs[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]"
+            ),
+        )
+
+    def test_zero_uncertainty_stays_zero(self) -> None:
+        """
+        @brief Zero uncertainty should remain zero in the observation.
         """
         from unittest.mock import MagicMock
 
@@ -549,52 +941,9 @@ class TestLog1pCovarianceTransform:
 
         env = CARLAParkingEnv(max_steps=5, include_covariance=True)
 
-        # Inject a mock subscriber that returns known covariance values
-        raw = np.array([1.0, 4.0, 9.0, 0.5, 2.5, 0.1, 0.0, 0.3, 7.0], dtype=np.float32)
-        assert len(raw) == COVARIANCE_FEATURES_DIM
-
-        mock_sub = MagicMock()
-        # _get_state() calls get_latest_state() once for both pose and uncertainty.
-        mock_sub.get_latest_state.return_value = (None, raw.copy())
-        env._cov_subscriber = mock_sub
-
-        # Simulate a minimal vehicle mock so _get_state() doesn't early-return
-        mock_vehicle = MagicMock()
-        mock_vehicle.get_transform.return_value = MagicMock(
-            location=MagicMock(x=0.0, y=0.0),
-            rotation=MagicMock(yaw=0.0),
-        )
-        mock_vehicle.get_velocity.return_value = MagicMock(x=0.0, y=0.0)
-        mock_vehicle.get_angular_velocity.return_value = MagicMock(z=0.0)
-        env.vehicle = mock_vehicle
-        env.world = MagicMock()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
-
-        obs = env._get_state()
-
-        # Code uses signed log1p to preserve sign of off-diagonal covariance terms.
-        expected_cov = np.sign(raw) * np.log1p(np.abs(raw))
-        np.testing.assert_allclose(
-            obs[3:12],
-            expected_cov,
-            rtol=1e-5,
-            err_msg="Covariance features must be signed log1p-transformed",
-        )
-
-    def test_log1p_zero_uncertainty_stays_zero(self) -> None:
-        """
-        @brief log1p(0) == 0: zero uncertainty should remain zero in obs.
-        """
-        from unittest.mock import MagicMock
-
-        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
-
-        env = CARLAParkingEnv(max_steps=5, include_covariance=True)
-
-        zero_cov = np.zeros(9, dtype=np.float32)
-        mock_sub = MagicMock()
-        mock_sub.get_latest_state.return_value = (None, zero_cov.copy())
-        env._cov_subscriber = mock_sub
+        zero_cov = np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32)
+        # _read_ekf_state is bound at construction; override it directly.
+        env._read_ekf_state = lambda: (None, zero_cov.copy())
 
         mock_vehicle = MagicMock()
         mock_vehicle.get_transform.return_value = MagicMock(
@@ -608,7 +957,10 @@ class TestLog1pCovarianceTransform:
         env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.0}
 
         obs = env._get_state()
-        np.testing.assert_array_equal(obs[6:15], np.zeros(9))
+        np.testing.assert_array_equal(
+            obs[1 : 1 + COVARIANCE_FEATURES_DIM],
+            np.zeros(COVARIANCE_FEATURES_DIM),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -710,11 +1062,27 @@ def _make_env_for_reward() -> Any:
     mock_sm.consume_collision.return_value = (False, False)
     env._sensor_manager = mock_sm
 
-    # Default target bay at origin
-    env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-    env._prev_distance = 5.0
+    # Default target bay at origin. Width/depth match the rectangle layout's
+    # angled bays so the geometric in-bay check has sensible polygon
+    # dimensions. Ego half-extents are CARLA's reported bounding box for
+    # vehicle.bmw.grandtourer (length 4.612 m, width 2.242 m).
+    env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
+    # _sample_target_bay() normally mirrors the bay pose into these scalars; set
+    # them directly here since the test bypasses sampling.
+    env._target_x = 0.0
+    env._target_y = 0.0
+    env._target_yaw = 0.0
+    env._ego_half_length = 2.306
+    env._ego_half_width = 1.121
+    # Corridor potential at the default 5 m straight-ahead start, so the first
+    # progress reading in a test is relative to a sensible prior pose.
+    env._prev_phi = env._corridor_potential(5.0, 0.0, 0.0)
+    # Per-episode reward normaliser. reset() normally sets this from the spawn
+    # potential; set it directly here since these tests bypass reset(). Tests that
+    # exercise the normalisation explicitly override it.
+    env._phi_start = max(abs(env._prev_phi), PHI_NORM_FLOOR)
 
-    # Layout with generous corners so OOB check doesn't fire unless intended
+    # Layout with generous corners so OOB check doesn't fire unless intended.
     env._current_layout = {
         "corners": [
             {"x": -50.0, "y": -50.0},
@@ -723,6 +1091,14 @@ def _make_env_for_reward() -> Any:
             {"x": -50.0, "y": 50.0},
         ]
     }
+    # reset() normally populates the inflated OOB boundary; set it directly here
+    # (the generous +/-50 box keeps the OOB check inert for non-OOB tests).
+    env._oob_inflated_corners = [
+        (-53.0, -53.0),
+        (53.0, -53.0),
+        (53.0, 53.0),
+        (-53.0, 53.0),
+    ]
     return env
 
 
@@ -767,9 +1143,11 @@ class TestComputeReward:
         assert terminated is False
         assert success is False
 
-    def test_collision_ego_fault_returns_minus_ten_and_terminates(self) -> None:
+    def test_collision_ego_fault_returns_minus_twentyfive_and_terminates(
+        self,
+    ) -> None:
         """
-        @brief Ego-fault collision -> reward = -10, terminated = True, success = False.
+        @brief Ego-fault collision -> reward = -25, terminated = True, success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -777,13 +1155,14 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        assert reward == pytest.approx(-10.0)
+        assert reward == pytest.approx(-25.0)
         assert terminated is True
         assert success is False
 
-    def test_collision_pedestrian_fault_terminates_no_penalty(self) -> None:
+    def test_collision_non_ego_fault_returns_minus_ten(self) -> None:
         """
-        @brief Pedestrian-fault collision -> reward = 0.0, terminated = True, success = False.
+        @brief Non-ego-fault collision -> reward = -10.0, terminated = True,
+               success = False.
         """
         env = _make_env_for_reward()
         _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
@@ -791,32 +1170,29 @@ class TestComputeReward:
 
         reward, terminated, success, diag = env._compute_reward()
 
-        assert reward == pytest.approx(0.0)
+        assert reward == pytest.approx(-10.0)
         assert terminated is True
         assert success is False
 
-    def test_success_returns_plus_ten_after_dwell(self) -> None:
+    def test_success_returns_plus_fifty_after_dwell(self) -> None:
         """
-        @brief Success requires all thresholds to hold for success_dwell_steps
-               consecutive steps. Before the dwell is complete, the episode
-               does not terminate.
+        @brief Success requires the geometric in-bay check and the velocity
+               gate to hold for success_dwell_steps consecutive steps. Before
+               the dwell is complete, the episode does not terminate.
         """
-        from uncertainty_rl.utils.constants import (
-            SUCCESS_THRESHOLD_POSITION,
-            SUCCESS_THRESHOLD_VELOCITY,
-        )
+        from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         dwell = 3
         env = _make_env_for_reward()
         env._success_dwell_steps = dwell
+        # Ego centred in the bay; speed below the success velocity threshold.
         _set_vehicle(
             env,
-            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            x=0.0,
             y=0.0,
             yaw_deg=0.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
         )
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
         # Steps 1 and 2: in-bay but dwell not yet satisfied
         for step in range(1, dwell):
@@ -826,28 +1202,24 @@ class TestComputeReward:
 
         # Final dwell step: success fires
         reward, terminated, success, diag = env._compute_reward()
-        assert reward == pytest.approx(10.0)
+        assert reward == pytest.approx(50.0)
         assert terminated is True
         assert success is True
 
     def test_drive_through_does_not_count_as_success(self) -> None:
         """
-        @brief A single step inside the bay thresholds (drive-through) must not
-               trigger success. The dwell counter resets when the vehicle leaves.
+        @brief A single step inside the bay (drive-through) must not trigger
+               success. The dwell counter resets when the vehicle leaves.
         """
-        from uncertainty_rl.utils.constants import (
-            SUCCESS_THRESHOLD_POSITION,
-            SUCCESS_THRESHOLD_VELOCITY,
-        )
+        from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         env = _make_env_for_reward()
         env._success_dwell_steps = 5
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
-        # One step inside thresholds (simulates fast drive-through)
+        # One step inside the bay (simulates fast drive-through)
         _set_vehicle(
             env,
-            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            x=0.0,
             y=0.0,
             yaw_deg=0.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
@@ -864,31 +1236,59 @@ class TestComputeReward:
         assert success is False
         assert env._success_counter == 0
 
+    def test_total_progress_equal_across_bay_distance(self) -> None:
+        """
+        @brief Regression guard for the per-episode progress normalisation.
+
+        The full-episode progress sum telescopes to (phi(parked) - phi(start)) /
+        |phi(start)| * PROGRESS_TARGET = PROGRESS_TARGET for EVERY bay, near or far.
+        The /|phi(start)| factor equalises bays: before it, a far bay offered a far
+        larger total shaping pool than a near one (it could exceed the +50 terminal),
+        and shared forward motion banked reward toward every bay - which rewarded
+        driving toward a fixed memorised bay instead of the commanded one. The
+        *PROGRESS_TARGET factor sets the absolute dense scale. Here we drive each
+        start pose all the way to the parked pose in one step and assert the banked
+        progress equals PROGRESS_TARGET in both cases.
+        """
+        for start_along in (6.0, 30.0):
+            env = _make_env_for_reward()
+            env._prev_phi = env._corridor_potential(start_along, 0.0, 0.0)
+            env._phi_start = max(abs(env._prev_phi), PHI_NORM_FLOOR)
+            # Drive to the parked pose (along=cross=heading=0 -> phi = 0).
+            _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0)
+
+            _, _, _, diag = env._compute_reward()
+
+            assert diag["progress_reward"] == pytest.approx(
+                PROGRESS_TARGET, abs=1e-6
+            ), (
+                f"full close-in from {start_along} m must bank ~{PROGRESS_TARGET} "
+                f"progress, got {diag['progress_reward']}"
+            )
+
     def test_progress_reward_positive_when_closing_in(self) -> None:
         """
-        @brief Moving toward target gives positive progress minus the time penalty.
+        @brief Closing in along the centreline gives a positive corridor-progress
+               reward (phi increases as along-track shrinks).
         """
         env = _make_env_for_reward()
-        env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-        # Current distance is ~5m (vehicle at (5,0))
+        # Previous pose 10 m out on the centreline; now 5 m out, still on the line.
+        env._prev_phi = env._corridor_potential(10.0, 0.0, 0.0)
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         reward, terminated, success, diag = env._compute_reward()
 
-        # progress = (10 - 5) / 20 = 0.25; reward = 0.25 - 0.01 = 0.24
         assert reward > 0.0
         assert terminated is False
         assert success is False
 
     def test_progress_reward_negative_when_moving_away(self) -> None:
         """
-        @brief Moving away from target gives a negative reward.
+        @brief Moving away along the centreline gives a negative corridor-progress
+               reward (phi decreases as along-track grows).
         """
         env = _make_env_for_reward()
-        env._prev_distance = 2.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-        # Current distance ~10m (vehicle moved away)
+        env._prev_phi = env._corridor_potential(2.0, 0.0, 0.0)
         _set_vehicle(env, x=10.0, y=0.0, yaw_deg=0.0)
 
         reward, terminated, success, diag = env._compute_reward()
@@ -896,66 +1296,77 @@ class TestComputeReward:
         assert reward < 0.0
         assert terminated is False
 
-    def test_time_penalty_always_applied(self) -> None:
+    def test_drifting_off_centreline_is_penalised(self) -> None:
         """
-        @brief Even when making zero progress, reward includes the -0.01 time penalty.
-        """
-        env = _make_env_for_reward()
-        dist = 5.0
-        env._prev_distance = dist
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-        # Vehicle stays at exactly the same distance (no progress)
-        _set_vehicle(env, x=dist, y=0.0, yaw_deg=0.0)
-
-        reward, terminated, success, diag = env._compute_reward()
-
-        # progress = 0, so reward = 0 - 0.01 = -0.01
-        assert reward == pytest.approx(-0.01, abs=1e-4)
-
-    def test_prev_distance_updated_after_step(self) -> None:
-        """
-        @brief _prev_distance is updated to the current position error after each call.
+        @brief Gap A: at equal along-track distance, drifting OFF the centreline
+               (growing cross-track) yields a negative corridor-progress reward,
+               because phi weights cross-track above along-track.
         """
         env = _make_env_for_reward()
-        env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
-        _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
+        # Previous pose: 4 m out, on the line. Now: same 4 m depth but 2 m off
+        # the line laterally. along unchanged, cross grew -> phi dropped.
+        env._prev_phi = env._corridor_potential(4.0, 0.0, 0.0)
+        _set_vehicle(env, x=4.0, y=2.0, yaw_deg=0.0)
+
+        reward, _, _, _ = env._compute_reward()
+
+        assert reward < 0.0, "drifting off the centreline must cost reward"
+
+    def test_no_negative_dead_band_at_the_mouth(self) -> None:
+        """
+        @brief A car creeping inward along the centreline while aligned must earn
+               non-negative shaping at the bay mouth: with no obstacle and on-line
+               aligned motion inward, reward must be >= 0.
+        """
+        env = _make_env_for_reward()
+        # 3.2 m out, creeping inward on the line.
+        env._prev_phi = env._corridor_potential(3.4, 0.0, 0.0)
+        _set_vehicle(env, x=3.2, y=0.0, yaw_deg=0.0, vx=0.1)
+
+        reward, _, _, _ = env._compute_reward()
+
+        assert reward >= 0.0, "no negative dead band on an inward on-line approach"
+
+    def test_prev_phi_updated_after_step(self) -> None:
+        """
+        @brief _prev_phi is updated to the current corridor potential each call.
+        """
+        env = _make_env_for_reward()
+        env._prev_phi = env._corridor_potential(10.0, 0.0, 0.0)
+        _set_vehicle(env, x=3.0, y=0.0, yaw_deg=0.0)
 
         env._compute_reward()
 
-        assert env._prev_distance == pytest.approx(5.0)
+        assert env._prev_phi == pytest.approx(env._corridor_potential(3.0, 0.0, 0.0))
 
-    def test_yaw_symmetry_nose_in_nose_out(self) -> None:
+    def test_yaw_180_offset_valid_any_orientation(self) -> None:
         """
-        @brief A 180-deg yaw offset is equivalent to 0-deg (nose-out = nose-in).
-        Both should trigger success if position and speed thresholds are also met.
+        @brief A car inside the bay at 180-deg yaw offset still counts as
+        success. Any orientation is accepted provided the car physically fits.
         """
-        from uncertainty_rl.utils.constants import (
-            SUCCESS_THRESHOLD_POSITION,
-            SUCCESS_THRESHOLD_VELOCITY,
-        )
+        from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
 
-        # Nose-out: vehicle yaw = 180 deg
+        # Vehicle yaw = 180 deg: opposite to the bay's target yaw but inside.
         _set_vehicle(
             env,
-            x=SUCCESS_THRESHOLD_POSITION * 0.5,
+            x=0.0,
             y=0.0,
             yaw_deg=180.0,
             vx=SUCCESS_THRESHOLD_VELOCITY * 0.5,
         )
+        env._success_counter = env._success_dwell_steps - 1
         reward, terminated, success, diag = env._compute_reward()
 
-        assert success is True, "180-deg yaw offset should be treated as valid nose-out"
+        assert success is True, "180-deg yaw offset inside bay must count as success"
 
     def test_diag_keys_present(self) -> None:
         """
-        @brief diag dict must contain all five expected keys on every code path.
+        @brief diag dict must contain all expected keys on the shaping path,
+               including the corridor and clearance terms.
         """
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         _, _, _, diag = env._compute_reward()
@@ -966,15 +1377,128 @@ class TestComputeReward:
             "speed",
             "collision",
             "progress_reward",
+            "endgame_reward",
+            "clearance_penalty",
         ):
             assert key in diag, f"Missing diag key: {key}"
+
+    def test_endgame_term_at_parked_pose_includes_hold_bonus(self) -> None:
+        """
+        @brief The merged endgame term (replacing the old align + hold split)
+               equals MOVE + HOLD at the parked pose: on the line, square, at
+               depth, and stopped, all corridor factors saturate to 1.
+        """
+        env = _make_env_for_reward()
+        # Parked pose: along=cross=heading=0 (target at origin), speed 0.
+        env._prev_phi = env._corridor_potential(0.0, 0.0, 0.0)
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0, vx=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["endgame_reward"] == pytest.approx(
+            ENDGAME_MOVE_COEF + ENDGAME_HOLD_COEF
+        )
+
+    def test_endgame_term_drops_hold_bonus_when_moving(self) -> None:
+        """
+        @brief When the car is on the line, square, and at depth but still
+               moving (speed above the slowness reference), the hold bonus
+               vanishes and only the MOVE component remains.
+        """
+        env = _make_env_for_reward()
+        env._prev_phi = env._corridor_potential(0.0, 0.0, 0.0)
+        # slowness_reference_speed = 5 * SUCCESS_THRESHOLD_VELOCITY = 0.5 m/s;
+        # 1.0 m/s drives the stopped factor to 0, dropping the HOLD bonus.
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0, vx=1.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["endgame_reward"] == pytest.approx(ENDGAME_MOVE_COEF)
+
+    def test_squared_pose_earns_more_potential_than_crooked(self) -> None:
+        """
+        @brief D1 alignment regression: with W_HEAD raised to 3.0 the corridor
+               potential penalises a 20-deg-crooked pose clearly more than a
+               squared pose at the same depth and cross-track, so phi - the
+               dominant gradient - pulls the car square, not just close.
+        """
+        env = _make_env_for_reward()
+        depth, cross = 1.0, 0.0
+        squared = env._corridor_potential(depth, cross, 0.0)
+        crooked = env._corridor_potential(depth, cross, math.radians(20.0))
+
+        # phi <= 0; squared (heading_err 0) must be strictly greater (less
+        # negative) than crooked.
+        assert squared > crooked
+        # The gap is exactly W_HEAD * heading_err - confirm the heading weight,
+        # not the along/cross weights, drives the alignment pull.
+        assert squared - crooked == pytest.approx(CORRIDOR_W_HEAD * math.radians(20.0))
+
+    def test_clearance_zero_when_no_obstacle(self) -> None:
+        """
+        @brief Gap B: with an empty LiDAR buffer (no returns) the clearance
+               penalty is zero.
+        """
+        env = _make_env_for_reward()
+        env._include_obstacle_obs = True
+        env._obstacle_features_buffer[:] = 0.0  # all hemispheres: no return
+        _set_vehicle(env, x=4.0, y=0.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["clearance_penalty"] == pytest.approx(0.0)
+
+    def test_clearance_penalises_close_forward_return_off_line(self) -> None:
+        """
+        @brief Gap B: a close forward-cone return during an OFF-line, crooked
+               approach incurs a negative clearance penalty.
+        """
+        env = _make_env_for_reward()
+        env._include_obstacle_obs = True
+        # forward_dist (index 4) = 0.4 m, inside the danger band; off-line/crooked.
+        env._obstacle_features_buffer[:] = 0.0
+        env._obstacle_features_buffer[4] = 0.4
+        _set_vehicle(env, x=4.0, y=1.5, yaw_deg=20.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["clearance_penalty"] < 0.0
+
+    def test_clearance_zero_for_correct_park_beside_neighbour(self) -> None:
+        """
+        @brief Gap B edge case (the 0.98 m abeam neighbour): a car parked square
+               on the centreline with a neighbour ~0.98 m to the side incurs no
+               clearance penalty, because the term is gated off when on-line and
+               aligned. The SAME side return on a crooked off-line approach DOES
+               incur a penalty - so the gate, not the distance alone, is decisive.
+        """
+        env = _make_env_for_reward()
+        env._include_obstacle_obs = True
+
+        # Square on the centreline at the parked pose with a neighbour 0.98 m
+        # abeam on the right (index 2 = right_dist) -> gated off -> ~0. A side
+        # return abeam of a square car is the benign case.
+        env._obstacle_features_buffer[:] = 0.0
+        env._obstacle_features_buffer[2] = 0.98
+        _set_vehicle(env, x=0.0, y=0.0, yaw_deg=0.0)
+        _, _, _, diag_square = env._compute_reward()
+        assert diag_square["clearance_penalty"] == pytest.approx(0.0, abs=1e-6)
+
+        # Crooked and off the line with a close forward-cone return (index 4 =
+        # forward_dist, the collision-critical direction) -> penalty present.
+        env._obstacle_features_buffer[:] = 0.0
+        env._obstacle_features_buffer[4] = 0.4
+        env._prev_phi = env._corridor_potential(4.0, 1.5, math.radians(20.0))
+        _set_vehicle(env, x=4.0, y=1.5, yaw_deg=20.0)
+        _, _, _, diag_crooked = env._compute_reward()
+        assert diag_crooked["clearance_penalty"] < 0.0
 
     def test_diag_pos_error_matches_distance(self) -> None:
         """
         @brief diag['pos_error'] equals the Euclidean distance to the target.
         """
         env = _make_env_for_reward()
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0, "width": 2.5, "depth": 5.4}
         _set_vehicle(env, x=3.0, y=4.0, yaw_deg=0.0)  # distance = 5.0
 
         _, _, _, diag = env._compute_reward()
@@ -1009,8 +1533,7 @@ class TestComputeReward:
         @brief diag['progress_reward'] is positive when the vehicle closes on target.
         """
         env = _make_env_for_reward()
-        env._prev_distance = 10.0
-        env._target_bay = {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        env._prev_phi = env._corridor_potential(10.0, 0.0, 0.0)
         _set_vehicle(env, x=5.0, y=0.0, yaw_deg=0.0)
 
         _, _, _, diag = env._compute_reward()
@@ -1028,6 +1551,80 @@ class TestComputeReward:
         _, _, _, diag = env._compute_reward()
 
         assert all(v == 0.0 for v in diag.values())
+
+    def test_oob_no_op_when_inside_boundary(self) -> None:
+        """
+        @brief A vehicle inside the inflated boundary incurs no OOB penalty and
+               the accumulator stays at zero.
+        """
+        env = _make_env_for_reward()
+        _set_vehicle(env, x=5.0, y=5.0, yaw_deg=0.0)
+
+        _, _, _, diag = env._compute_reward()
+
+        assert diag["oob"] == 0.0
+        assert env._oob_accumulated_penalty == 0.0
+
+    def test_oob_step_penalty_and_accumulation_when_outside(self) -> None:
+        """
+        @brief Outside the inflated boundary, the per-step penalty is applied and
+               accumulated, but the episode does not terminate on the first step.
+        """
+        env = _make_env_for_reward()
+        # Target just inside the boundary; ego a metre outside it (x = 54 > 53),
+        # so the progress term is zero (prev_phi set to the current pose) and the
+        # OOB term dominates the reward.
+        env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
+        _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
+        env._prev_phi = env._corridor_potential(2.0, 0.0, 0.0)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert diag["oob"] == 1.0
+        assert terminated is False
+        assert success is False
+        assert env._oob_accumulated_penalty == pytest.approx(-env._oob_step_penalty)
+        # The OOB step penalty dominates the reward (small shaping aside), so the
+        # reward sits close to the step penalty and is clearly negative.
+        assert reward < 0.0
+        assert reward == pytest.approx(env._oob_step_penalty, abs=0.05)
+
+    def test_oob_terminates_when_accumulator_crosses_limit(self) -> None:
+        """
+        @brief When the accumulated OOB cost crosses the limit the episode
+               terminates with no extra crash-magnitude penalty.
+        """
+        env = _make_env_for_reward()
+        env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
+        _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
+        # Prime the accumulator just below the limit so one more OOB step crosses it.
+        env._oob_accumulated_penalty = (
+            env._oob_termination_limit + env._oob_step_penalty
+        )
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert terminated is True
+        assert success is False
+        # No -25 crash term: the OOB-terminate reward is far milder than a crash.
+        assert reward > -25.0
+
+    def test_collision_takes_precedence_over_oob(self) -> None:
+        """
+        @brief A collision is resolved before the OOB check, so an out-of-bounds
+               vehicle that also collides returns the collision penalty and never
+               sets the oob flag.
+        """
+        env = _make_env_for_reward()
+        env._target_x, env._target_y, env._target_yaw = 52.0, 0.0, 0.0
+        _set_vehicle(env, x=54.0, y=0.0, yaw_deg=0.0)
+        env._sensor_manager.consume_collision.return_value = (True, True)
+
+        reward, terminated, success, diag = env._compute_reward()
+
+        assert reward == pytest.approx(-25.0)
+        assert terminated is True
+        assert diag.get("oob", 0.0) == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -1149,6 +1746,422 @@ class TestPointInPolygon:
         corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]
         assert point_in_polygon(0.0, 0.0, corners) is True
         assert point_in_polygon(3.0, 0.0, corners) is False
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: inflate_polygon
+# ---------------------------------------------------------------------------
+
+
+class TestInflatePolygon:
+    """
+    @class TestInflatePolygon
+    @brief Tests for the uniform outward polygon offset used by the soft OOB
+           boundary.
+    """
+
+    def test_unit_square_inflates_outward(self) -> None:
+        """
+        @brief A unit square centred on the origin grows by `margin` per side.
+        """
+        corners = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
+        inflated = inflate_polygon(corners, margin=1.0)
+        # Each corner moves out to +/- 1.5 (0.5 original + 1.0 margin).
+        for x, y in inflated:
+            assert abs(abs(x) - 1.5) < 1e-9
+            assert abs(abs(y) - 1.5) < 1e-9
+
+    def test_original_polygon_stays_inside_inflated(self) -> None:
+        """
+        @brief Every original vertex lies inside the inflated polygon (convex).
+        """
+        corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 8.0), (0.0, 8.0)]
+        inflated = inflate_polygon(corners, margin=2.0)
+        for x, y in corners:
+            assert point_in_polygon(x, y, inflated) is True
+
+    def test_axis_aligned_rectangle_offsets_uniformly(self) -> None:
+        """
+        @brief Every edge of an axis-aligned rectangle moves out by exactly
+               `margin`, so the offset box is the original grown by `margin`
+               on all four sides (a true uniform skirt, not a per-axis scale).
+        """
+        corners = [(0.0, 0.0), (10.0, 0.0), (10.0, 8.0), (0.0, 8.0)]
+        margin = 5.0
+        inflated = inflate_polygon(corners, margin=margin)
+        expected = [
+            (-margin, -margin),
+            (10.0 + margin, -margin),
+            (10.0 + margin, 8.0 + margin),
+            (-margin, 8.0 + margin),
+        ]
+        for (ex, ey), (ax, ay) in zip(expected, inflated):
+            assert abs(ax - ex) < 1e-9
+            assert abs(ay - ey) < 1e-9
+
+    def test_clockwise_winding_also_offsets_outward(self) -> None:
+        """
+        @brief Outward direction is detected from winding, so a CW polygon
+               (as produced after the CARLA Y-negation) still grows outward.
+        """
+        # Same rectangle wound clockwise.
+        corners = [(0.0, 0.0), (0.0, 8.0), (10.0, 8.0), (10.0, 0.0)]
+        margin = 3.0
+        inflated = inflate_polygon(corners, margin=margin)
+        xs_out = [c[0] for c in inflated]
+        ys_out = [c[1] for c in inflated]
+        assert abs(min(xs_out) - (-margin)) < 1e-9
+        assert abs(max(xs_out) - (10.0 + margin)) < 1e-9
+        assert abs(min(ys_out) - (-margin)) < 1e-9
+        assert abs(max(ys_out) - (8.0 + margin)) < 1e-9
+
+    def test_degenerate_polygon_returned_unchanged(self) -> None:
+        """
+        @brief Inputs with fewer than three vertices are returned unchanged.
+        """
+        corners = [(0.0, 0.0), (1.0, 1.0)]
+        assert inflate_polygon(corners, margin=3.0) == corners
+
+
+# ---------------------------------------------------------------------------
+# LotSpawner: perimeter-cone toggle
+# ---------------------------------------------------------------------------
+
+
+class TestLotSpawnerConeFlag:
+    """
+    @class TestLotSpawnerConeFlag
+    @brief Tests that the spawn_perimeter_cones flag is honoured by the spawner.
+    """
+
+    def test_flag_defaults_to_true(self) -> None:
+        """
+        @brief Omitting the flag preserves the legacy perimeter-cone behaviour.
+        """
+        spawner = LotSpawner(
+            cone_spacing=2.0,
+            marker_blueprint="static.prop.constructioncone",
+            bay_occupancy_min=0.0,
+            bay_occupancy_max=0.0,
+        )
+        assert spawner._spawn_perimeter_cones_enabled is True
+
+    def test_flag_stored_when_disabled(self) -> None:
+        """
+        @brief Passing False disables the perimeter-cone ring.
+        """
+        spawner = LotSpawner(
+            cone_spacing=2.0,
+            marker_blueprint="static.prop.constructioncone",
+            bay_occupancy_min=0.0,
+            bay_occupancy_max=0.0,
+            spawn_perimeter_cones=False,
+        )
+        assert spawner._spawn_perimeter_cones_enabled is False
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: car_fully_inside_bay
+# ---------------------------------------------------------------------------
+
+
+class TestCarFullyInsideBay:
+    """
+    @class TestCarFullyInsideBay
+    @brief Tests for the polygon-containment success check.
+    """
+
+    # CARLA-reported extents for vehicle.bmw.grandtourer.
+    CAR_HL = 2.306
+    CAR_HW = 1.121
+    # Rectangle layout angled bay dims. Lateral slack:
+    # (BAY_W - 2*CAR_HW) / 2 = (2.5 - 2.242) / 2 = 0.129 m.
+    # Longitudinal slack: (BAY_D - 2*CAR_HL) / 2 = (5.4 - 4.612) / 2 = 0.394 m.
+    BAY_W = 2.5
+    BAY_D = 5.4
+
+    def test_centred_car_fits(self) -> None:
+        """
+        @brief Car perfectly centred and aligned with the bay must fit.
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_car_offset_within_lateral_slack_fits(self) -> None:
+        """
+        @brief A lateral offset smaller than the lateral slack must still fit.
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.1,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_car_offset_beyond_lateral_slack_fails(self) -> None:
+        """
+        @brief A lateral offset larger than the slack must push a corner out.
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.2,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is False
+        )
+
+    def test_car_offset_within_longitudinal_slack_fits(self) -> None:
+        """
+        @brief A longitudinal offset smaller than the longitudinal slack must
+               still fit (slack is larger in this axis than laterally).
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.3,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_yawed_car_pokes_out(self) -> None:
+        """
+        @brief A 15-deg yaw sweeps the corners well beyond the lateral slack.
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=math.radians(15.0),
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is False
+        )
+
+    def test_180_yaw_still_fits_polygon(self) -> None:
+        """
+        @brief Rectangle symmetry under 180-deg rotation: the polygon check
+               accepts a rear-first park as geometrically valid. The env's
+               action space forbids reverse, so the policy cannot actually
+               achieve this state - the polygon check itself does not have to
+               reject it.
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=math.pi,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_rotated_bay_with_aligned_car_fits(self) -> None:
+        """
+        @brief Containment is invariant under the same rigid rotation applied
+               to bay and car.
+        """
+        yaw = math.radians(45.0)
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=yaw,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=yaw,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_positive_margin_shrinks_bay(self) -> None:
+        """
+        @brief A car that fits with margin=0 should be rejected when the
+               margin shrinks the bay below the car's footprint.
+        """
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+                margin=0.5,
+            )
+            is False
+        )
+
+
+# ---------------------------------------------------------------------------
+# Pure geometry: bay_containment_fraction
+# ---------------------------------------------------------------------------
+
+
+class TestBayContainmentFraction:
+    """
+    @class TestBayContainmentFraction
+    @brief Tests for the continuous in-bay containment factor used to gate the
+           endgame shaping terms.
+    """
+
+    CAR_HL = 2.306
+    CAR_HW = 1.121
+    BAY_W = 2.5
+    BAY_D = 5.4
+
+    def _frac(
+        self, car_x: float, car_y: float, car_yaw: float = 0.0, margin: float = 0.0
+    ) -> float:
+        """@brief Helper: containment fraction with reference = one half-length."""
+        return bay_containment_fraction(
+            car_x=car_x,
+            car_y=car_y,
+            car_yaw=car_yaw,
+            car_half_length=self.CAR_HL,
+            car_half_width=self.CAR_HW,
+            bay_x=0.0,
+            bay_y=0.0,
+            bay_yaw=0.0,
+            bay_width=self.BAY_W,
+            bay_depth=self.BAY_D,
+            reference=self.CAR_HL,
+            margin=margin,
+        )
+
+    def test_fully_inside_returns_one(self) -> None:
+        """
+        @brief A centred, aligned car whose corners are all inside the bay must
+               return exactly 1.0, agreeing with car_fully_inside_bay.
+        """
+        assert self._frac(0.0, 0.0) == pytest.approx(1.0)
+        assert (
+            car_fully_inside_bay(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+            )
+            is True
+        )
+
+    def test_fraction_decreases_monotonically_with_overhang(self) -> None:
+        """
+        @brief As the car moves out along the depth axis the fraction must
+               decrease strictly - this is the gradient that pulls the car INTO
+               the bay rather than leaving a flat stop-short plateau.
+        """
+        # Longitudinal slack = (BAY_D/2 - CAR_HL) = 2.7 - 2.306 = 0.394 m.
+        # x beyond 0.394 pushes the leading corner past the bay edge.
+        f_in = self._frac(0.3, 0.0)  # still inside -> 1.0
+        f_edge = self._frac(0.6, 0.0)  # 0.206 m overhang
+        f_more = self._frac(1.2, 0.0)  # 0.806 m overhang
+        assert f_in == pytest.approx(1.0)
+        assert f_in > f_edge > f_more
+        assert 0.0 < f_more < f_edge < 1.0
+
+    def test_reaches_zero_one_reference_outside(self) -> None:
+        """
+        @brief Once the worst corner overhangs by a full reference distance the
+               factor must clamp to 0.0 (no negative reward leakage).
+        """
+        # Leading corner at x + CAR_HL; bay half-depth 2.7. Overhang reaches the
+        # reference (CAR_HL = 2.306) when x = 2.7 - 2.306 + 2.306 = 2.7 + slack.
+        # x = 3.5 gives overhang 3.5 + 2.306 - 2.7 = 3.106 > reference -> 0.0.
+        assert self._frac(3.5, 0.0) == pytest.approx(0.0)
+
+    def test_negative_margin_inflates_bay(self) -> None:
+        """
+        @brief A negative margin (bay inflated, the training convention) must
+               raise the fraction versus margin=0 for the same overhanging pose.
+        """
+        pose = (0.7, 0.0)
+        assert self._frac(*pose, margin=-0.25) > self._frac(*pose, margin=0.0)
+
+    def test_degenerate_reference_returns_zero(self) -> None:
+        """
+        @brief A non-positive reference distance must return 0.0, not divide by
+               zero.
+        """
+        assert (
+            bay_containment_fraction(
+                car_x=0.0,
+                car_y=0.0,
+                car_yaw=0.0,
+                car_half_length=self.CAR_HL,
+                car_half_width=self.CAR_HW,
+                bay_x=0.0,
+                bay_y=0.0,
+                bay_yaw=0.0,
+                bay_width=self.BAY_W,
+                bay_depth=self.BAY_D,
+                reference=0.0,
+            )
+            == 0.0
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1279,6 +2292,28 @@ class TestExtractObstacleFeatures:
         result = extract_obstacle_features(np.empty((0, 2), dtype=np.float32), out)
         np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
 
+    def test_none_scan_clears_stale_buffer(self) -> None:
+        """
+        @brief A None scan must CLEAR previous readings, not preserve them -
+               otherwise a stale obstacle follows the car through empty space
+               (in both the observation and the clearance penalty).
+        """
+        out = np.array([1.1, 0.6, 2.0, -0.3, 3.0], dtype=np.float32)
+        result = extract_obstacle_features(None, out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
+    def test_no_valid_returns_clears_stale_buffer(self) -> None:
+        """
+        @brief A scan with only rear-hemisphere / self returns (no valid
+               forward returns) must clear previous readings to the
+               clear-space convention (all zeros).
+        """
+        out = np.array([1.1, 0.6, 2.0, -0.3, 3.0], dtype=np.float32)
+        # One rear-hemisphere point and one sub-1m self-return: both invalid.
+        scan = np.array([[-5.0, 0.0], [0.5, 0.1]], dtype=np.float32)
+        result = extract_obstacle_features(scan, out)
+        np.testing.assert_array_equal(result, np.zeros(OBSTACLE_FEATURES_DIM))
+
     def test_forward_point_populates_forward_dist(self) -> None:
         """
         @brief A point directly ahead must populate forward_dist (index 4).
@@ -1357,9 +2392,14 @@ class TestBuildObservation:
         return {"x": x, "y": y, "yaw": yaw}
 
     def _ekf_pose(
-        self, x: float = 0.0, y: float = 0.0, yaw: float = 0.0, vyaw: float = 0.1
+        self,
+        x: float = 0.0,
+        y: float = 0.0,
+        yaw: float = 0.0,
+        vyaw: float = 0.1,
+        vx: float = 0.0,
     ) -> np.ndarray:
-        return np.array([x, y, yaw, vyaw], dtype=np.float32)
+        return np.array([x, y, yaw, vyaw, vx], dtype=np.float32)
 
     def test_full_obs_has_correct_dim(self) -> None:
         """
@@ -1415,12 +2455,15 @@ class TestBuildObservation:
 
     def test_uncertainty_written_to_covariance_indices(self) -> None:
         """
-        @brief Uncertainty values must appear at indices 1-3 when include_covariance=True.
+        @brief Uncertainty values must appear at indices [VEHICLE_STATE_DIM,
+               VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM) when
+               include_covariance=True. With the speed-bearing 13-dim layout
+               that is obs[2:5].
         """
         dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=False)
         buf = np.zeros(dim, dtype=np.float32)
         unc = np.array([0.1, 0.2, 0.3], dtype=np.float32)
-        obs = build_observation(
+        build_observation(
             ekf_pose=self._ekf_pose(),
             uncertainty=unc,
             target_bay=self._make_target(),
@@ -1429,7 +2472,33 @@ class TestBuildObservation:
             include_obstacle_obs=False,
             obs_buffer=buf,
         )
-        np.testing.assert_allclose(obs[1 : 1 + COVARIANCE_FEATURES_DIM], unc)
+        # The return value is the fixed-range NORMALISED copy; the raw buffer holds
+        # the verbatim values. Assert positional placement on the raw buffer.
+        cov_start = VEHICLE_STATE_DIM
+        np.testing.assert_allclose(
+            buf[cov_start : cov_start + COVARIANCE_FEATURES_DIM], unc
+        )
+
+    def test_speed_written_to_obs_zero(self) -> None:
+        """
+        @brief Signed body-frame speed (ekf_pose[4]) must appear at obs[0].
+        """
+        dim = compute_obs_dim(include_covariance=True, include_obstacle_obs=True)
+        buf = np.zeros(dim, dtype=np.float32)
+        ekf = self._ekf_pose(vx=1.7)
+        build_observation(
+            ekf_pose=ekf,
+            uncertainty=np.zeros(COVARIANCE_FEATURES_DIM, dtype=np.float32),
+            target_bay=self._make_target(),
+            obstacle_features=np.zeros(OBSTACLE_FEATURES_DIM, dtype=np.float32),
+            include_covariance=True,
+            include_obstacle_obs=True,
+            obs_buffer=buf,
+        )
+        # Positional placement on the raw buffer (the return is the normalised copy).
+        np.testing.assert_allclose(buf[0], 1.7, rtol=1e-5)
+        # vyaw still appears immediately after speed.
+        np.testing.assert_allclose(buf[1], ekf[3], rtol=1e-5)
 
     def test_returns_copy_not_buffer(self) -> None:
         """

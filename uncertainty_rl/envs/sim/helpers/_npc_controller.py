@@ -10,7 +10,6 @@ instance and delegates NPC lifecycle calls to it.
 import itertools
 import logging
 import math
-import random
 from typing import Any, Dict, List, Set, Tuple
 
 import numpy as np
@@ -47,9 +46,9 @@ class NPCController:
     _EGO_AVOID_RADIUS_SQ: float = _EGO_AVOID_RADIUS**2
     _PATROL_AVOID_RADIUS_SQ: float = _PATROL_AVOID_RADIUS**2
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Construction
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -114,9 +113,24 @@ class NPCController:
         self._pedestrian_lifetime_steps: List[int] = []
         self._pedestrian_zones: List[Dict[str, float]] = []
 
-    # ------------------------------------------------------------------
+        # Per-episode RNG. Defaults to an unseeded generator for standalone /
+        # test use; the env injects its seeded Gymnasium np_random via set_rng()
+        # so NPC placement and walk headings are reproducible at a fixed seed.
+        self._rng: np.random.Generator = np.random.default_rng()
+
+    # -----------------------------------------------------------------------
     # Per-reset setup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
+
+    def set_rng(self, rng: "np.random.Generator") -> None:
+        """
+        @brief Inject the seeded RNG used for all NPC placement and heading draws.
+        @param rng: NumPy Generator (the env's Gymnasium np_random).
+
+        Called by the env each reset so patrol-vehicle and pedestrian spawning
+        and random walk headings are reproducible at a fixed training seed.
+        """
+        self._rng = rng
 
     def refresh_blueprints(
         self,
@@ -140,9 +154,9 @@ class NPCController:
         """
         self._all_vehicle_actors = all_vehicle_actors
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Spawning
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def spawn_patrol(
         self,
@@ -189,9 +203,11 @@ class NPCController:
 
         n_waypoints = len(waypoints)
         for _ in range(self._num_patrol_max):
-            bp = random.choice(self._car_blueprints)
-            start_idx = random.choice(safe_indices)
-            direction = random.choice([-1, 1])
+            bp = self._car_blueprints[
+                int(self._rng.integers(len(self._car_blueprints)))
+            ]
+            start_idx = safe_indices[int(self._rng.integers(len(safe_indices)))]
+            direction = 1 if self._rng.random() < 0.5 else -1
             first_target_idx = (start_idx + direction) % n_waypoints
             wp = waypoints[start_idx]
             first_target_wp = waypoints[first_target_idx]
@@ -279,30 +295,32 @@ class NPCController:
             clusters.setdefault(_find(idx), []).append(idx)
 
         for zone_indices in clusters.values():
-            if random.random() > self._pedestrian_spawn_prob:
+            if self._rng.random() > self._pedestrian_spawn_prob:
                 continue
 
-            zone = zones[random.choice(zone_indices)]
-            bp = random.choice(self._walker_blueprints)
+            zone = zones[zone_indices[int(self._rng.integers(len(zone_indices)))]]
+            bp = self._walker_blueprints[
+                int(self._rng.integers(len(self._walker_blueprints)))
+            ]
             if bp.has_attribute("is_invincible"):
                 bp.set_attribute("is_invincible", "false")
 
             walker = None
             for _ in range(5):
-                px = random.uniform(zone["x_min"], zone["x_max"])
-                py = random.uniform(zone["y_min"], zone["y_max"])
+                px = float(self._rng.uniform(zone["x_min"], zone["x_max"]))
+                py = float(self._rng.uniform(zone["y_min"], zone["y_max"]))
                 walker = world.try_spawn_actor(
                     bp,
                     carla.Transform(
                         carla.Location(x=px, y=py, z=z),
-                        carla.Rotation(yaw=random.uniform(0.0, 360.0)),
+                        carla.Rotation(yaw=float(self._rng.uniform(0.0, 360.0))),
                     ),
                 )
                 if walker is not None:
                     break
 
             if walker is not None:
-                heading_rad = random.uniform(0.0, 2.0 * math.pi)
+                heading_rad = float(self._rng.uniform(0.0, 2.0 * math.pi))
                 self.pedestrian_actors.append(walker)
                 self._pedestrian_headings.append(
                     (math.cos(heading_rad), math.sin(heading_rad), 0.0)
@@ -313,9 +331,9 @@ class NPCController:
 
         logger.debug("Spawned %d pedestrians.", len(self.pedestrian_actors))
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Per-step updates
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def update_patrol(
         self,
@@ -564,7 +582,7 @@ class NPCController:
                 self._pedestrian_headings[i] = (to_cx_n, to_cy_n, 0.0)
                 self._pedestrian_heading_steps[i] = 0
             elif self._pedestrian_heading_steps[i] >= self._pedestrian_resample_steps:
-                heading_rad = random.uniform(0.0, 2.0 * math.pi)
+                heading_rad = float(self._rng.uniform(0.0, 2.0 * math.pi))
                 self._pedestrian_headings[i] = (
                     math.cos(heading_rad),
                     math.sin(heading_rad),
@@ -578,9 +596,9 @@ class NPCController:
             control.speed = self._pedestrian_speed
             walker.apply_control(control)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Cleanup
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def cleanup(self) -> None:
         """
@@ -608,9 +626,31 @@ class NPCController:
         self._pedestrian_zones.clear()
         self._all_vehicle_actors.clear()
 
-    # ------------------------------------------------------------------
+    def forget_actors(self) -> None:
+        """
+        @brief Drop all NPC handles and per-episode state WITHOUT CARLA RPC.
+
+        Used after a CARLA server crash, when destroy() over RPC would time out
+        against a dead engine. Clears the same per-episode state as cleanup but
+        skips the actor.destroy() calls; the fresh server has no NPCs to remove.
+        @see NPCController.cleanup.
+        """
+        self.patrol_npcs.clear()
+        self.pedestrian_actors.clear()
+        self.patrol_npc_ids.clear()
+        self._patrol_waypoint_indices.clear()
+        self._patrol_waypoint_directions.clear()
+        self._patrol_waypoints_cache = []
+        self._patrol_pinned.clear()
+        self._pedestrian_headings.clear()
+        self._pedestrian_heading_steps.clear()
+        self._pedestrian_lifetime_steps.clear()
+        self._pedestrian_zones.clear()
+        self._all_vehicle_actors.clear()
+
+    # -----------------------------------------------------------------------
     # Private helpers
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _respawn_pedestrian(self, idx: int, vehicle: Any) -> None:
         """
@@ -633,7 +673,9 @@ class NPCController:
 
         z = 0.3 + 0.05
 
-        bp = random.choice(self._walker_blueprints)
+        bp = self._walker_blueprints[
+            int(self._rng.integers(len(self._walker_blueprints)))
+        ]
         if bp.has_attribute("is_invincible"):
             bp.set_attribute("is_invincible", "false")
 
@@ -676,16 +718,16 @@ class NPCController:
             )
             sectors = sectors[: max(1, n - excluded)]
 
-        chosen = random.choice(sectors)
+        chosen = sectors[int(self._rng.integers(len(sectors)))]
         walker = None
         for _ in range(5):
-            px = random.uniform(chosen[0], chosen[1])
-            py = random.uniform(chosen[2], chosen[3])
+            px = float(self._rng.uniform(chosen[0], chosen[1]))
+            py = float(self._rng.uniform(chosen[2], chosen[3]))
             walker = world.try_spawn_actor(
                 bp,
                 carla.Transform(
                     carla.Location(x=px, y=py, z=z),
-                    carla.Rotation(yaw=random.uniform(0.0, 360.0)),
+                    carla.Rotation(yaw=float(self._rng.uniform(0.0, 360.0))),
                 ),
             )
             if walker is not None:
@@ -702,7 +744,7 @@ class NPCController:
                 n,
             )
 
-        heading_rad = random.uniform(0.0, 2.0 * math.pi)
+        heading_rad = float(self._rng.uniform(0.0, 2.0 * math.pi))
         self._pedestrian_headings[idx] = (
             math.cos(heading_rad),
             math.sin(heading_rad),

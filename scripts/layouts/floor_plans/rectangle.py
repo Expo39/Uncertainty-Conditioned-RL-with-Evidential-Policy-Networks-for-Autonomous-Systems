@@ -3,12 +3,12 @@
 @brief Rectangle parking lot floor plan (60x45 m).
 """
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 from scripts.layouts.builder import LotBuilder, PatrolPath, PedestrianZone
 
 ORIGIN_X = 2.0
-ORIGIN_Y = 17.5
+ORIGIN_Y = 22.5
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
 OOD = False
@@ -17,9 +17,6 @@ OOD = False
 WIDTH = 42.5
 DEPTH = 60.0
 LEFT_X = -5.0
-CENTRE_BACK_GAP = 6.0  # Aisle between the two centre rows' back faces.
-CENTRE_X_OFFSET = 0.0  # Cluster x-shift from lot midline (centred).
-CENTRE_ROW_B_EXTRA = 1.0  # Extra cy bump on the angled centre row.
 
 # Walls (CCW polygon order: bottom -> right -> top -> left).
 WALL_BOTTOM = 0
@@ -36,99 +33,120 @@ def generate() -> Dict[str, Any]:
         name="rectangle",
         corners=[(LEFT_X, 0.0), (DEPTH, 0.0), (DEPTH, WIDTH), (LEFT_X, WIDTH)],
     )
-    dims_perp = lot.dims["perpendicular"]
-    dims_ang = lot.dims["angled"]
-
-    # ---------- Bays ---------------------------------------------------
-    centre_perp, centre_ang = _centre_rows(lot, dims_perp, dims_ang)
-    bottom_perp = lot.row_along_perimeter("perpendicular", n=12, wall=WALL_BOTTOM)
-    bottom_ang = lot.row_along_perimeter(
-        "angled",
-        n=7,
-        wall=WALL_BOTTOM,
-        bay_angle_deg=45.0,
-        pack_from="end",
-    )
-    left_perp = lot.row_along_perimeter(
+    # Bays
+    centre_perp = _centre_perp_row(lot)
+    # Runs from the right end of the original centred cluster leftward to the
+    # corner clearance, covering the full left portion of the top wall.
+    # start_along is measured from corners[WALL_TOP] (the right corner, x=DEPTH);
+    # 19.55 keeps the rightmost bay near the centred row's right edge while the
+    # leftmost bay clears the corner by the full wall_gap.
+    top_perp = lot.row_along_perimeter(
         "perpendicular",
-        n=7,
-        wall=WALL_LEFT,
-        start_along=2.0,  # Start near top wall, respecting perimeter gap.
+        n=13,
+        wall=WALL_TOP,
+        start_along=19.55,
     )
-    right_ang = lot.row_along_perimeter(
-        "angled",
-        n=6,
+    # Start 2 bay-widths from the left corner so the gap near spawn 1 is empty.
+    # Spawn 1 is hardcoded below to its original position (midpoint of
+    # left_perp.bays[-1] and the now-absent first bay) so it does not shift.
+    bottom_perp = lot.row_along_perimeter(
+        "perpendicular",
+        n=8,
+        wall=WALL_BOTTOM,
+        start_along=8.25,
+    )
+    bottom_right_perp = lot.row_along_perimeter(
+        "perpendicular",
+        n=5,
+        wall=WALL_BOTTOM,
+        pack_from="end",
+        # Default end clearance (bay_w/2 + wall_gap = 2.05) plus a 7 m inset, so
+        # the cluster sits 7 m left of the bottom-right corner.
+        start_along=10.05,
+    )
+    right_perp = lot.row_along_perimeter(
+        "perpendicular",
+        n=9,
         wall=WALL_RIGHT,
-        bay_angle_deg=45.0,
-        # Clear the bottom-wall angled row's footprint at the corner.
+        # Clear the bottom-wall row's footprint at the corner; runs up to the
+        # top-right corner (now free of the relocated motorcycle bays).
         start_along=14.0,
     )
     _motorcycle_corner_bays(lot)
 
-    # ---------- Spawns -------------------------------------------------
-    lot.spawn(x=-2.0, y=WIDTH / 2.0 - 5.0, yaw_deg=0.0, primary=True)
-    lot.spawn(x=DEPTH / 2.0, y=3.0, yaw_deg=90.0)
-    lot.spawn(x=52.0, y=38.5, yaw_deg=270.0)
+    # Spawns
+    # Spawn 2: midpoint of the last bottom-left bay and the last bottom-right bay.
+    # Spawn 3: midpoint of the top-wall row's right end and the right-wall row's
+    # top end, i.e. the open top-right corner (now free of the motorcycle bays).
+    # Spawn 1: fixed point in the open left aisle, facing into the lot.
+    s1_x, s1_y = -2.3, 12.625
+    s2_x, s2_y = _midpoint(bottom_perp.bays[-1], bottom_right_perp.bays[-1])
+    s3_x, s3_y = _midpoint(top_perp.bays[0], right_perp.bays[-1])
+    lot.spawn(x=s1_x, y=s1_y, yaw_deg=0.0, primary=True)
+    lot.spawn(x=s2_x, y=s2_y, yaw_deg=90.0)
+    lot.spawn(x=s3_x, y=s3_y, yaw_deg=270.0)
 
-    # ---------- Patrol path (4-waypoint CCW loop) ----------------------
-    # Loop the open aisles: lower aisle -> right aisle (in front of
-    # right-wall angled row) -> upper aisle -> left aisle (in front of
-    # new left-wall perp row). Top region is open driveway.
+    # Patrol path (4-waypoint CCW loop)
+    # Loop the open aisles: lower aisle (between bottom rows and the perp
+    # centre row) -> right aisle (in front of the right-wall row) -> upper
+    # aisle (between the perp centre row and the top-wall row) -> left aisle
+    # (in front of the left-wall row).
     patrol = PatrolPath()
-    centre_cluster = [centre_perp, centre_ang]
-    y_lower = patrol.aisle_y(below=[bottom_perp, bottom_ang], above=centre_perp)
-    y_upper = patrol.aisle_y(below=centre_ang, above=WIDTH)
-    x_left = patrol.aisle_x(left=left_perp, right=centre_cluster)
-    x_right = patrol.aisle_x(left=centre_cluster, right=right_ang)
+    y_lower = patrol.aisle_y(below=[bottom_perp, bottom_right_perp], above=centre_perp)
+    y_upper = patrol.aisle_y(below=centre_perp, above=top_perp)
+    # Left wall now has no bay row; anchor the left aisle just inside the wall.
+    x_left = patrol.aisle_x(left=LEFT_X + 1.5, right=centre_perp)
+    x_right = patrol.aisle_x(left=centre_perp, right=right_perp)
     patrol.add(x_left, y_lower)
     patrol.add(x_right, y_lower)
     patrol.add(x_right, y_upper)
     patrol.add(x_left, y_upper)
     lot.set_patrol(patrol)
 
-    # ---------- Pedestrian zones ---------------------------------------
+    # Pedestrian zones
     lot.add_zone(PedestrianZone.along_row(bottom_perp, side="north"))
-    lot.add_zone(PedestrianZone.along_row(bottom_ang, side="north"))
-    lot.add_zone(PedestrianZone.along_row(left_perp, side="east"))
-    lot.add_zone(PedestrianZone.between_rows(centre_perp, centre_ang))
-    lot.add_zone(PedestrianZone.along_row(centre_ang, side="north"))
+    lot.add_zone(PedestrianZone.along_row(bottom_right_perp, side="north"))
+    lot.add_zone(PedestrianZone.between_rows(centre_perp, top_perp))
+    # Top row sits flush against the top wall, noses facing south into the lot;
+    # the walkway hugs its nose face.
+    lot.add_zone(PedestrianZone.along_row(top_perp, side="nose"))
 
     return lot.build()
 
 
-def _centre_rows(lot: LotBuilder, dims_perp, dims_ang):
-    """@brief Place the two heterogeneous centre rows back-to-back."""
-    centre_x = DEPTH / 2.0 + CENTRE_X_OFFSET - 3.0
-    centre_y = WIDTH / 2.0 + 2.5
-    row_a = lot.row_centred(
+def _centre_perp_row(lot: LotBuilder):
+    """@brief Place the perpendicular centre row through the lot centre."""
+    centre_x = (LEFT_X + DEPTH) / 2.0
+    centre_y = WIDTH / 2.0
+    return lot.row_centred(
         bay_type="perpendicular",
         n=12,
-        centre=(centre_x, centre_y - CENTRE_BACK_GAP / 2.0 - dims_perp["depth"] / 2.0),
+        centre=(centre_x, centre_y),
         direction="east",
         yaw_deg=90.0,
     )
-    row_b = lot.row_centred(
-        bay_type="angled",
-        n=8,
-        centre=(
-            centre_x,
-            centre_y
-            + CENTRE_BACK_GAP / 2.0
-            + dims_ang["depth"] / 2.0
-            + CENTRE_ROW_B_EXTRA,
-        ),
-        direction="east",
-        yaw_deg=225.0,
-        spacing=dims_ang["width"] / 0.7071067811865475,
+
+
+def _midpoint(bay_a: Dict[str, Any], bay_b: Dict[str, Any]) -> Tuple[float, float]:
+    """@brief Local-frame midpoint between two bay centres."""
+    return (
+        (bay_a["local_x"] + bay_b["local_x"]) / 2.0,
+        (bay_a["local_y"] + bay_b["local_y"]) / 2.0,
     )
-    return row_a, row_b
 
 
-def _motorcycle_corner_bays(lot: LotBuilder):
-    """@brief Place the two always-empty motorcycle bays in the top-right corner."""
-    cx = DEPTH - 3.0 / 2.0 - lot.wall_gap
-    cy_top = WIDTH - 1.5 / 2.0 - lot.wall_gap - 1.0
-    for cy, occupant in ((cy_top, "Kawasaki Ninja"), (cy_top - 1.5, "Yamaha YZF-R")):
+def _motorcycle_corner_bays(
+    lot: LotBuilder,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """
+    @brief Place the two always-empty motorcycle bays in the bottom-left corner.
+    @return The (lower, upper) motorcycle bay dicts in placement order.
+    """
+    # Backs to the left wall (nose east into the lot), stacked just above the
+    # bottom-left corner clearance.
+    cx = LEFT_X + 3.0 / 2.0 + lot.wall_gap
+    cy_bottom = 1.5 / 2.0 + lot.wall_gap + 1.0
+    groups = [
         lot.place_bay(
             bay_type="motorcycle",
             x=cx,
@@ -138,3 +156,9 @@ def _motorcycle_corner_bays(lot: LotBuilder):
             depth=3.0,
             bay_extras={"always_empty": True, "occupant": occupant},
         )
+        for cy, occupant in (
+            (cy_bottom, "Kawasaki Ninja"),
+            (cy_bottom + 1.5, "Yamaha YZF-R"),
+        )
+    ]
+    return groups[0].bays[0], groups[1].bays[0]

@@ -54,17 +54,22 @@ def validate_covariance_matrix(cov_matrix: np.ndarray) -> bool:
 
     A valid covariance matrix must be:
     1. Symmetric: C = C^T
-    2. Positive semi-definite: Cholesky factorisation succeeds
+    2. Positive semi-definite: all eigenvalues >= 0
+
+    Positive semi-definiteness is tested via the symmetric eigenvalue
+    decomposition rather than Cholesky factorisation. Cholesky requires
+    strict positive-definiteness and so rejects valid PSD matrices with
+    zero eigenvalues (e.g. an EKF reporting zero covariance before any
+    measurement update).
     """
     if cov_matrix.shape[0] != cov_matrix.shape[1]:
         return False
     if not np.allclose(cov_matrix, cov_matrix.T):
         return False
-    try:
-        np.linalg.cholesky(cov_matrix)
-        return True
-    except np.linalg.LinAlgError:
-        return False
+    # eigvalsh is for symmetric matrices; symmetry is already confirmed above.
+    eigenvalues = np.linalg.eigvalsh(cov_matrix)
+    # Small negative tolerance absorbs floating-point round-off in eigvalsh.
+    return bool(np.all(eigenvalues >= -1e-9))
 
 
 def make_diagonal_covariance(diag: List[float]) -> List[float]:

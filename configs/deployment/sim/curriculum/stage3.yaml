@@ -1,0 +1,31 @@
+# Curriculum Stage 3 - all 47 bays (allowed_bay_ids omitted). Resume from Stage 2.
+# Primary axis: bay variety reaches the full lot.
+
+use_extra_spawns: false
+bay_margin: -0.4
+
+parking_scenarios:
+  fixed_floor_plan: rectangle
+  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  # allowed_bay_ids omitted: all eligible bays.
+  bay_occupancy_min: 0.1
+  bay_occupancy_max: 0.1
+
+carla_sensors:
+  lidar:
+    noise:
+      enabled: true  # Constant realism floor (on in every stage).
+
+# Identical standard/evidential blocks - see Stage 1.
+standard_overrides:
+  stage_timesteps: 2000000
+  learning_rate: 0.00015
+  learning_rate_final: 0.00004
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005
+evidential_overrides:
+  stage_timesteps: 2000000
+  learning_rate: 0.00015
+  learning_rate_final: 0.00004
+  ent_coef: 0.0015
+  ent_coef_final: 0.0005

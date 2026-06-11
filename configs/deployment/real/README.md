@@ -1,9 +1,10 @@
 # configs/deployment/real/
 
 Real-vehicle deployment configs. These files are placeholders until the test site is
-instrumented and a calibration run is performed. Set `real_world_deployment: true` in
-`configs/deployment/agent_config.yaml` to activate datum-based EKF frame calibration
-and actuation calibration on the real vehicle.
+instrumented and a calibration run is performed. The deployment path loads the
+`real_world_datum` and `actuation_calibration` files referenced in
+`configs/deployment/agent_config.yaml` to calibrate the EKF frame and actuators on
+the real vehicle.
 
 ## Files
 
@@ -20,8 +21,8 @@ Before any real-vehicle deployment run:
 - [ ] `cp real_world_datum.yaml.example real_world_datum.yaml` and fill in the surveyed UTM easting/northing and heading of the reference marker.
 - [ ] Run actuation calibration and update `actuation_calibration.yaml` with measured gains and deadbands.
 - [ ] Set `mission.yaml`: correct `target_bay_id` and `layout_file` for this run.
-- [ ] Confirm `agent_config.yaml` flags (`include_covariance`, `include_obstacle_obs`) match the checkpoint being deployed.
-- [ ] Set `real_world_deployment: true` in `agent_config.yaml`.
+- [ ] Confirm `agent_config.yaml`'s `baseline:` names the baseline the deployed checkpoint was trained as (its `include_covariance` / `include_obstacle_obs` / `policy_type` must match the checkpoint).
+- [ ] Confirm `agent_config.yaml`'s `real_world_datum` / `actuation_calibration` point at the filled-in files for this site.
 - [ ] Confirm RTK-GNSS antenna has clear sky visibility from the deployment site.
 
 ## `real_world_datum.yaml`
@@ -56,4 +57,4 @@ layout YAML, and `layout_file` to the path of the corresponding layout.
 
 - [configs/deployment/README.md](../README.md) - shared sensor and agent configs
 - [uncertainty_rl/envs/real/README.md](../../../uncertainty_rl/envs/real/README.md) - `RealWorldDeployment` and `RealWorldInferenceLoop`
-- [docs/detailed_notes/real_world_deployment.md](../../../docs/detailed_notes/real_world_deployment.md) - deployment architecture and sim-to-real transfer
+- [docs/detailed_notes/deployment/real_world_deployment.md](../../../docs/detailed_notes/deployment/real_world_deployment.md) - deployment architecture and sim-to-real transfer

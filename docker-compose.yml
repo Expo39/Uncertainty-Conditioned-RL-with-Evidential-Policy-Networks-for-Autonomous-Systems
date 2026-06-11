@@ -15,17 +15,26 @@ services:
       args:
         PYTORCH_VERSION: 24.10-py3
     container_name: uncertainty-rl-training
+    user: "${UID}:${GID}"
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
+      # Training and CARLA share one GPU; CARLA leaks VRAM over long runs, so the
+      # caching allocator can fragment and a later allocation lands on a bad
+      # address (CUDA "illegal memory access" at the next sync). expandable
+      # segments let the allocator grow/shrink contiguous regions instead of
+      # fragmenting, reducing that failure mode at near-zero speed cost.
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     networks:
       - uncertainty-rl-network
     volumes:
       - ./uncertainty_rl:/workspace/uncertainty_rl:ro
-      - ./configs:/workspace/configs:ro
+      # configs/ is rw so tune_hyperparams.py can write the best trial's params
+      # back into train_config.yaml at end of study.
+      - ./configs:/workspace/configs:rw
       - ./scripts:/workspace/scripts:ro
       - ./logs:/workspace/logs:rw
       - ./checkpoints:/workspace/checkpoints:rw
@@ -52,13 +61,23 @@ services:
       args:
         PYTORCH_VERSION: 24.10-py3
     container_name: uncertainty-rl-demo
+    user: "${UID}:${GID}"
     runtime: nvidia
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
-      - CARLA_HOST=carla-server-0
+      # HOME points at the writable outputs/ mount so the CARLA Python client
+      # (and matplotlib, etc.) can create their per-user caches. Without this,
+      # HOME defaults to "/" for non-root UIDs and CARLA tries to write
+      # "//carlaCache/0.9.16/..." which fails.
+      - HOME=/workspace/outputs
+      - MPLCONFIGDIR=/workspace/outputs/.matplotlib
+      # CARLA_HOST is intentionally not set here: demo_drive.py falls back to
+      # carla_host in env_config.yaml ("uncertainty-rl-carla-0"), which is the
+      # actual worker 0 container alias. Hardcoding "carla-server-0" here would
+      # override the config with a hostname that does not resolve.
       - CARLA_PORT=2000
     networks:
       - uncertainty-rl-network

@@ -6,7 +6,7 @@
 import math
 import threading
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 import numpy as np
 
@@ -21,6 +21,20 @@ except ImportError:
 from scripts.inspect._drawing import _draw_layout_overlays
 from scripts.inspect.inspectors.base import _Inspector, _read_live_tier
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+from uncertainty_rl.utils.constants import (
+    COVARIANCE_FEATURES_DIM,
+    OBS_OBSTACLE_BEARING_SCALE,
+    OBS_OBSTACLE_DIST_SCALE,
+    OBS_SPEED_SCALE,
+    OBS_STD_POS_SCALE,
+    OBS_STD_YAW_SCALE,
+    OBS_TARGET_POS_SCALE,
+    OBS_TARGET_YAW_SCALE,
+    OBS_YAW_RATE_SCALE,
+    OBSTACLE_FEATURES_DIM,
+    TARGET_POSE_DIM,
+    VEHICLE_STATE_DIM,
+)
 from uncertainty_rl.utils.geometry import wrap_angle_symmetric
 
 # ---------------------------------------------------------------------------
@@ -31,6 +45,7 @@ _ANSI_WHITE = "\033[97m"
 _ANSI_YELLOW = "\033[33m"
 _ANSI_RED = "\033[31m"
 _ANSI_CYAN = "\033[36m"
+_ANSI_GREEN = "\033[32m"
 _ANSI_RESET = "\033[0m"
 
 # ---------------------------------------------------------------------------
@@ -43,16 +58,21 @@ class KeyboardController:
     @class KeyboardController
     @brief Latching TTY keyboard input for manual dryrun control.
 
-    Key bindings (action space: [steer, drive], drive bipolar):
-      Up arrow   - increase drive (positive = throttle)
-      Down arrow - decrease drive (negative = brake; no reverse gear)
+    Key bindings (action space: [steer, throttle, brake]):
+      Up arrow   - more throttle / release brake (single bipolar pedal)
+      Down arrow - more brake / release throttle (no reverse gear)
       Left/Right - steer left / right
-      Space      - full stop (zero both axes)
+      Space      - full stop (zero throttle and steer, full brake)
       Ctrl+C     - quit
+
+    @note The Up/Down keys drive an internal bipolar `_pedal` value in [-1, 1];
+          get_action() maps it to the separate throttle (>=0) and brake (>=0)
+          axes the env now expects. This keeps the one-pedal feel for manual
+          driving while emitting the 3-dim action.
     """
 
     _STEER_STEP: float = 0.1
-    _DRIVE_STEP: float = 0.1
+    _PEDAL_STEP: float = 0.1
 
     def __init__(self) -> None:
         """@brief Initialise controller with zeroed latched state."""
@@ -60,7 +80,7 @@ class KeyboardController:
         import tty  # noqa: F401
 
         self._steer: float = 0.0
-        self._drive: float = 0.0
+        self._pedal: float = 0.0  # bipolar: +ve = throttle, -ve = brake
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -81,12 +101,15 @@ class KeyboardController:
 
     def get_action(self) -> np.ndarray:
         """
-        @brief Return the current latched [steer, drive] action.
-        @return numpy array of shape (2,) with steer and drive in [-1, 1].
-                drive is bipolar: positive = throttle, negative = brake.
+        @brief Return the current latched [steer, throttle, brake] action.
+        @return numpy array of shape (3,). steer in [-1, 1]; throttle and brake
+                in [0, 1]. The internal bipolar pedal maps to a positive
+                throttle (pedal >= 0) or a positive brake (pedal < 0).
         """
         with self._lock:
-            return np.array([self._steer, self._drive], dtype=np.float32)
+            throttle = max(0.0, self._pedal)
+            brake = max(0.0, -self._pedal)
+            return np.array([self._steer, throttle, brake], dtype=np.float32)
 
     def _read_loop(self) -> None:
         """@brief Read raw escape sequences from stdin and update latched state."""
@@ -118,19 +141,20 @@ class KeyboardController:
                     os.kill(os.getpid(), signal.SIGINT)
                     break
                 if ch == " ":
+                    # Space: zero steer/throttle and apply full brake.
                     with self._lock:
                         self._steer = 0.0
-                        self._drive = 0.0
+                        self._pedal = -1.0
                 elif ch == "\x1b":
                     rest = sys.stdin.read(2)
                     seq = ch + rest
                     with self._lock:
                         if seq == "\x1b[A":
                             # Up arrow: more throttle (or release brake)
-                            self._drive = min(1.0, self._drive + self._DRIVE_STEP)
+                            self._pedal = min(1.0, self._pedal + self._PEDAL_STEP)
                         elif seq == "\x1b[B":
                             # Down arrow: more brake (or release throttle)
-                            self._drive = max(-1.0, self._drive - self._DRIVE_STEP)
+                            self._pedal = max(-1.0, self._pedal - self._PEDAL_STEP)
                         elif seq == "\x1b[D":
                             self._steer = max(-1.0, self._steer - self._STEER_STEP)
                         elif seq == "\x1b[C":
@@ -154,7 +178,7 @@ class DryRunInspector(_Inspector):
            forward action or keyboard control, no model.  Spectator follows the ego.
     """
 
-    _LOG_INTERVAL: int = 50  # steps between console obs prints
+    _LOG_INTERVAL: int = 50  # env steps between console obs prints
 
     def __init__(
         self,
@@ -168,13 +192,15 @@ class DryRunInspector(_Inspector):
     ) -> None:
         """
         @brief Construct the dry-run inspector.
-        @param env: Pre-reset CARLAParkingEnv with include_covariance=True.
+        @param env: Pre-reset CARLAParkingEnv. Its include_covariance /
+               include_obstacle_obs flags set the obs layout the console prints.
         @param duration: Maximum wall-clock seconds to run (across all episodes).
         @param n_episodes: Stop after this many episodes; None = run until duration.
-        @param dryrun_action: Fixed [steer, drive] to apply each step. drive
-               is bipolar: positive = throttle, negative = brake.
+        @param dryrun_action: Fixed [steer, throttle, brake] to apply each step.
+               steer in [-1, 1]; throttle and brake in [0, 1].
                None = action_space.sample(). Ignored when manual=True.
-        @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free'.
+        @param initial_view: One of 'third_person', 'side', 'back', 'front', 'free',
+               'birds_eye'.
         @param termination_pause: Seconds to hold scene after episode ends.
         @param manual: If True, use keyboard arrow keys instead of random/fixed action.
         """
@@ -187,7 +213,8 @@ class DryRunInspector(_Inspector):
         )
         self._view: str = (
             initial_view
-            if initial_view in ("third_person", "side", "back", "front", "free")
+            if initial_view
+            in ("third_person", "side", "back", "front", "free", "birds_eye")
             else "third_person"
         )
         self._termination_pause = termination_pause
@@ -195,9 +222,9 @@ class DryRunInspector(_Inspector):
             KeyboardController() if manual else None
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Spectator placement
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def place_spectator(self) -> None:
         """
@@ -266,6 +293,17 @@ class DryRunInspector(_Inspector):
                     ),
                 )
             )
+        elif self._view == "birds_eye":
+            # Top-down chase cam. Pitch is -89 (not -90) to avoid the gimbal-lock
+            # singularity where yaw becomes degenerate and the image spins on
+            # every tiny vehicle-yaw oscillation. Matching yaw to the vehicle
+            # keeps the car's forward direction aligned with screen up.
+            spectator.set_transform(
+                carla.Transform(
+                    carla.Location(x=vx, y=vy, z=vz + 30.0),
+                    carla.Rotation(pitch=-89.0, yaw=vyaw),
+                )
+            )
         elif self._view == "back":
             spectator.set_transform(
                 carla.Transform(
@@ -290,22 +328,50 @@ class DryRunInspector(_Inspector):
                 )
             )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Observation logging
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
-    def _print_obs(self, obs: Any, step: int, episode: int) -> None:
+    def _print_obs(
+        self,
+        obs: Any,
+        step: int,
+        episode: int,
+        info: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """
         @brief Print key observation values to the console for diagnosis.
 
         WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic.
 
-        @param obs: Observation array from env.step() or env.reset().
+        The obs layout depends on the env's ablation flags, so indices are computed
+        from include_covariance / include_obstacle_obs rather than hardcoded - the
+        dryrun shows exactly what the policy receives at train time. With covariance
+        off (vanilla_ppo / output_uncertainty baselines) the obs carries no std_*
+        block, so the cov line and the EKF-std diagnostic are suppressed.
+
+        Layout: [speed, vyaw] (+[std_x, std_y, std_yaw] if include_covariance)
+        + [dx, dy, dyaw] (+5 hemispheric obstacle dims if include_obstacle_obs).
+
+        Every WHITE line shows the NORMALISED values exactly as the model
+        receives them (the env returns the obs already scaled by the
+        constants.py OBS_*_SCALE divisors and clipped to +/-OBS_NORM_CLIP),
+        followed by the descaled physical equivalent in brackets.
+
+        @param obs: Normalised observation array from env.step() or env.reset().
         @param step: Current step within the episode.
         @param episode: Current episode index.
+        @param info: Optional info dict from env.step().
         """
-        if obs is None or len(obs) < 3:
+        if obs is None or len(obs) < 2:
             return
+
+        # Resolve obs slice offsets from the env's actual flags (what trains).
+        inc_cov = bool(getattr(self._env, "_include_covariance", True))
+        inc_obs = bool(getattr(self._env, "_include_obstacle_obs", True))
+        cov_start = VEHICLE_STATE_DIM
+        tgt_start = cov_start + (COVARIANCE_FEATURES_DIM if inc_cov else 0)
+        obstacle_start = tgt_start + TARGET_POSE_DIM
 
         W = _ANSI_WHITE
         Y = _ANSI_YELLOW
@@ -324,23 +390,40 @@ class DryRunInspector(_Inspector):
             + "-" * 28
         )
 
-        lines.append(W + f"vel  vyaw={math.degrees(obs[0]):+.1f}deg/s" + X)
+        # Model inputs: speed + vyaw (the first two slots of the obs vector),
+        # normalised value first, physical equivalent in brackets.
+        _spd = float(obs[0])
+        _vyaw = float(obs[1])
+        lines.append(
+            W + f"vel  spd={_spd:+.3f} ({_spd * OBS_SPEED_SCALE:+.2f}m/s)  "
+            f"vyaw={_vyaw:+.3f} "
+            f"({math.degrees(_vyaw * OBS_YAW_RATE_SCALE):+.1f}deg/s)" + X
+        )
 
+        gt_speed = 0.0
+        gt_vyaw_rad = 0.0
         if self._env.vehicle is not None:
             t = self._env.vehicle.get_transform()
             v = self._env.vehicle.get_velocity()
-            spd = math.hypot(v.x, v.y)
+            av = self._env.vehicle.get_angular_velocity()
+            gt_speed = math.hypot(v.x, v.y)
+            # Negated to put left-turn positive (REP-103), matching obs[1].
+            gt_vyaw_rad = -math.radians(av.z)
             lines.append(
                 Y + f"GT   pos=({t.location.x:.2f},{t.location.y:.2f})"
-                f"  yaw={t.rotation.yaw:+.1f}deg  spd={spd:.2f}m/s" + X
+                f"  yaw={t.rotation.yaw:+.1f}deg"
+                f"  spd={gt_speed:.2f}m/s"
+                f"  vyaw={math.degrees(gt_vyaw_rad):+.1f}deg/s" + X
             )
 
         if self._env._cov_subscriber is not None:
             ekf_pose = self._env._cov_subscriber.get_latest_pose()
             if ekf_pose is not None:
                 ekf_x = float(ekf_pose[0])
-                ekf_y = -float(ekf_pose[1])
+                ekf_y = float(ekf_pose[1])
                 ekf_yaw = float(ekf_pose[2])
+                ekf_vyaw = float(ekf_pose[3])
+                ekf_vx = float(ekf_pose[4]) if len(ekf_pose) > 4 else 0.0
                 lines.append(
                     R + f"EKF(odom)   x={ekf_x:.2f}  y={ekf_y:.2f}"
                     f"  yaw={math.degrees(ekf_yaw):+.1f}deg" + X
@@ -353,43 +436,78 @@ class DryRunInspector(_Inspector):
                     R + f"EKF(world)  x={wx:.2f}  y={wy:.2f}"
                     f"  yaw={math.degrees(wyaw_rad):+.1f}deg" + X
                 )
+                # EKF vs GT kinematic deltas (verification signal).
+                lines.append(
+                    R + f"delta  spd={ekf_vx - gt_speed:+.3f}m/s"
+                    f"  vyaw={math.degrees(ekf_vyaw - gt_vyaw_rad):+.2f}deg/s" + X
+                )
 
-        if len(obs) >= 4:
-            lines.append(W + f"cov  std=({obs[1]:.3f},{obs[2]:.3f},{obs[3]:.3f})" + X)
-
-        if len(obs) >= 7:
+        # Covariance block is in the obs ONLY when include_covariance is set; for
+        # vanilla_ppo / output_uncertainty it is absent, so do not print it.
+        if inc_cov and len(obs) >= cov_start + COVARIANCE_FEATURES_DIM:
+            _sx = float(obs[cov_start])
+            _sy = float(obs[cov_start + 1])
+            _syaw = float(obs[cov_start + 2])
             lines.append(
-                W + f"tgt  dx={obs[4]:+.2f}m  dy={obs[5]:+.2f}m"
-                f"  dyaw={math.degrees(obs[6]):+.1f}deg" + X
+                W + f"cov  std=({_sx:.3f},{_sy:.3f},{_syaw:.3f}) "
+                f"({_sx * OBS_STD_POS_SCALE:.2f}m,"
+                f"{_sy * OBS_STD_POS_SCALE:.2f}m,"
+                f"{math.degrees(_syaw * OBS_STD_YAW_SCALE):.1f}deg)" + X
+            )
+
+        if len(obs) >= tgt_start + TARGET_POSE_DIM:
+            _dx = float(obs[tgt_start])
+            _dy = float(obs[tgt_start + 1])
+            _dyaw = float(obs[tgt_start + 2])
+            lines.append(
+                W + f"tgt  dx={_dx:+.3f} ({_dx * OBS_TARGET_POS_SCALE:+.2f}m)"
+                f"  dy={_dy:+.3f} ({_dy * OBS_TARGET_POS_SCALE:+.2f}m)"
+                f"  dyaw={_dyaw:+.3f} "
+                f"({math.degrees(_dyaw * OBS_TARGET_YAW_SCALE):+.1f}deg)" + X
             )
 
         gt = self._env._target_bay
         _, _, _, _, r = self._env._ekf_odom_offset
 
-        ekf_std = 0.0
-        if self._env._cov_subscriber is not None:
-            _, unc = self._env._cov_subscriber.get_latest_state()
-            if unc is not None:
-                ekf_std = float(max(unc[0], unc[1]))
-
-        lines.append(
+        # ekf_std is the raw EKF covariance diagnostic. Only meaningful when the
+        # policy actually consumes covariance, so suppress it (like the cov line)
+        # for baselines with include_covariance off - the dryrun then shows only
+        # what the trained policy sees.
+        bay_line = (
             Y + f"bay  world=({gt['x']:.2f},{gt['y']:.2f})"
             f"  yaw={math.degrees(gt['yaw']):+.1f}deg"
-            f"  ekf_std={ekf_std:.3f}m  r={math.degrees(r):+.1f}deg" + X
         )
+        if inc_cov:
+            ekf_std = 0.0
+            if self._env._cov_subscriber is not None:
+                _, unc = self._env._cov_subscriber.get_latest_state()
+                if unc is not None:
+                    ekf_std = float(max(unc[0], unc[1]))
+            bay_line += f"  ekf_std={ekf_std:.3f}m"
+        bay_line += f"  r={math.degrees(r):+.1f}deg" + X
+        lines.append(bay_line)
 
-        if len(obs) >= 12:
+        if inc_obs and len(obs) >= obstacle_start + OBSTACLE_FEATURES_DIM:
+            _ld = float(obs[obstacle_start])
+            _lb = float(obs[obstacle_start + 1])
+            _rd = float(obs[obstacle_start + 2])
+            _rb = float(obs[obstacle_start + 3])
+            _fd = float(obs[obstacle_start + 4])
             lines.append(
-                W + f"obs  L={obs[7]:.2f}m({math.degrees(obs[8]):+.1f}deg)"
-                f"  R={obs[9]:.2f}m({math.degrees(obs[10]):+.1f}deg)"
-                f"  F={obs[11]:.2f}m" + X
+                W + f"obs  L=({_ld:.3f},{_lb:+.3f}) "
+                f"({_ld * OBS_OBSTACLE_DIST_SCALE:.1f}m,"
+                f"{math.degrees(_lb * OBS_OBSTACLE_BEARING_SCALE):+.1f}deg)"
+                f"  R=({_rd:.3f},{_rb:+.3f}) "
+                f"({_rd * OBS_OBSTACLE_DIST_SCALE:.1f}m,"
+                f"{math.degrees(_rb * OBS_OBSTACLE_BEARING_SCALE):+.1f}deg)"
+                f"  F={_fd:.3f} ({_fd * OBS_OBSTACLE_DIST_SCALE:.1f}m)" + X
             )
 
         print("\n" + "\n".join(lines))
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Overlay drawing
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _draw_overlays(self, life_time: float) -> None:
         """
@@ -398,16 +516,22 @@ class DryRunInspector(_Inspector):
         """
         if self._env.world is None or not self._env._current_layout:
             return
+        # Mirror the env's own scenario settings so the overlay shows only what
+        # the agent actually trains with: patrol path and pedestrian zones only
+        # when enabled, plus the soft out-of-bounds boundary.
         _draw_layout_overlays(
             self._env.world,
             self._env._current_layout,
             self._env._target_bay.get("bay_id", ""),
             life_time,
+            show_patrol=self._env._num_patrol_max > 0,
+            show_pedestrians=self._env._pedestrian_spawn_prob > 0.0,
+            oob_inflation_margin=self._env._oob_inflation_margin,
         )
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Run loop
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def run(self) -> None:
         """
@@ -438,14 +562,32 @@ class DryRunInspector(_Inspector):
             f"Dry-run: {mode_desc} for up to {self._duration}s"
             + (f" / {self._n_episodes} episodes." if self._n_episodes else ".")
         )
-        print(
-            "\nModel inputs per step (12-dim obs):"
-            "\n  [0]    vel: vyaw"
-            "\n  [1-3]  cov: std(x,y,yaw)"
-            "\n  [4-6]  tgt: dx dy dyaw (ego-relative)"
-            "\n  [7-11] obs: L(dist,bear)  R(dist,bear)  F(dist)"
-            "\n  bay/EKF lines are diagnostic only (not fed to model)"
+        # Legend reflects the active obs layout (depends on the ablation flags), so
+        # the cov / obstacle rows only appear when those blocks are in the obs.
+        inc_cov = bool(getattr(self._env, "_include_covariance", True))
+        inc_obs = bool(getattr(self._env, "_include_obstacle_obs", True))
+        i = VEHICLE_STATE_DIM
+        legend = [f"\nModel inputs per step ({self._env._compute_obs_dim()}-dim obs):"]
+        legend.append(f"\n  [0-{i - 1}]   vel: speed, vyaw")
+        if inc_cov:
+            legend.append(
+                f"\n  [{i}-{i + COVARIANCE_FEATURES_DIM - 1}]   cov: std(x, y, yaw)"
+            )
+            i += COVARIANCE_FEATURES_DIM
+        legend.append(
+            f"\n  [{i}-{i + TARGET_POSE_DIM - 1}]   tgt: dx dy dyaw (ego-relative)"
         )
+        i += TARGET_POSE_DIM
+        if inc_obs:
+            legend.append(
+                f"\n  [{i}-{i + OBSTACLE_FEATURES_DIM - 1}]  obs: "
+                "L(dist, bear)  R(dist, bear)  F(dist)"
+            )
+        legend.append(
+            "\n  white lines: normalised model input, physical value in brackets"
+        )
+        legend.append("\n  bay/EKF lines are diagnostic only (not fed to model)")
+        print("".join(legend))
 
         try:
             while time.monotonic() < deadline:
@@ -482,7 +624,7 @@ class DryRunInspector(_Inspector):
                         _ep = self._env._cov_subscriber.get_latest_pose()
                         if _ep is not None:
                             _ep0 = float(_ep[0])
-                            _ep1 = -float(_ep[1])
+                            _ep1 = float(_ep[1])
                             _ep2 = float(_ep[2])
                             _tx, _ty, _cr, _sr, _rr = self._env._ekf_odom_offset
                             _wx = _cr * _ep0 - _sr * _ep1 + _tx
@@ -504,12 +646,14 @@ class DryRunInspector(_Inspector):
                             _rmse_yaw_sq += _yaw_err * _yaw_err
                             _rmse_n += 1
 
-                    time.sleep(self._env._action_repeat * self._env._carla_timestep)
+                    # One env.step() spans action_repeat sim ticks; sleep the
+                    # matching wall time so manual driving stays real-time.
+                    time.sleep(self._env._carla_timestep * self._env._action_repeat)
                     self._update_spectator()
 
                     if step % self._LOG_INTERVAL == 0:
                         self._draw_overlays(life_time=self._OVERLAY_LIFE)
-                        self._print_obs(obs, step, episode)
+                        self._print_obs(obs, step, episode, info=info)
                     _latest_obs = obs
 
                 if info.get("success", False):
@@ -535,7 +679,7 @@ class DryRunInspector(_Inspector):
                     f"  steps={step}  total_steps={total_steps}  " + _rmse_str
                 )
                 print("--- Final observation ---")
-                self._print_obs(obs, step, episode)
+                self._print_obs(obs, step, episode, info=info)
 
                 if self._termination_pause > 0:
                     print(

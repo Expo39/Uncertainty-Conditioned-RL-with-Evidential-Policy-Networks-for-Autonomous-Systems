@@ -2,8 +2,6 @@
 # Consumed by GnssNoiseRelayNode. Tier is sampled each reset(); noise injected
 # into NavSatFix.position_covariance so the EKF receives correctly scaled
 # measurement noise.
-#
-# See documentation/detailed_notes/sensor_noise_models.md for full derivation.
 
 tiers:
   rtk_fixed:
@@ -13,6 +11,7 @@ tiers:
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
     metric_stddev_m: 0.020
+    doppler_stddev_ms: 0.05  # m/s - ZED-F9P data-sheet velocity accuracy
     weight: 0.3
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
@@ -23,6 +22,7 @@ tiers:
     lon_stddev_deg: 0.0000032
     alt_stddev_m: 0.5
     metric_stddev_m: 0.360
+    doppler_stddev_ms: 0.08  # m/s - mild jitter from correlated signal environment
     weight: 0.3
     description: "RTK float (~36 cm). Marginal accuracy for 2.5 m bays."
 
@@ -33,6 +33,7 @@ tiers:
     lon_stddev_deg: 0.0000162
     alt_stddev_m: 5.0
     metric_stddev_m: 1.802
+    doppler_stddev_ms: 0.15  # m/s - conservative for suboptimal sky view
     weight: 0.25
     description: "Standalone GNSS (~1.8 m). RTK lost; parking unsafe."
 
@@ -42,15 +43,21 @@ tiers:
     lon_stddev_deg: 0.0000449
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
+    doppler_stddev_ms: 0.40  # m/s - heavy multipath degrades tracking loops
     weight: 0.15
     description: "Degraded GNSS (~5 m). Policy must abort/handoff."
 
 # Per-step transition matrix at GNSS callback rate (20 Hz).
 # Rows = from-tier, columns = to-tier in the order of the named keys.
-#
-# See documentation/detailed_notes/sensor_noise_models.md for derivation.
+# Ladder-only (neighbour transitions): degradation walks fixed->float->standalone->
+# degraded and recovers up the same rungs, never skipping a tier. At every off-fixed
+# rung the upward (recovery) probability exceeds the downward (degradation) one, so the
+# chain is fixed-dominant (~80% rtk_fixed long-run) and any excursion recovers within a
+# few seconds - a healthy open-sky RTK receiver, not a chronically degraded one. This
+# keeps degraded states transient and recoverable, so waiting-for-recovery is a learnable
+# behaviour rather than an unwinnable episode. @see documentation/CURRICULUM_PLAN.md.
 transition_matrix:
-  rtk_fixed:  [0.9958, 0.0042, 0.0000, 0.0000]   # mean dwell 11.9 s
-  rtk_float:  [0.0042, 0.9928, 0.0030, 0.0000]   # mean dwell  6.9 s
-  standalone: [0.0000, 0.0036, 0.9928, 0.0036]   # mean dwell  6.9 s
-  degraded:   [0.0000, 0.0000, 0.0060, 0.9940]   # mean dwell  8.3 s
+  rtk_fixed:  [0.9920, 0.0080, 0.0000, 0.0000]   # leave fix ~0.8%/step (excursion onset)
+  rtk_float:  [0.0400, 0.9550, 0.0050, 0.0000]   # recover 0.040 >> degrade 0.005
+  standalone: [0.0000, 0.0175, 0.9800, 0.0025]   # recover 0.0175 >> degrade 0.0025 (dwell ~2.5s)
+  degraded:   [0.0000, 0.0000, 0.0300, 0.9700]   # climb back out 0.030 (dwell ~1.7s)

@@ -67,7 +67,23 @@ _BAY_STYLE_DEFAULT: Tuple[Any, int] = (_C_PERP_BAY, 1)
 _LEGEND_W = 180
 _MAP_W = 900
 _WINDOW_W = _MAP_W + _LEGEND_W
-_WINDOW_H = 900
+# Map area height. The HUD is drawn in a separate band BELOW the map, not
+# overlaid on it, so the window is taller than the map by _HUD_BAND_H.
+#
+# _MAP_H is only the INITIAL height (used for the waiting splash). Once the
+# first frame arrives, _compute_viewport() resizes the map area to the lot's
+# aspect ratio so a wide-and-short lot does not leave a tall empty strip.
+# _MAP_H_MAX caps the height so a tall lot cannot exceed the screen.
+_MAP_H = 600
+_MAP_H_MIN = 300
+_MAP_H_MAX = 900
+# HUD band: up to four stacked bars at y-offsets 2 / 24 / 46 / 68 (see
+# _draw_frame). Bars 0-2 are always drawn (floor info; action+spd;
+# EKF-vs-GT kinematic comparison); bar 3 is the debug line, only shown when
+# debug=True in env_config.yaml. Each bar is ~22 px tall.
+_HUD_BAR_PITCH = 22
+_HUD_BAND_H = 92
+_WINDOW_H = _MAP_H + _HUD_BAND_H
 _FPS_CAP = 120
 _MARGIN_PX = 40
 _HUD_FONT_SIZE = 14
@@ -155,6 +171,7 @@ def _build_static_surface(
     state: Dict[str, Any],
     origin: np.ndarray,
     scale: float,
+    map_h: int,
 ) -> pygame.Surface:
     """
     @brief Render the static scene elements into a surface (rebuilt once per episode).
@@ -164,9 +181,10 @@ def _build_static_surface(
     @param state: Any frame from the episode (static data is identical across frames).
     @param origin: World origin for the viewport.
     @param scale: Pixels per metre.
+    @param map_h: Current map-area height in pixels.
     @return Opaque Surface with static scene painted on it.
     """
-    surf = pygame.Surface((_MAP_W, _WINDOW_H))
+    surf = pygame.Surface((_MAP_W, map_h))
     surf.fill(_C_BG)
 
     # Lot boundary
@@ -252,12 +270,15 @@ def _draw_legend(screen: pygame.Surface) -> None:
     font = _legend_font
     title_font = _legend_title_font
 
+    # Height is read from the surface so the legend panel always spans the
+    # full window even after the map area has been resized.
+    win_h = screen.get_height()
     pygame.draw.rect(
         screen,
         (235, 235, 235),
-        pygame.Rect(_MAP_W, 0, _LEGEND_W, _WINDOW_H),
+        pygame.Rect(_MAP_W, 0, _LEGEND_W, win_h),
     )
-    pygame.draw.line(screen, (180, 180, 180), (_MAP_W, 0), (_MAP_W, _WINDOW_H), 2)
+    pygame.draw.line(screen, (180, 180, 180), (_MAP_W, 0), (_MAP_W, win_h), 2)
 
     entries = [
         (_C_TARGET_BAY, "Target bay"),
@@ -307,9 +328,14 @@ class LiveVisualiser:
         self._history_file = history_file or _DEFAULT_HISTORY_FILE
         self._signal_file = _SIGNAL_FILE
 
+        # Map and window heights start at the defaults and are resized to the
+        # lot aspect ratio once the first frame arrives (see _compute_viewport).
+        self._map_h: int = _MAP_H
+        self._window_h: int = _WINDOW_H
+
         pygame.init()
         pygame.font.init()
-        self._screen = pygame.display.set_mode((_WINDOW_W, _WINDOW_H))
+        self._screen = pygame.display.set_mode((_WINDOW_W, self._window_h))
         pygame.display.set_caption(
             "CARLA Parking Visualiser  |  F fullscreen  |  ESC quit"
         )
@@ -330,16 +356,20 @@ class LiveVisualiser:
         self._exit_requested: bool = False
         self._fullscreen: bool = False
         self._ever_received_frame: bool = False
+        # Wall-clock time the visualiser started, used by the waiting splash
+        # to show how long it has been waiting for the first frame.
+        self._start_time: float = time.time()
+        # Trail surface is reallocated whenever the map area is resized.
         self._trail_surf: pygame.Surface = pygame.Surface(
-            (_MAP_W, _WINDOW_H), pygame.SRCALPHA
+            (_MAP_W, self._map_h), pygame.SRCALPHA
         )
 
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
         self._signal_file.touch()
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Entry point
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def run(self) -> None:
         """@brief Open the Pygame window and enter the main loop."""
@@ -361,19 +391,28 @@ class LiveVisualiser:
                 pass
             pygame.quit()
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Main loop
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _run_loop(self) -> None:
         """
         @brief Read new JSONL frames and render them as fast as they arrive.
 
         Polls the JSONL file each iteration. When no new data is available
-        the loop sleeps briefly to avoid busy-waiting.
+        the loop sleeps briefly to avoid busy-waiting. The signal file is
+        re-asserted every iteration so a stale cleanup cannot stop the env
+        from writing while this window is open.
         """
         while not self._exit_requested:
             self._handle_events()
+
+            # Keep the signal file present so the env never stops writing.
+            if not self._signal_file.exists():
+                try:
+                    self._signal_file.touch()
+                except OSError:
+                    pass
 
             frames = self._read_new_frames()
             if frames:
@@ -389,9 +428,9 @@ class LiveVisualiser:
 
             self._clock.tick(_FPS_CAP)
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Event handling
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _handle_events(self) -> None:
         """@brief Process Pygame event queue."""
@@ -405,18 +444,24 @@ class LiveVisualiser:
                     self._fullscreen = not self._fullscreen
                     flags = pygame.FULLSCREEN if self._fullscreen else 0
                     self._screen = pygame.display.set_mode(
-                        (_WINDOW_W, _WINDOW_H), flags
+                        (_WINDOW_W, self._window_h), flags
                     )
                     self._static_episode_id = None  # Force static surface rebuild
                     self._vis_trail_episode_id = None  # Force trail reset
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # JSONL ingestion
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _read_new_frames(self) -> List[Dict[str, Any]]:
         """
         @brief Read all complete JSONL lines written since the last call.
+
+        The env truncates vis_history.jsonl every N episodes (see
+        CARLAParkingEnv._vis_rotation_interval). When the file shrinks below
+        _file_offset the offset is reset to zero so the visualiser reads from
+        the start of the new data without stalling.
+
         @return List of parsed frame dicts in arrival order.
         """
         if not self._history_file.exists():
@@ -450,13 +495,20 @@ class LiveVisualiser:
             pass
         return frames
 
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
     # Viewport
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _compute_viewport(self, state: Dict[str, Any]) -> None:
         """
         @brief Compute origin and scale so the lot fits inside the map viewport.
+
+        Also resizes the map area (and therefore the window) to the lot's
+        aspect ratio: the lot is scaled to fill the full map width, and the
+        map height is set to whatever that scale needs - clamped to
+        [_MAP_H_MIN, _MAP_H_MAX]. This removes the empty vertical strip a
+        wide-and-short lot would otherwise leave below the layout.
+
         @param state: Any frame from the episode.
         """
         corners_raw = state.get("corners", [])
@@ -470,24 +522,92 @@ class LiveVisualiser:
         mn, mx = pts.min(axis=0), pts.max(axis=0)
         span = np.where((mx - mn) < 1.0, 1.0, mx - mn)
         usable_w = _MAP_W - 2 * _MARGIN_PX
-        usable_h = _WINDOW_H - 2 * _MARGIN_PX
-        self._scale = min(usable_w / span[0], usable_h / span[1])
+        # Scale so the lot fills the full map width, then size the map height
+        # to match - the lot then touches both side margins with no slack.
+        self._scale = usable_w / span[0]
+        needed_h = int(span[1] * self._scale) + 2 * _MARGIN_PX
+        new_map_h = max(_MAP_H_MIN, min(_MAP_H_MAX, needed_h))
+        # If a tall lot was clamped, fall back to the fit-both scale so it is
+        # not cropped at the bottom.
+        usable_h = new_map_h - 2 * _MARGIN_PX
+        self._scale = min(self._scale, usable_h / span[1])
         self._origin = mn
+        self._resize_map(new_map_h)
 
-    # ------------------------------------------------------------------
+    def _resize_map(self, new_map_h: int) -> None:
+        """
+        @brief Resize the map area and recreate the window/trail surfaces.
+        @param new_map_h: New map-area height in pixels.
+        """
+        if new_map_h == self._map_h:
+            return
+        self._map_h = new_map_h
+        self._window_h = new_map_h + _HUD_BAND_H
+        flags = pygame.FULLSCREEN if self._fullscreen else 0
+        self._screen = pygame.display.set_mode((_WINDOW_W, self._window_h), flags)
+        self._trail_surf = pygame.Surface((_MAP_W, self._map_h), pygame.SRCALPHA)
+        # The static surface was sized to the old height - force a rebuild.
+        self._static_episode_id = None
+
+    # -----------------------------------------------------------------------
     # Drawing
-    # ------------------------------------------------------------------
+    # -----------------------------------------------------------------------
 
     def _draw_waiting(self) -> None:
-        """@brief Render a waiting splash when no data has arrived yet."""
+        """
+        @brief Render a diagnostic waiting splash when no data has arrived yet.
+
+        Shows an animated spinner, elapsed wait time, and the state of the two
+        files the pipeline depends on (the signal file and the history file),
+        so a still-loading viewer is visibly distinct from a stalled one.
+        """
         self._screen.fill(_C_BG)
         _draw_legend(self._screen)
-        font = pygame.font.SysFont("monospace", 18)
-        txt = font.render("Waiting for data...", True, (80, 80, 80))
-        self._screen.blit(
-            txt,
-            ((_MAP_W - txt.get_width()) // 2, (_WINDOW_H - txt.get_height()) // 2),
+
+        elapsed = time.time() - self._start_time
+        spinner = "|/-\\"[int(elapsed * 4) % 4]
+
+        history_exists = self._history_file.exists()
+        if history_exists:
+            history_line = f"History file: present ({self._history_file})"
+        else:
+            history_line = f"History file: not created yet ({self._history_file})"
+        signal_line = (
+            "Signal file: created (env will write frames once driving)"
+            if self._signal_file.exists()
+            else "Signal file: MISSING - env will not write frames"
         )
+
+        # The demo driver takes time to load the checkpoint, connect to
+        # CARLA, and reset the first episode before any frame is written.
+        hint = (
+            "Demo is loading the model and connecting to CARLA - "
+            "this can take 30-60s."
+            if elapsed < 90
+            else "Still no frames after 90s - check the demo container logs "
+            "(docker ps / docker logs)."
+        )
+
+        title_font = pygame.font.SysFont("monospace", 22, bold=True)
+        body_font = pygame.font.SysFont("monospace", 15)
+
+        lines = [
+            (title_font, f"{spinner} Waiting for data...  ({elapsed:4.0f}s)"),
+            (body_font, ""),
+            (body_font, signal_line),
+            (body_font, history_line),
+            (body_font, ""),
+            (body_font, hint),
+        ]
+
+        total_h = sum(f.get_height() + 6 for f, _ in lines)
+        y = (_MAP_H - total_h) // 2
+        for font, text in lines:
+            if text:
+                surf = font.render(text, True, (70, 70, 70))
+                self._screen.blit(surf, ((_MAP_W - surf.get_width()) // 2, y))
+            y += font.get_height() + 6
+
         pygame.display.flip()
 
     def _draw_frame(self, state: Dict[str, Any]) -> None:
@@ -499,9 +619,14 @@ class LiveVisualiser:
         episode_id = state.get("episode_id")
 
         if episode_id != self._static_episode_id:
-            self._static_episode_id = episode_id
+            # _compute_viewport may resize the map (and reset
+            # _static_episode_id to None); set the id afterwards so the
+            # rebuilt static surface is not discarded on the next frame.
             self._compute_viewport(state)
-            self._static_surf = _build_static_surface(state, self._origin, self._scale)
+            self._static_surf = _build_static_surface(
+                state, self._origin, self._scale, self._map_h
+            )
+            self._static_episode_id = episode_id
 
         assert self._static_surf is not None
         self._screen.blit(self._static_surf, (0, 0))
@@ -586,30 +711,52 @@ class LiveVisualiser:
             f"Step: {state.get('episode_step', '?')}  "
             f"t={state.get('sim_time', 0.0):.2f}s"
         )
-        self._draw_hud(hud, y_offset=8)
+        # HUD is drawn in a dedicated band BELOW the map (y >= self._map_h),
+        # not overlaid on it. Fill the band with the HUD background colour so
+        # it reads as a solid strip.
+        pygame.draw.rect(
+            self._screen,
+            _C_HUD_BG[:3],
+            (0, self._map_h, _WINDOW_W, _HUD_BAND_H),
+        )
 
+        self._draw_hud(hud, y_offset=self._map_h + 2)
+
+        # Speed and the action vector are fundamental state, not debug info -
+        # the env writes ego.speed and action.* on every frame regardless of
+        # the debug flag. Show them by default so the policy's behaviour
+        # (is it braking? how fast is it over the bay?) is always visible.
+        ego = state.get("ego", {})
+        act = state.get("action", {})
+        self._draw_hud(
+            f"spd={ego.get('speed', 0.0):.2f}m/s  "
+            f"act=[st {act.get('steer', 0.0):+.2f}  "
+            f"th {act.get('throttle', 0.0):.2f}  "
+            f"br {act.get('brake', 0.0):.2f}]",
+            y_offset=self._map_h + 2 + _HUD_BAR_PITCH,
+        )
+
+        # Diagnostic fields (pos error, reward, covariance, EKF drift) are only
+        # written when debug=True in env_config.yaml.
         dbg = state.get("debug")
         if dbg:
             self._draw_hud(
                 f"err={dbg.get('pos_err', 0.0):.2f}m "
                 f"yaw={dbg.get('yaw_err_deg', 0.0):.1f}deg "
-                f"spd={dbg.get('speed', 0.0):.2f}m/s "
                 f"rwd={dbg.get('reward', 0.0):.3f} | "
                 f"cov={dbg.get('cov_rms', 0.0):.3f} "
-                f"drift={dbg.get('ekf_drift', 0.0):.2f}m | "
-                f"act=[{dbg.get('steer', 0.0):.2f} "
-                f"{dbg.get('throttle', 0.0):.2f} "
-                f"{dbg.get('brake', 0.0):.2f}]",
-                y_offset=34,
+                f"drift={dbg.get('ekf_drift', 0.0):.2f}m",
+                y_offset=self._map_h + 2 + 2 * _HUD_BAR_PITCH,
             )
 
         pygame.display.flip()
 
     def _draw_hud(self, text: str, y_offset: int = 8) -> None:
         """
-        @brief Render a semi-transparent HUD bar at the top of the screen.
+        @brief Render a HUD text bar at the given vertical position.
         @param text: Text to display.
         @param y_offset: Vertical position from the top of the window (pixels).
+               HUD bars are placed in the band below the map (y >= _MAP_H).
         """
         txt_surf = self._hud_font.render(text, True, _C_HUD_TEXT)
         bar = pygame.Surface(

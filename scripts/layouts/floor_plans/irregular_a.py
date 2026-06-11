@@ -1,17 +1,16 @@
 """
 @file irregular_a.py
-@brief Irregular nine-sided parking lot floor plan (OOD, ~80x50 m).
+@brief Irregular seven-sided parking lot floor plan (OOD, ~85x50 m).
+
+The notch and central obstacle have been removed. The bottom boundary is now
+a single straight wall from P0 to P1. A single cluster of perpendicular bays
+runs along the bottom wall.
 """
 
 import math
 from typing import Any, Dict
 
-from scripts.layouts.builder import (
-    LotBuilder,
-    PatrolPath,
-    PedestrianZone,
-    angled_corner_clearance,
-)
+from scripts.layouts.builder import LotBuilder, PatrolPath, PedestrianZone
 
 ORIGIN_X = -3.0
 ORIGIN_Y = 25.0
@@ -21,30 +20,20 @@ OOD = True
 
 # Perimeter corners (CCW polygon order).
 P0 = (0.0, 0.0)  # bottom-left
-P1 = (53.0, 0.0)  # notch bottom-left
-P2 = (53.0, 16.0)  # notch top-left
-P3 = (65.0, 16.0)  # notch top-right
-P4 = (65.0, 0.0)  # notch bottom-right
-P5 = (85.0, 0.0)  # bottom-right
-P6 = (85.0, 37.0)  # diagonal start (top-right)
-P7 = (20.0, 50.0)  # diagonal/flat junction
-P8 = (0.0, 50.0)  # top-left
+P1 = (62.0, 0.0)  # bottom-right
+P2 = (62.0, 20.0)  # right wall top
+P3 = (20.0, 50.0)  # diagonal/flat junction
+P4 = (0.0, 50.0)  # top-left
 
 # Wall indices in CCW order.
-WALL_BOTTOM_LEFT = 0  # P0 -> P1 (left of notch)
-WALL_NOTCH_LEFT = 1  # P1 -> P2
-WALL_NOTCH_TOP = 2  # P2 -> P3
-WALL_NOTCH_RIGHT = 3  # P3 -> P4
-WALL_BOTTOM_RIGHT = 4  # P4 -> P5
-WALL_RIGHT = 5  # P5 -> P6
-WALL_TOP_DIAGONAL = 6  # P6 -> P7
-WALL_TOP_FLAT = 7  # P7 -> P8
-WALL_LEFT = 8  # P8 -> P0
+WALL_BOTTOM = 0  # P0 -> P1
+WALL_RIGHT = 1  # P1 -> P2
+WALL_TOP_DIAGONAL = 2  # P2 -> P3
+WALL_TOP_FLAT = 3  # P3 -> P4
+WALL_LEFT = 4  # P4 -> P0
 
-# Central obstacle (rectangular cone wall in lot interior).
-OBSTACLE = (27.25, 43.25, 17.0, 21.0)  # (x_min, x_max, y_min, y_max)
 TOP_FLAT_AISLE = 6.0  # Aisle between top-flat back-to-back perp rows.
-LEFT_ANG_BOTTOM_Y = 3.0  # Local y of the bottom-most left-wall angled bay.
+LEFT_ANG_BOTTOM_Y = 3.0  # Local y of the bottom-most left-wall bay.
 
 
 def generate() -> Dict[str, Any]:
@@ -53,116 +42,92 @@ def generate() -> Dict[str, Any]:
     """
     lot = LotBuilder(
         name="irregular_a",
-        corners=[P0, P1, P2, P3, P4, P5, P6, P7, P8],
+        corners=[P0, P1, P2, P3, P4],
     )
-    dims_ang = lot.dims["angled"]
+    dims_perp = lot.dims["perpendicular"]
 
-    # ---------- Bays around central obstacle ---------------------------
-    obs_south = lot.row_along_obstacle_face(
-        "perpendicular", n=6, obstacle=OBSTACLE, face="south"
-    )
-    obs_north = lot.row_along_obstacle_face(
-        "perpendicular", n=6, obstacle=OBSTACLE, face="north"
-    )
-    obs_west = lot.row_along_obstacle_face(
-        "perpendicular", n=6, obstacle=OBSTACLE, face="west"
+    # Bottom wall: single centred cluster
+    bottom_perp = lot.row_along_perimeter(
+        bay_type="perpendicular",
+        n=8,
+        wall=WALL_BOTTOM,
+        pack_from="start",
+        start_along=16.5,
     )
 
-    # ---------- Left wall angled bays ----------------------------------
-    # The bottom-most bay should land at y=LEFT_ANG_BOTTOM_Y. Walking the
-    # left wall from P8 down to P0 (CCW order), placement starts at the
-    # natural corner clearance from P8. We pack from the END (closer to P0)
-    # so the first bay placed is the bottom one at LEFT_ANG_BOTTOM_Y.
+    # Left wall perpendicular bays
+    perp_corner_clearance = dims_perp["width"] / 2.0 + lot.wall_gap
     lot.row_along_perimeter(
-        bay_type="angled",
+        bay_type="perpendicular",
         n=4,
         wall=WALL_LEFT,
-        bay_angle_deg=45.0,
         start_along=LEFT_ANG_BOTTOM_Y
-        - lot.wall_y(WALL_BOTTOM_LEFT)
-        + angled_corner_clearance(lot)
+        - lot.wall_y(WALL_BOTTOM)
+        + perp_corner_clearance
         - lot.wall_gap,
         pack_from="end",
     )
 
-    # ---------- Diagonal top wall: 11 angled bays hugging P7 end -------
-    diag_wall_len = math.hypot(P7[0] - P6[0], P7[1] - P6[1])
-    ang_spacing = dims_ang["width"] / math.sin(math.radians(45.0))
-    end_clearance = angled_corner_clearance(lot)
-    diag_ang = lot.row_along_perimeter(
-        bay_type="angled",
-        n=11,
+    # Diagonal top wall: perpendicular bays hugging P3 end
+    diag_wall_len = math.hypot(P3[0] - P2[0], P3[1] - P2[1])
+    perp_spacing = dims_perp["width"]
+    end_clearance = perp_corner_clearance
+    diag_perp = lot.row_along_perimeter(
+        bay_type="perpendicular",
+        n=10,
         wall=WALL_TOP_DIAGONAL,
-        bay_angle_deg=45.0,
-        start_along=diag_wall_len - end_clearance - 11 * ang_spacing,
+        start_along=diag_wall_len - end_clearance - 10 * perp_spacing - 5.0,
     )
 
-    # ---------- Top-flat back-to-back perp rows ------------------------
-    # Row 1 sits flush against the top-flat wall with backs to it; row 2
-    # mirrors row 1 across a 6 m aisle.
+    # Top-flat back-to-back perp rows
     top_flat_back = lot.row_along_perimeter(
         bay_type="perpendicular",
-        n=7,
+        n=6,
         wall=WALL_TOP_FLAT,
         pack_from="end",
     )
     top_flat_facing = lot.facing_row(top_flat_back, gap=TOP_FLAT_AISLE, n=4)
 
-    # ---------- Notch top wall: 4 perpendicular bays -------------------
-    notch_perp = lot.row_along_perimeter(
+    # Right wall perpendicular bays
+    right_perp = lot.row_along_perimeter(
         bay_type="perpendicular",
         n=4,
-        wall=WALL_NOTCH_TOP,
+        wall=WALL_RIGHT,
         centred=True,
     )
 
-    # ---------- Right wall angled bays ---------------------------------
-    right_ang = lot.row_along_perimeter(
-        bay_type="angled",
-        n=8,
-        wall=WALL_RIGHT,
-        bay_angle_deg=45.0,
-        start_along=8.0,
-    )
-
-    # ---------- Spawns -------------------------------------------------
+    # Spawns
     lot.spawn(x=3.0, y=25.0, yaw_deg=0.0, primary=True)
     _diagonal_top_spawn(lot)
-    lot.spawn(x=71.0, y=3.0, yaw_deg=90.0)
+    lot.spawn(x=45.0, y=5.0, yaw_deg=90.0)
 
-    # ---------- Patrol path (5-waypoint CCW orbit around obstacle) -----
+    # Patrol path
     patrol = PatrolPath()
-    y_lower = patrol.aisle_y(below=0.0, above=obs_south)
-    y_upper = patrol.aisle_y(below=obs_north, above=diag_ang)
-    x_left = patrol.aisle_x(left=0.0, right=obs_west)
-    x_right = patrol.aisle_x(left=OBSTACLE[1], right=notch_perp)
-    patrol.add(x_left, y_lower)
-    patrol.add(x_left, 28.0)
-    patrol.add(26.0, 34.0)
+    y_lower = patrol.aisle_y(below=bottom_perp, above=0.0)
+    y_upper = patrol.aisle_y(below=0.0, above=diag_perp)
+    x_left = patrol.aisle_x(left=0.0, right=top_flat_back)
+    x_right = patrol.aisle_x(left=top_flat_back, right=right_perp)
+    patrol.add(x_left, y_lower + 4.0)
+    patrol.add(x_left, y_upper)
     patrol.add(x_right, y_upper)
-    patrol.add(x_right, y_lower)
+    patrol.add(x_right, y_lower + 4.0)
     lot.set_patrol(patrol)
 
-    # ---------- Pedestrian zones ---------------------------------------
-    lot.add_zone(PedestrianZone.along_row(obs_south, side="south"))
-    lot.add_zone(PedestrianZone.along_row(obs_north, side="north"))
+    # Pedestrian zones
+    lot.add_zone(PedestrianZone.along_row(bottom_perp, side="north"))
     lot.add_zone(PedestrianZone.along_row(top_flat_facing, side="south"))
-    lot.add_zone(PedestrianZone.along_row(notch_perp, side="north"))
-    lot.add_zone(PedestrianZone.along_row(right_ang, side="west"))
-
-    # ---------- Interior obstacle --------------------------------------
-    lot.add_obstacle(*OBSTACLE)
+    lot.add_zone(PedestrianZone.along_row(right_perp, side="west"))
 
     return lot.build()
 
 
 def _diagonal_top_spawn(lot: LotBuilder) -> None:
     """@brief Add the diagonal top-wall spawn 3 m inward from the wall slope."""
-    wall_dx = P7[0] - P6[0]  # -60
-    wall_dy = P7[1] - P6[1]  # +13
+    wall_dx = P3[0] - P2[0]
+    wall_dy = P3[1] - P2[1]
     wall_len = math.hypot(wall_dx, wall_dy)
-    s2_y = P6[1] + (wall_dy / wall_dx) * (70.0 - P6[0])
+    s2_y = P2[1] + (wall_dy / wall_dx) * (57.0 - P2[0])
     yaw = math.degrees(math.atan2(wall_dx / wall_len, -wall_dy / wall_len)) % 360.0
-    x = round(70.0 + math.cos(math.radians(yaw)) * 3.0, 1)
+    x = round(57.0 + math.cos(math.radians(yaw)) * 3.0, 1)
     y = round(s2_y + math.sin(math.radians(yaw)) * 3.0, 1)
     lot.spawn(x=x, y=y, yaw_deg=round(yaw, 1))
