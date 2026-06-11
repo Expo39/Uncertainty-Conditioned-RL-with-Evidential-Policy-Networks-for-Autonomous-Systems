@@ -302,12 +302,23 @@ def evaluate_agent(
             steps += 1
             if done[0]:
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
-                episode_success = bool(infos[0].get("success", False))
+                # On the terminal step DummyVecEnv has already auto-reset the
+                # wrapped env, so read the terminal info from terminal_info when
+                # present (Gymnasium auto-reset stashes the pre-reset info there)
+                # and fall back to the live info dict otherwise.
+                terminal_info = infos[0].get("terminal_info", infos[0])
+                episode_success = bool(terminal_info.get("success", False))
                 success_flags[episode] = episode_success
                 if bay_tracker is not None:
-                    target_bay = infos[0].get("target_bay", {})
+                    # The bay id lives in the nested target_bay dict; fall back to
+                    # the flat target_bay_id key so recording survives any wrapper
+                    # that drops the nested dict. An empty id is ignored by record().
+                    target_bay = terminal_info.get("target_bay", {})
+                    bay_id = target_bay.get("bay_id", "") or terminal_info.get(
+                        "target_bay_id", ""
+                    )
                     bay_tracker.record(
-                        bay_id=str(target_bay.get("bay_id", "")),
+                        bay_id=str(bay_id),
                         success=episode_success,
                         bay_type=str(target_bay.get("bay_type", "")),
                     )
@@ -374,7 +385,7 @@ def evaluate_across_conditions(
     n_episodes = n_episodes or int(eval_config.get("n_episodes", 100))
 
     # Load model
-    logger.info("Loading model from %s...", model_path)
+    logger.info("Loading model from %s...", "/".join(Path(model_path).parts[-3:]))
     # Load model: use EvidentialPPO when the baseline specifies policy_type=evidential
     # so that isinstance(model, EvidentialPPO) is True and uncertainty is collected.
     policy_type = baseline_cfg.get("policy_type", "evidential")
@@ -397,12 +408,20 @@ def evaluate_across_conditions(
     deterministic: bool = eval_config.get("deterministic", True)
 
     # Per-bay success accounting. Each condition gets its own tracker dumped to
-    # outputs/bay_successes/eval/<run>/<condition>/ because a bay's success at
-    # RTK-fixed and RTK-lost are distinct questions and must not be conflated.
-    _eval_run_name = Path(model_path).parent.name or datetime.now().strftime(
+    # outputs/bay_successes/eval/<baseline>/<leaf>/<condition>/, mirroring the
+    # training tree, because a bay's success at RTK-fixed and RTK-degraded are
+    # distinct questions and must not be conflated. The leaf is the checkpoint's
+    # parent directory name (seed<N>_<timestamp>); the baseline comes from the
+    # evaluated baseline config, falling back to the checkpoint's grandparent so
+    # the path is unambiguous even for ad-hoc checkpoints.
+    _eval_leaf = Path(model_path).parent.name or datetime.now().strftime(
         "%d-%m-%Y-%H%M%S"
     )
-    _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_run_name
+    _eval_baseline = baseline_cfg.get(
+        "baseline_name", Path(model_path).parent.parent.name
+    )
+    _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
+    _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_baseline / _eval_leaf
 
     for condition in conditions:
         name = condition.get("name", "unknown")

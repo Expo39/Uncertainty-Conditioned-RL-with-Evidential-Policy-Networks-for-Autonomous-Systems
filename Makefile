@@ -27,6 +27,22 @@ CHECKPOINT   ?=
 BASELINE     ?=
 STAGE        ?=
 
+# BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
+# layout <root>/<baseline>/<leaf>/. You type only the names:
+#   BASELINE=input_uncertainty   CHECKPOINT=seed42_11062026-0628
+# and the recipes reconstruct the full paths. BASELINE_NAME tolerates a legacy
+# full YAML path too (it takes the file stem). The checkpoint folder is always the
+# baseline (default full_method); the leaf is whatever CHECKPOINT was given.
+BASELINE_NAME = $(if $(BASELINE),$(notdir $(basename $(BASELINE))),full_method)
+# Full path to the baseline override config, passed to the scripts.
+BASELINE_YAML = $(CONFIG_DIR)/baselines/$(BASELINE_NAME).yaml
+# Resume/run directory (checkpoints/<baseline>/<leaf>) for train --resume-from.
+CHECKPOINT_DIR = checkpoints/$(BASELINE_NAME)/$(CHECKPOINT)
+# The saved model inside that run dir, for eval/demo --model-path / --checkpoint.
+CHECKPOINT_MODEL = $(if $(CHECKPOINT),$(CHECKPOINT_DIR)/final_model,checkpoints/final_model)
+# Short label for the echo banners (<baseline>/<leaf>, cosmetic only).
+CHECKPOINT_NAME = $(if $(CHECKPOINT),$(BASELINE_NAME)/$(CHECKPOINT),final_model)
+
 # Scripts that bring up/down N env workers (N read from train_config.yaml by default).
 WORKERS_UP   = bash scripts/multi_workers/workers_up.sh
 WORKERS_DOWN = bash scripts/multi_workers/workers_down.sh
@@ -121,47 +137,47 @@ docker-top: ## Show running processes in containers
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [CHECKPOINT=path] [BASELINE=configs/baselines/vanilla_ppo.yaml]
-	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT) baseline=$(or $(BASELINE),<full_method>)"
+docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),) $(if $(BASELINE),--baseline $(BASELINE),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [CHECKPOINT=path] [BASELINE=configs/baselines/vanilla_ppo.yaml]
-	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT) baseline=$(or $(BASELINE),<full_method>)"
+docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT),) $(if $(BASELINE),--baseline $(BASELINE),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=4] [BASELINE=configs/baselines/full_method.yaml]
-	@echo "Tuning: layout=$(LAYOUT) stage=$(or $(STAGE),1) baseline=$(or $(BASELINE),<full_method>)"
+docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=4] [BASELINE=full_method]
+	@echo "Tuning: layout=$(LAYOUT) stage=$(or $(STAGE),1) baseline=$(BASELINE_NAME)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [CHECKPOINT=path] [BASELINE=configs/baselines/vanilla_ppo.yaml]
-	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(or $(CHECKPOINT),checkpoints/final_model) baseline=$(or $(BASELINE),<full_method>)"
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
 	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
-		--model-path $(or $(CHECKPOINT),checkpoints/final_model) \
+		--model-path $(CHECKPOINT_MODEL) \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
-		$(if $(BASELINE),--baseline $(BASELINE),) \
+		$(if $(BASELINE),--baseline $(BASELINE_YAML),) \
 		--output-dir evaluation_results
 
-docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [CHECKPOINT=path]
+docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
-	DISPLAY=$(_DISPLAY) CHECKPOINT=$(or $(CHECKPOINT),checkpoints/final_model) \
+	DISPLAY=$(_DISPLAY) CHECKPOINT=$(CHECKPOINT_MODEL) \
 		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
 
 # ----------------------------------------------------------------------
@@ -264,7 +280,7 @@ INSPECT_VIEW     ?= third_person
 INSPECT_PAUSE    ?= 3.0
 INSPECT_OOD      ?= false
 docker-inspect-dryrun: ## Full training pipeline in windowed CARLA, built identically to training. Usage: make docker-inspect-dryrun [STAGE=1] [BASELINE=configs/baselines/vanilla_ppo.yaml] [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free|birds_eye] [INSPECT_PAUSE=3.0] [INSPECT_OOD=true|false]
-	@echo "Dryrun: stage=$(or $(STAGE),1) baseline=$(or $(BASELINE),<full_method>) manual=$(MANUAL) ood=$(INSPECT_OOD)"
+	@echo "Dryrun: stage=$(or $(STAGE),1) baseline=$(BASELINE_NAME) manual=$(MANUAL) ood=$(INSPECT_OOD)"
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
@@ -356,44 +372,28 @@ visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
-eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [CHECKPOINT=path] [REALTIME=false] [BASELINE=vanilla_ppo] [STAGE=N]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [REALTIME=false] [STAGE=N]
 	$(call ensure-venv)
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
-	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(or $(CHECKPOINT),checkpoints/final_model)"
-	@# Tear down any pre-existing stack first (including orphans from a
-	@# previous broken eval-visualise-2d run that left the training /
-	@# tensorboard containers up but disconnected).
+	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(CHECKPOINT_NAME)"
+	@# Tear down any pre-existing stack first (orphans included).
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) down --remove-orphans
-	@# Also clear the visualisation history so the viewer starts on this
-	@# run's frames, not stale ones left over from a previous session. The
-	@# old file may be root-owned (demo container writes as root when UID
-	@# is unset), hence sudo.
+	@# Clear stale viewer history (may be root-owned, hence sudo).
 	sudo rm -f $(_VIS_FILE) outputs/.vis_active
+	@# Training writes bay_successes/ as root; pre-own eval/ or the demo CSV dump fails.
+	sudo mkdir -p outputs/bay_successes/eval && sudo chown $$(id -u):$$(id -g) outputs/bay_successes/eval
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
-	@# Start the demo container detached, stream its logs in the background
-	@# so failures (checkpoint load errors, CARLA connection issues, etc.)
-	@# are visible, then run the viewer in the foreground. UID/GID are
-	@# exported so the demo container does not fall back to root and leave
-	@# root-owned files in outputs/.
-	@set -e; \
-	export UID=$$(id -u); export GID=$$(id -g); \
-	demo_cid=$$($(DOCKER_COMPOSE) --profile demo run --rm -d demo \
-		python $(SCRIPTS_DIR)/visualise/demo_drive.py \
-		--checkpoint $(or $(CHECKPOINT),checkpoints/final_model) \
-		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
-		--train-config $(CONFIG_DIR)/train_config.yaml \
-		$(if $(BASELINE),--baseline $(CONFIG_DIR)/baselines/$(BASELINE).yaml,) \
-		$(if $(STAGE),--stage $(STAGE),) \
-		$(if $(filter false,$(REALTIME)),--no-realtime,) | tail -n1); \
-	echo "Demo container: $$demo_cid"; \
-	docker logs -f $$demo_cid 2>&1 | sed 's/^/[demo] /' & \
-	logs_pid=$$!; \
-	trap 'echo "Stopping demo container..."; kill $$logs_pid 2>/dev/null || true; docker rm -f $$demo_cid >/dev/null 2>&1 || true' EXIT INT TERM; \
-	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
-		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
+	@# Demo + log stream + viewer + graceful teardown live in the helper script.
+	DISPLAY=$(_DISPLAY) \
+		DEMO_CHECKPOINT=$(CHECKPOINT_MODEL) \
+		DEMO_BASELINE_YAML=$(if $(BASELINE),$(BASELINE_YAML),) \
+		DEMO_STAGE=$(STAGE) \
+		DEMO_REALTIME=$(REALTIME) \
+		DEMO_VIS_FILE=$(_VIS_FILE) \
+		bash scripts/visualise/eval_visualise_2d.sh
 
 # ----------------------------------------------------------------------
 # Testing

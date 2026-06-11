@@ -12,7 +12,6 @@ train_config.yaml.
 import argparse
 import copy
 import logging
-import os
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -319,18 +318,17 @@ def objective(
         trial_config = copy.deepcopy(base_config)
         trial_config.update(sampled_params)
 
-        # Set trial-specific training budget and directories
+        # Set trial-specific training budget and directories. train() nests every
+        # run as <root>/<baseline_name>/<run_leaf>/, so the tuning roots plus a
+        # deterministic per-trial leaf give logs/tuning/<baseline>/trial_<N>/ (and
+        # the matching checkpoints/tuning subtree) - the same per-baseline layout
+        # as a normal training run.
         trial_config["total_timesteps"] = tuning_config.get(
             "timesteps_per_trial", 100000
         )
-        trial_config["log_dir"] = os.path.join(
-            "logs/tuning",
-            f"trial_{trial.number}",
-        )
-        trial_config["checkpoint_dir"] = os.path.join(
-            "checkpoints/tuning",
-            f"trial_{trial.number}",
-        )
+        trial_config["log_dir"] = "logs/tuning"
+        trial_config["checkpoint_dir"] = "checkpoints/tuning"
+        trial_config["run_leaf"] = f"trial_{trial.number}"
 
         # Create trial eval callback
         trial_callback = TrialEvalCallback(trial)

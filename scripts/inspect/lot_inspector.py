@@ -7,6 +7,7 @@ import argparse
 import os
 import sys
 import warnings
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 try:
@@ -312,7 +313,7 @@ def main() -> None:
         dryrun_cfg["action_repeat"] = 1
         print(
             f"Dryrun: stage {stage}, baseline "
-            f"'{dryrun_cfg.get('baseline_name', baseline_path)}' "
+            f"'{dryrun_cfg.get('baseline_name', Path(baseline_path).stem)}' "
             f"(bay_margin={dryrun_cfg.get('bay_margin')}, "
             f"include_covariance={dryrun_cfg.get('include_covariance')}, "
             f"include_obstacle_obs={dryrun_cfg.get('include_obstacle_obs')})"

@@ -90,6 +90,19 @@ logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 DEFAULT_STAGE = 1
 DEFAULT_BASELINE = "configs/baselines/full_method.yaml"
 
+
+def _short_path(path: str) -> str:
+    """
+    @brief Trim a run path to its trailing <baseline>/<leaf>[/file] tail for display.
+    @param path: A checkpoint, log, or model path under one of the output roots.
+    @return The last up-to-three path components joined with "/", so log lines
+            show e.g. "full_method/seed42_11062026-0628/final_model" rather than
+            the full path. Shortening is cosmetic only; callers keep the original
+            path for filesystem operations.
+    """
+    return "/".join(Path(path).parts[-3:])
+
+
 # Suppress Gymnasium's float64->float32 precision warning for unbounded obs.
 # spaces.Box with low/high=+/-inf always triggers this; it is harmless.
 warnings.filterwarnings(
@@ -514,11 +527,13 @@ def train(
         else config.get("total_timesteps", 1000000)
     )
 
-    # Build a run name that uniquely identifies this configuration so each
-    # training run gets its own TensorBoard subdirectory under logs/.
-    # Format: <baseline_name>_seed<N>_<DDMMYYYY-HHMM>
-    # baseline_name is set explicitly in baseline override configs; for ad-hoc
-    # runs it is derived from policy_type and observation flags.
+    # Each run gets its own subtree nested by baseline so the ablation grid is
+    # navigable: <root>/<baseline_name>/<run_leaf>/, where run_leaf is
+    # seed<N>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/, and
+    # outputs/bay_successes/training/. The seed<N>_ prefix on the leaf is load-
+    # bearing: demo_drive.py parses the seed and start timestamp back out of the
+    # leaf directory name. baseline_name is set explicitly in baseline override
+    # configs; for ad-hoc runs it is derived from policy_type and observation flags.
     policy_type = config.get("policy_type", "evidential")
     include_cov = config.get("include_covariance", True)
     include_obs = config.get("include_obstacle_obs", True)
@@ -529,12 +544,17 @@ def train(
     )
     baseline_name = config.get("baseline_name", _default_run_name)
     _timestamp = datetime.now().strftime("%d%m%Y-%H%M")
-    run_name = f"{baseline_name}_seed{seed}_{_timestamp}"
+    # run_leaf defaults to seed<N>_<timestamp>; callers that need a deterministic
+    # leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may override it so
+    # the on-disk tree stays <baseline>/<leaf>/ in both cases.
+    run_leaf = config.get("run_leaf", f"seed{seed}_{_timestamp}")
+    # Provenance label mirroring the on-disk tree (<baseline>/<leaf>).
+    run_name = f"{baseline_name}/{run_leaf}"
 
     _base_log_dir = config.get("log_dir", "./logs")
     _base_checkpoint_dir = config.get("checkpoint_dir", "./checkpoints")
-    log_dir = os.path.join(_base_log_dir, run_name)
-    checkpoint_dir = os.path.join(_base_checkpoint_dir, run_name)
+    log_dir = os.path.join(_base_log_dir, baseline_name, run_leaf)
+    checkpoint_dir = os.path.join(_base_checkpoint_dir, baseline_name, run_leaf)
     # eval_freq and n_eval_episodes are read here for when eval_env is re-enabled.
     # Currently eval_env is always None (see comment below).
     eval_freq = config.get("eval_freq", 10000)
@@ -659,7 +679,7 @@ def train(
         # Load model from checkpoint. Resume path may point to:
         # 1. final_model (from a completed training run)
         # 2. A directory containing periodic checkpoints (ppo_*.zip files)
-        logger.info("Resuming from checkpoint: %s", resume_from)
+        logger.info("Resuming from checkpoint: %s", _short_path(resume_from))
 
         # Find the latest checkpoint (either final_model or the highest-step
         # intermediate checkpoint).
@@ -707,7 +727,7 @@ def train(
                 logger.info(
                     "Found periodic checkpoint at %s steps: %s",
                     step_count,
-                    checkpoint_model_path,
+                    _short_path(checkpoint_model_path),
                 )
             else:
                 raise ValueError(
@@ -736,7 +756,8 @@ def train(
             and os.path.exists(checkpoint_vec_norm_path)
         ):
             logger.info(
-                "Loading VecNormalize from checkpoint: %s", checkpoint_vec_norm_path
+                "Loading VecNormalize from checkpoint: %s",
+                _short_path(checkpoint_vec_norm_path),
             )
             env = VecNormalize.load(checkpoint_vec_norm_path, env)
         elif not own_env:
@@ -827,9 +848,12 @@ def train(
     )
 
     # Per-bay success accounting. Cumulative attempts/successes per target bay
-    # over the whole run, dumped to outputs/bay_successes/training/<run_name>/
-    # so a random-bay run can be inspected for which bays the policy can park.
-    _bay_output_dir = Path("./outputs/bay_successes/training") / run_name
+    # over the whole run, dumped to
+    # outputs/bay_successes/training/<baseline>/<leaf>/ so a random-bay run can
+    # be inspected for which bays the policy can park.
+    _bay_output_dir = (
+        Path("./outputs/bay_successes/training") / baseline_name / run_leaf
+    )
     _bay_run_info: Dict[str, Any] = {
         "run_name": run_name,
         "seed": seed,
@@ -895,7 +919,9 @@ def train(
         assert env is not None
         env.save(os.path.join(checkpoint_dir, "vec_normalize.pkl"))
 
-        logger.info("Training complete. Model saved to %s", final_model_path)
+        logger.info(
+            "Training complete. Model saved to %s", _short_path(final_model_path)
+        )
 
     finally:
         # Clean up (always runs, even if CARLA crashes during training).

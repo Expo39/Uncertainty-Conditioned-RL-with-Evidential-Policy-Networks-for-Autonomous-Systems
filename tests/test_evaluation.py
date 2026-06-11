@@ -6,11 +6,14 @@ Validates the EvaluationMetrics container, metric aggregation,
 and the evaluation helper functions.
 """
 
+from typing import Any, Dict, List, Tuple
+
 import numpy as np
 import pytest
 
 from uncertainty_rl.evaluation import EvaluationMetrics
-from uncertainty_rl.evaluation.evaluate import _scale_sensor_noise
+from uncertainty_rl.evaluation.evaluate import _scale_sensor_noise, evaluate_agent
+from uncertainty_rl.utils.bay_success import BaySuccessTracker
 
 
 class TestEvaluationMetrics:
@@ -234,3 +237,111 @@ class TestScaleSensorNoise:
 
         assert result["lidar"]["channels"] == 1
         assert result["lidar"]["range"] == pytest.approx(30.0)
+
+
+class _StubModel:
+    """
+    @class _StubModel
+    @brief Minimal model stub returning a fixed action for evaluate_agent.
+
+    Not an EvidentialPPO, so evaluate_agent takes the deterministic
+    model.predict() path and never touches torch or a real policy.
+    """
+
+    def predict(
+        self, obs: np.ndarray, deterministic: bool = True
+    ) -> Tuple[np.ndarray, None]:
+        """
+        @brief Return a zero action and no recurrent state.
+        @param obs: Observation batch (ignored).
+        @param deterministic: Unused; present for signature parity.
+        @return Tuple of (action, None).
+        """
+        return np.zeros((1, 3), dtype=np.float32), None
+
+
+class _StubVecEnv:
+    """
+    @class _StubVecEnv
+    @brief One-step DummyVecEnv stand-in that terminates with a chosen info.
+
+    Each episode runs a single step that returns done=True and the supplied
+    per-episode info dict, so evaluate_agent's terminal-step recording path is
+    exercised without CARLA. Mirrors DummyVecEnv's auto-reset contract: the
+    info returned on the terminal step IS that episode's terminal info.
+    """
+
+    def __init__(self, episode_infos: List[Dict[str, Any]]) -> None:
+        """
+        @brief Store the queued per-episode terminal infos.
+        @param episode_infos: One info dict per episode, returned in order.
+        """
+        self._episode_infos = episode_infos
+        self._episode = -1
+
+    def reset(self) -> np.ndarray:
+        """
+        @brief Advance to the next queued episode and return a dummy obs.
+        @return Observation batch of shape (1, 1).
+        """
+        self._episode += 1
+        return np.zeros((1, 1), dtype=np.float32)
+
+    def step(
+        self, action: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict[str, Any]]]:
+        """
+        @brief Terminate immediately with this episode's queued info.
+        @param action: Action from the model (ignored).
+        @return Tuple of (obs, rewards, dones, infos) with done=True.
+        """
+        info = self._episode_infos[self._episode]
+        return (
+            np.zeros((1, 1), dtype=np.float32),
+            np.array([0.0], dtype=np.float32),
+            np.array([True]),
+            [info],
+        )
+
+
+class TestEvaluateAgentBayRecording:
+    """
+    @class TestEvaluateAgentBayRecording
+    @brief evaluate_agent must record each terminated episode against its bay.
+    """
+
+    def test_records_nested_target_bay(self) -> None:
+        """
+        @brief A nested target_bay dict in the terminal info is recorded.
+        """
+        infos = [
+            {"success": True, "target_bay": {"bay_id": "perpendicular_2"}},
+            {"success": False, "target_bay": {"bay_id": "perpendicular_2"}},
+        ]
+        tracker = BaySuccessTracker()
+        evaluate_agent(
+            model=_StubModel(),  # type: ignore[arg-type]
+            env=_StubVecEnv(infos),  # type: ignore[arg-type]
+            n_episodes=2,
+            bay_tracker=tracker,
+        )
+
+        assert tracker.total_attempts == 2
+        _, attempts, successes = tracker._counts["perpendicular_2"]
+        assert (attempts, successes) == (2, 1)
+
+    def test_falls_back_to_flat_target_bay_id(self) -> None:
+        """
+        @brief The flat target_bay_id is used when the nested dict is absent.
+        """
+        infos = [{"success": True, "target_bay_id": "perpendicular_5"}]
+        tracker = BaySuccessTracker()
+        evaluate_agent(
+            model=_StubModel(),  # type: ignore[arg-type]
+            env=_StubVecEnv(infos),  # type: ignore[arg-type]
+            n_episodes=1,
+            bay_tracker=tracker,
+        )
+
+        assert tracker.total_attempts == 1
+        assert "perpendicular_5" in tracker._counts
