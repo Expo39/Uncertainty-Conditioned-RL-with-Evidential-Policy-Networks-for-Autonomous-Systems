@@ -3,9 +3,8 @@
 Single-phase ADR curriculum, six stages. Each `stage<N>.yaml` owns the per-stage
 difficulty and is deep-merged over `configs/deployment/sim/env_config.yaml` when
 selected with `make docker-train STAGE=N` (omitting the stage defaults to stage 1).
-Strategy and rationale live in `documentation/CURRICULUM_PLAN.md` and
-`documentation/detailed_notes/curriculum_design_principles.md`; this README documents
-the file contract.
+This README documents the file contract - the per-stage difficulty keys and the
+per-policy override blocks each stage owns.
 
 ## The six stages
 
