@@ -135,4 +135,4 @@ obstacle avoidance relies on the human safety operator during initial testing.
 - `uncertainty_rl/envs/safety_wrapper.py` - `SafetyWrapper.apply()` static method
 - `uncertainty_rl/utils/actuation_calibration.py` - `ActuationCalibration` class
 - `docs/detailed_notes/deployment/real_world_deployment.md` - full deployment guide
-- `documentation/extras/design/sim_to_real_transfer.md` - sim-to-real gap analysis
+- `docs/detailed_notes/deployment/sim_to_real_transfer.md` - sim-to-real gap analysis

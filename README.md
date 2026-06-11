@@ -181,8 +181,8 @@ channel is live in every stage, and one axis's range ramps per stage (bays + mar
 -> obstacle occupancy). The GNSS degradation process is a fixed, stage-invariant
 Markov chain (always-on mid-episode drift), so localisation uncertainty is present
 from stage 1 rather than being a ramped axis. Each stage resumes from the previous
-stage's checkpoint. See
-[documentation/CURRICULUM_PLAN.md](documentation/CURRICULUM_PLAN.md).
+stage's checkpoint. See the
+[curriculum stage README](configs/deployment/sim/curriculum/README.md).
 
 ---
 
@@ -258,7 +258,7 @@ Uncertainty-Conditioned-RL.../
 |   +-- colours/                       Shared visualisation colour palette
 |
 |-- tests/                             pytest suite - unit and integration tiers
-|-- documentation/                     Technical notes
+|-- docs/                              Technical notes (detailed_notes/) and media
 +-- docker-compose.yml                 Three-container stack orchestration
 ```
 
