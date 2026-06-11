@@ -1,23 +1,27 @@
-# Curriculum Stage 2 - bay count up (~2 per cluster). Resume from Stage 1.
-# Primary axis: bay variety.
+# Curriculum Stage 2 - bay variety up (3 per cluster, 2 from the 5-bay east block;
+# Stage 1 bays retained). Resume from Stage 1. Primary axis: bay count.
 
 use_extra_spawns: false
-bay_margin: -0.65
+bay_margin: -0.55
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_gnss_tier: rtk_fixed
-  allowed_bay_ids:  # Two per cluster, all 4 orientations.
+  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  allowed_bay_ids:  # All 5 clusters covered (yaws 270, 90, 180).
+    - perpendicular_0
     - perpendicular_3
-    - perpendicular_8     # yaw 270, north row
-    - perpendicular_23
-    - perpendicular_29    # yaw 270, upper row
+    - perpendicular_8    # cluster 0-11,  yaw 270, north row
+    - perpendicular_26
+    - perpendicular_29
+    - perpendicular_32   # cluster 25-32, yaw 270, upper row west block (25 excluded - radial-homing crutch)
+    - perpendicular_33
+    - perpendicular_37   # cluster 33-37, yaw 270, upper row east block
     - perpendicular_14
-    - perpendicular_17    # yaw 90, south row
-    - perpendicular_35
-    - perpendicular_38    # yaw 0, west column
+    - perpendicular_17
+    - perpendicular_22   # cluster 12-24, yaw 90,  south row
+    - perpendicular_38
     - perpendicular_41
-    - perpendicular_43    # yaw 180, east column
+    - perpendicular_44   # cluster 38-46, yaw 180, east column
   bay_occupancy_min: 0.1
   bay_occupancy_max: 0.1
 
@@ -26,16 +30,17 @@ carla_sensors:
     noise:
       enabled: true  # Constant realism floor (on in every stage).
 
-# Identical standard/evidential blocks - see Stage 1.
+# Identical standard/evidential blocks - see Stage 1. Resumed stages restart the
+# learning rate at ~3x the previous stage's final value, not the from-scratch rate.
 standard_overrides:
   stage_timesteps: 1500000
-  learning_rate: 0.00025
+  learning_rate: 0.00015
   learning_rate_final: 0.00005
   ent_coef: 0.0015
   ent_coef_final: 0.0005
 evidential_overrides:
   stage_timesteps: 1500000
-  learning_rate: 0.00025
+  learning_rate: 0.00015
   learning_rate_final: 0.00005
   ent_coef: 0.0015
   ent_coef_final: 0.0005
