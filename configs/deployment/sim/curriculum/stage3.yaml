@@ -1,33 +1,13 @@
-# Curriculum Stage 3 - bay count up (~4 per cluster). Resume from Stage 2.
-# Primary axis: bay variety.
+# Curriculum Stage 3 - all 47 bays (allowed_bay_ids omitted). Resume from Stage 2.
+# Primary axis: bay variety reaches the full lot.
 
 use_extra_spawns: false
-bay_margin: -0.55
+bay_margin: -0.4
 
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  allowed_bay_ids:  # ~4 per cluster, all 4 orientations.
-    - perpendicular_0
-    - perpendicular_4
-    - perpendicular_8
-    - perpendicular_11   # yaw 270, north row
-    - perpendicular_20
-    - perpendicular_24
-    - perpendicular_28
-    - perpendicular_31   # yaw 270, upper row
-    - perpendicular_12
-    - perpendicular_14
-    - perpendicular_16
-    - perpendicular_18   # yaw 90, south row
-    - perpendicular_33
-    - perpendicular_35
-    - perpendicular_37
-    - perpendicular_39   # yaw 0, west column
-    - perpendicular_40
-    - perpendicular_41
-    - perpendicular_42
-    - perpendicular_43   # yaw 180, east column
+  # allowed_bay_ids omitted: all eligible bays.
   bay_occupancy_min: 0.1
   bay_occupancy_max: 0.1
 
@@ -38,14 +18,14 @@ carla_sensors:
 
 # Identical standard/evidential blocks - see Stage 1.
 standard_overrides:
-  stage_timesteps: 1500000
-  learning_rate: 0.00025
-  learning_rate_final: 0.00005
+  stage_timesteps: 2000000
+  learning_rate: 0.00015
+  learning_rate_final: 0.00004
   ent_coef: 0.0015
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 1500000
-  learning_rate: 0.00025
-  learning_rate_final: 0.00005
+  stage_timesteps: 2000000
+  learning_rate: 0.00015
+  learning_rate_final: 0.00004
   ent_coef: 0.0015
   ent_coef_final: 0.0005

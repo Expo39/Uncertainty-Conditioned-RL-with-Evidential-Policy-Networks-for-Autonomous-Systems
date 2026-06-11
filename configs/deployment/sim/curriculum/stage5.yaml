@@ -1,15 +1,14 @@
-# Curriculum Stage 5 - all 47 bays (allowed_bay_ids omitted). Resume from Stage 4.
-# Primary axis: bay variety reaches the full lot.
+# Curriculum Stage 5 - obstacles begin. Resume from Stage 4.
+# Primary axis: bay occupancy (the avoidance task); geometry and margin frozen.
 
 use_extra_spawns: false
-bay_margin: -0.35
+bay_margin: -0.25  # Strict, held.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
   fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
-  # allowed_bay_ids omitted: all eligible bays.
-  bay_occupancy_min: 0.1
-  bay_occupancy_max: 0.1
+  bay_occupancy_min: 0.2
+  bay_occupancy_max: 0.5
 
 carla_sensors:
   lidar:
@@ -19,13 +18,13 @@ carla_sensors:
 # Identical standard/evidential blocks - see Stage 1.
 standard_overrides:
   stage_timesteps: 2000000
-  learning_rate: 0.0002
-  learning_rate_final: 0.00004
-  ent_coef: 0.0015
+  learning_rate: 0.00012
+  learning_rate_final: 0.00003
+  ent_coef: 0.001
   ent_coef_final: 0.0005
 evidential_overrides:
   stage_timesteps: 2000000
-  learning_rate: 0.0002
-  learning_rate_final: 0.00004
-  ent_coef: 0.0015
+  learning_rate: 0.00012
+  learning_rate_final: 0.00003
+  ent_coef: 0.001
   ent_coef_final: 0.0005
