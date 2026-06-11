@@ -84,7 +84,11 @@ Stage 1 trains from scratch; every later stage resumes from the previous stage's
 final checkpoint and must pass the same baseline the checkpoint was trained with
 (observation dimensions differ between baselines):
 
+`BASELINE` and `CHECKPOINT` are bare names - the baseline name and the previous
+stage's run leaf (`seed<N>_<DDMMYYYY-HHMM>`), not paths. The recipe reconstructs
+`checkpoints/<baseline>/<leaf>/final_model` to resume from.
+
 ```bash
-make docker-train STAGE=2 BASELINE=configs/baselines/vanilla_ppo.yaml \
-    CHECKPOINT=checkpoints/<previous_stage_run>/final_model
+make docker-train STAGE=1 BASELINE=vanilla_ppo
+make docker-train STAGE=2 BASELINE=vanilla_ppo CHECKPOINT=seed42_11062026-0628
 ```

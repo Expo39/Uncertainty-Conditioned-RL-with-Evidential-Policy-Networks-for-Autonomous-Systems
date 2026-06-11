@@ -9,7 +9,7 @@ Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evalua
 | Open 2D viewer (training already running) | `make visualise` |
 | Load checkpoint + headless CARLA + 2D viewer | `make eval-visualise-2d` |
 | Load checkpoint + CARLA 3D spectator | `make docker-eval-visualise-3d` |
-| Custom checkpoint | `make eval-visualise-2d CHECKPOINT=checkpoints/step_500000` |
+| Custom checkpoint | `make eval-visualise-2d BASELINE=full_method CHECKPOINT=seed42_11062026-0628` |
 
 ## How it works
 

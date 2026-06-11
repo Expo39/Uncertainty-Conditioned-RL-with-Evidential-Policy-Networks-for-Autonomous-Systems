@@ -15,8 +15,8 @@ the best trial's values are written automatically back into
 [`configs/train_config.yaml`](../train_config.yaml).
 
 ```bash
-make docker-tune         # Run the study
-make docker-tune-dry     # Print what would run without training
+make docker-tune                          # Run the study (defaults to stage 1, full_method)
+make docker-tune STAGE=4 BASELINE=full_method   # Tune a specific stage and baseline
 ```
 
 The study configuration (study name, trial budget, evaluation metric, sampler

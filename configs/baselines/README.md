@@ -24,23 +24,22 @@ derived at runtime from these flags via `compute_obs_dim()` -see
 [`uncertainty_rl/utils/constants.py`](../../uncertainty_rl/utils/constants.py)
 for the structural constants.
 
-## Running a single baseline
+## Running a baseline
+
+A baseline is selected with the bare `BASELINE=<name>` variable; `STAGE` and
+`CHECKPOINT` pick the curriculum stage and resume point as usual.
 
 ```bash
-make docker-train BASELINE=vanilla_ppo
-make docker-train BASELINE=full_method
+make docker-train BASELINE=vanilla_ppo STAGE=1
+make docker-train BASELINE=full_method STAGE=1
 ```
 
-## Running the full ablation
-
-```bash
-make docker-experiment       # Full 4-baseline x N-seed sweep
-make docker-experiment-dry   # Dry-run: print what would run without training
-```
-
-Results are written to `logs/<baseline_name>_seed<N>_<timestamp>/` and checkpoints
-to `checkpoints/<baseline_name>_seed<N>_<timestamp>/` (derived from `baseline_name`
-plus the base dirs in `train_config.yaml`).
+The full 2x2 ablation is run by training each cell in turn (per baseline, per seed,
+through the curriculum). Output is nested by baseline: checkpoints, logs, and
+`bay_successes/` land under `<root>/<baseline>/<leaf>/`, where `<leaf>` is
+`seed<N>_<DDMMYYYY-HHMM>`. The directory names are derived in code from `baseline_name`
+plus the base dirs in `train_config.yaml`; you only ever pass the bare `BASELINE` and
+`CHECKPOINT` names.
 
 ## See also
 
