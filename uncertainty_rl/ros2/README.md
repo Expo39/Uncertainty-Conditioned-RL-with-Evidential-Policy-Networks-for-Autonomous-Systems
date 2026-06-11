@@ -173,5 +173,5 @@ make docker-shell-ros2  # interactive shell in ros2-bridge
 
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [envs/README.md](../envs/README.md) - `_CovarianceSubscriber` that reads `ekf_state.json`
-- [docs/detailed_notes/ros2_architecture.md](../../docs/detailed_notes/ros2_architecture.md) - pipeline design rationale
+- [docs/detailed_notes/localisation/ros2_architecture.md](../../docs/detailed_notes/localisation/ros2_architecture.md) - pipeline design rationale
 - [docs/detailed_notes/localisation/sensor_noise_models.md](../../docs/detailed_notes/localisation/sensor_noise_models.md) - GNSS and IMU noise model derivation
