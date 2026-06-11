@@ -349,7 +349,7 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make ge
 
 analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml. Usage: make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]
 	$(call ensure-venv)
-	$(PYTHON) scripts/inspect/markov_analyser.py \
+	$(PYTHON) scripts/miscellaneous/markov_analyser.py \
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
 
@@ -459,15 +459,6 @@ clean-all: ## Remove everything including checkpoints and logs (preserves .xodr 
 
 clean-venv: ## Remove the local virtual environment (re-create with make install)
 	rm -rf $(VENV)
-
-# ----------------------------------------------------------------------
-# TensorBoard scalar inspection (host-side; reads a run's event file)
-# ----------------------------------------------------------------------
-
-tb-scalars: ## Print scalar trajectories from a run log dir. Usage: make tb-scalars LOG=logs/<run_dir>
-	$(call ensure-venv)
-	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
-	$(PYTHON) $(SCRIPTS_DIR)/inspect/tb_read.py $(LOG)
 
 # ----------------------------------------------------------------------
 # Config Backup

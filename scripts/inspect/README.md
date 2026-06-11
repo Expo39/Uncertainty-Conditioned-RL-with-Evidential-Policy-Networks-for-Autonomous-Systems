@@ -29,7 +29,6 @@ Requires a windowed CARLA session (X11 display) and the `carla-server-demo` cont
 | `inspectors/__init__.py` | Subpackage exports |
 | `_drawing.py` | Free functions for CARLA debug geometry (dots, arcs, labels) |
 | `dryrun.sh` | Shell driver: streams logs and tears down inspect containers on exit |
-| `markov_analyser.py` | Offline diagnostic for the GNSS tier Markov chain. CPU-only (no CARLA). Run via `make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]`; reports stationary distribution, mean dwell, and time to first contiguous good window for episodes starting in a bad tier. |
 
 ## Modes
 
