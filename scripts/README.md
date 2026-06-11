@@ -17,6 +17,7 @@ Offline tooling for layout generation, CARLA inspection, live visualisation, and
 | 2D bird's-eye visualiser (live) | `make visualise` |
 | Checkpoint demo + 2D viewer | `make eval-visualise-2d` |
 | Checkpoint demo + 3D CARLA view | `make docker-eval-visualise-3d` |
+| Diagnose GNSS tier Markov chain | `make analyse-markov` |
 
 ## Directory map
 
@@ -30,6 +31,7 @@ flowchart TB
         TRN["training/\ntrain.sh"]
         MLT["multi_workers/\nWorker stack scripts"]
         CLN["cleanup/\nstack_clean.sh"]
+        MSC["miscellaneous/\nmarkov_analyser.py"]
     end
 
     subgraph make["make targets"]
@@ -115,6 +117,17 @@ Multi-worker stack orchestration for parallel CARLA training (`workers_up.sh`, `
 ### `cleanup/`
 
 Stack teardown helper (`stack_clean.sh`). Removes dangling containers and volumes after interrupted runs.
+
+### `miscellaneous/`
+
+Standalone CPU-only diagnostics with no CARLA or ROS 2 dependency.
+
+- `markov_analyser.py` - offline diagnostic for the GNSS tier Markov chain (stationary distribution, mean dwell per tier, time to first contiguous good window).
+
+```bash
+make analyse-markov                              # Defaults from gnss_noise_profiles.yaml
+make analyse-markov N_EPISODES=10000 N_STEPS=1750
+```
 
 ## See also
 
