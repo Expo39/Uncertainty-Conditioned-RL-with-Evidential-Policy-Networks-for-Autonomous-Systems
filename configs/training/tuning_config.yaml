@@ -4,7 +4,7 @@
 study_name: "uncertainty_rl_tuning"  # Per-baseline runs suffix this with the baseline name.
 storage_path: "logs/tuning/optuna_study.db"  # SQLite for resume. Per-baseline runs suffix the filename.
 n_trials: 40   # Budget for the structural-parameter search space.
-timesteps_per_trial: 100000  # ~49 PPO updates; enough to rank configs without full convergence.
+timesteps_per_trial: 100000  # 24-98 PPO updates depending on sampled n_steps; ranks configs without full convergence (equal-timestep comparison favours sample efficiency).
 tuning_seed: 777  # TPE sampler seed (the only tuning seed); disjoint from train_config seeds so tuning and eval splits differ.
 
 sampler:

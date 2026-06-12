@@ -1,12 +1,16 @@
 """
 @file tune_hyperparams.py
-@brief Optuna hyperparameter tuning for PPO + evidential policy networks.
+@brief Optuna tuning of the structural PPO hyperparameters.
 
-Uses TPESampler (multivariate) and MedianPruner to search PPO + evidential
-hyperparameters. Each trial runs a short training session and evaluates
-env/success_rate (primary), with env/mean_progress_reward as a tiebreaker
-before any success has been observed. Best params are written back to
-train_config.yaml.
+Uses TPESampler (multivariate) and MedianPruner to search the STRUCTURAL PPO
+params only (n_steps, batch_size, n_epochs, gamma, gae_lambda, clip_range,
+vf_coef, max_grad_norm) - learning_rate/ent_coef are stage-owned schedules and
+evidential.* is ablation-specific, so neither is searched. Each trial runs a
+short from-scratch training session and evaluates env/success_rate (primary),
+with env/mean_progress_reward as a tiebreaker before any success has been
+observed. A per-baseline study writes its best params to
+logs/tuning/results/best_params_<baseline>.yaml; the legacy no-baseline study
+writes back into train_config.yaml.
 """
 
 import argparse
@@ -292,7 +296,7 @@ def objective(
     tuning_config: Dict[str, Any],
     train_config_path: str,
     env_config_path: str,
-    shared_env: Optional[VecNormalize] = None,
+    shared_vec_env: Optional[DummyVecEnv] = None,
 ) -> float:
     """
     @brief Optuna objective function for a single trial.
@@ -306,8 +310,10 @@ def objective(
     @param tuning_config: Tuning configuration with study settings.
     @param train_config_path: Path to train_config.yaml.
     @param env_config_path: Path to env_config.yaml.
-    @param shared_env: Pre-built VecNormalize env reused across all trials.
-           Avoids the CARLA destroy/respawn cycle that breaks the EKF.
+    @param shared_vec_env: Pre-built CARLA vec env reused across all trials.
+           Avoids the CARLA destroy/respawn cycle that breaks the EKF. Each
+           trial wraps it in a FRESH VecNormalize so reward-normalisation
+           stats never leak between trials.
     @return Composite objective value for this trial.
     """
     try:
@@ -317,6 +323,22 @@ def objective(
         # Create a trial-specific config
         trial_config = copy.deepcopy(base_config)
         trial_config.update(sampled_params)
+
+        # Fresh per-trial VecNormalize over the shared CARLA env, constructed
+        # EXACTLY as train_ppo.py builds it (reward normalisation only - obs
+        # are normalised by fixed physical ranges in build_observation), with
+        # this trial's sampled gamma scaling the return-normalisation std.
+        # Tuning against any other normalisation setup ranks configs on
+        # dynamics the real training run never sees.
+        trial_env: Optional[VecNormalize] = None
+        if shared_vec_env is not None:
+            trial_env = VecNormalize(
+                shared_vec_env,
+                norm_obs=False,
+                norm_reward=True,
+                clip_reward=20.0,
+                gamma=float(trial_config.get("gamma", 0.99)),
+            )
 
         # Set trial-specific training budget and directories. train() nests every
         # run as <root>/<baseline_name>/<run_leaf>/, so the tuning roots plus a
@@ -338,7 +360,7 @@ def objective(
         result = train(
             trial_config,
             extra_callbacks=[trial_callback],
-            env=shared_env,
+            env=trial_env,
         )
 
         success_rate = float(result.final_metrics.get("env/success_rate", 0.0))
@@ -476,22 +498,14 @@ def run_study(
     # bay_margin comes from env_config (single source of truth); .get guards a
     # missing key with the env's own constructor default.
     tune_bay_margin = float(base_config.get("bay_margin", 0.0))
+    # Only the CARLA vec env is shared; each trial wraps it in its own
+    # VecNormalize (see objective) so reward-normalisation running stats and
+    # the sampled gamma stay per-trial, exactly as a fresh training run.
     shared_vec_env = DummyVecEnv(
         [
             make_env(base_config, bay_margin=tune_bay_margin, rank=i)
             for i in range(n_workers)
         ]
-    )
-    # norm_reward=False here, so VecNormalize's gamma (which only scales the
-    # reward-normalisation running std) is inert; passed for parity with the
-    # train_ppo construction. The per-trial PPO gamma is sampled by Optuna, so
-    # the base default is the right value for this shared, reward-unnormalised env.
-    shared_env = VecNormalize(
-        shared_vec_env,
-        norm_obs=True,
-        norm_reward=False,
-        clip_obs=10.0,
-        gamma=base_config.get("gamma", 0.99),
     )
 
     try:
@@ -502,13 +516,13 @@ def run_study(
                 tuning_config,
                 train_config_path,
                 env_config_path,
-                shared_env=shared_env,
+                shared_vec_env=shared_vec_env,
             ),
             n_trials=n_trials,
         )
     finally:
         logger.info("Closing shared training environment.")
-        shared_env.close()
+        shared_vec_env.close()
 
     # Print summary
     logger.info("Study complete. Best trial:")
@@ -600,9 +614,11 @@ def main() -> None:
         help=(
             "Curriculum stage (1..N). Deep-merges "
             "configs/deployment/sim/curriculum/stage<N>.yaml over the env config "
-            "so tuning runs at that stage's difficulty. The curriculum plan tunes "
-            "at the Phase A -> B boundary, so pass --stage 6 (or via STAGE= in the "
-            "Makefile). Omit to default to stage 1."
+            "so tuning runs at that stage's difficulty. Stage 1 (the default) is "
+            "the recommended tuning stage: trials train from scratch on a "
+            "100k-step budget, and stage 1 is the only stage where that budget "
+            "yields a non-zero success-rate objective (later stages would leave "
+            "only the progress tiebreaker)."
         ),
     )
     parser.add_argument(
