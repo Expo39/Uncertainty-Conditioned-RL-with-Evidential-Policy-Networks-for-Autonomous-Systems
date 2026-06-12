@@ -177,7 +177,7 @@ obs, reward, terminated, truncated, info = env.step(action)
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | Structural dimensions and success thresholds |
 
 <!-- gif:placeholder name="parking_episode" caption="Bird's-eye view of a parking episode under RTK float conditions" -->
-![Parking episode placeholder](docs/media/parking_episode.gif)
+![Parking episode placeholder](../../docs/media/parking_episode.gif)
 
 ## See also
 

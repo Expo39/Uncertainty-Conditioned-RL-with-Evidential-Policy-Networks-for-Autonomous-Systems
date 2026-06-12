@@ -83,6 +83,9 @@ make docker-inspect-live                               # Default: rectangle layo
 make docker-inspect-live INSPECT_LAYOUT=trapezoid
 ```
 
+<!-- gif:placeholder name="inspect_live" caption="Live LiDAR inspector - red scan return dots in the CARLA world from birds-eye" -->
+![Live LiDAR inspector placeholder](../../docs/media/inspect_live.gif)
+
 ### Dryrun (`--mode dryrun`)
 
 Runs the full training pipeline (env reset + step loop) with a constant forward action or keyboard control and no model. Spectator follows the ego vehicle. EKF covariance, GT pose, and EKF-vs-GT errors are printed to the console every 50 steps.

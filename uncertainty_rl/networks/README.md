@@ -211,8 +211,8 @@ for the full wiring.
 | [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.use_uncertainty_conditioning` |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM`, `ACTION_DIM` |
 
-<!-- gif:placeholder name="uncertainty_evolution" caption="Epistemic and aleatoric uncertainty during a parking episode" -->
-![Uncertainty evolution placeholder](docs/media/uncertainty_evolution.gif)
+<!-- img:placeholder name="uncertainty_evolution" caption="Epistemic and aleatoric uncertainty during a parking episode" -->
+![Uncertainty evolution placeholder](../../docs/media/uncertainty_evolution.png)
 
 ## See also
 
