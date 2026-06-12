@@ -88,8 +88,8 @@ values rather than relying on this list.
 | [`configs/deployment/sim/gnss_noise_profiles.yaml`](../configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers and per-episode sampling weights |
 | [`configs/layouts/*.yaml`](../configs/layouts/) | Floor plan geometry (corners, bays, spawn points, patrol paths) |
 
-<!-- gif:placeholder name="training_overview" caption="Training convergence with uncertainty logging" -->
-![Training overview placeholder](docs/media/training_overview.gif)
+<!-- img:placeholder name="training_curves" caption="PPO training convergence - episode reward, success rate, and evidential uncertainty metrics" -->
+![Training curves placeholder](../docs/media/training_curves.png)
 
 ## See also
 

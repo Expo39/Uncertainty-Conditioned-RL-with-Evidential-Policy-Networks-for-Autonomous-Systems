@@ -165,8 +165,11 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 | `configs/train_config.yaml` | `policy_type` (selects evidential vs standard path for uncertainty logging) |
 | `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_VELOCITY`, `STRICT_BAY_MARGIN` (the strict margin applied during evaluation/demo/inspector; training reads `bay_margin` from config, relaxed per curriculum stage). Success is tested geometrically via `car_fully_inside_bay()` in `utils/geometry.py`. |
 
-<!-- gif:placeholder name="eval_degradation" caption="Success rate and epistemic uncertainty across the 9 evaluation conditions" -->
-![Evaluation degradation placeholder](docs/media/eval_degradation.gif)
+<!-- img:placeholder name="eval_degradation" caption="Success rate and epistemic uncertainty across the 9 evaluation conditions" -->
+![Evaluation degradation placeholder](../../docs/media/eval_degradation.png)
+
+<!-- gif:placeholder name="baseline_comparison" caption="Vanilla PPO vs full method side by side under degraded GNSS" -->
+![Baseline comparison placeholder](../../docs/media/baseline_comparison.gif)
 
 ## See also
 

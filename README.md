@@ -73,14 +73,17 @@ flowchart TB
 
 ## Demos
 
-<!-- gif:placeholder name="training_convergence" caption="PPO training convergence - episode reward and success rate over 1M steps" -->
-![Training convergence placeholder](docs/media/training_convergence.gif)
+<!-- img:placeholder name="training_curves" caption="PPO training convergence - episode reward, success rate, and evidential uncertainty metrics" -->
+![Training curves placeholder](docs/media/training_curves.png)
 
-<!-- gif:placeholder name="vis_2d" caption="Detachable 2D bird's-eye visualiser during a live training run" -->
-![2D visualiser placeholder](docs/media/vis_2d.gif)
+<!-- gif:placeholder name="visualiser_2d" caption="Detachable 2D bird's-eye visualiser during a parking episode" -->
+![2D visualiser placeholder](docs/media/visualiser_2d.gif)
 
 <!-- gif:placeholder name="carla_3d" caption="3D CARLA spectator view - evidential policy navigating the rectangular lot" -->
 ![CARLA 3D placeholder](docs/media/carla_3d.gif)
+
+<!-- gif:placeholder name="gnss_degradation" caption="Same bay attempted under RTK fixed vs degraded GNSS - EKF covariance growth side by side" -->
+![GNSS degradation placeholder](docs/media/gnss_degradation.gif)
 
 ---
 
