@@ -15,7 +15,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 | Module | Class / purpose |
 |--------|----------------|
-| `evaluate.py` | `EvaluationMetrics` - per-condition results dataclass; `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full 9-condition sweep; `plot_evaluation_results()` - seaborn bar charts and CSV export |
+| `evaluate.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records); `_classify_outcome()` - failure-mode taxonomy; `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (13 conditions, returns `(DataFrame, run_output_dir)`); `plot_evaluation_results()` - seaborn bar charts + stacked failure-mode figure |
 | `__init__.py` | Re-exports `EvaluationMetrics`, `evaluate_agent`, `evaluate_across_conditions`, `plot_evaluation_results` |
 
 ## Internal data flow
@@ -34,14 +34,14 @@ flowchart TB
 
     subgraph ev["evaluate.py"]
         SCALE["_scale_sensor_noise()\nbase * multiplier"]
-        LOOP["evaluate_across_conditions()\n9 conditions"]
+        LOOP["evaluate_across_conditions()\n13 conditions"]
         AGENT["evaluate_agent()\nn_episodes"]
         ENV["CARLAParkingEnv"]
     end
 
-    subgraph out["evaluation_results/"]
-        CSV["metrics.csv"]
-        PNG["plots/*.png"]
+    subgraph out["evaluation_results/baseline/leaf/"]
+        CSV["evaluation_results.csv\nepisode_records.csv"]
+        PNG["evaluation_plots.png\nfailure_modes.png"]
     end
 
     EC --> LOOP
@@ -139,20 +139,20 @@ from uncertainty_rl.evaluation import (
     plot_evaluation_results,
 )
 
-metrics = evaluate_across_conditions(
-    model_path="checkpoints/final_model",
-    eval_config=eval_cfg,
-    env_config=env_cfg,
-    train_config=train_cfg,
+df, run_output_dir = evaluate_across_conditions(
+    model_path="checkpoints/full_method/seed42_12062026-0536/final_model",
+    eval_config_path="configs/eval_config.yaml",
+    env_config_path="configs/deployment/sim/env_config.yaml",
+    train_config_path="configs/train_config.yaml",
 )
-# metrics: List[EvaluationMetrics], one per condition
-plot_evaluation_results(metrics, output_dir="evaluation_results/")
+# df: one row per condition; run_output_dir: evaluation_results/<baseline>/<leaf>
+plot_evaluation_results(df, output_dir=run_output_dir)
 ```
 
 Run via Make:
 
 ```bash
-make docker-eval          # Full 9-condition sweep (100 episodes per condition)
+make docker-eval          # Full 13-condition sweep (100 episodes per condition)
 make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 ```
 
@@ -160,9 +160,9 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 
 | Config file | Keys |
 |-------------|------|
-| `configs/eval_config.yaml` | `model_path`, `n_episodes`, `deterministic`, `debug`, `eval_conditions`, `output_dir` (connection/timing come from env_config) |
+| `configs/eval_config.yaml` | `model_path`, `n_episodes`, `deterministic`, `debug`, `near_miss_threshold_m`, `eval_conditions` (connection/timing come from env_config) |
 | `configs/deployment/sim/env_config.yaml` | `carla_sensors.gnss.*`, `carla_sensors.imu.*` (base noise, scaled by condition multipliers) |
-| `configs/train_config.yaml` | `policy_type` (selects evidential vs standard path for uncertainty logging) |
+| `configs/baselines/<arm>.yaml` | `policy_type`, `include_covariance`, `include_obstacle_obs` (model class + obs shape of the evaluated checkpoint) |
 | `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_VELOCITY`, `STRICT_BAY_MARGIN` (the strict margin applied during evaluation/demo/inspector; training reads `bay_margin` from config, relaxed per curriculum stage). Success is tested geometrically via `car_fully_inside_bay()` in `utils/geometry.py`. |
 
 <!-- img:placeholder name="eval_degradation" caption="Success rate and epistemic uncertainty across the 9 evaluation conditions" -->

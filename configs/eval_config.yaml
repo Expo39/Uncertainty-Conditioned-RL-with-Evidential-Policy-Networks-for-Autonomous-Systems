@@ -1,110 +1,103 @@
 # Evaluation Configuration
-# Condition sweep across GNSS noise tiers and traffic densities.
-# Connection, timing and ROS 2 settings come from env_config.yaml (single source
-# of truth); this file holds only the condition sweep and eval-specific options.
+# De-confounded condition sweep for the ablation study: every condition varies
+# exactly ONE factor against the in-distribution anchor (rectangle lot, bay
+# occupancy 0.5, no dynamic actors - training has static parked cars only).
+# Connection, timing and ROS 2 settings come from env_config.yaml (single
+# source of truth); this file holds only the condition sweep and eval options.
+#
+# GNSS levels: a condition with gnss_noise_multiplier holds that level for the
+# whole episode (bypasses tier sampling) so the level is a controlled
+# independent variable. Multipliers are derived from the tier table in
+# configs/deployment/sim/gnss_noise_profiles.yaml as metric_stddev_m / 0.020 m
+# (the RTK-fixed base). A condition WITHOUT the key runs the training noise
+# process itself: per-episode tier sampling + mid-episode Markov drift.
 
-model_path: "checkpoints/final_model"
+model_path: "checkpoints/final_model"  # Overridden by make docker-eval.
 
-n_episodes: 100  # Episodes per condition.
+n_episodes: 100  # Episodes per condition. Use 200+ for final headline runs.
 deterministic: true  # Use deterministic (mean) actions.
 debug: false
 
+# Timed-out episodes ending closer than this (m) to the bay are classed
+# near_miss (precision shortfall); farther ones stuck (blocked/abandoned).
+near_miss_threshold_m: 1.5
+
 eval_conditions:
-  # Nominal conditions (policy should park successfully)
-  - name: "nominal_empty"
-    description: "RTK fixed, empty lot"
-    gnss_noise_multiplier: 1.0  # RTK fixed (~2 cm)
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 0
-    pedestrian_spawn_probability: 0.0
-    bay_occupancy_rate: 0.6
+  # In-distribution anchor: the exact noise process training ran (tier
+  # sampling + Markov drift). This is the deployment condition.
+  - name: "in_distribution_markov"
+    description: "Training GNSS process (tier sampling + drift), occupancy 0.5"
+    bay_occupancy_rate: 0.5
 
-  - name: "nominal_busy"
-    description: "RTK fixed, full traffic - training distribution"
-    gnss_noise_multiplier: 1.0  # RTK fixed (~2 cm)
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.8
+  # --- GNSS axis (occupancy pinned at 0.5, rectangle) ---------------------
+  - name: "gnss_rtk_fixed"
+    description: "RTK fixed (~2 cm) held all episode"
+    gnss_noise_multiplier: 1.0  # 0.020 m / 0.020 m
+    bay_occupancy_rate: 0.5
 
-  # GNSS degradation sweep
-  - name: "rtk_float"
-    description: "RTK float (~30 cm), moderate traffic"
-    gnss_noise_multiplier: 15.0  # RTK float (~30 cm)
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 0.8
-    bay_occupancy_rate: 0.6
+  - name: "gnss_rtk_float"
+    description: "RTK float (~36 cm) held all episode"
+    gnss_noise_multiplier: 18.0  # 0.360 m / 0.020 m
+    bay_occupancy_rate: 0.5
 
-  - name: "rtk_float_busy"
-    description: "RTK float (~30 cm), full traffic"
-    gnss_noise_multiplier: 15.0  # RTK float (~30 cm)
-    imu_noise_multiplier: 1.5
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.8
+  - name: "gnss_standalone"
+    description: "Standalone GNSS (~1.8 m) held - cautious or abort expected"
+    gnss_noise_multiplier: 90.0  # 1.802 m / 0.020 m
+    bay_occupancy_rate: 0.5
 
-  - name: "rtk_standalone"
-    description: "Standalone GNSS (~2 m), moderate traffic - policy should abort"
-    gnss_noise_multiplier: 100.0  # Standalone (~2 m)
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 0.8
-    bay_occupancy_rate: 0.6
+  - name: "gnss_degraded"
+    description: "Degraded GNSS (~5 m) held - safety handoff expected"
+    gnss_noise_multiplier: 250.0  # 5.0 m / 0.020 m
+    bay_occupancy_rate: 0.5
 
-  - name: "rtk_lost"
-    description: "Degraded GNSS (~5 m), busy lot - safety handoff expected"
-    gnss_noise_multiplier: 250.0  # Degraded (~5 m)
-    imu_noise_multiplier: 2.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.8
-
-  # OOD floor plan evaluation - epistemic uncertainty calibration check
-  - name: "ood_layout"
-    description: "OOD floor plan (irregular_a), RTK fixed"
+  # --- Occupancy axis (GNSS pinned at RTK fixed, rectangle) ---------------
+  - name: "occ_empty"
+    description: "Empty lot (below training minimum 0.2 - mild OOD)"
     gnss_noise_multiplier: 1.0
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.6
-    floor_plan: "irregular_a"
+    bay_occupancy_rate: 0.0
 
-  - name: "ood_layout_degraded"
-    description: "OOD floor plan (irregular_a), RTK float"
-    gnss_noise_multiplier: 15.0
-    imu_noise_multiplier: 1.5
-    num_patrol_vehicles: 1
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.6
-    floor_plan: "irregular_a"
+  - name: "occ_light"
+    description: "Light occupancy (training minimum)"
+    gnss_noise_multiplier: 1.0
+    bay_occupancy_rate: 0.2
 
-  # Held-out layout evaluation - trapezoid is excluded from training (rectangle
-  # only), so success here measures generalisation to an unseen geometry.
+  - name: "occ_busy"
+    description: "Busy lot (training maximum)"
+    gnss_noise_multiplier: 1.0
+    bay_occupancy_rate: 0.8
+
+  # --- Generalisation: unseen geometry (occupancy 0.5) --------------------
+  # Trapezoid is held out from training (rectangle only); irregular_a is the
+  # designated OOD layout - the epistemic-uncertainty calibration check.
   - name: "heldout_trapezoid"
     description: "Held-out floor plan (trapezoid), RTK fixed"
     gnss_noise_multiplier: 1.0
-    imu_noise_multiplier: 1.0
-    num_patrol_vehicles: 0
-    pedestrian_spawn_probability: 0.0
-    bay_occupancy_rate: 0.6
+    bay_occupancy_rate: 0.5
     floor_plan: "trapezoid"
 
   - name: "heldout_trapezoid_degraded"
     description: "Held-out floor plan (trapezoid), RTK float"
-    gnss_noise_multiplier: 15.0
-    imu_noise_multiplier: 1.5
-    num_patrol_vehicles: 0
-    pedestrian_spawn_probability: 0.0
-    bay_occupancy_rate: 0.6
+    gnss_noise_multiplier: 18.0
+    bay_occupancy_rate: 0.5
     floor_plan: "trapezoid"
 
-  # Safety handoff demonstration - beyond training distribution
+  - name: "ood_layout"
+    description: "OOD floor plan (irregular_a), RTK fixed"
+    gnss_noise_multiplier: 1.0
+    bay_occupancy_rate: 0.5
+    floor_plan: "irregular_a"
+
+  - name: "ood_layout_degraded"
+    description: "OOD floor plan (irregular_a), RTK float"
+    gnss_noise_multiplier: 18.0
+    bay_occupancy_rate: 0.5
+    floor_plan: "irregular_a"
+
+  # --- Stress beyond training ranges ---------------------------------------
+  # IMU multiplier scales the CARLA IMU sensor stddevs above the fixed
+  # training noise (the ROS 2 relay noise is not scaled).
   - name: "worst_case"
-    description: "Degraded GNSS + max IMU noise - safety handoff demo"
-    gnss_noise_multiplier: 250.0  # Degraded (~5 m)
-    imu_noise_multiplier: 6.0  # Beyond training range (0.5x-3.0x)
-    num_patrol_vehicles: 0
-    pedestrian_spawn_probability: 1.0
-    bay_occupancy_rate: 0.0
-    floor_plan: "rectangle"
+    description: "Degraded GNSS (~5 m) + 3x IMU noise - handoff demo"
+    gnss_noise_multiplier: 250.0
+    imu_noise_multiplier: 3.0
+    bay_occupancy_rate: 0.5

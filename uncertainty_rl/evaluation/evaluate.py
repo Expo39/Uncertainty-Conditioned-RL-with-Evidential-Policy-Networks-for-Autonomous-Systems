@@ -55,9 +55,12 @@ class EvaluationMetrics:
     @class EvaluationMetrics
     @brief Container for evaluation metrics.
 
-    Fields cover per-condition success rate, reward, step counts, final pose
-    errors (reserved; not populated by current env), and per-step evidential
-    uncertainty estimates (evidential policy only).
+    Fields cover per-condition success rate, reward, step counts, final-state
+    pose errors (one entry per episode, read from the terminal info), per-step
+    evidential uncertainty estimates (evidential policy only), the per-episode
+    outcome taxonomy counts, and the full per-episode records that downstream
+    calibration analysis (uncertainty-vs-outcome, abort-threshold sweeps)
+    consumes via episode_records.csv.
     """
 
     success_rate: float = 0.0
@@ -67,11 +70,17 @@ class EvaluationMetrics:
     orientation_errors: List[float] = field(default_factory=list)
     epistemic_uncertainties: List[float] = field(default_factory=list)
     aleatoric_uncertainties: List[float] = field(default_factory=list)
+    # Episodes per outcome class: success / collision / out_of_bounds /
+    # handoff / near_miss / stuck (see _classify_outcome).
+    outcome_counts: Dict[str, int] = field(default_factory=dict)
+    # One dict per episode: outcome, final errors, lengths, uncertainty stats.
+    episode_records: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """
         @brief Convert metrics to dictionary.
-        @return Dictionary of metrics.
+        @return Dictionary of metrics. Rates are percentages of episodes,
+                matching the success_rate convention.
         """
 
         def _mean_std(lst: List[float]) -> Tuple[float, float]:
@@ -85,6 +94,13 @@ class EvaluationMetrics:
         epi_mean, _ = _mean_std(self.epistemic_uncertainties)
         ale_mean, _ = _mean_std(self.aleatoric_uncertainties)
 
+        n_outcomes = sum(self.outcome_counts.values())
+
+        def _rate(outcome: str) -> float:
+            if n_outcomes == 0:
+                return 0.0
+            return self.outcome_counts.get(outcome, 0) / n_outcomes * 100.0
+
         return {
             "success_rate": self.success_rate,
             "average_reward": self.average_reward,
@@ -95,7 +111,55 @@ class EvaluationMetrics:
             "std_orientation_error": ori_std,
             "mean_epistemic_uncertainty": epi_mean,
             "mean_aleatoric_uncertainty": ale_mean,
+            "max_epistemic_uncertainty": (
+                float(max(self.epistemic_uncertainties))
+                if self.epistemic_uncertainties
+                else 0.0
+            ),
+            "max_aleatoric_uncertainty": (
+                float(max(self.aleatoric_uncertainties))
+                if self.aleatoric_uncertainties
+                else 0.0
+            ),
+            "collision_rate": _rate("collision"),
+            "out_of_bounds_rate": _rate("out_of_bounds"),
+            "handoff_rate": _rate("handoff"),
+            "near_miss_rate": _rate("near_miss"),
+            "stuck_rate": _rate("stuck"),
         }
+
+
+def _classify_outcome(
+    terminal_info: Dict[str, Any],
+    near_miss_threshold: float,
+) -> str:
+    """
+    @brief Classify a terminated episode into the failure-mode taxonomy.
+    @param terminal_info: Terminal step info dict (post-wrapper, pre-reset).
+    @param near_miss_threshold: Final position error (m) below which a
+           timed-out episode counts as a near miss rather than stuck.
+    @return One of: "success", "collision", "out_of_bounds", "handoff",
+            "near_miss", "stuck".
+
+    Priority: a collision or run-off is reported as such even if a safety
+    handoff fired on the same step - the physical outcome outranks the
+    intervention. Handoff (SafetyWrapper truncation on high epistemic
+    uncertainty) is its own class: the vehicle stopped deliberately, which
+    the safety analysis must not conflate with a blocked or imprecise park.
+    Remaining timeouts split on the final position error: close misses are
+    precision shortfalls, far ones blocked or abandoned approaches.
+    """
+    if terminal_info.get("success", False):
+        return "success"
+    if terminal_info.get("collision", False):
+        return "collision"
+    if terminal_info.get("oob", False):
+        return "out_of_bounds"
+    if terminal_info.get("safety_handoff", False):
+        return "handoff"
+    if float(terminal_info.get("pos_error", float("inf"))) < near_miss_threshold:
+        return "near_miss"
+    return "stuck"
 
 
 def _scale_sensor_noise(
@@ -156,11 +220,14 @@ def make_eval_env(
         "bay_occupancy_rate", base_scenarios.get("bay_occupancy_max", 0.6)
     )
 
+    # Dynamic actors (patrol vehicles, pedestrians) are out of scope: training
+    # uses static parked cars only, so both default to zero and a condition
+    # must opt in explicitly to deviate from the training distribution.
     parking_config: Dict[str, Any] = {
         "spawn_perimeter_cones": spawn_cones,
         "num_patrol_vehicles_max": condition.get("num_patrol_vehicles", 0),
         "pedestrian_spawn_probability": condition.get(
-            "pedestrian_spawn_probability", 1.0
+            "pedestrian_spawn_probability", 0.0
         ),
         "bay_occupancy_min": bay_occupancy,
         "bay_occupancy_max": bay_occupancy,
@@ -230,6 +297,7 @@ def evaluate_agent(
     deterministic: bool = True,
     render: bool = False,
     bay_tracker: Optional[BaySuccessTracker] = None,
+    near_miss_threshold: float = 1.5,
 ) -> EvaluationMetrics:
     """
     @brief Evaluate agent performance.
@@ -241,14 +309,28 @@ def evaluate_agent(
     @param bay_tracker: Optional per-bay success tracker. When supplied, each
            terminated episode is recorded against its target bay so the caller
            can dump a per-bay success CSV across the whole condition sweep.
+    @param near_miss_threshold: Final position error (m) separating near_miss
+           from stuck for timed-out episodes (see _classify_outcome).
     @return EvaluationMetrics object with results.
 
     @note For EvidentialPPO models, uses get_action_with_uncertainty() to
           collect per-step epistemic and aleatoric uncertainty estimates.
           Success is determined from the environment's info dict (set by
           CARLAParkingEnv.step()) rather than re-computing from final state.
+          EKF localisation stds are read from the per-step info (the EKF runs
+          for every baseline), so the uncertainty-gating analysis covers the
+          no-covariance arms too.
     """
     metrics = EvaluationMetrics()
+
+    # Per-episode uncertainty accumulators, cleared at each reset. step_fn
+    # appends to these as well as the flat per-condition lists in metrics so
+    # the per-episode record can report mean/max without re-slicing.
+    ep_epistemic: List[float] = []
+    ep_aleatoric: List[float] = []
+    # Action-distribution std per decision: sqrt(aleatoric) for the evidential
+    # head (its predicted outcome variance IS the sampling variance).
+    ep_action_std: List[float] = []
 
     episode_rewards = np.empty(n_episodes, dtype=np.float64)
     episode_steps = np.empty(n_episodes, dtype=np.int32)
@@ -279,9 +361,14 @@ def evaluate_agent(
             aleatoric = float(uncertainty_dict["aleatoric"].mean().item())
             metrics.epistemic_uncertainties.append(epistemic)
             metrics.aleatoric_uncertainties.append(aleatoric)
+            ep_epistemic.append(epistemic)
+            ep_aleatoric.append(aleatoric)
+            ep_action_std.append(float(np.sqrt(aleatoric)))
             _set_uncertainty("set_uncertainty", epistemic, aleatoric)
             next_obs, reward, done, infos = env.step(action)
             return next_obs, float(reward[0]), done, infos
+
+        const_action_std = float("nan")
 
     else:
 
@@ -290,16 +377,49 @@ def evaluate_agent(
             next_obs, reward, done, infos = env.step(action)
             return next_obs, float(reward[0]), done, infos
 
+        # The standard Gaussian policy's only confidence signal: exp(log_std),
+        # a learned state-INDEPENDENT parameter in SB3 PPO. Recorded per
+        # episode so the calibration analysis can show in-data that it carries
+        # no per-state information (a constant column), in contrast to the
+        # evidential head's state-conditional uncertainty.
+        _log_std = getattr(getattr(model, "policy", None), "log_std", None)
+        const_action_std = (
+            float(_log_std.detach().exp().mean().item())
+            if _log_std is not None
+            else float("nan")
+        )
+
+    def _mean_max(values: List[float]) -> Tuple[float, float]:
+        if not values:
+            return float("nan"), float("nan")
+        return float(np.mean(values)), float(np.max(values))
+
     for episode in range(n_episodes):
         obs: np.ndarray = env.reset()
         episode_reward = 0.0
         steps = 0
         done = np.array([False])
+        ep_epistemic.clear()
+        ep_aleatoric.clear()
+        ep_action_std.clear()
+        # EKF localisation stds (m / rad) at each decision, read from the
+        # step info - populated for every baseline because the EKF always
+        # runs; include_covariance only controls whether the policy SEES them.
+        ep_std_pos: List[float] = []
+        ep_std_yaw: List[float] = []
 
         while not done[0]:
             obs, step_reward, done, infos = step_fn(obs)
             episode_reward += step_reward
             steps += 1
+            _info0 = infos[0]
+            _std_x = float(_info0.get("ekf_std_x", float("nan")))
+            _std_y = float(_info0.get("ekf_std_y", float("nan")))
+            _std_yaw = float(_info0.get("ekf_std_yaw", float("nan")))
+            if np.isfinite(_std_x) and np.isfinite(_std_y):
+                ep_std_pos.append((_std_x + _std_y) / 2.0)
+            if np.isfinite(_std_yaw):
+                ep_std_yaw.append(_std_yaw)
             if done[0]:
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
                 # On the terminal step DummyVecEnv has already auto-reset the
@@ -309,19 +429,66 @@ def evaluate_agent(
                 terminal_info = infos[0].get("terminal_info", infos[0])
                 episode_success = bool(terminal_info.get("success", False))
                 success_flags[episode] = episode_success
+                outcome = _classify_outcome(terminal_info, near_miss_threshold)
+                metrics.outcome_counts[outcome] = (
+                    metrics.outcome_counts.get(outcome, 0) + 1
+                )
+                # Final-state pose errors: one entry per episode.
+                final_pos_error = float(terminal_info.get("pos_error", float("nan")))
+                final_ori_error = float(
+                    terminal_info.get("orientation_error", float("nan"))
+                )
+                metrics.position_errors.append(final_pos_error)
+                metrics.orientation_errors.append(final_ori_error)
+                # The bay id lives in the nested target_bay dict; fall back to
+                # the flat target_bay_id key so recording survives any wrapper
+                # that drops the nested dict. An empty id is ignored by record().
+                target_bay = terminal_info.get("target_bay", {})
+                bay_id = target_bay.get("bay_id", "") or terminal_info.get(
+                    "target_bay_id", ""
+                )
                 if bay_tracker is not None:
-                    # The bay id lives in the nested target_bay dict; fall back to
-                    # the flat target_bay_id key so recording survives any wrapper
-                    # that drops the nested dict. An empty id is ignored by record().
-                    target_bay = terminal_info.get("target_bay", {})
-                    bay_id = target_bay.get("bay_id", "") or terminal_info.get(
-                        "target_bay_id", ""
-                    )
                     bay_tracker.record(
                         bay_id=str(bay_id),
                         success=episode_success,
                         bay_type=str(target_bay.get("bay_type", "")),
                     )
+                epi_mean, epi_max = _mean_max(ep_epistemic)
+                ale_mean, ale_max = _mean_max(ep_aleatoric)
+                std_pos_mean, std_pos_max = _mean_max(ep_std_pos)
+                std_yaw_mean, _ = _mean_max(ep_std_yaw)
+                # Action std: state-conditional sqrt(aleatoric) for the
+                # evidential head; the constant exp(log_std) for the standard
+                # Gaussian policy (its only confidence measure).
+                if is_evidential:
+                    act_std_mean, act_std_max = _mean_max(ep_action_std)
+                else:
+                    act_std_mean = act_std_max = const_action_std
+                metrics.episode_records.append(
+                    {
+                        "episode": episode + 1,
+                        "bay_id": str(bay_id),
+                        "spawn_id": terminal_info.get("spawn_id", ""),
+                        "outcome": outcome,
+                        "success": int(episode_success),
+                        "steps": steps,
+                        "reward": episode_reward,
+                        "final_pos_error_m": final_pos_error,
+                        "final_orientation_error_rad": final_ori_error,
+                        "final_speed_ms": float(
+                            terminal_info.get("speed", float("nan"))
+                        ),
+                        "mean_epistemic": epi_mean,
+                        "max_epistemic": epi_max,
+                        "mean_aleatoric": ale_mean,
+                        "max_aleatoric": ale_max,
+                        "mean_action_std": act_std_mean,
+                        "max_action_std": act_std_max,
+                        "ekf_std_pos_mean_m": std_pos_mean,
+                        "ekf_std_pos_max_m": std_pos_max,
+                        "ekf_std_yaw_mean_rad": std_yaw_mean,
+                    }
+                )
                 if render:
                     env.render()
 
@@ -343,7 +510,7 @@ def evaluate_across_conditions(
     n_episodes: int = 0,
     output_dir: str = "./evaluation_results",
     baseline_path: Optional[str] = None,
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, str]:
     """
     @brief Evaluate agent across different physical conditions.
     @param model_path: Path to trained model.
@@ -352,11 +519,12 @@ def evaluate_across_conditions(
     @param train_config_path: Path to training config (shared hyperparameters).
     @param n_episodes: Episodes per condition. 0 means read from eval_config
         (n_episodes key), falling back to 100.
-    @param output_dir: Directory to save results.
+    @param output_dir: Root results directory; this run writes into the
+        <baseline>/<leaf> subdirectory underneath it.
     @param baseline_path: Baseline config naming the evaluated ablation cell. Its
         include_covariance / include_obstacle_obs / policy_type drive the obs shape
         and model class. None defaults to the full method (DEFAULT_BASELINE).
-    @return DataFrame with evaluation results.
+    @return Tuple of (results DataFrame, resolved run output directory).
     """
     from uncertainty_rl.training.train_ppo import (
         DEFAULT_BASELINE,
@@ -383,6 +551,8 @@ def evaluate_across_conditions(
     conditions = eval_config.get("eval_conditions", [])
     # n_episodes: caller can override; fall back to eval_config, then hard default.
     n_episodes = n_episodes or int(eval_config.get("n_episodes", 100))
+    # Timeout episodes closer than this (m) to the bay are near_miss, else stuck.
+    near_miss_threshold = float(eval_config.get("near_miss_threshold_m", 1.5))
 
     # Load model
     logger.info("Loading model from %s...", "/".join(Path(model_path).parts[-3:]))
@@ -398,6 +568,7 @@ def evaluate_across_conditions(
     vec_normalize_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
 
     results = []
+    episode_rows: List[Dict[str, Any]] = []
     vec_normalize_exists = os.path.exists(vec_normalize_path)
     if not vec_normalize_exists:
         logger.warning(
@@ -422,6 +593,10 @@ def evaluate_across_conditions(
     )
     _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
     _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_baseline / _eval_leaf
+    # Results nest by <baseline>/<leaf>, mirroring checkpoints/logs/bay
+    # successes, so successive ablation arms and seeds never overwrite each
+    # other's evaluation_results.csv / episode_records.csv.
+    run_output_dir = os.path.join(output_dir, _eval_baseline, _eval_leaf)
 
     for condition in conditions:
         name = condition.get("name", "unknown")
@@ -446,9 +621,12 @@ def evaluate_across_conditions(
             n_episodes=n_episodes,
             deterministic=deterministic,
             bay_tracker=bay_tracker,
+            near_miss_threshold=near_miss_threshold,
         )
 
-        # Dump this condition's per-bay success counts.
+        # Dump this condition's per-bay success counts. The GNSS field reports
+        # "markov" when no multiplier override is set, i.e. the condition runs
+        # the training noise process (tier sampling + drift).
         bay_tracker.dump(
             _bay_eval_root / name,
             run_info={
@@ -457,10 +635,16 @@ def evaluate_across_conditions(
                 "condition": name,
                 "description": description,
                 "n_episodes": n_episodes,
-                "gnss_noise_multiplier": condition.get("gnss_noise_multiplier", 1.0),
+                "gnss_noise_multiplier": condition.get(
+                    "gnss_noise_multiplier", "markov"
+                ),
                 "evaluated": datetime.now().strftime("%d-%m-%Y %H:%M"),
             },
         )
+
+        # Accumulate per-episode records across the sweep (one tidy table).
+        for record in metrics.episode_records:
+            episode_rows.append({"condition": name, **record})
 
         # Store results: merge metrics dict with condition metadata in one pass
         optional_fields = (
@@ -470,21 +654,28 @@ def evaluate_across_conditions(
             **metrics.to_dict(),
             "condition": name,
             "description": description,
-            "gnss_noise_multiplier": condition.get("gnss_noise_multiplier", 1.0),
+            # NaN marks the in-distribution Markov condition (no fixed level).
+            "gnss_noise_multiplier": condition.get(
+                "gnss_noise_multiplier", float("nan")
+            ),
             "imu_noise_multiplier": condition.get("imu_noise_multiplier", 1.0),
             "num_patrol_vehicles": condition.get("num_patrol_vehicles", 0),
             "pedestrian_spawn_probability": condition.get(
-                "pedestrian_spawn_probability", 1.0
+                "pedestrian_spawn_probability", 0.0
             ),
-            "bay_occupancy_rate": condition.get("bay_occupancy_rate", 0.6),
+            "bay_occupancy_rate": condition.get("bay_occupancy_rate", float("nan")),
             **optional_fields,
         }
         results.append(result)
 
         logger.info(
-            "  success_rate=%.1f%%  avg_reward=%.2f  avg_steps=%.0f",
+            "  success_rate=%.1f%%  handoff=%.1f%%  collision=%.1f%%  "
+            "near_miss=%.1f%%  stuck=%.1f%%  avg_steps=%.0f",
             metrics.success_rate,
-            metrics.average_reward,
+            result["handoff_rate"],
+            result["collision_rate"],
+            result["near_miss_rate"],
+            result["stuck_rate"],
             metrics.average_steps,
         )
 
@@ -495,12 +686,19 @@ def evaluate_across_conditions(
     df = pd.DataFrame(results)
 
     # Save results
-    os.makedirs(output_dir, exist_ok=True)
-    csv_path = os.path.join(output_dir, "evaluation_results.csv")
+    os.makedirs(run_output_dir, exist_ok=True)
+    csv_path = os.path.join(run_output_dir, "evaluation_results.csv")
     df.to_csv(csv_path, index=False)
     logger.info("Results saved to %s", csv_path)
 
-    return df
+    # Per-episode records: the raw table behind every aggregate, and the input
+    # to the calibration analysis (uncertainty-vs-outcome, abort thresholds).
+    episodes_df = pd.DataFrame(episode_rows)
+    episodes_csv_path = os.path.join(run_output_dir, "episode_records.csv")
+    episodes_df.to_csv(episodes_csv_path, index=False)
+    logger.info("Per-episode records saved to %s", episodes_csv_path)
+
+    return df, run_output_dir
 
 
 def plot_evaluation_results(
@@ -584,6 +782,36 @@ def plot_evaluation_results(
 
     plt.close()
 
+    # Failure-mode breakdown: stacked outcome shares per condition. Success at
+    # the base, then the failure taxonomy - the "degrades gracefully" figure.
+    outcome_specs = [
+        ("success_rate", "Success", "steelblue"),
+        ("near_miss_rate", "Near miss", "gold"),
+        ("stuck_rate", "Stuck", "darkorange"),
+        ("handoff_rate", "Handoff", "slategrey"),
+        ("out_of_bounds_rate", "Out of bounds", "sienna"),
+        ("collision_rate", "Collision", "firebrick"),
+    ]
+    present = [s for s in outcome_specs if s[0] in df.columns]
+    if present:
+        fig2, ax2 = plt.subplots(figsize=(12, 6))
+        bottom = np.zeros(len(conditions))
+        for col, label, colour in present:
+            values = df[col].to_numpy(dtype=float)
+            ax2.bar(x_list, values, bottom=bottom, label=label, color=colour)
+            bottom += values
+        ax2.set_xticks(x_list)
+        ax2.set_xticklabels(conditions, rotation=45, ha="right")
+        ax2.set_ylabel("Share of Episodes (%)", fontsize=12)
+        ax2.set_title("Episode Outcomes vs Condition", fontsize=14)
+        ax2.legend(fontsize=10)
+        ax2.grid(True, alpha=0.3, axis="y")
+        plt.tight_layout()
+        outcome_path = os.path.join(output_dir, "failure_modes.png")
+        plt.savefig(outcome_path, dpi=300, bbox_inches="tight")
+        logger.info("Failure-mode plot saved to %s", outcome_path)
+        plt.close()
+
 
 def main() -> None:
     """
@@ -653,8 +881,8 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Run evaluation
-    df = evaluate_across_conditions(
+    # Run evaluation. Results land in <output-dir>/<baseline>/<leaf>/.
+    df, run_output_dir = evaluate_across_conditions(
         model_path=args.model_path,
         eval_config_path=args.eval_config,
         env_config_path=args.env_config,
@@ -664,8 +892,8 @@ def main() -> None:
         baseline_path=args.baseline,
     )
 
-    # Create plots
-    plot_evaluation_results(df, output_dir=args.output_dir)
+    # Create plots alongside the CSVs.
+    plot_evaluation_results(df, output_dir=run_output_dir)
 
     logger.info("Evaluation complete.")
 
