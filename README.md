@@ -73,12 +73,6 @@ flowchart TB
 
 ## Demos
 
-<!-- img:placeholder name="training_curves" caption="PPO training convergence - episode reward, success rate, and evidential uncertainty metrics" -->
-![Training curves placeholder](docs/media/training_curves.png)
-
-<!-- gif:placeholder name="visualiser_2d" caption="Detachable 2D bird's-eye visualiser during a parking episode" -->
-![2D visualiser placeholder](docs/media/visualiser_2d.gif)
-
 <!-- gif:placeholder name="carla_3d" caption="3D CARLA spectator view - evidential policy navigating the rectangular lot" -->
 ![CARLA 3D placeholder](docs/media/carla_3d.gif)
 
