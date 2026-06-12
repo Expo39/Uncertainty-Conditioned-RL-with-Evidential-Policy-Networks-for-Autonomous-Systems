@@ -26,6 +26,7 @@ LAYOUT       ?= rectangle
 CHECKPOINT   ?=
 BASELINE     ?=
 STAGE        ?=
+SEED         ?=
 
 # BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
 # layout <root>/<baseline>/<leaf>/. You type only the names:
@@ -137,23 +138,23 @@ docker-top: ## Show running processes in containers
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
-	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
+docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SEED=123]
+	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(if $(SEED),$(SEED),train_config)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),) $(if $(SEED),--seed $(SEED),)
 
-docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
-	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
+docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SEED=123]
+	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(if $(SEED),$(SEED),train_config)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),) $(if $(SEED),--seed $(SEED),)
 
-docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=4] [BASELINE=full_method]
+docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo]
 	@echo "Tuning: layout=$(LAYOUT) stage=$(or $(STAGE),1) baseline=$(BASELINE_NAME)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
