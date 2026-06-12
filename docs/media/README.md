@@ -23,7 +23,7 @@ resolve once the asset is added. Paths from nested READMEs use relative
 
 To replace a placeholder: record the session (or export the plot), name the file
 `<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
-resolves automatically. A name referenced from several READMEs is one shared file.
+resolves automatically. Each asset is shown in exactly one README.
 
 ---
 
@@ -31,13 +31,14 @@ resolves automatically. A name referenced from several READMEs is one shared fil
 
 ### GIFs (animated recordings)
 
-| Name | Caption | Referenced in |
-|------|---------|---------------|
-| `visualiser_2d` | Detachable 2D bird's-eye visualiser during a parking episode | `README.md`, `scripts/README.md`, `scripts/visualise/README.md` |
+| Name | Caption | Shown in |
+|------|---------|----------|
 | `carla_3d` | 3D CARLA spectator view - evidential policy navigating the rectangular lot | `README.md` |
 | `gnss_degradation` | Same bay attempted under RTK fixed vs degraded GNSS - EKF covariance growth side by side | `README.md` |
+| `visualiser_2d` | Detachable 2D bird's-eye visualiser during a parking episode | `scripts/visualise/README.md` |
 | `parking_episode` | Bird's-eye view of a parking episode under RTK float conditions | `uncertainty_rl/envs/README.md` |
 | `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
+| `safety_handoff` | SafetyWrapper under rtk_lost conditions - aleatoric throttle cap slows the approach, then epistemic crosses the handoff threshold and the vehicle brakes to a stop | `uncertainty_rl/evaluation/README.md` |
 | `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |
 | `inspect_sensors` | Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye | `scripts/inspect/README.md` |
 | `inspect_live` | Live LiDAR inspector - red scan return dots in the CARLA world from birds-eye | `scripts/inspect/README.md` |
@@ -45,9 +46,9 @@ resolves automatically. A name referenced from several READMEs is one shared fil
 
 ### PNGs (static plots)
 
-| Name | Caption | Referenced in |
-|------|---------|---------------|
-| `training_curves` | PPO training convergence - episode reward, success rate, and evidential uncertainty metrics | `README.md`, `uncertainty_rl/README.md`, `uncertainty_rl/training/README.md` |
+| Name | Caption | Shown in |
+|------|---------|----------|
+| `training_curves` | PPO training convergence - episode reward, success rate, and evidential uncertainty metrics | `uncertainty_rl/training/README.md` |
 | `uncertainty_evolution` | Epistemic and aleatoric uncertainty during a parking episode | `uncertainty_rl/networks/README.md` |
 | `eval_degradation` | Success rate and epistemic uncertainty across the 9 evaluation conditions | `uncertainty_rl/evaluation/README.md` |
 
