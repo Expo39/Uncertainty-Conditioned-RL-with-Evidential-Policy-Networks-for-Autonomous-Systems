@@ -170,8 +170,8 @@ Active observation dimensions are derived at runtime.
 | [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml) | `study_name`, `n_trials`, `timesteps_per_trial`, `seed`, search-space bounds |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `TOTAL_OBS_DIM`, `ACTION_DIM`, `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM` |
 
-<!-- gif:placeholder name="training_curves" caption="PPO reward and evidential uncertainty metrics" -->
-![Training curves placeholder](docs/media/training_curves.gif)
+<!-- img:placeholder name="training_curves" caption="PPO training convergence - episode reward, success rate, and evidential uncertainty metrics" -->
+![Training curves placeholder](../../docs/media/training_curves.png)
 
 ## See also
 
