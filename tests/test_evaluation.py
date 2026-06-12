@@ -12,7 +12,11 @@ import numpy as np
 import pytest
 
 from uncertainty_rl.evaluation import EvaluationMetrics
-from uncertainty_rl.evaluation.evaluate import _scale_sensor_noise, evaluate_agent
+from uncertainty_rl.evaluation.evaluate import (
+    _classify_outcome,
+    _scale_sensor_noise,
+    evaluate_agent,
+)
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
 
 
@@ -50,6 +54,13 @@ class TestEvaluationMetrics:
             "std_orientation_error",
             "mean_epistemic_uncertainty",
             "mean_aleatoric_uncertainty",
+            "max_epistemic_uncertainty",
+            "max_aleatoric_uncertainty",
+            "collision_rate",
+            "out_of_bounds_rate",
+            "handoff_rate",
+            "near_miss_rate",
+            "stuck_rate",
         }
         assert expected_keys == set(d.keys())
 
@@ -117,6 +128,68 @@ class TestEvaluationMetrics:
         d = metrics.to_dict()
         assert d["mean_epistemic_uncertainty"] == 0.0
         assert d["mean_aleatoric_uncertainty"] == 0.0
+
+
+# ===========================================================================
+# TestClassifyOutcome
+# ===========================================================================
+
+
+class TestClassifyOutcome:
+    """
+    @class TestClassifyOutcome
+    @brief Tests for the episode failure-mode taxonomy.
+    """
+
+    def test_success(self) -> None:
+        """
+        @brief A successful episode is classed success regardless of flags.
+        """
+        info = {"success": True, "collision": True, "pos_error": 0.1}
+        assert _classify_outcome(info, 1.5) == "success"
+
+    def test_collision_outranks_handoff(self) -> None:
+        """
+        @brief A collision on the handoff step is still a collision.
+        """
+        info = {"success": False, "collision": True, "safety_handoff": True}
+        assert _classify_outcome(info, 1.5) == "collision"
+
+    def test_out_of_bounds(self) -> None:
+        """
+        @brief An OOB termination is classed out_of_bounds.
+        """
+        info = {"success": False, "collision": False, "oob": True}
+        assert _classify_outcome(info, 1.5) == "out_of_bounds"
+
+    def test_handoff(self) -> None:
+        """
+        @brief A SafetyWrapper truncation is classed handoff.
+        """
+        info = {"success": False, "safety_handoff": True, "pos_error": 0.5}
+        assert _classify_outcome(info, 1.5) == "handoff"
+
+    def test_near_miss_below_threshold(self) -> None:
+        """
+        @brief A timeout close to the bay is a near miss.
+        """
+        info = {"success": False, "pos_error": 0.8}
+        assert _classify_outcome(info, 1.5) == "near_miss"
+
+    def test_stuck_at_or_above_threshold(self) -> None:
+        """
+        @brief A timeout far from the bay is stuck.
+        """
+        info = {"success": False, "pos_error": 1.5}
+        assert _classify_outcome(info, 1.5) == "stuck"
+
+    def test_missing_pos_error_defaults_to_stuck(self) -> None:
+        """
+        @brief Without a final position error the episode cannot be a near
+               miss, so it falls through to stuck.
+        """
+        info = {"success": False}
+        assert _classify_outcome(info, 1.5) == "stuck"
 
 
 # ===========================================================================

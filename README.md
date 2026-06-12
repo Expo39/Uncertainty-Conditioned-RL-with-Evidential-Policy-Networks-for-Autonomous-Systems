@@ -238,7 +238,7 @@ Uncertainty-Conditioned-RL.../
 |
 |-- configs/                           YAML only - nothing hardcoded in source
 |   |-- train_config.yaml              PPO + evidential hyperparameters
-|   |-- eval_config.yaml               9-condition evaluation sweep
+|   |-- eval_config.yaml               13-condition evaluation sweep
 |   |-- ros2_config.yaml               EKF topics and QoS settings
 |   |-- deployment/sim/env_config.yaml CARLA env, sensors, GNSS noise profiles
 |   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage6)

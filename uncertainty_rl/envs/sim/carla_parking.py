@@ -396,6 +396,12 @@ class CARLAParkingEnv(gym.Env):
         # as not-a-number rather than logging ground truth as if it were EKF.
         self._last_ekf_world: np.ndarray = np.full(5, np.nan, dtype=np.float32)
         self._last_ekf_is_real: bool = False
+        # EKF 1-sigma localisation stds [std_x, std_y, std_yaw] (m, m, rad)
+        # from the same _get_state() read. The EKF runs for every baseline, so
+        # this is populated regardless of include_covariance - the obs flag
+        # only controls whether the policy SEES it, not whether it exists.
+        # Surfaced into step() info for uncertainty-gating analysis.
+        self._last_ekf_std: np.ndarray = np.full(3, np.nan, dtype=np.float32)
 
         # Identity odom-to-world transform (tx, ty, cos_r, sin_r, r).
         # The GNSS datum is latched to spawn position each episode reset, so
@@ -1268,6 +1274,10 @@ class CARLAParkingEnv(gym.Env):
             # Snapshot the genuine EKF world pose for step() info / trace CSV.
             self._last_ekf_world[:] = self._world_pose_buf
             self._last_ekf_is_real = True
+            if uncertainty is not None:
+                self._last_ekf_std[:] = uncertainty
+            else:
+                self._last_ekf_std[:] = np.nan
         else:
             # CI / tests fallback: use CARLA GT (no EKF available)
             self._debug_logger._logger.debug(
@@ -1291,6 +1301,7 @@ class CARLAParkingEnv(gym.Env):
             # rather than as a copy of ground truth.
             self._last_ekf_world[:] = np.nan
             self._last_ekf_is_real = False
+            self._last_ekf_std[:] = np.nan
 
         obstacle_features = extract_obstacle_features(
             self._get_lidar_scan(),
@@ -2345,6 +2356,12 @@ class CARLAParkingEnv(gym.Env):
             "ekf_yaw": float(ekf[2]),
             "ekf_vx": float(ekf[4]),
             "ekf_vyaw": float(ekf[3]),
+            # EKF 1-sigma localisation stds (m, m, rad). Populated for every
+            # baseline (the EKF always runs); include_covariance only controls
+            # whether the policy observes them. NaN when no EKF estimate.
+            "ekf_std_x": float(self._last_ekf_std[0]),
+            "ekf_std_y": float(self._last_ekf_std[1]),
+            "ekf_std_yaw": float(self._last_ekf_std[2]),
             # Target bay this episode (id, world pose, dimensions). Constant
             # within an episode; surfaced so trace tooling can record which bay
             # the run targeted without reaching into the env internals.
