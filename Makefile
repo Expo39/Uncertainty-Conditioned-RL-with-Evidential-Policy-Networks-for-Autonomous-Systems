@@ -464,6 +464,11 @@ clean-venv: ## Remove the local virtual environment (re-create with make install
 # Config Backup
 # ----------------------------------------------------------------------
 
+tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<run_dir> [ARGS="--match success --points 20 --last 10"]
+	$(call ensure-venv)
+	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
+	$(PYTHON) $(SCRIPTS_DIR)/miscellaneous/tb_read.py $(LOG) $(ARGS)
+
 backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
 	@echo "TODO.md" >> /tmp/_backup_files.txt
