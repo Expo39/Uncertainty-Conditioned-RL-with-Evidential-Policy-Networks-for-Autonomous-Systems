@@ -147,6 +147,11 @@ _TRACE_COLUMNS = [
     "ekf_yaw",
     "ekf_vx",
     "ekf_vyaw",
+    # EKF 1-sigma localisation stds (m, m, rad). Populated for every baseline
+    # (the EKF always runs); NaN when no genuine EKF estimate was available.
+    "ekf_std_x",
+    "ekf_std_y",
+    "ekf_std_yaw",
 ]
 
 
@@ -398,6 +403,9 @@ def main() -> None:
                             f"{info0.get('ekf_yaw', float('nan')):.4f}",
                             f"{info0.get('ekf_vx', float('nan')):.4f}",
                             f"{info0.get('ekf_vyaw', float('nan')):.4f}",
+                            f"{info0.get('ekf_std_x', float('nan')):.4f}",
+                            f"{info0.get('ekf_std_y', float('nan')):.4f}",
+                            f"{info0.get('ekf_std_yaw', float('nan')):.4f}",
                         ]
                     )
 
