@@ -86,9 +86,6 @@ make docker-eval-visualise-3d                                    # Checkpoint + 
 
 The env writes frames only when `outputs/.vis_active` exists (created by the visualiser on start, removed on close). See [visualise/README.md](visualise/README.md) for the signal file protocol and JSONL schema.
 
-<!-- gif:placeholder name="visualiser_2d" caption="Detachable 2D bird's-eye visualiser during a parking episode" -->
-![2D visualiser placeholder](../docs/media/visualiser_2d.gif)
-
 ### `colours/`
 
 Single source of truth for all visualisation colours (bay types, pedestrian zones, patrol path, lot boundary, ego vehicle, actor overlays). Import from here; never hardcode hex values in any script.
