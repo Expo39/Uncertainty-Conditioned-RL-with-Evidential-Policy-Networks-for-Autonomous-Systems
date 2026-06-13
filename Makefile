@@ -176,6 +176,11 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		$(if $(BASELINE),--baseline $(BASELINE_YAML),) \
 		--output-dir outputs/evaluation_results
 
+docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628
+	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
+	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/covariance_probe.py \
+		--model-path $(CHECKPOINT_MODEL)
+
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	DISPLAY=$(_DISPLAY) CHECKPOINT=$(CHECKPOINT_MODEL) \
