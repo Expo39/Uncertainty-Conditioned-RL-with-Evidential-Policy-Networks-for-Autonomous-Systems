@@ -143,15 +143,16 @@ def build_eval_env_factory(
         # sets fixed_gnss_tier rtk_fixed (episodes start clean and the Markov
         # chain wanders from there). Without the pin the anchor condition would
         # start episodes at a weighted random tier - a harsher process than
-        # training ever ran. Irrelevant when gnss_noise_multiplier overrides.
+        # training ever ran. Irrelevant when held_gnss_tier overrides.
         "fixed_gnss_tier": base_scenarios.get("fixed_gnss_tier", "rtk_fixed"),
     }
 
     # Env-specific settings resolved once from env_config.
     _ec = env_config if env_config is not None else {}
 
-    # GNSS noise multiplier override: locks tier for this eval condition.
-    gnss_override: Optional[float] = condition.get("gnss_noise_multiplier", None)
+    # Held GNSS tier override: locks the named fix-state tier for this eval
+    # condition (no Markov drift). None runs the training noise process.
+    held_tier: Optional[str] = condition.get("held_gnss_tier", None)
 
     # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
     aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 0.5))
@@ -175,7 +176,7 @@ def build_eval_env_factory(
         bay_margin=STRICT_BAY_MARGIN,
         rank=0,
         carla_sensors_override=scaled_sensors,
-        gnss_noise_multiplier_override=gnss_override,
+        held_gnss_tier_override=held_tier,
         host_override=host_override,
         port_override=port_override,
     )
