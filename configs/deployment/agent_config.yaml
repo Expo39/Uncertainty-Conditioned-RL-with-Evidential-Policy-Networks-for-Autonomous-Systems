@@ -10,10 +10,14 @@
 # ---------------------------------------------------------------------------
 # Hard speed governor (throttle is cut at or above this speed, brake unaffected).
 # Sized for the manoeuvre, not the road: at the 5 Hz decision rate with the
-# steering slew below, the turn-in window must span several policy decisions -
-# 3.5 m/s gives ~0.7 m per decision and a ~2.5 m steering ramp, versus 1.6 m and
-# 8 m at 8 m/s, where the corridor turn passes in 1-2 decisions.
-max_ego_speed_ms: 3.5  # Speed limit (m/s).
+# steering slew below, the turn-in window must span several policy decisions
+# (~1.2 m per decision here, a ~4 m steering ramp). The cap is the CEILING, not
+# the target - it is set high enough to leave headroom for the policy to CHOOSE
+# a lower speed, so cautious driving under high localisation uncertainty is a
+# measurable behaviour rather than something the governor flattens out. Below
+# the 1-2-decision corridor turn at 8 m/s, above the near-no-headroom regime
+# where caution is unobservable.
+max_ego_speed_ms: 6.0  # Speed limit (m/s).
 
 # ---------------------------------------------------------------------------
 # Actuator model

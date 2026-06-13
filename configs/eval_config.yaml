@@ -35,15 +35,28 @@ eval_conditions:
     description: "Training GNSS process (tier sampling + Markov drift), occupancy 0.5"
     bay_occupancy_rate: 0.5
 
+  # Same GNSS process as the anchor but an EMPTY lot (occupancy 0.0): the
+  # no-obstacle control. With zero parked cars the LiDAR channel (obs 8-12) sees
+  # nothing, so the policy must park on localisation alone (EKF speed +
+  # covariance + bay-direction), with the obstacle-avoidance crutch removed. The
+  # drift is mostly RTK-fixed, so the bay-direction obs is trustworthy and the
+  # car can still park - the empty lot is a fair control here, NOT the broken
+  # held-degraded-empty case (a degraded fix in an empty lot has no GNSS-
+  # independent bay signal, since bays carry no physical markers - only
+  # neighbour cars are LiDAR-visible). The anchor/anchor_empty pair isolates how
+  # much the policy leans on neighbours versus localisation.
+  - name: "anchor_empty"
+    description: "Training GNSS process, EMPTY lot (occupancy 0.0) - no-obstacle control"
+    bay_occupancy_rate: 0.0
+
   # --- GNSS axis: degradation-slope endpoints (occupancy 0.5, rectangle) --
   # Hold one RTK fix-state tier constant all episode (bypassing the Markov
   # chain) so the localisation level is a controlled independent variable. Only
   # the slope ENDPOINTS are kept: fixed (clean baseline) and degraded (worst).
-  # The intermediate float/standalone tiers are dropped from the headline sweep
-  # - their EKF error (~0.36/0.47 m) sits inside the bay's lateral slack, so the
+  # The intermediate float/standalone tiers are dropped - their EKF error
+  # (~0.36/0.47 m) sits inside the bay's lateral slack at occupancy 0.5, so the
   # covariance arms and the blind arms are indistinguishable there (no signal,
-  # only eval time). The clean covariance contrast lives in the empty-lot cells
-  # below, where the error is not swallowed by neighbours-or-geometry.
+  # only eval time).
   - name: "gnss_fixed"
     description: "RTK fixed (~2 cm) held - clean baseline (slope start)"
     held_gnss_tier: rtk_fixed
