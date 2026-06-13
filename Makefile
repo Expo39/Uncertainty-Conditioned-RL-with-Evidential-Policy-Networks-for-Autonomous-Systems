@@ -176,10 +176,11 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		$(if $(BASELINE),--baseline $(BASELINE_YAML),) \
 		--output-dir outputs/evaluation_results
 
-docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628
-	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/covariance_probe.py \
-		--model-path $(CHECKPOINT_MODEL)
+docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/evaluation_results/full_method/<leaf>/real_observations.npy]
+	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)$(if $(REAL_OBS), (on-manifold),)"
+	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/evaluation/covariance_probe.py \
+		--model-path $(CHECKPOINT_MODEL) \
+		$(if $(REAL_OBS),--real-obs $(REAL_OBS),)
 
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
@@ -378,6 +379,18 @@ analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml
 	$(PYTHON) scripts/miscellaneous/markov_analyser.py \
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
+
+analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis]
+	$(call ensure-venv)
+	$(PYTHON) scripts/evaluation/ablation_analyser.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis)
+
+analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis]
+	$(call ensure-venv)
+	$(PYTHON) scripts/evaluation/gate_roc.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis)
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)

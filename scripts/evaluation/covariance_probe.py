@@ -8,8 +8,21 @@ VEHICLE_STATE_DIM through VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM) from low
 growing action delta isolates the covariance as the cause, since nothing else
 in the observation changes; a flat delta means the policy ignores the input.
 
+Two modes:
+  - synthetic (default): one hand-built near-bay observation, covariance swept.
+    Cheap, but the base observation may sit off the data manifold.
+  - manifold (--real-obs <file.npy>): replays REAL observations captured during
+    an evaluation run (the eval loop dumps them when EVAL_DUMP_OBS is set),
+    sweeping only the covariance block on each and reporting the mean action
+    delta across the real-state distribution. This answers the same causal
+    question on-manifold, which is the stronger claim.
+
 Needs torch + stable-baselines3, so it runs in the training container via
-`make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf>`.
+`make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf>`. Lives under
+scripts/evaluation/ (bind-mounted to /workspace/scripts in the container) with
+the host-side analysers, though it alone needs the container to run.
+
+@author Antonio Galdes
 """
 
 from __future__ import annotations
@@ -27,13 +40,13 @@ from uncertainty_rl.utils.constants import (
     VEHICLE_STATE_DIM,
 )
 
-## Covariance block bounds in the observation vector (obs[2:5] by default).
+# Covariance block bounds in the observation vector (obs[2:5] by default).
 _COV_START = VEHICLE_STATE_DIM
 _COV_END = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM
 
-## Raw EKF position stds (metres, 1-sigma) spanning clean to degraded, with a
-## proportional yaw std. The EKF smooths the raw GNSS noise, so the worst tier
-## settles near ~1.0 m position std rather than the 5 m raw GNSS figure.
+# Raw EKF position stds (metres, 1-sigma) spanning clean to degraded, with a
+# proportional yaw std. The EKF smooths the raw GNSS noise, so the worst tier
+# settles near ~1.0 m position std rather than the 5 m raw GNSS figure.
 _TIER_POS_STDS_M: List[Tuple[str, float, float]] = [
     ("rtk_fixed", 0.02, 0.016),
     ("rtk_float", 0.36, 0.022),
@@ -142,6 +155,71 @@ def run_probe(model_path: str) -> None:
     )
 
 
+def run_manifold_probe(model_path: str, real_obs_path: str) -> None:
+    """
+    @brief Sweep the covariance block on REAL eval observations (on-manifold).
+    @param model_path: Path to the saved model (without or with .zip).
+    @param real_obs_path: Path to a .npy array of shape (n_obs, obs_dim) of real
+           normalised observations captured during an evaluation run.
+
+    For each captured observation, the covariance block is overwritten with each
+    tier's normalised std (everything else held at the real value) and the
+    deterministic action is recorded. The reported per-tier |d action| is the
+    mean over all real observations of the action's distance from that same
+    observation's clean-covariance action - so the delta is attributable solely
+    to the covariance, measured across the real-state distribution rather than a
+    single synthetic point.
+    """
+    from uncertainty_rl.networks.sb3_integration import EvidentialPPO
+
+    model = EvidentialPPO.load(model_path, device="cpu")
+    policy = model.policy
+    policy.set_training_mode(False)
+    obs_dim = int(policy.observation_space.shape[0])
+
+    real = np.load(real_obs_path).astype(np.float32)
+    if real.ndim != 2 or real.shape[1] != obs_dim:
+        raise ValueError(
+            f"Real obs array shape {real.shape} does not match obs_dim {obs_dim}."
+        )
+
+    print(f"Manifold covariance probe: {model_path}")
+    print(f"Replaying {real.shape[0]} real observations from {real_obs_path}")
+    print(f"obs_dim={obs_dim}  covariance block = obs[{_COV_START}:{_COV_END}]\n")
+    header = (
+        f"{'tier':12s}{'std_pos(m)':>11s}{'aleatoric':>11s}"
+        f"{'epistemic':>11s}{'mean|d act|':>12s}"
+    )
+    print(header)
+    print("-" * len(header))
+
+    # Per-tier action for every real observation; tier 0 is the clean baseline.
+    clean_actions: np.ndarray = np.zeros((real.shape[0], 3), dtype=np.float32)
+    for i, (name, std_pos, std_yaw) in enumerate(_TIER_POS_STDS_M):
+        swept = real.copy()
+        swept[:, _COV_START:_COV_END] = _normalise_covariance(std_pos, std_pos, std_yaw)
+        obs_t = th.as_tensor(swept, dtype=th.float32)
+        action_t, unc = policy.get_action_with_uncertainty(obs_t, deterministic=True)
+        actions = action_t.cpu().numpy()
+        aleatoric = float(unc["aleatoric"].mean().item())
+        epistemic = float(unc["epistemic"].mean().item())
+
+        if i == 0:
+            clean_actions = actions.copy()
+        mean_delta = float(np.linalg.norm(actions - clean_actions, axis=1).mean())
+
+        print(
+            f"{name:12s}{std_pos:>11.3f}{aleatoric:>11.4f}"
+            f"{epistemic:>11.4f}{mean_delta:>12.4f}"
+        )
+
+    print(
+        "\nmean|d act| growing with std means the policy conditions on the "
+        "covariance\nacross the REAL state distribution (on-manifold); flat means "
+        "it ignores it."
+    )
+
+
 def main() -> None:
     """
     @brief CLI entry point for the covariance causal probe.
@@ -155,8 +233,20 @@ def main() -> None:
         required=True,
         help="Path to the trained model (e.g. checkpoints/full_method/<leaf>/final_model).",
     )
+    parser.add_argument(
+        "--real-obs",
+        type=str,
+        default=None,
+        help=(
+            "Path to a .npy of real observations (n_obs, obs_dim) for the "
+            "on-manifold sweep. Omit for the synthetic single-point sweep."
+        ),
+    )
     args = parser.parse_args()
-    run_probe(args.model_path)
+    if args.real_obs:
+        run_manifold_probe(args.model_path, args.real_obs)
+    else:
+        run_probe(args.model_path)
 
 
 if __name__ == "__main__":
