@@ -41,6 +41,9 @@ class EvaluationMetrics:
     outcome_counts: Dict[str, int] = field(default_factory=dict)
     # One dict per episode: outcome, final errors, lengths, uncertainty stats.
     episode_records: List[Dict[str, Any]] = field(default_factory=list)
+    # Optional capture of real normalised observations (one ndarray per decision)
+    # for the on-manifold covariance probe. Empty unless EVAL_DUMP_OBS is set.
+    captured_observations: List[Any] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """

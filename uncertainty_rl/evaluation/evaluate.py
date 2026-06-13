@@ -95,6 +95,13 @@ def evaluate_agent(
     # Action-distribution std per decision: sqrt(aleatoric) for the evidential
     # head (its predicted outcome variance IS the sampling variance).
     ep_action_std: List[float] = []
+    # Optional capture of real (normalised) observations for the on-manifold
+    # covariance probe (scripts/evaluation/covariance_probe.py --real-obs).
+    # Off by default; enabled by the EVAL_DUMP_OBS env var (a positive integer
+    # cap on how many observations to keep). Captured across all conditions so
+    # the probe sees the full eval-state distribution.
+    _obs_cap = int(os.environ.get("EVAL_DUMP_OBS", "0") or "0")
+    captured_obs: List[np.ndarray] = []
 
     episode_rewards = np.empty(n_episodes, dtype=np.float64)
     episode_steps = np.empty(n_episodes, dtype=np.int32)
@@ -173,6 +180,9 @@ def evaluate_agent(
         ep_std_yaw: List[float] = []
 
         while not done[0]:
+            if _obs_cap and len(captured_obs) < _obs_cap:
+                # obs is the (1, obs_dim) batch the policy is about to act on.
+                captured_obs.append(np.asarray(obs, dtype=np.float32)[0].copy())
             obs, step_reward, done, infos = step_fn(obs)
             episode_reward += step_reward
             steps += 1
@@ -262,6 +272,8 @@ def evaluate_agent(
     metrics.success_rate = float(success_flags.sum()) / n_episodes * 100.0
     metrics.average_reward = float(episode_rewards.mean())
     metrics.average_steps = float(episode_steps.mean())
+    if captured_obs:
+        metrics.captured_observations = captured_obs
 
     return metrics
 
@@ -333,6 +345,9 @@ def evaluate_across_conditions(
 
     results = []
     episode_rows: List[Dict[str, Any]] = []
+    # Real observations captured across the whole sweep when EVAL_DUMP_OBS is set
+    # (the on-manifold covariance-probe input). Empty otherwise.
+    captured_obs_all: List[Any] = []
     vec_normalize_exists = os.path.exists(vec_normalize_path)
     if not vec_normalize_exists:
         logger.warning(
@@ -408,6 +423,12 @@ def evaluate_across_conditions(
         for record in metrics.episode_records:
             episode_rows.append({"condition": name, **record})
 
+        # Accumulate any captured real observations (EVAL_DUMP_OBS) across all
+        # conditions so the on-manifold covariance probe sees the full eval-state
+        # distribution, not one condition's slice.
+        if metrics.captured_observations:
+            captured_obs_all.extend(metrics.captured_observations)
+
         # Store results: merge metrics dict with condition metadata in one pass
         optional_fields = (
             {"floor_plan": condition["floor_plan"]} if "floor_plan" in condition else {}
@@ -459,6 +480,16 @@ def evaluate_across_conditions(
     episodes_csv_path = os.path.join(run_output_dir, "episode_records.csv")
     episodes_df.to_csv(episodes_csv_path, index=False)
     logger.info("Per-episode records saved to %s", episodes_csv_path)
+
+    # Dump captured real observations for the on-manifold covariance probe.
+    if captured_obs_all:
+        obs_path = os.path.join(run_output_dir, "real_observations.npy")
+        np.save(obs_path, np.asarray(captured_obs_all, dtype=np.float32))
+        logger.info(
+            "Captured %d real observations to %s (on-manifold probe input)",
+            len(captured_obs_all),
+            obs_path,
+        )
 
     return df, run_output_dir
 
