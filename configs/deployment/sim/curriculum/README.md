@@ -43,8 +43,10 @@ Every stage spells out the same full difficulty key set:
   outward; -0.25 is `STRICT_BAY_MARGIN`, the evaluation criterion).
 - `parking_scenarios.fixed_floor_plan` - `rectangle` (trapezoid/irregular held out
   for OOD evaluation).
-- `parking_scenarios.fixed_gnss_tier` - `rtk_fixed` in every stage; episodes START
-  clean and the stage-invariant GNSS Markov chain wanders from there.
+- `parking_scenarios.fixed_gnss_tier` - OMITTED in every stage, so the per-episode
+  START tier is SAMPLED from the init weights in `gnss_noise_profiles.yaml` (episodes
+  can begin in any fix state, the realistic arrival case); the stage-invariant GNSS
+  Markov chain then wanders from there.
 - `parking_scenarios.allowed_bay_ids` - bay whitelist; omitted = all 47 bays.
   Cluster geometry in `configs/layouts/rectangle.yaml` (five spatial clusters,
   three distinct yaws): 0-11 (yaw 270, north row), 12-24 (yaw 90, south row),

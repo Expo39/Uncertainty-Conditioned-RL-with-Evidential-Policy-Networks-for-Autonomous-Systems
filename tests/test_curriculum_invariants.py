@@ -104,11 +104,16 @@ def test_target_pose_channel_live(n: int) -> None:
 
 
 @pytest.mark.parametrize("n", _STAGES)
-def test_start_tier_and_spawns_fixed(n: int) -> None:
+def test_start_tier_sampled_and_spawns_fixed(n: int) -> None:
+    """The per-episode START tier must be SAMPLED from the gnss_noise_profiles init
+    weights, not pinned. The Markov redesign removed fixed_gnss_tier from every stage
+    so episodes can begin in any fix state (the realistic arrival case) and the chain
+    wanders from there; a stage that re-pins it would make eval easier than training
+    and re-introduce the stale-anchor bug. @see configs/CLAUDE.md, MEMORY.md."""
     cfg = _stage(n)
-    assert (
-        cfg["parking_scenarios"].get("fixed_gnss_tier") == "rtk_fixed"
-    ), f"stage{n}: episodes must START in rtk_fixed (drift wanders from there)"
+    assert "fixed_gnss_tier" not in cfg.get(
+        "parking_scenarios", {}
+    ), f"stage{n}: fixed_gnss_tier must be omitted (START tier is sampled, not pinned)"
     assert cfg.get("use_extra_spawns") is False, f"stage{n}: extra spawns must be off"
 
 

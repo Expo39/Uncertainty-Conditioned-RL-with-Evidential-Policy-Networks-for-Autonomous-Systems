@@ -22,9 +22,9 @@ import yaml
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
     "rtk_fixed": {"metric_stddev_m": 0.020, "doppler_stddev_ms": 0.05},
-    "rtk_float": {"metric_stddev_m": 0.360, "doppler_stddev_ms": 0.08},
-    "standalone": {"metric_stddev_m": 1.802, "doppler_stddev_ms": 0.15},
-    "degraded": {"metric_stddev_m": 5.000, "doppler_stddev_ms": 0.40},
+    "rtk_float": {"metric_stddev_m": 0.360, "doppler_stddev_ms": 0.90},
+    "standalone": {"metric_stddev_m": 1.802, "doppler_stddev_ms": 4.50},
+    "degraded": {"metric_stddev_m": 5.000, "doppler_stddev_ms": 12.50},
 }
 
 # Path to the YAML mirror file, resolved relative to this test file.
@@ -90,12 +90,14 @@ class TestTierDefaults:
         """
         assert _TIER_DEFAULTS["rtk_fixed"]["doppler_stddev_ms"] <= 0.1
 
-    def test_doppler_much_smaller_than_position_degradation(self) -> None:
+    def test_doppler_scales_with_position_degradation(self) -> None:
         """
-        @brief Doppler ladder range (<10x) must be much narrower than position range (>100x).
+        @brief Doppler noise scales by the SAME per-tier factor as position noise.
 
-        This encodes the physical claim: carrier Doppler is insensitive to the slowly-
-        varying errors that dominate the position tier ladder.
+        The fix-state tier degrades velocity/heading and position together: each tier's
+        doppler_stddev_ms is the rtk_fixed base scaled by the same 1 / 18 / 90 / 250x
+        ladder as metric_stddev_m, so the degraded:rtk_fixed ratio matches in both
+        channels. @see gnss_noise_profiles.yaml header.
         """
         doppler_ratio = (
             _TIER_DEFAULTS["degraded"]["doppler_stddev_ms"]
@@ -105,11 +107,10 @@ class TestTierDefaults:
             _TIER_DEFAULTS["degraded"]["metric_stddev_m"]
             / _TIER_DEFAULTS["rtk_fixed"]["metric_stddev_m"]
         )
-        assert (
-            doppler_ratio < 20.0
-        ), f"Doppler ratio {doppler_ratio:.1f}x unexpectedly large"
         assert pos_ratio > 50.0, f"Position ratio {pos_ratio:.1f}x unexpectedly small"
-        assert doppler_ratio < pos_ratio
+        assert doppler_ratio == pytest.approx(
+            pos_ratio
+        ), f"Doppler ratio {doppler_ratio:.1f}x must match position ratio {pos_ratio:.1f}x"
 
 
 # ---------------------------------------------------------------------------
