@@ -1,8 +1,11 @@
 # GNSS Fix-State Markov Chain - Design and Sim-to-Real Rationale
 
 > **Single-phase curriculum.** Mid-episode Markov drift is ON from Stage 1 (master switches
-> in `ros2_config.yaml` enabled globally). Each episode STARTS in `rtk_fixed` and the chain
-> wanders from there. The chain is a FIXED, stage-invariant process - it is loaded once at
+> in `ros2_config.yaml` enabled globally). Each episode STARTS in a tier SAMPLED from the
+> per-tier `weight` values in `gnss_noise_profiles.yaml` (biased toward the bad tiers -
+> 40/20/20/20 over fixed/float/standalone/degraded - so most episodes begin under
+> uncertainty, the realistic arrival case), and the chain wanders from there. The chain is a
+> FIXED, stage-invariant process - it is loaded once at
 > node startup from `configs/deployment/sim/gnss_noise_profiles.yaml` and is identical in
 > every curriculum stage (the GNSS degradation is not a ramped axis). The transition matrix
 > shown below is the one in that config.
@@ -35,9 +38,9 @@ States:  rtk_fixed (0) <-> rtk_float (1) <-> standalone (2) <-> degraded (3)
 ```
 
 No direct transitions between non-adjacent tiers (e.g. fixed -> standalone)
-are permitted; degradation and recovery progress through neighbouring states.
-This matches the physical mechanism: RTK does not jump directly from cm-level
-to metre-level accuracy -- it degrades through float first.
+are permitted; degradation and recovery walk the ladder through neighbouring
+states. This matches the physical mechanism: RTK does not jump directly from
+cm-level to metre-level accuracy -- it degrades through float first.
 
 ### Transition Matrix (per callback, 20 Hz)
 
@@ -45,28 +48,30 @@ to metre-level accuracy -- it degrades through float first.
              to: fixed   float   standalone  degraded
 from: fixed      0.9920  0.0080  0.0000      0.0000
 from: float      0.0400  0.9550  0.0050      0.0000
-from: standalone 0.0000  0.0350  0.9600      0.0050
-from: degraded   0.0000  0.0000  0.0600      0.9400
+from: standalone 0.0000  0.0080  0.9875      0.0045
+from: degraded   0.0000  0.0000  0.0071      0.9929
 ```
 
 ### Behaviour
 
 The chain is **upward-biased**: at every off-fixed rung the recovery
-probability (toward `rtk_fixed`) is far larger than the degradation
-probability (deeper). This makes it fixed-dominant and self-recovering.
+probability (toward `rtk_fixed`) exceeds the degradation probability (deeper).
+This makes it fixed-dominant and self-recovering. The dwell is deliberately
+**asymmetric** - standalone holds ~4 s and degraded ~7 s (longer where waiting
+for recovery is the only correct move), both kept below the ~10 s
+stall-truncation margin so a justified wait is never cut short.
 
 | Property | Value |
 |----------|-------|
-| Stationary distribution | fixed ~0.81, float ~0.16, standalone ~0.02, degraded ~0.002 |
-| Mean recovery to fixed   | float ~1.4 s, standalone ~3 s, degraded ~3.8 s |
+| Long-run distribution    | ~80% `rtk_fixed` (fixed-dominant healthy open-sky receiver) |
+| Mean dwell off-fixed     | standalone ~4 s, degraded ~7 s |
 | Leave-fixed rate         | 0.008/step -> a degradation event begins every ~6 s of fixed |
 
 The `_step_markov()` call runs on every GNSS callback (20 Hz); with
-`action_repeat=4` that is 4 chain steps per agent decision. Over a typical
-~150 s parking approach the agent experiences ~20 excursions from fixed,
-reaching standalone in ~90% of approaches and the (rare, brief) degraded tier
-in ~25%, covering the full covariance range mid-manoeuvre while the fix is
-clean the majority of the time.
+`action_repeat=4` that is 4 chain steps per agent decision. Because most
+episodes START off-fixed (biased start weights) and the chain recovers up the
+ladder, the agent meets the full covariance range mid-manoeuvre while the fix
+trends clean over the approach.
 
 ---
 
@@ -79,8 +84,8 @@ The probabilities were chosen to satisfy three constraints:
 1. **Fixed-dominant, like a healthy open-sky RTK receiver.** A correctly
    operating RTK rover with sky view holds fix the large majority of the time;
    fix loss is a discrete, transient event (cycle slip, a passing vehicle
-   blocking the antenna, a multipath burst), not the baseline. The stationary
-   distribution (~81% fixed) reflects this. An earlier matrix that diffused
+   blocking the antenna, a multipath burst), not the baseline. The long-run
+   distribution (~80% fixed) reflects this. An earlier matrix that diffused
    freely (~30% fixed, recovery in minutes) modelled a chronically degraded
    urban-canyon receiver and made degraded episodes effectively unwinnable.
 
@@ -135,7 +140,7 @@ The Markov chain can be disabled via `enable_markov_transitions: false` in
 
 | File | What changed |
 |------|--------------|
-| `uncertainty_rl/ros2/uncertainty_rl_ros2/gnss_noise_relay.py` | `_TIER_ORDER`, `_TIER_DEFAULTS`, `_DEFAULT_TRANSITION_MATRIX` constants; `_apply_tier()`, `_step_markov()` methods; `enable_markov_transitions` parameter; `_gnss_callback()` calls `_step_markov()` each tick |
+| `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | `_TIER_ORDER`, `_TIER_DEFAULTS`, `_DEFAULT_TRANSITION_MATRIX` constants; `_apply_tier()`, `_step_markov()` methods; `enable_markov_transitions` parameter; `_gnss_callback()` calls `_step_markov()` each tick |
 | `configs/ros2_config.yaml` | `gnss_noise_relay.enable_markov_transitions` flag; `ekf.process_noise_covariance` matrix with realistic IMU noise |
 | `uncertainty_rl/ros2/launch/carla_bridge.launch.py` | Passes `enable_markov_transitions` to the node |
 

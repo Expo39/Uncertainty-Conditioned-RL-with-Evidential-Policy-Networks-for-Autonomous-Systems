@@ -58,11 +58,12 @@ corner. Three spawns give varied approach angles during training.
 
 ---
 
-## `floor_plans/trapezoid.py` - Trapezoid (Training)
+## `floor_plans/trapezoid.py` - Trapezoid (OOD evaluation only)
 
 Wider at the entrance (front width=60 m) and narrower at the rear (rear width=40 m), so the
 top and bottom walls taper. This gives a different LiDAR wall signature from the rectangle,
-encouraging generalisation to non-rectangular geometry. All bays are perpendicular.
+testing generalisation to non-rectangular geometry. Held out from training (the curriculum
+trains on rectangle only). All bays are perpendicular.
 
 **Polygon corners (local frame):**
 
