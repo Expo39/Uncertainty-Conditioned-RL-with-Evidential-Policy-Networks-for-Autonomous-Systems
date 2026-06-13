@@ -125,7 +125,7 @@ def eval_config() -> Dict[str, Any]:
             {
                 "name": "nominal_empty",
                 "description": "RTK fixed, empty lot",
-                "gnss_noise_multiplier": 1.0,
+                "held_gnss_tier": "rtk_fixed",
                 "imu_noise_multiplier": 1.0,
                 "num_patrol_vehicles": 0,
                 "pedestrian_spawn_probability": 0.0,
@@ -134,7 +134,7 @@ def eval_config() -> Dict[str, Any]:
             {
                 "name": "rtk_float",
                 "description": "RTK float, moderate traffic",
-                "gnss_noise_multiplier": 15.0,
+                "held_gnss_tier": "rtk_float",
                 "imu_noise_multiplier": 1.5,
                 "num_patrol_vehicles": 1,
                 "pedestrian_spawn_probability": 1.0,

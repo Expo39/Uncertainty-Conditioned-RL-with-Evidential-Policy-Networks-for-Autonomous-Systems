@@ -15,7 +15,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 | Module | Class / purpose |
 |--------|----------------|
-| `evaluate.py` | Orchestration: `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (14 conditions, returns `(DataFrame, run_output_dir)`); `main()` - CLI. Re-exports the moved symbols below so `...evaluation.evaluate.*` import paths stay stable |
+| `evaluate.py` | Orchestration: `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (returns `(DataFrame, run_output_dir)`); `main()` - CLI. Re-exports the moved symbols below so `...evaluation.evaluate.*` import paths stay stable |
 | `metrics.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records); `_classify_outcome()` - failure-mode taxonomy. No torch / stable-baselines3 dependency |
 | `env_builder.py` | The condition -> env contract: `_scale_sensor_noise()` - `base * multiplier`; `build_eval_env_factory()` - single source of truth, returns the BARE env factory + SafetyWrapper params; `make_eval_env()` - wraps it in SafetyWrapper + DummyVecEnv for the sweep |
 | `plots.py` | `plot_evaluation_results()` - seaborn bar charts + stacked failure-mode figure (the only module pulling in matplotlib/seaborn) |
@@ -37,7 +37,7 @@ flowchart TB
 
     subgraph ev["evaluate.py + env_builder.py"]
         SCALE["env_builder._scale_sensor_noise()\nbase * multiplier"]
-        LOOP["evaluate_across_conditions()\n14 conditions"]
+        LOOP["evaluate_across_conditions()\ncondition sweep"]
         AGENT["evaluate_agent()\nn_episodes"]
         ENV["env_builder.make_eval_env()\nCARLAParkingEnv"]
     end
@@ -108,16 +108,15 @@ evidential head sees the corrupted obstacle features.
 |-----------|------------|---------------|-------|
 | `lidar_degraded` | 25.0x | 0.5 m 1-sigma | EKF-blind sensor degradation |
 
-### Held-out layout generalisation (occupancy 0.5)
+### OOD layout generalisation (occupancy 0.5)
 
-Training uses the `rectangle` floor plan only; `trapezoid` is held out and
-`irregular_a` (five-sided lot with a diagonal top wall) is the designated OOD
-layout. Success here measures generalisation across lot geometry.
+Training uses the `rectangle` floor plan only; `irregular_a` (five-sided lot with
+a diagonal top wall) is the designated OOD layout. Success here measures
+generalisation across lot geometry, run at two GNSS tiers so layout
+generalisation and localisation degradation stay separable.
 
 | Condition | Floor plan | GNSS mult |
 |-----------|-----------|-----------|
-| `heldout_trapezoid_rtk_fixed` | `trapezoid` | 1.0x |
-| `heldout_trapezoid_rtk_float` | `trapezoid` | 18.0x |
 | `ood_irregular_rtk_fixed` | `irregular_a` | 1.0x |
 | `ood_irregular_rtk_float` | `irregular_a` | 18.0x |
 

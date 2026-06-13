@@ -389,7 +389,7 @@ def evaluate_across_conditions(
         )
 
         # Dump this condition's per-bay success counts. The GNSS field reports
-        # "markov" when no multiplier override is set, i.e. the condition runs
+        # "markov" when no held-tier override is set, i.e. the condition runs
         # the training noise process (tier sampling + drift).
         bay_tracker.dump(
             _bay_eval_root / name,
@@ -399,9 +399,7 @@ def evaluate_across_conditions(
                 "condition": name,
                 "description": description,
                 "n_episodes": n_episodes,
-                "gnss_noise_multiplier": condition.get(
-                    "gnss_noise_multiplier", "markov"
-                ),
+                "held_gnss_tier": condition.get("held_gnss_tier", "markov"),
                 "evaluated": datetime.now().strftime("%d-%m-%Y %H:%M"),
             },
         )
@@ -418,10 +416,9 @@ def evaluate_across_conditions(
             **metrics.to_dict(),
             "condition": name,
             "description": description,
-            # NaN marks the in-distribution Markov condition (no fixed level).
-            "gnss_noise_multiplier": condition.get(
-                "gnss_noise_multiplier", float("nan")
-            ),
+            # "markov" marks the in-distribution condition (no held tier - the
+            # training noise process of tier sampling + Markov drift runs).
+            "held_gnss_tier": condition.get("held_gnss_tier", "markov"),
             "imu_noise_multiplier": condition.get("imu_noise_multiplier", 1.0),
             "lidar_noise_multiplier": condition.get("lidar_noise_multiplier", 1.0),
             "num_patrol_vehicles": condition.get("num_patrol_vehicles", 0),
