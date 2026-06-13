@@ -380,11 +380,13 @@ analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
 
-analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis]
+analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/ablation_analyser.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis)
+		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis) \
+		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
+		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
 
 analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis]
 	$(call ensure-venv)

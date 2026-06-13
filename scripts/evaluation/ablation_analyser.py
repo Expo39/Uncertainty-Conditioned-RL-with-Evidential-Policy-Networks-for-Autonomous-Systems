@@ -215,16 +215,25 @@ def _contrast_table(records: pd.DataFrame, seed: int) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _degradation_slope(summary: pd.DataFrame) -> pd.DataFrame:
+def _degradation_slope(
+    summary: pd.DataFrame,
+    clean_condition: str = _SLOPE_CLEAN_CONDITION,
+    degraded_condition: str = _SLOPE_DEGRADED_CONDITION,
+) -> pd.DataFrame:
     """
     @brief Per-arm fall in success / rise in position error from clean to degraded GNSS.
     @param summary: Per-condition aggregate from _condition_summary.
+    @param clean_condition: Slope-start condition name (cleanest held GNSS tier).
+    @param degraded_condition: Slope-end condition name (worst held GNSS tier).
     @return DataFrame, one row per arm: success at the clean and degraded held
             tiers, the drop (percentage points), and the position-error growth (m).
 
     Both endpoint conditions must be present (the held-tier GNSS axis). A smaller
     success drop and smaller position-error growth mean a more graceful
-    degradation - the property the covariance arms are claimed to have.
+    degradation - the property the covariance arms are claimed to have. The
+    endpoints default to the occupancy-0.5 cell but can be pointed at the
+    empty-lot cell (gnss_empty_fixed -> gnss_empty_degraded), where the
+    intermediate EKF error is not swallowed by neighbours and the slope is clean.
     """
     pivot = summary.pivot_table(
         index="arm", columns="condition", values="success_rate", observed=True
@@ -235,14 +244,14 @@ def _degradation_slope(summary: pd.DataFrame) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for arm in pivot.index:
         if (
-            _SLOPE_CLEAN_CONDITION not in pivot.columns
-            or _SLOPE_DEGRADED_CONDITION not in pivot.columns
+            clean_condition not in pivot.columns
+            or degraded_condition not in pivot.columns
         ):
             break
-        clean = pivot.loc[arm, _SLOPE_CLEAN_CONDITION]
-        degraded = pivot.loc[arm, _SLOPE_DEGRADED_CONDITION]
-        pos_clean = pos_pivot.loc[arm, _SLOPE_CLEAN_CONDITION]
-        pos_degraded = pos_pivot.loc[arm, _SLOPE_DEGRADED_CONDITION]
+        clean = pivot.loc[arm, clean_condition]
+        degraded = pivot.loc[arm, degraded_condition]
+        pos_clean = pos_pivot.loc[arm, clean_condition]
+        pos_degraded = pos_pivot.loc[arm, degraded_condition]
         rows.append(
             {
                 "arm": arm,
@@ -385,12 +394,20 @@ def _plot_behaviour(behaviour: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
-def analyse(results_root: Path, out_dir: Path, seed: int) -> None:
+def analyse(
+    results_root: Path,
+    out_dir: Path,
+    seed: int,
+    slope_clean: str = _SLOPE_CLEAN_CONDITION,
+    slope_degraded: str = _SLOPE_DEGRADED_CONDITION,
+) -> None:
     """
     @brief Run the full cross-arm analysis and write tables + figures.
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory to write the CSV tables and PNG figures into.
     @param seed: Bootstrap RNG seed (reproducibility).
+    @param slope_clean: Degradation-slope start condition (cleanest GNSS tier).
+    @param slope_degraded: Degradation-slope end condition (worst GNSS tier).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     arm_csvs = _discover_arm_csvs(results_root)
@@ -409,7 +426,7 @@ def analyse(results_root: Path, out_dir: Path, seed: int) -> None:
     records = _load_records(arm_csvs)
     summary = _condition_summary(records)
     contrasts = _contrast_table(records, seed)
-    slope = _degradation_slope(summary)
+    slope = _degradation_slope(summary, slope_clean, slope_degraded)
     behaviour = _behaviour_by_std(records)
 
     summary.to_csv(out_dir / "condition_summary.csv", index=False)
@@ -422,15 +439,22 @@ def analyse(results_root: Path, out_dir: Path, seed: int) -> None:
     _plot_degradation_slope(slope, out_dir)
     _plot_behaviour(behaviour, out_dir)
 
-    _print_headline(contrasts, slope)
+    _print_headline(contrasts, slope, slope_clean, slope_degraded)
     print(f"\nTables and figures written to {out_dir}")
 
 
-def _print_headline(contrasts: pd.DataFrame, slope: pd.DataFrame) -> None:
+def _print_headline(
+    contrasts: pd.DataFrame,
+    slope: pd.DataFrame,
+    slope_clean: str = _SLOPE_CLEAN_CONDITION,
+    slope_degraded: str = _SLOPE_DEGRADED_CONDITION,
+) -> None:
     """
     @brief Console summary of the two claims: covariance contrast + slope.
     @param contrasts: Contrast table from _contrast_table.
     @param slope: Slope table from _degradation_slope.
+    @param slope_clean: Slope-start condition name (for the missing-data hint).
+    @param slope_degraded: Slope-end condition name (for the missing-data hint).
     """
     print("\n=== Covariance contrast (treatment - control), 95% bootstrap CI ===")
     if contrasts.empty:
@@ -448,10 +472,7 @@ def _print_headline(contrasts: pd.DataFrame, slope: pd.DataFrame) -> None:
 
     print("\n=== GNSS degradation slope (clean -> degraded) ===")
     if slope.empty:
-        print(
-            f"  (need both {_SLOPE_CLEAN_CONDITION} and "
-            f"{_SLOPE_DEGRADED_CONDITION} conditions)"
-        )
+        print(f"  (need both {slope_clean} and {slope_degraded} conditions)")
     else:
         for _, r in slope.iterrows():
             print(
@@ -489,8 +510,26 @@ def main() -> None:
         default=42,
         help="Bootstrap RNG seed for reproducible confidence intervals.",
     )
+    parser.add_argument(
+        "--slope-clean",
+        type=str,
+        default=_SLOPE_CLEAN_CONDITION,
+        help="Degradation-slope start condition (cleanest held GNSS tier).",
+    )
+    parser.add_argument(
+        "--slope-degraded",
+        type=str,
+        default=_SLOPE_DEGRADED_CONDITION,
+        help="Degradation-slope end condition (worst held GNSS tier).",
+    )
     args = parser.parse_args()
-    analyse(Path(args.results_root), Path(args.output_dir), args.seed)
+    analyse(
+        Path(args.results_root),
+        Path(args.output_dir),
+        args.seed,
+        args.slope_clean,
+        args.slope_degraded,
+    )
 
 
 if __name__ == "__main__":
