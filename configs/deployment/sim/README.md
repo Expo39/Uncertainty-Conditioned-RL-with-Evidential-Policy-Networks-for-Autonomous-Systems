@@ -65,9 +65,9 @@ position-stddev values, and per-tier sampling weights live in the YAML
 itself. The sampling weights change as the curriculum progresses, so read
 the live file rather than relying on a snapshot in this README.
 
-At eval time, `gnss_noise_multiplier` in `configs/eval_config.yaml` overrides
-the per-episode sampling to fix a specific noise level for each evaluation
-condition. The curriculum sets `parking_scenarios.fixed_gnss_tier: rtk_fixed` in
+At eval time, `held_gnss_tier` in `configs/eval_config.yaml` overrides
+the per-episode sampling to hold a named fix-state tier (e.g. `rtk_float`) for
+each evaluation condition. The curriculum sets `parking_scenarios.fixed_gnss_tier: rtk_fixed` in
 every stage as the per-episode START tier; the mid-episode Markov chain (always on) then
 wanders from there. The chain is fixed and stage-invariant - the GNSS degradation process
 is the same in every stage, not a ramped curriculum axis.

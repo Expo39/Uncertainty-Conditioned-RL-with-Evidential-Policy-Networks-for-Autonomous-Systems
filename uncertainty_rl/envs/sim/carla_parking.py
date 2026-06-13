@@ -129,7 +129,7 @@ class CARLAParkingEnv(gym.Env):
         max_ego_speed_ms: float = 8.0,
         use_extra_spawns: bool = False,
         gnss_noise_profiles_path: Optional[str] = None,
-        gnss_noise_multiplier_override: Optional[float] = None,
+        held_gnss_tier_override: Optional[str] = None,
         success_dwell_steps: int = SUCCESS_DWELL_STEPS,
         bay_margin: float = 0.0,
         actuator_model: Optional[Dict[str, float]] = None,
@@ -174,13 +174,13 @@ class CARLAParkingEnv(gym.Env):
         @param gnss_noise_profiles_path: Path to GNSS noise profiles YAML. If
                provided, the env samples an RTK fix-state tier each reset() and
                spawns the GNSS sensor with the corresponding noise multiplier.
-        @param gnss_noise_multiplier_override: If set, locks the GNSS noise to a
-               single fix-state tier for the WHOLE episode (Markov drift held off
-               in the relay) every reset. The multiplier is resolved to the tier
-               whose metric_stddev_m / 0.020 m base matches it; the matched tier
-               drives both the relay noise and the held-level signalling, so the
-               level is a controlled independent variable. Used during evaluation
-               to lock GNSS noise to a specific condition.
+        @param held_gnss_tier_override: If set, locks the GNSS noise to the named
+               fix-state tier for the WHOLE episode (Markov drift held off in the
+               relay) every reset. The name must match a tier in the loaded GNSS
+               noise profiles; that tier drives both the relay noise and the
+               held-level signalling, so the level is a controlled independent
+               variable. Used during evaluation to lock GNSS noise to a specific
+               condition.
         @param success_dwell_steps: Number of consecutive steps all success
                criteria (position, orientation, velocity) must be satisfied
                before the episode terminates as a success. Prevents a fast
@@ -228,7 +228,7 @@ class CARLAParkingEnv(gym.Env):
         self._prev_steer_cmd: float = 0.0
         self._prev_throttle_cmd: float = 0.0
         self._prev_brake_cmd: float = 0.0
-        self._gnss_noise_multiplier_override = gnss_noise_multiplier_override
+        self._held_gnss_tier_override = held_gnss_tier_override
 
         self._bay_margin: float = float(bay_margin)
 
@@ -237,7 +237,7 @@ class CARLAParkingEnv(gym.Env):
         self._gnss_tier_weights: np.ndarray = np.empty(0, dtype=np.float64)
         self._current_gnss_multiplier: float = 1.0
         self._current_gnss_tier: Optional[Dict[str, Any]] = None
-        # When a multiplier override locks a single tier for evaluation, the
+        # When a held-tier override locks a single tier for evaluation, the
         # relay must HOLD that tier (no Markov drift) so the level is a clean
         # independent variable. publish_episode_config carries this flag.
         self._hold_gnss_tier: bool = False
@@ -684,58 +684,56 @@ class CARLAParkingEnv(gym.Env):
             tier_names,
         )
 
-    def _resolve_tier_for_multiplier(self, multiplier: float) -> Dict[str, Any]:
+    def _resolve_held_tier(self, tier_name: str) -> Dict[str, Any]:
         """
-        @brief Map a GNSS noise multiplier to its loaded fix-state tier.
+        @brief Map a held-tier name to its loaded fix-state tier dict.
 
-        The eval multipliers are defined as metric_stddev_m / 0.020 m (the
-        RTK-fixed base), so the matching tier is the one whose metric stddev
-        is closest to multiplier * base. Returns the nearest tier rather than
-        requiring an exact match so eval config rounding never raises.
+        The eval conditions name the RTK fix-state tier to hold directly (e.g.
+        rtk_float), so resolution is an exact name lookup against the loaded
+        profiles. Names must match a tier in
+        configs/deployment/sim/gnss_noise_profiles.yaml.
 
-        @param multiplier: GNSS noise multiplier from the eval condition.
-        @return The nearest loaded tier dict.
-        @raises RuntimeError if no GNSS tiers are loaded.
+        @param tier_name: Fix-state tier name (from a held-tier override or the
+               curriculum fixed_gnss_tier).
+        @return The matching loaded tier dict.
+        @raises RuntimeError if no GNSS tiers are loaded or the name is unknown.
         """
         if len(self._gnss_noise_tiers) == 0:
             raise RuntimeError(
-                "gnss_noise_multiplier_override set but no GNSS tiers loaded; "
+                "GNSS tier requested but no tiers loaded; "
                 "pass gnss_noise_profiles_path."
             )
-        base_stddev = 0.02  # RTK-fixed base (metres) - matches tier table.
-        target_stddev = multiplier * base_stddev
-        return min(
-            self._gnss_noise_tiers,
-            key=lambda t: abs(
-                float(t.get("metric_stddev_m", base_stddev)) - target_stddev
-            ),
-        )
+        for tier in self._gnss_noise_tiers:
+            if tier.get("name") == tier_name:
+                return tier
+        available = [t.get("name", "") for t in self._gnss_noise_tiers]
+        raise RuntimeError(f"GNSS tier '{tier_name}' not in loaded tiers: {available}")
+        return tier
 
     def _sample_gnss_noise_tier(self) -> None:
         """
         @brief Sample a GNSS noise tier for the current episode.
 
-        When gnss_noise_multiplier_override is set (evaluation mode), the
-        multiplier is resolved to the matching fix-state tier and HELD for the
-        whole episode (the relay's Markov drift is suppressed via the hold
-        flag), so the condition is a clean independent variable. Otherwise a
-        tier is sampled and the relay wanders it via the Markov chain, exactly
-        as in training.
+        When held_gnss_tier_override is set (evaluation mode), the named
+        fix-state tier is resolved and HELD for the whole episode (the relay's
+        Markov drift is suppressed via the hold flag), so the condition is a
+        clean independent variable. Otherwise a tier is sampled and the relay
+        wanders it via the Markov chain, exactly as in training.
         """
-        if self._gnss_noise_multiplier_override is not None:
-            tier = self._resolve_tier_for_multiplier(
-                self._gnss_noise_multiplier_override
-            )
+        if self._held_gnss_tier_override is not None:
+            tier = self._resolve_held_tier(self._held_gnss_tier_override)
+            base_stddev = 0.02  # RTK-fixed base (metres) - matches tier table.
+            tier_stddev = float(tier.get("metric_stddev_m", base_stddev))
             self._current_gnss_tier = tier
-            self._current_gnss_multiplier = self._gnss_noise_multiplier_override
+            self._current_gnss_multiplier = max(1.0, tier_stddev / base_stddev)
             self._hold_gnss_tier = True
             logger.info(
-                "Episode %d: GNSS multiplier override=%.1f -> held tier '%s' "
-                "(%.2f m stddev, no drift)",
+                "Episode %d: held GNSS tier '%s' "
+                "(%.2f m stddev, multiplier=%.1f, no drift)",
                 self._episode_id,
-                self._current_gnss_multiplier,
                 tier.get("name", "unknown"),
-                float(tier.get("metric_stddev_m", 0.02)),
+                tier_stddev,
+                self._current_gnss_multiplier,
             )
             return
 
@@ -749,21 +747,7 @@ class CARLAParkingEnv(gym.Env):
 
         # When a fixed tier is configured, bypass the weighted sampler.
         if self._fixed_gnss_tier is not None:
-            tier = next(
-                (
-                    t
-                    for t in self._gnss_noise_tiers
-                    if t.get("name") == self._fixed_gnss_tier
-                ),
-                None,
-            )
-            if tier is None:
-                available = [t.get("name", "") for t in self._gnss_noise_tiers]
-                raise RuntimeError(
-                    f"fixed_gnss_tier='{self._fixed_gnss_tier}' not in "
-                    f"loaded tiers: {available}"
-                )
-            self._current_gnss_tier = tier
+            self._current_gnss_tier = self._resolve_held_tier(self._fixed_gnss_tier)
         else:
             idx = self.np_random.choice(
                 len(self._gnss_noise_tiers),

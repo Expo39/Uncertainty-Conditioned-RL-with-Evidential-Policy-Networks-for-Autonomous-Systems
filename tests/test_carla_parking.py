@@ -310,42 +310,45 @@ class TestObservationSpaceShape:
         env.close()
 
 
-class TestGnssMultiplierTierResolution:
+class TestHeldGnssTierResolution:
     """
-    @class TestGnssMultiplierTierResolution
-    @brief The eval GNSS-override multiplier must resolve to the matching tier.
+    @class TestHeldGnssTierResolution
+    @brief The eval GNSS-override tier name must resolve to the loaded tier.
 
-    Evaluation locks GNSS noise by passing a multiplier (metric_stddev / 0.020 m
-    base). The env resolves it to a real loaded tier so the same per-episode
-    publish path training uses (datum re-latch + tier signalling) runs, rather
-    than the dead-multiplier path that never reached the relay. Constructing the
-    env needs no CARLA connection (only reset() connects).
+    Evaluation locks GNSS noise by naming a fix-state tier directly. The env
+    resolves the name to a real loaded tier so the same per-episode publish path
+    training uses (datum re-latch + tier signalling) runs, rather than a dead
+    path that never reaches the relay. Constructing the env needs no CARLA
+    connection (only reset() connects).
     """
 
     _PROFILES = "configs/deployment/sim/gnss_noise_profiles.yaml"
 
     @pytest.mark.parametrize(
-        "multiplier, expected_tier",
-        [
-            (1.0, "rtk_fixed"),
-            (18.0, "rtk_float"),
-            (90.0, "standalone"),
-            (250.0, "degraded"),
-        ],
+        "tier_name",
+        ["rtk_fixed", "rtk_float", "standalone", "degraded"],
     )
-    def test_multiplier_maps_to_expected_tier(
-        self, multiplier: float, expected_tier: str
-    ) -> None:
+    def test_name_resolves_to_loaded_tier(self, tier_name: str) -> None:
         """
-        @brief Each eval multiplier resolves to its documented fix-state tier.
-        @param multiplier: GNSS noise multiplier from an eval condition.
-        @param expected_tier: The tier name the multiplier must select.
+        @brief Each held-tier name resolves to the loaded tier of that name.
+        @param tier_name: Fix-state tier name from an eval condition.
         """
         from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
         env = CARLAParkingEnv(max_steps=5, gnss_noise_profiles_path=self._PROFILES)
-        tier = env._resolve_tier_for_multiplier(multiplier)
-        assert tier.get("name") == expected_tier
+        tier = env._resolve_held_tier(tier_name)
+        assert tier.get("name") == tier_name
+        env.close()
+
+    def test_unknown_name_raises(self) -> None:
+        """
+        @brief An unknown held-tier name raises rather than silently mis-resolving.
+        """
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5, gnss_noise_profiles_path=self._PROFILES)
+        with pytest.raises(RuntimeError, match="not in"):
+            env._resolve_held_tier("rtk_nonexistent")
         env.close()
 
     def test_override_sets_held_tier_and_flag(self) -> None:
@@ -362,7 +365,7 @@ class TestGnssMultiplierTierResolution:
         env = CARLAParkingEnv(
             max_steps=5,
             gnss_noise_profiles_path=self._PROFILES,
-            gnss_noise_multiplier_override=18.0,
+            held_gnss_tier_override="rtk_float",
         )
         env._sample_gnss_noise_tier()
         assert env._current_gnss_tier is not None

@@ -23,7 +23,7 @@ def make_env(
     carla_sensors_override: Optional[Dict[str, Any]] = None,
     host_override: Optional[str] = None,
     port_override: Optional[int] = None,
-    gnss_noise_multiplier_override: Optional[float] = None,
+    held_gnss_tier_override: Optional[str] = None,
 ) -> Callable[[], gym.Env]:
     """
     @brief Create a callable that returns a new environment instance.
@@ -40,11 +40,11 @@ def make_env(
            the per-rank training host is used.
     @param port_override: Override the per-worker CARLA port. When None, the
            per-rank training port is used.
-    @param gnss_noise_multiplier_override: If set, locks the GNSS noise to this
-           constant multiplier for the whole episode (bypasses per-episode tier
+    @param held_gnss_tier_override: If set, locks the GNSS noise to this named
+           fix-state tier for the whole episode (bypasses per-episode tier
            sampling and the Markov drift). Evaluation passes the per-condition
-           level so a GNSS tier becomes a controlled independent variable; None
-           runs the training noise process (sampling + drift).
+           tier name so a GNSS level becomes a controlled independent variable;
+           None runs the training noise process (sampling + drift).
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
@@ -91,7 +91,7 @@ def make_env(
             max_ego_speed_ms=config.get("max_ego_speed_ms", 8.0),
             use_extra_spawns=config.get("use_extra_spawns", False),
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
-            gnss_noise_multiplier_override=gnss_noise_multiplier_override,
+            held_gnss_tier_override=held_gnss_tier_override,
             vis_output_path=vis_path,
             bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),

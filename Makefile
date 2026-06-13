@@ -293,7 +293,7 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA, built identi
 	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
 		INSPECT_MANUAL=$(MANUAL) INSPECT_OOD=$(INSPECT_OOD) \
-		INSPECT_STAGE=$(STAGE) INSPECT_BASELINE=$(BASELINE) \
+		INSPECT_STAGE=$(STAGE) INSPECT_BASELINE=$(if $(BASELINE),$(BASELINE_YAML),) \
 		bash scripts/inspect/dryrun.sh
 
 SCENARIO ?= anchor_deployment
@@ -310,7 +310,7 @@ docker-inspect-eval-dryrun: ## Manually drive a named eval condition in windowed
 	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
 		INSPECT_MANUAL=$(MANUAL) \
-		INSPECT_SCENARIO=$(SCENARIO) INSPECT_BASELINE=$(BASELINE) \
+		INSPECT_SCENARIO=$(SCENARIO) INSPECT_BASELINE=$(if $(BASELINE),$(BASELINE_YAML),) \
 		INSPECT_PROFILE=inspect-eval-dryrun \
 		INSPECT_SERVICE=training-inspect-eval-dryrun \
 		INSPECT_CONTAINER=uncertainty-rl-training-inspect-eval-dryrun \

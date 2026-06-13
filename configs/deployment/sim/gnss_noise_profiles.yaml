@@ -1,7 +1,10 @@
 # RTK-GNSS noise profiles for per-episode fix-state sampling.
 # Consumed by GnssNoiseRelayNode. Tier is sampled each reset(); noise injected
 # into NavSatFix.position_covariance so the EKF receives correctly scaled
-# measurement noise.
+# measurement noise. doppler_stddev_ms (velocity + COG heading noise) scales by
+# the same per-tier factor as metric_stddev_m (1 / 18 / 90 / 250x of the
+# rtk_fixed base), so velocity and heading degrade with the fix state. Mirror
+# these values in _TIER_DEFAULTS in gnss_noise_relay.py.
 
 tiers:
   rtk_fixed:
@@ -11,7 +14,7 @@ tiers:
     lon_stddev_deg: 0.0000002
     alt_stddev_m: 0.05
     metric_stddev_m: 0.020
-    doppler_stddev_ms: 0.05  # m/s - ZED-F9P data-sheet velocity accuracy
+    doppler_stddev_ms: 0.05  # m/s - 1x base (ZED-F9P data-sheet accuracy)
     weight: 0.3
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
@@ -22,7 +25,7 @@ tiers:
     lon_stddev_deg: 0.0000032
     alt_stddev_m: 0.5
     metric_stddev_m: 0.360
-    doppler_stddev_ms: 0.08  # m/s - mild jitter from correlated signal environment
+    doppler_stddev_ms: 0.90  # m/s - 18x base (matches position factor)
     weight: 0.3
     description: "RTK float (~36 cm). Marginal accuracy for 2.5 m bays."
 
@@ -33,7 +36,7 @@ tiers:
     lon_stddev_deg: 0.0000162
     alt_stddev_m: 5.0
     metric_stddev_m: 1.802
-    doppler_stddev_ms: 0.15  # m/s - conservative for suboptimal sky view
+    doppler_stddev_ms: 4.5  # m/s - 90x base (matches position factor)
     weight: 0.25
     description: "Standalone GNSS (~1.8 m). RTK lost; parking unsafe."
 
@@ -43,7 +46,7 @@ tiers:
     lon_stddev_deg: 0.0000449
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
-    doppler_stddev_ms: 0.40  # m/s - heavy multipath degrades tracking loops
+    doppler_stddev_ms: 12.5  # m/s - 250x base (matches position factor)
     weight: 0.15
     description: "Degraded GNSS (~5 m). Policy must abort/handoff."
 

@@ -406,7 +406,7 @@ def main() -> None:
         # Build the env through the SAME path the eval sweep uses
         # (build_eval_env_factory), so manually driving here verifies the exact
         # scenario evaluate.py would run: condition-scaled sensor noise, the
-        # locked GNSS tier (gnss_noise_multiplier), pinned occupancy and floor
+        # locked GNSS tier (held_gnss_tier), pinned occupancy and floor
         # plan, plus the obs flags / policy_type from the baseline. No model is
         # loaded - you drive the keyboard (manual) or a constant action.
         import yaml
@@ -493,8 +493,8 @@ def main() -> None:
             f"{condition.get('description', '')}"
         )
         print(
-            f"  gnss_noise_multiplier="
-            f"{condition.get('gnss_noise_multiplier', 'markov')}  "
+            f"  held_gnss_tier="
+            f"{condition.get('held_gnss_tier', 'markov')}  "
             f"imu={condition.get('imu_noise_multiplier', 1.0)}  "
             f"lidar={condition.get('lidar_noise_multiplier', 1.0)}  "
             f"occupancy={condition.get('bay_occupancy_rate', 'default')}  "

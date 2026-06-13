@@ -8,10 +8,11 @@ Subscribes to CARLA NavSatFix, adds tier-appropriate Gaussian noise to
 position, converts to metric Odometry via flat-earth projection
 (/odometry/gps). Velocity is Doppler-style: clean-source differencing at
 20 Hz equals GT velocity; per-tier Gaussian noise (doppler_stddev_ms,
-0.05-0.40 m/s) models carrier tracking-loop sensitivity independent of
-the pseudorange position errors that dominate the tier ladder (0.02-5.0 m).
-COG is derived from the same clean displacement vector with noise
-proportional to doppler_std/speed and published on /gnss/heading.
+0.05-12.5 m/s) scales by the same factor as the position tier ladder
+(0.02-5.0 m), so velocity degrades with the fix state. COG is derived from
+the same clean displacement vector with noise proportional to
+doppler_std/speed (so it degrades with the same factor) and published on
+/gnss/heading.
 """
 
 import json
@@ -34,12 +35,11 @@ _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
 _TIER_INDEX: Dict[str, int] = {name: i for i, name in enumerate(_TIER_ORDER)}
 
 # Noise parameters for each tier (fallback if config file is absent).
-# doppler_stddev_ms is the 1-sigma velocity noise (m/s) from carrier
-# Doppler tracking. Position degrades 250x across the ladder (0.02-5.0 m);
-# Doppler degrades only 8x (0.05-0.40 m/s) because the slowly-varying
-# errors that corrupt position (atmosphere, orbit) differentiate to near
-# zero over 50 ms. The rtk_fixed value matches the u-blox ZED-F9P data-sheet
-# velocity accuracy spec. Mirror these values in gnss_noise_profiles.yaml.
+# doppler_stddev_ms is the 1-sigma velocity noise (m/s); it also sets the COG
+# heading noise (course_std = doppler_stddev_ms / speed). It scales by the same
+# per-tier factor as position (1 / 18 / 90 / 250x of the rtk_fixed base), so
+# velocity and heading degrade with the fix state instead of leaving a clean
+# dead-reckoning channel. Mirror these values in gnss_noise_profiles.yaml.
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
     # RTK fixed:
     # Conservative 0.020 m used to cover antenna phase-centre offset
@@ -49,7 +49,7 @@ _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
         "lon_stddev_deg": 0.0000002,
         "alt_stddev_m": 0.05,
         "metric_stddev_m": 0.020,
-        "doppler_stddev_ms": 0.05,  # m/s - ZED-F9P data-sheet velocity accuracy
+        "doppler_stddev_ms": 0.05,  # m/s - 1x base (ZED-F9P data-sheet accuracy)
     },
     # RTK float:
     # 0.360 / 111320 = 3.233e-6 deg.
@@ -58,7 +58,7 @@ _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
         "lon_stddev_deg": 0.0000032,
         "alt_stddev_m": 0.5,
         "metric_stddev_m": 0.360,
-        "doppler_stddev_ms": 0.08,  # m/s - mild jitter from correlated signal environment
+        "doppler_stddev_ms": 0.90,  # m/s - 18x base (matches position factor)
     },
     # Standalone PVT:
     # 1.802 / 111320 = 1.619e-5 deg.
@@ -67,7 +67,7 @@ _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
         "lon_stddev_deg": 0.0000162,
         "alt_stddev_m": 5.0,
         "metric_stddev_m": 1.802,
-        "doppler_stddev_ms": 0.15,  # m/s - conservative for suboptimal sky view
+        "doppler_stddev_ms": 4.5,  # m/s - 90x base (matches position factor)
     },
     # Degraded:
     # 5.0 / 111320 = 4.492e-5 deg.
@@ -76,7 +76,7 @@ _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
         "lon_stddev_deg": 0.0000449,
         "alt_stddev_m": 10.0,
         "metric_stddev_m": 5.0,
-        "doppler_stddev_ms": 0.40,  # m/s - heavy multipath degrades tracking loops
+        "doppler_stddev_ms": 12.5,  # m/s - 250x base (matches position factor)
     },
 }
 
