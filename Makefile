@@ -392,6 +392,13 @@ analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs.
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis)
 
+analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method]
+	$(call ensure-venv)
+	$(PYTHON) scripts/evaluation/calibration.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/calibration_analysis) \
+		$(if $(ARM),--arm $(ARM),)
+
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
 # Two use cases:
