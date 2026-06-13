@@ -33,7 +33,6 @@ WALL_TOP_FLAT = 3  # P3 -> P4
 WALL_LEFT = 4  # P4 -> P0
 
 
-
 def generate() -> Dict[str, Any]:
     """
     @brief Build the irregular_a layout using the LotBuilder DSL.
