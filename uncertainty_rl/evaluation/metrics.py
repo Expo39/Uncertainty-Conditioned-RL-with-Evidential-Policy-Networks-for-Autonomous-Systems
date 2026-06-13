@@ -44,6 +44,10 @@ class EvaluationMetrics:
     # Optional capture of real normalised observations (one ndarray per decision)
     # for the on-manifold covariance probe. Empty unless EVAL_DUMP_OBS is set.
     captured_observations: List[Any] = field(default_factory=list)
+    # Per-step EKF calibration pairs (predicted std vs actual GT-EKF error), one
+    # dict per decision, for the honesty-of-the-covariance analysis. Populated
+    # for every baseline (ground truth is reward-only, never in the obs).
+    calibration_pairs: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """

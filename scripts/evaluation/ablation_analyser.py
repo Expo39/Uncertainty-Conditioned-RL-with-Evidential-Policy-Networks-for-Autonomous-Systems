@@ -61,6 +61,9 @@ _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 # Number of bootstrap resamples for delta confidence intervals.
 _N_BOOTSTRAP = 10000
 
+# Quantile bins for the behaviour-vs-EKF-std cross-section.
+_N_STD_BINS = 5
+
 
 def _discover_arm_csvs(results_root: Path) -> Dict[str, Path]:
     """
@@ -314,6 +317,74 @@ def _plot_degradation_slope(slope: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
+def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
+    """
+    @brief Final pos-error and approach speed per EKF-std bin, per arm.
+    @param records: Tidy per-episode frame from _load_records.
+    @return DataFrame: per (arm, std_bin) the mean final position error and mean
+            final speed, with the std-bin range.
+
+    The mechanism behind the outcome gap: binning episodes by their EKF position
+    std (ekf_std_pos_mean_m, logged for every arm) and reading off how each arm
+    behaves. The claim is that as std rises, the covariance arm holds its final
+    position error roughly flat (it compensates), while the blind arm's error
+    grows; the covariance arm may also slow down (emergent caution). Speed and
+    error are per-episode finals, so this is a behavioural cross-section, not a
+    causal per-step trace - that is what the calibration analysis covers.
+    """
+    std_col = "ekf_std_pos_mean_m"
+    if std_col not in records.columns:
+        return pd.DataFrame()
+    df = records[[std_col, "final_pos_error_m", "final_speed_ms", "arm"]].dropna(
+        subset=[std_col]
+    )
+    if len(df) < _N_STD_BINS:
+        return pd.DataFrame()
+    try:
+        df = df.assign(std_bin=pd.qcut(df[std_col], _N_STD_BINS, duplicates="drop"))
+    except ValueError:
+        return pd.DataFrame()
+    grouped = df.groupby(["arm", "std_bin"], observed=True)
+    out = grouped.agg(
+        std_low=(std_col, lambda s: float(s.min())),
+        std_high=(std_col, lambda s: float(s.max())),
+        mean_pos_error_m=("final_pos_error_m", "mean"),
+        mean_speed_ms=("final_speed_ms", "mean"),
+        n=(std_col, "size"),
+    ).reset_index()
+    out["std_mid"] = (out["std_low"] + out["std_high"]) / 2.0
+    return out
+
+
+def _plot_behaviour(behaviour: pd.DataFrame, out_dir: Path) -> None:
+    """
+    @brief Final pos-error and approach speed vs EKF-std bin, arms overlaid.
+    @param behaviour: Per (arm, std_bin) table from _behaviour_by_std.
+    @param out_dir: Directory for the saved figure.
+    """
+    if behaviour.empty:
+        return
+    sns.set_style("whitegrid")
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    for ax, metric, label in (
+        (axes[0], "mean_pos_error_m", "Mean final position error (m)"),
+        (axes[1], "mean_speed_ms", "Mean final speed (m/s)"),
+    ):
+        for arm in _ARM_ORDER:
+            a = behaviour[behaviour["arm"] == arm]
+            if a.empty:
+                continue
+            ax.plot(a["std_mid"], a[metric], "o-", label=arm)
+        ax.set_xlabel("EKF position std bin midpoint (m)")
+        ax.set_ylabel(label)
+        ax.legend(title="arm", fontsize=8)
+    axes[0].set_title("Precision under localisation uncertainty")
+    axes[1].set_title("Caution under localisation uncertainty")
+    fig.tight_layout()
+    fig.savefig(out_dir / "behaviour_by_std.png", dpi=150)
+    plt.close(fig)
+
+
 def analyse(results_root: Path, out_dir: Path, seed: int) -> None:
     """
     @brief Run the full cross-arm analysis and write tables + figures.
@@ -339,13 +410,17 @@ def analyse(results_root: Path, out_dir: Path, seed: int) -> None:
     summary = _condition_summary(records)
     contrasts = _contrast_table(records, seed)
     slope = _degradation_slope(summary)
+    behaviour = _behaviour_by_std(records)
 
     summary.to_csv(out_dir / "condition_summary.csv", index=False)
     contrasts.to_csv(out_dir / "covariance_contrasts.csv", index=False)
     slope.to_csv(out_dir / "degradation_slope.csv", index=False)
+    if not behaviour.empty:
+        behaviour.to_csv(out_dir / "behaviour_by_std.csv", index=False)
 
     _plot_condition_bars(summary, out_dir)
     _plot_degradation_slope(slope, out_dir)
+    _plot_behaviour(behaviour, out_dir)
 
     _print_headline(contrasts, slope)
     print(f"\nTables and figures written to {out_dir}")
