@@ -139,12 +139,15 @@ def build_eval_env_factory(
         # Fixed selection also bypasses the ood eligibility filter, so the
         # irregular_a conditions are loadable.
         "fixed_floor_plan": condition.get("floor_plan", "rectangle"),
-        # Pin the episode START tier to match training: every curriculum stage
-        # sets fixed_gnss_tier rtk_fixed (episodes start clean and the Markov
-        # chain wanders from there). Without the pin the anchor condition would
-        # start episodes at a weighted random tier - a harsher process than
-        # training ever ran. Irrelevant when held_gnss_tier overrides.
-        "fixed_gnss_tier": base_scenarios.get("fixed_gnss_tier", "rtk_fixed"),
+        # Episode START tier: match training, which since the Markov redesign
+        # SAMPLES the start tier from the init weights in gnss_noise_profiles.yaml
+        # (no curriculum stage sets fixed_gnss_tier) and lets the chain wander
+        # from there. So the default here is None - the anchor runs the exact
+        # training process (weighted random start + drift), not a forced clean
+        # start, which would make eval easier than training. Honoured only if a
+        # config still sets fixed_gnss_tier; irrelevant when held_gnss_tier
+        # overrides (a held tier suppresses both the sampler and the drift).
+        "fixed_gnss_tier": base_scenarios.get("fixed_gnss_tier", None),
     }
 
     # Env-specific settings resolved once from env_config.

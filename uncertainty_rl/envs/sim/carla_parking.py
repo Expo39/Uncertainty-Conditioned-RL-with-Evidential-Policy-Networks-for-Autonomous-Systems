@@ -748,14 +748,14 @@ class CARLAParkingEnv(gym.Env):
 
         # When a fixed tier is configured, bypass the weighted sampler.
         if self._fixed_gnss_tier is not None:
-            self._current_gnss_tier = self._resolve_held_tier(self._fixed_gnss_tier)
+            tier = self._resolve_held_tier(self._fixed_gnss_tier)
         else:
             idx = self.np_random.choice(
                 len(self._gnss_noise_tiers),
                 p=self._gnss_tier_weights,
             )
             tier = self._gnss_noise_tiers[idx]
-            self._current_gnss_tier = tier
+        self._current_gnss_tier = tier
 
         # Multiplier = tier metric stddev / base RTK-fixed stddev.
         # The base GNSS sensor noise in env_config.yaml corresponds to
