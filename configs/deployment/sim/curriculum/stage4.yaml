@@ -8,7 +8,7 @@ parking_scenarios:
   fixed_floor_plan: rectangle
   # fixed_gnss_tier omitted: start tier is SAMPLED from the init weights in
   # gnss_noise_profiles.yaml (any fix state), then wanders via the Markov chain.
-  bay_occupancy_min: 0.1
+  bay_occupancy_min: 0.0  # Empty in-distribution (see stage1).
   bay_occupancy_max: 0.1
 
 carla_sensors:

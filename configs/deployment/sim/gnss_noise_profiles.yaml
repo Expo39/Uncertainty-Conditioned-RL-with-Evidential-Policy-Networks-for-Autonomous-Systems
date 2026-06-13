@@ -15,9 +15,9 @@ tiers:
     alt_stddev_m: 0.05
     metric_stddev_m: 0.020
     doppler_stddev_ms: 0.05  # m/s - 1x base (ZED-F9P data-sheet accuracy)
-    weight: 0.71  # Per-episode START-tier probability; set to the chain's stationary
-    # occupancy so the start prior matches the steady state the chain produces
-    # (= deployment reality). Mid-episode tier coverage comes from the Markov chain.
+    weight: 0.40  # Per-episode START-tier probability, biased toward bad tiers (not
+    # the stationary occupancy) so most episodes begin under uncertainty; the chain
+    # still recovers mid-episode. @see curriculum_design_principles.md.
     description: "RTK fixed (~2 cm). Nominal parking conditions."
 
   rtk_float:
@@ -28,7 +28,7 @@ tiers:
     alt_stddev_m: 0.5
     metric_stddev_m: 0.360
     doppler_stddev_ms: 0.90  # m/s - 18x base (matches position factor)
-    weight: 0.14  # Stationary START-tier probability (see rtk_fixed).
+    weight: 0.20  # Biased START-tier probability (see rtk_fixed for the rationale).
     description: "RTK float (~36 cm). Marginal accuracy for 2.5 m bays."
 
   standalone:
@@ -39,7 +39,7 @@ tiers:
     alt_stddev_m: 5.0
     metric_stddev_m: 1.802
     doppler_stddev_ms: 4.5  # m/s - 90x base (matches position factor)
-    weight: 0.09  # Stationary START-tier probability (see rtk_fixed).
+    weight: 0.20  # Biased START-tier probability (see rtk_fixed).
     description: "Standalone GNSS (~1.8 m). RTK lost; parking unsafe."
 
   degraded:
@@ -49,7 +49,7 @@ tiers:
     alt_stddev_m: 10.0
     metric_stddev_m: 5.0
     doppler_stddev_ms: 12.5  # m/s - 250x base (matches position factor)
-    weight: 0.06  # Stationary START-tier probability (see rtk_fixed).
+    weight: 0.20  # Biased START-tier probability (see rtk_fixed).
     description: "Degraded GNSS (~5 m). Policy must abort/handoff."
 
 # Per-step transition matrix at GNSS callback rate (20 Hz).

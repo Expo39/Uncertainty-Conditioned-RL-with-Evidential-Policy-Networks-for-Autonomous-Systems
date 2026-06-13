@@ -23,7 +23,7 @@ parking_scenarios:
     - perpendicular_38
     - perpendicular_41
     - perpendicular_44   # cluster 38-46, yaw 180, east column
-  bay_occupancy_min: 0.1
+  bay_occupancy_min: 0.0  # Empty in-distribution (see stage1).
   bay_occupancy_max: 0.1
 
 carla_sensors:

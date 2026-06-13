@@ -57,6 +57,7 @@ from uncertainty_rl.utils.constants import (
     OOB_TERMINATION_PENALTY_LIMIT,
     PHI_NORM_FLOOR,
     PROGRESS_TARGET,
+    STALL_GATE_EKF_STD_M,
     STALL_TRUNCATION_DECISIONS,
     SUCCESS_DWELL_STEPS,
     SUCCESS_THRESHOLD_VELOCITY,
@@ -2283,13 +2284,31 @@ class CARLAParkingEnv(gym.Env):
         # full recovery time, so stopping to wait out a degraded fix is never
         # cut short. @see STALL_TRUNCATION_DECISIONS.
         if not terminated:
-            if (
+            # Live EKF position std (m): mean of the x/y diagonal stds, matching
+            # how the observation and eval combine them. NaN when the EKF is
+            # unavailable (CI/tests), in which case the gate stays closed (treat
+            # as good localisation) so the stall rule is unchanged off-stack.
+            ekf_std_pos = float(
+                np.nanmean(self._last_ekf_std[:2])
+                if np.any(np.isfinite(self._last_ekf_std[:2]))
+                else 0.0
+            )
+            # Suspend the stall counter while localisation is genuinely degraded:
+            # a near-stop there is a legitimate wait-for-recovery, not a stall,
+            # and must not be punished (the behaviour the covariance induces). The
+            # counter is HELD (neither incremented nor reset) during the wait, so
+            # a real good-fix stall briefly interrupted by a degraded blip resumes
+            # rather than restarting from zero.
+            waiting_out_bad_fix = ekf_std_pos > STALL_GATE_EKF_STD_M
+            near_stop = (
                 reward_diag["speed"] < SUCCESS_THRESHOLD_VELOCITY
                 and self._success_counter == 0
-            ):
-                self._stall_counter += 1
-            else:
-                self._stall_counter = 0
+            )
+            if not waiting_out_bad_fix:
+                if near_stop:
+                    self._stall_counter += 1
+                else:
+                    self._stall_counter = 0
             if self._stall_counter >= STALL_TRUNCATION_DECISIONS:
                 truncated = True
 

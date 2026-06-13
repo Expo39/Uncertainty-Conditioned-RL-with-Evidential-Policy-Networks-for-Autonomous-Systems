@@ -170,12 +170,22 @@ OUT_OF_BOUNDS_THRESHOLD = 20.0
 # the acceptance box before the episode truncates as a stall (same graded
 # timeout penalty as the clock running out). A stalled policy otherwise sits
 # motionless for the remaining episode, flooding the rollout buffer with
-# identical zero-advantage frames. Sized at 10 s of standstill: above the
-# expected full GNSS Markov recovery ladder (~6 s from the worst tier), so the
-# legitimate wait-for-recovery behaviour is never cut short, while a terminal
-# freeze still releases the episode early. Discounting makes an early stall
-# strictly worse than a late one, so this cannot be gamed to escape an episode.
+# identical zero-advantage frames. Sized at 10 s of standstill: a terminal
+# freeze releases the episode early. The counter is SUSPENDED while the live EKF
+# position std exceeds STALL_GATE_EKF_STD_M (see below), so waiting out a bad-fix
+# excursion is never counted as a stall however long the recovery takes - the
+# stall rule only governs a freeze under GOOD localisation. Discounting makes an
+# early stall strictly worse than a late one, so this cannot be gamed to escape
+# an episode.
 STALL_TRUNCATION_DECISIONS = 50
+
+# Live EKF position std (metres, 1-sigma) above which a near-stop is treated as a
+# legitimate wait-for-recovery rather than a stall, so the stall counter does not
+# increment. Set at the RTK-float/standalone boundary (float settles ~0.36 m,
+# standalone ~0.47 m, degraded ~1.0 m at the EKF output), so the gate opens only
+# when localisation is genuinely degraded - waiting is the correct response there
+# and must not be punished, the behaviour the input covariance is meant to induce.
+STALL_GATE_EKF_STD_M = 0.4
 
 # ---------------------------------------------------------------------------
 # Dense reward scale

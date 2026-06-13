@@ -10,7 +10,8 @@ parking_scenarios:
   fixed_floor_plan: rectangle
   # fixed_gnss_tier omitted: start tier is SAMPLED from the init weights in
   # gnss_noise_profiles.yaml (any fix state), then wanders via the Markov chain.
-  bay_occupancy_min: 0.2
+  bay_occupancy_min: 0.0  # Empty in-distribution (see stage1); max 0.8 keeps the
+  # busiest occupied case so LiDAR collision-avoidance is still learned.
   bay_occupancy_max: 0.8
 
 carla_sensors:

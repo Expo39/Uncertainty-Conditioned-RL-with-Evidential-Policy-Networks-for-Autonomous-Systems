@@ -23,7 +23,9 @@ parking_scenarios:
     - perpendicular_22   # cluster 12-24, yaw 90,  south row (turn-in, opposite orientation)
     - perpendicular_37   # cluster 33-37, yaw 270, upper row east block (far - forces corridor setup)
     - perpendicular_38   # cluster 38-46, yaw 180, east column (straight-in anchor; clear corridor along the main aisle)
-  bay_occupancy_min: 0.1
+  bay_occupancy_min: 0.0  # Include EMPTY lots: careful-under-uncertainty is needed
+  # most in open space (no LiDAR to resolve a bad EKF pose), so empty must be
+  # in-distribution or the empty-lot covariance eval is OOD. Applied every stage.
   bay_occupancy_max: 0.1
 
 carla_sensors:
