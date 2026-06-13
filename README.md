@@ -282,7 +282,7 @@ Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
 | Layout | Bays | OOD | Training use | Description |
 |--------|------|-----|-------------|-------------|
 | `rectangle` | 47 | No | Training + evaluation | Rectangular lot, perpendicular bays across a centre row, top row, bottom rows, and left and right walls, plus two always-empty motorcycle bays in the top-right corner. Three spawns: left, bottom-centre, top-right. |
-| `trapezoid` | 39 | No | Training + evaluation | Trapezoid lot, perpendicular bays in central clusters plus perimeter rows along the tapered walls. |
+| `trapezoid` | 39 | Yes | OOD evaluation only | Trapezoid lot (held out from training), perpendicular bays in central clusters plus perimeter rows along the tapered walls. |
 | `irregular_a` | 36 | Yes | OOD evaluation only | Irregular polygon lot (held out from training), perpendicular bays around a central obstacle and the perimeter. |
 
 Bay counts come from the generated `configs/layouts/*.yaml`; regenerate with

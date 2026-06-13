@@ -5,9 +5,10 @@ Geometry derivations and design rationale for the three parking-lot layouts used
 
 ## Source files
 
-- `scripts/layouts/rectangle.py`, `trapezoid.py`, `irregular_a.py`, `common.py`
-- `uncertainty_rl/envs/sim/_npc_controller.py` (patrol path geometry)
-- `uncertainty_rl/envs/sim/_lot_spawner.py` (bay sampling, cone placement)
+- `scripts/layouts/floor_plans/rectangle.py`, `trapezoid.py`, `irregular_a.py`;
+  `scripts/layouts/common.py`, `scripts/layouts/builder.py`
+- `uncertainty_rl/envs/sim/helpers/_npc_controller.py` (patrol path geometry)
+- `uncertainty_rl/envs/sim/helpers/_lot_spawner.py` (bay sampling, cone placement)
 
 ## See also
 

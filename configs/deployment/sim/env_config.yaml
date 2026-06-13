@@ -84,7 +84,7 @@ parking_scenarios:
       ood: false  # Training layout.
     trapezoid:
       layout_file: configs/layouts/trapezoid.yaml
-      ood: false  # Training layout.
+      ood: true  # Held out for OOD evaluation only (curriculum trains on rectangle).
     irregular_a:
       layout_file: configs/layouts/irregular_a.yaml
       ood: true  # Held out for OOD evaluation only.
