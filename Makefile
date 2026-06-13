@@ -8,7 +8,7 @@
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
-.PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun
+.PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-eval-dryrun
 .PHONY: docker-train docker-train-short docker-tune
 .PHONY: ensure-dirs
 
@@ -103,7 +103,7 @@ docker-build-no-cache-core: ## Build core + env-worker images without cache (car
 docker-build-no-cache-inspect: ## Build inspect-stack images without cache (ros2-bridge-inspect, training-inspect-*)
 	@# Inspect services are profile-gated; activate every profile so build --no-cache
 	@# does not skip them.
-	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-sensors --profile inspect-live --profile inspect-dryrun build --no-cache
+	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-sensors --profile inspect-live --profile inspect-dryrun --profile inspect-eval-dryrun build --no-cache
 
 docker-build-ros2: ## Rebuild only the ros2-bridge images without cache
 	$(DOCKER_COMPOSE_WORKERS) build --no-cache ros2-bridge
@@ -118,8 +118,8 @@ docker-down: ## Stop all containers (training stack + all running env workers)
 	$(WORKERS_DOWN)
 
 docker-inspect-down: ## Stop all inspect containers (all profiles)
-	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-dryrun --profile inspect-sensors --profile inspect-live down
-	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect uncertainty-rl-training-inspect-dryrun uncertainty-rl-training-inspect-sensors uncertainty-rl-training-inspect-live 2>/dev/null || true
+	$(DOCKER_COMPOSE_INSPECT) --profile inspect --profile inspect-dryrun --profile inspect-eval-dryrun --profile inspect-sensors --profile inspect-live down
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect uncertainty-rl-training-inspect-dryrun uncertainty-rl-training-inspect-eval-dryrun uncertainty-rl-training-inspect-sensors uncertainty-rl-training-inspect-live 2>/dev/null || true
 	xhost -local:docker 2>/dev/null || true
 
 docker-restart: ## Restart all containers
@@ -174,7 +174,7 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		$(if $(BASELINE),--baseline $(BASELINE_YAML),) \
-		--output-dir evaluation_results
+		--output-dir outputs/evaluation_results
 
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
@@ -294,6 +294,26 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA, built identi
 		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
 		INSPECT_MANUAL=$(MANUAL) INSPECT_OOD=$(INSPECT_OOD) \
 		INSPECT_STAGE=$(STAGE) INSPECT_BASELINE=$(BASELINE) \
+		bash scripts/inspect/dryrun.sh
+
+SCENARIO ?= anchor_deployment
+docker-inspect-eval-dryrun: ## Manually drive a named eval condition in windowed CARLA (no checkpoint), to verify the eval scenario wiring. Usage: make docker-inspect-eval-dryrun SCENARIO=anchor_deployment [BASELINE=full_method] [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=third_person|side|back|front|free|birds_eye] [INSPECT_PAUSE=3.0]
+	@echo "Eval dryrun: scenario=$(SCENARIO) baseline=$(BASELINE_NAME) manual=$(MANUAL)"
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
+	$(DOCKER_COMPOSE) down 2>/dev/null || true
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-eval-dryrun 2>/dev/null || true
+	docker network prune -f 2>/dev/null || true
+	@# Clean stale signal files from previous runs to prevent the ros2-bridge
+	@# from processing leftover initial_pose or ekf_state data on startup.
+	rm -f outputs/initial_pose.json outputs/ekf_state.json outputs/ekf_state.json.tmp 2>/dev/null || true
+	xhost +local:docker 2>/dev/null || true
+	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \
+		INSPECT_VIEW=$(INSPECT_VIEW) INSPECT_PAUSE=$(INSPECT_PAUSE) \
+		INSPECT_MANUAL=$(MANUAL) \
+		INSPECT_SCENARIO=$(SCENARIO) INSPECT_BASELINE=$(BASELINE) \
+		INSPECT_PROFILE=inspect-eval-dryrun \
+		INSPECT_SERVICE=training-inspect-eval-dryrun \
+		INSPECT_CONTAINER=uncertainty-rl-training-inspect-eval-dryrun \
 		bash scripts/inspect/dryrun.sh
 
 docker-inspect: ## Spawn a layout in windowed CARLA for visual inspection (includes perimeter cones). Usage: make docker-inspect [INSPECT_LAYOUT=rectangle]

@@ -94,14 +94,18 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="sensors",
-        choices=["layout", "sensors", "live", "dryrun"],
+        choices=["layout", "sensors", "live", "dryrun", "eval_dryrun"],
         help=(
             "Inspector mode: 'layout' = lot geometry only; "
             "'sensors' = sensors on lot; "
             "'live' = real spawned sensors with live output "
             "(LiDAR debug dots); "
-            "'dryrun' = full training pipeline with random actions (no model), "
-            "spectator follows ego, EKF covariance printed to console. "
+            "'dryrun' = full training pipeline with random/manual actions (no "
+            "model), spectator follows ego, EKF covariance printed to console; "
+            "'eval_dryrun' = same as dryrun but the env is built from a named "
+            "eval_config.yaml condition (--scenario) via the SAME path the eval "
+            "sweep uses, so you can manually drive an eval scenario and verify "
+            "its noise / occupancy / floor-plan wiring. "
             "Default: sensors."
         ),
     )
@@ -208,6 +212,26 @@ def main() -> None:
             "Dryrun mode only."
         ),
     )
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        help=(
+            "Name of an eval_config.yaml condition (e.g. 'anchor_deployment', "
+            "'gnss_standalone', 'heldout_trapezoid_rtk_fixed'). The eval_dryrun "
+            "env is built for this condition via the same make_eval_env path the "
+            "sweep uses (scaled sensor noise, pinned occupancy / floor plan / "
+            "GNSS tier). Omit to default to the first condition. "
+            "eval_dryrun mode only."
+        ),
+    )
+    parser.add_argument(
+        "--eval-config",
+        type=str,
+        default="configs/eval_config.yaml",
+        dest="eval_config",
+        help="Path to eval_config.yaml (eval_dryrun mode only).",
+    )
     args = parser.parse_args()
 
     from uncertainty_rl.training.train_ppo import DEFAULT_STAGE, load_env_config
@@ -222,7 +246,7 @@ def main() -> None:
     train_cfg = load_env_config("configs/deployment/sim/env_config.yaml", stage=stage)
 
     print(f"Connecting to CARLA at {args.host}:{args.port} ...")
-    if args.mode != "dryrun":
+    if args.mode not in ("dryrun", "eval_dryrun"):
         print(f"Mode: {args.mode}  |  Layout: {args.layout}", end="")
         if args.mode == "sensors":
             print(f"  |  View: {args.view}", end="")
@@ -376,6 +400,113 @@ def main() -> None:
         print(
             f"  View: {args.inspect_view}  |  " f"pause: {args.termination_pause:.1f}s"
         )
+        print("  Press Ctrl+C to stop.")
+
+    elif args.mode == "eval_dryrun":
+        # Build the env through the SAME path the eval sweep uses
+        # (build_eval_env_factory), so manually driving here verifies the exact
+        # scenario evaluate.py would run: condition-scaled sensor noise, the
+        # locked GNSS tier (gnss_noise_multiplier), pinned occupancy and floor
+        # plan, plus the obs flags / policy_type from the baseline. No model is
+        # loaded - you drive the keyboard (manual) or a constant action.
+        import yaml
+
+        from uncertainty_rl.evaluation.evaluate import build_eval_env_factory
+        from uncertainty_rl.training.train_ppo import (
+            DEFAULT_BASELINE,
+            load_config,
+            load_env_config,
+        )
+        from uncertainty_rl.utils.config_merge import apply_baseline
+
+        with open(args.eval_config, "r") as _f:
+            eval_config = yaml.safe_load(_f)
+        conditions = eval_config.get("eval_conditions", [])
+        if not conditions:
+            print(f"ERROR: no eval_conditions in {args.eval_config}.")
+            sys.exit(1)
+
+        # Resolve the named scenario; default to the first condition (the
+        # deployment anchor) so an omitted --scenario still runs something real.
+        if args.scenario is not None:
+            condition = next(
+                (c for c in conditions if c.get("name") == args.scenario), None
+            )
+            if condition is None:
+                _names = [c.get("name") for c in conditions]
+                print(
+                    f"ERROR: scenario '{args.scenario}' not found in "
+                    f"{args.eval_config}. Available: {_names}"
+                )
+                sys.exit(1)
+        else:
+            condition = conditions[0]
+
+        # The eval env merges the UNSTAGED env config (the sweep is stage-less)
+        # and overlays the baseline obs flags / policy_type, exactly as
+        # evaluate_across_conditions() does - not the stage-merged train_cfg.
+        eval_env_config = load_env_config("configs/deployment/sim/env_config.yaml")
+        baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
+        apply_baseline(eval_env_config, load_config(baseline_path))
+        base_sensors = eval_env_config.get("carla_sensors", {})
+
+        # Windowed CARLA + tick-level stepping so manual driving is real-time
+        # (mirrors the dryrun overrides above; the obs build path is unchanged).
+        eval_env_config["no_rendering_mode"] = False
+        eval_env_config["action_repeat"] = 1
+
+        env_factory, _aleatoric, _handoff = build_eval_env_factory(
+            condition,
+            eval_config,
+            base_sensors,
+            eval_env_config,
+            host_override=args.host,
+            port_override=args.port,
+        )
+        # The eval-dryrun uses the BARE env (no SafetyWrapper): manual driving
+        # has no policy epistemic signal to gate on, and DryRunInspector reaches
+        # env.vehicle / env.world / env._cov_subscriber directly.
+        env = env_factory()
+        env.reset()
+        if env.world is None or env.vehicle is None:
+            print("ERROR: Could not connect to CARLA or spawn vehicle.")
+            env.close()
+            sys.exit(1)
+
+        dryrun_action = train_cfg.get("inspect", {}).get("dryrun_action", None)
+        inspector = DryRunInspector(
+            env,
+            args.duration,
+            args.episodes,
+            dryrun_action,
+            initial_view=args.inspect_view,
+            termination_pause=args.termination_pause,
+            manual=args.manual,
+        )
+        inspector.place_spectator()  # type: ignore[attr-defined]
+        if args.manual:
+            action_desc = "keyboard (Up=throttle, Down=brake, Left/Right=steer)"
+        else:
+            action_desc = f"constant {dryrun_action}"
+        print(
+            f"Eval dry-run: condition '{condition.get('name')}' - "
+            f"{condition.get('description', '')}"
+        )
+        print(
+            f"  gnss_noise_multiplier="
+            f"{condition.get('gnss_noise_multiplier', 'markov')}  "
+            f"imu={condition.get('imu_noise_multiplier', 1.0)}  "
+            f"lidar={condition.get('lidar_noise_multiplier', 1.0)}  "
+            f"occupancy={condition.get('bay_occupancy_rate', 'default')}  "
+            f"floor_plan={condition.get('floor_plan', 'rectangle')}"
+        )
+        print(
+            f"  baseline '{eval_env_config.get('baseline_name', '?')}'  "
+            f"(include_covariance={eval_env_config.get('include_covariance')}, "
+            f"include_obstacle_obs={eval_env_config.get('include_obstacle_obs')})"
+        )
+        print(f"  action={action_desc}, no model.")
+        print(f"  View: {args.inspect_view}  |  pause: {args.termination_pause:.1f}s")
         print("  Press Ctrl+C to stop.")
 
     else:  # live

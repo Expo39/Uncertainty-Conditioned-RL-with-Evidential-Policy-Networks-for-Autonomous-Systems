@@ -15,6 +15,7 @@ Requires a windowed CARLA session (X11 display) and the `carla-server-demo` cont
 | Live LiDAR scan dots | `make docker-inspect-live` |
 | Dryrun - keyboard control | `make docker-inspect-dryrun MANUAL=true` |
 | Dryrun - constant action | `make docker-inspect-dryrun` |
+| Eval dryrun - drive a condition | `make docker-inspect-eval-dryrun SCENARIO=anchor_deployment MANUAL=true` |
 
 ## Files
 
@@ -100,23 +101,39 @@ Keyboard controls (dryrun, `MANUAL=true`): Up = throttle, Down = brake, Left/Rig
 <!-- gif:placeholder name="inspect_dryrun" caption="Dryrun inspector: manual keyboard drive with EKF covariance output" -->
 ![Dryrun inspector placeholder](../../docs/media/inspect_dryrun.gif)
 
+### Eval dryrun (`--mode eval_dryrun`)
+
+Same step loop and console readout as dryrun, but the env is built from a named `eval_config.yaml` condition through the SAME `make_eval_env` path the eval sweep uses. No checkpoint is loaded - you drive the keyboard (or a constant action) so you can verify the scenario wiring (scaled sensor noise, locked GNSS tier, pinned occupancy and floor plan) against the printed inputs / GT / EKF before running the headless sweep.
+
+```bash
+make docker-inspect-eval-dryrun SCENARIO=anchor_deployment MANUAL=true       # Drive the deployment anchor
+make docker-inspect-eval-dryrun SCENARIO=gnss_standalone MANUAL=true         # Drive a held GNSS level
+make docker-inspect-eval-dryrun SCENARIO=heldout_trapezoid_rtk_fixed MANUAL=true  # Held-out floor plan
+```
+
+The `SCENARIO` value is any condition `name` in `configs/eval_config.yaml`; omit it to default to `anchor_deployment`. Keyboard controls are the same as dryrun.
+
 ## Arguments
 
 | Argument | Choices / type | Default | Notes |
 |----------|---------------|---------|-------|
-| `--mode` | `layout`, `sensors`, `live`, `dryrun` | `sensors` | Inspector mode |
+| `--mode` | `layout`, `sensors`, `live`, `dryrun`, `eval_dryrun` | `sensors` | Inspector mode |
 | `--layout` | `rectangle`, `trapezoid`, `irregular_a` | `rectangle` | Floor plan to spawn |
 | `--view` | `birds_eye`, `side`, `front` | `birds_eye` | Camera view (sensors mode only) |
 | `--zoom` | `close`, `wide` | `close` | Camera height (birds-eye only) |
-| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free`, `birds_eye` | `third_person` | Spectator view (dryrun only) |
-| `--termination-pause` | float (seconds) | `3.0` | Hold scene after episode end (dryrun only) |
-| `--episodes` | int | unlimited | Max episodes (dryrun only) |
+| `--inspect-view` | `third_person`, `side`, `back`, `front`, `free`, `birds_eye` | `third_person` | Spectator view (dryrun / eval_dryrun) |
+| `--termination-pause` | float (seconds) | `3.0` | Hold scene after episode end (dryrun / eval_dryrun) |
+| `--episodes` | int | unlimited | Max episodes (dryrun / eval_dryrun) |
 | `--duration` | int (seconds) | `86400` | Max run time (24 h) |
-| `--manual` | flag | off | Keyboard control (dryrun only) |
+| `--manual` | flag | off | Keyboard control (dryrun / eval_dryrun) |
+| `--stage` | int | `1` | Curriculum stage (dryrun only) |
+| `--baseline` | path | full method | Baseline obs flags / policy_type (dryrun / eval_dryrun) |
+| `--scenario` | string | first condition | `eval_config.yaml` condition name (eval_dryrun only) |
+| `--eval-config` | path | `configs/eval_config.yaml` | Condition sweep file (eval_dryrun only) |
 | `--host` | string | `carla-server-demo` | CARLA server hostname |
 | `--port` | int | `2100` | CARLA server port |
 
-Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `SENSORS_VIEW` -> `--view` (sensors mode only), `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`.
+Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `SENSORS_VIEW` -> `--view` (sensors mode only), `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`, `SCENARIO` -> `--scenario` (eval_dryrun only).
 
 ## Requirements
 

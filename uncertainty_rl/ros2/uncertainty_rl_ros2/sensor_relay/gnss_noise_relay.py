@@ -246,6 +246,10 @@ class GnssNoiseRelayNode(Node):
             noise_profiles_path
         )
         self._active_tier_idx: int = 0
+        # Per-episode override: when episode_config.json sets hold_tier, the
+        # Markov chain is suppressed for that episode so the level stays fixed
+        # (controlled evaluation conditions). Training leaves it False.
+        self._hold_tier: bool = False
 
         self._extra_alt_stddev_m: float = 0.0
         # Current tier's NavSatStatus code, updated by _apply_tier and stamped
@@ -476,6 +480,11 @@ class GnssNoiseRelayNode(Node):
 
             self._config_seq = seq
 
+            # Per-episode hold: when set, the Markov chain is suppressed for the
+            # whole episode so the level stays fixed (controlled evaluation
+            # conditions). Absent/false in training, where the chain wanders.
+            self._hold_tier = bool(data.get("hold_tier", False))
+
             tier_name: Optional[str] = data.get("tier_name")
             if tier_name and tier_name in _TIER_ORDER:
                 self._apply_tier(tier_name)
@@ -587,7 +596,7 @@ class GnssNoiseRelayNode(Node):
         self._callback_count += 1
         self._check_config_file()
 
-        if self._markov_enabled:
+        if self._markov_enabled and not self._hold_tier:
             self._step_markov()
 
         # Simulated GNSS dropout: occasionally skip a fix entirely so the EKF
