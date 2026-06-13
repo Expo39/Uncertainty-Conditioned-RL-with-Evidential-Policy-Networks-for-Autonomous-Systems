@@ -17,23 +17,31 @@ __all__ = [
 
 def __getattr__(name):
     """
-    @brief Lazy load evaluation functions on first access.
+    @brief Lazy load evaluation symbols on first access.
     @param name: Name of the attribute being accessed.
-    @return The requested attribute from evaluate module.
+    @return The requested attribute from its defining module.
+
+    EvaluationMetrics and plot_evaluation_results have no torch /
+    stable-baselines3 dependency, so they load from their dedicated modules; the
+    two evaluation-loop entry points pull in those optional deps via evaluate.
+    Everything stays lazy so importing the package never forces them in CI.
     """
-    if name in __all__:
+    if name == "EvaluationMetrics":
+        from uncertainty_rl.evaluation.metrics import EvaluationMetrics
+
+        return EvaluationMetrics
+    if name == "plot_evaluation_results":
+        from uncertainty_rl.evaluation.plots import plot_evaluation_results
+
+        return plot_evaluation_results
+    if name in ("evaluate_agent", "evaluate_across_conditions"):
         from uncertainty_rl.evaluation.evaluate import (  # noqa: E402
-            EvaluationMetrics,
             evaluate_across_conditions,
             evaluate_agent,
-            plot_evaluation_results,
         )
 
-        attrs = {
-            "EvaluationMetrics": EvaluationMetrics,
+        return {
             "evaluate_agent": evaluate_agent,
             "evaluate_across_conditions": evaluate_across_conditions,
-            "plot_evaluation_results": plot_evaluation_results,
-        }
-        return attrs[name]
+        }[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

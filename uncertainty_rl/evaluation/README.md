@@ -4,8 +4,8 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 ## At a glance
 
-- 9 evaluation conditions sweep GNSS noise from $1\times$ (RTK fixed, ~2 cm) to $250\times$ (~5 m)
-- Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()`
+- 14 de-confounded conditions: every condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors)
+- Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()` (LiDAR noise always enabled at eval, matching the training realism floor)
 - Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `STRICT_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `SUCCESS_DWELL_STEPS`
 - `n_episodes = 100` per condition, deterministic (mean) actions
 - OOD conditions use `irregular_a` floor plan (never seen during training)
@@ -15,8 +15,11 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 | Module | Class / purpose |
 |--------|----------------|
-| `evaluate.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records); `_classify_outcome()` - failure-mode taxonomy; `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (13 conditions, returns `(DataFrame, run_output_dir)`); `plot_evaluation_results()` - seaborn bar charts + stacked failure-mode figure |
-| `__init__.py` | Re-exports `EvaluationMetrics`, `evaluate_agent`, `evaluate_across_conditions`, `plot_evaluation_results` |
+| `evaluate.py` | Orchestration: `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (14 conditions, returns `(DataFrame, run_output_dir)`); `main()` - CLI. Re-exports the moved symbols below so `...evaluation.evaluate.*` import paths stay stable |
+| `metrics.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records); `_classify_outcome()` - failure-mode taxonomy. No torch / stable-baselines3 dependency |
+| `env_builder.py` | The condition -> env contract: `_scale_sensor_noise()` - `base * multiplier`; `build_eval_env_factory()` - single source of truth, returns the BARE env factory + SafetyWrapper params; `make_eval_env()` - wraps it in SafetyWrapper + DummyVecEnv for the sweep |
+| `plots.py` | `plot_evaluation_results()` - seaborn bar charts + stacked failure-mode figure (the only module pulling in matplotlib/seaborn) |
+| `__init__.py` | Lazily re-exports `EvaluationMetrics`, `evaluate_agent`, `evaluate_across_conditions`, `plot_evaluation_results` |
 
 ## Internal data flow
 
@@ -32,11 +35,11 @@ flowchart TB
         VN["vec_normalize.pkl"]
     end
 
-    subgraph ev["evaluate.py"]
-        SCALE["_scale_sensor_noise()\nbase * multiplier"]
-        LOOP["evaluate_across_conditions()\n13 conditions"]
+    subgraph ev["evaluate.py + env_builder.py"]
+        SCALE["env_builder._scale_sensor_noise()\nbase * multiplier"]
+        LOOP["evaluate_across_conditions()\n14 conditions"]
         AGENT["evaluate_agent()\nn_episodes"]
-        ENV["CARLAParkingEnv"]
+        ENV["env_builder.make_eval_env()\nCARLAParkingEnv"]
     end
 
     subgraph out["evaluation_results/baseline/leaf/"]
@@ -59,59 +62,70 @@ flowchart TB
 
 ## Evaluation conditions
 
-Primary uncertainty axis: GNSS noise tier (RTK fix state). `gnss_noise_multiplier` scales the base RTK-fixed stddev (0.02 m). No weather variation.
+De-confounded sweep: every condition varies exactly ONE factor against the
+in-distribution anchor (rectangle lot, bay occupancy 0.5, no dynamic actors).
+GNSS multipliers derive from `configs/deployment/sim/gnss_noise_profiles.yaml`
+as `metric_stddev_m / 0.020` (the RTK-fixed base); a condition with a multiplier
+resolves to the matching fix-state tier and HOLDS it for the whole episode (the
+relay's Markov drift is suppressed via the per-episode `hold_tier` flag), so the
+level is a clean independent variable. The held conditions still go through the
+exact per-episode publish training uses (tier signal + GNSS datum re-latch),
+which is why no condition needs a separate code path. The anchor leaves the flag
+off and runs the training noise process itself (per-episode tier sampling +
+mid-episode Markov drift). The exact list lives in `configs/eval_config.yaml`.
 
-### Condition ladder
+### Anchor
 
-```
-GNSS noise escalation (base stddev = 0.02 m at 1x):
+| Condition | GNSS | Bay occ. | Notes |
+|-----------|------|----------|-------|
+| `anchor_deployment` | training Markov process | 0.5 | The deployment condition |
 
-  mult      approx. noise   condition
-  -------   -------------   ---------------------------------------------------
-     1.0x       ~0.02 m    nominal_empty  (RTK fixed, empty lot)
-     1.0x       ~0.02 m    nominal_busy   (RTK fixed, full traffic)
-    15.0x       ~0.30 m    rtk_float      (marginal localisation)
-    15.0x       ~0.30 m    rtk_float_busy (RTK float + elevated IMU)
-   100.0x       ~2.00 m    rtk_standalone (policy should decline to park)
-   250.0x       ~5.00 m    rtk_lost       (safety handoff expected)
-   250.0x       ~5.00 m    worst_case     (RTK lost + IMU 6x, handoff demo)
-                  OOD       ood_layout           (irregular_a, RTK fixed)
-                  OOD       ood_layout_degraded  (irregular_a, RTK float)
-```
+### GNSS axis (occupancy 0.5, rectangle)
 
-### Performance sweep (in-distribution floor plans)
+| Condition | GNSS mult | Approx. noise | Notes |
+|-----------|-----------|---------------|-------|
+| `gnss_rtk_fixed` | 1.0x | ~0.02 m | Nominal RTK fixed |
+| `gnss_rtk_float` | 18.0x | ~0.36 m | Marginal for 2.5 m bays |
+| `gnss_standalone` | 90.0x | ~1.8 m | Cautious or abort expected |
+| `gnss_degraded` | 250.0x | ~5.0 m | Worst tier; safety handoff expected |
 
-| Condition | GNSS mult | IMU mult | Patrol | Ped. prob | Bay occ. | Notes |
-|-----------|-----------|----------|--------|-----------|----------|-------|
-| `nominal_empty` | $1.0\times$ | $1.0\times$ | 0 | 0.0 | 0.6 | RTK fixed, best-case |
-| `nominal_busy` | $1.0\times$ | $1.0\times$ | 1 | 1.0 | 0.8 | RTK fixed, full traffic |
-| `rtk_float` | $15.0\times$ | $1.0\times$ | 1 | 0.8 | 0.6 | Marginal localisation |
-| `rtk_float_busy` | $15.0\times$ | $1.5\times$ | 1 | 1.0 | 0.8 | Compound degradation |
-| `rtk_standalone` | $100.0\times$ | $1.0\times$ | 1 | 0.8 | 0.6 | Policy should decline |
-| `rtk_lost` | $250.0\times$ | $2.0\times$ | 1 | 1.0 | 0.8 | Safety handoff expected |
+### Occupancy axis (GNSS RTK fixed, rectangle)
 
-### Held-out layout generalisation (unseen geometries)
+| Condition | Bay occ. | Notes |
+|-----------|----------|-------|
+| `occupancy_empty` | 0.0 | Below training minimum 0.2 (mild OOD) |
+| `occupancy_min` | 0.2 | Training minimum |
+| `occupancy_max` | 0.8 | Training maximum |
 
-Training uses the `rectangle` floor plan only, so the `trapezoid` (moderate OOD)
-and `irregular_a` (strong OOD, nine-sided irregular polygon) layouts are never
-seen during training. Success here measures generalisation; the `irregular_a`
-conditions additionally test whether epistemic uncertainty rises on the strongly
-out-of-distribution geometry.
+### LiDAR axis (GNSS RTK fixed, occupancy 0.5, rectangle)
 
-| Condition | Floor plan | GNSS mult | IMU mult | Patrol | Ped. prob | Bay occ. |
-|-----------|-----------|-----------|----------|--------|-----------|----------|
-| `heldout_trapezoid` | `trapezoid` | $1.0\times$ | $1.0\times$ | 0 | 0.0 | 0.6 |
-| `heldout_trapezoid_degraded` | `trapezoid` | $15.0\times$ | $1.5\times$ | 0 | 0.0 | 0.6 |
-| `ood_layout` | `irregular_a` | $1.0\times$ | $1.0\times$ | 1 | 1.0 | 0.6 |
-| `ood_layout_degraded` | `irregular_a` | $15.0\times$ | $1.5\times$ | 1 | 1.0 | 0.6 |
+Degrades only the obstacle channel (obs 8-12). The EKF fuses GNSS + IMU and
+never consumes LiDAR, so the localisation stds stay at the RTK-fixed floor:
+an EKF-std safety gate is structurally blind to this condition, while the
+evidential head sees the corrupted obstacle features.
 
-### Safety handoff demonstration
+| Condition | LiDAR mult | Approx. noise | Notes |
+|-----------|------------|---------------|-------|
+| `lidar_degraded` | 25.0x | 0.5 m 1-sigma | EKF-blind sensor degradation |
 
-Beyond the training distribution on all axes simultaneously.
+### Held-out layout generalisation (occupancy 0.5)
 
-| Condition | Floor plan | GNSS mult | IMU mult | Patrol | Ped. prob | Bay occ. |
-|-----------|-----------|-----------|----------|--------|-----------|----------|
-| `worst_case` | `rectangle` | $250.0\times$ | $6.0\times$ | 0 | 1.0 | 0.0 |
+Training uses the `rectangle` floor plan only; `trapezoid` is held out and
+`irregular_a` (five-sided lot with a diagonal top wall) is the designated OOD
+layout. Success here measures generalisation across lot geometry.
+
+| Condition | Floor plan | GNSS mult |
+|-----------|-----------|-----------|
+| `heldout_trapezoid_rtk_fixed` | `trapezoid` | 1.0x |
+| `heldout_trapezoid_rtk_float` | `trapezoid` | 18.0x |
+| `ood_irregular_rtk_fixed` | `irregular_a` | 1.0x |
+| `ood_irregular_rtk_float` | `irregular_a` | 18.0x |
+
+### Stress beyond training ranges
+
+| Condition | GNSS mult | IMU mult | Bay occ. | Notes |
+|-----------|-----------|----------|----------|-------|
+| `gnss_stress_imu` | 250.0x | 3.0x | 0.5 | Worst GNSS tier + IMU stress; handoff demo |
 
 ## Metrics collected
 

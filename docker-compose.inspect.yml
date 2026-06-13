@@ -18,6 +18,7 @@ services:
       - inspect-sensors
       - inspect-live
       - inspect-dryrun
+      - inspect-eval-dryrun
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - DISPLAY=${DISPLAY}
@@ -237,6 +238,7 @@ services:
     runtime: nvidia
     profiles:
       - inspect-dryrun
+      - inspect-eval-dryrun
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       # Inspect stack uses a separate ROS_DOMAIN_ID so its EKF and topics are
@@ -338,6 +340,76 @@ services:
       $([ '${INSPECT_MANUAL:-false}' = 'true' ] && echo --manual || true)
       $([ -n '${EPISODES}' ] && echo --episodes ${EPISODES} || true)
       $([ -n '${INSPECT_STAGE}' ] && echo --stage ${INSPECT_STAGE} || true)
+      $([ -n '${INSPECT_BASELINE}' ] && echo --baseline ${INSPECT_BASELINE} || true)
+      2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Manual eval-scenario dry-run: identical container to training-inspect-dryrun
+  # but the env is built from a named eval_config.yaml condition
+  # (INSPECT_SCENARIO) via the same path the eval sweep uses, so you can drive an
+  # eval scenario by keyboard and verify its noise / occupancy / floor-plan
+  # wiring against the printed inputs / GT / EKF. No checkpoint is loaded.
+  training-inspect-eval-dryrun:
+    build:
+      context: .
+      dockerfile: uncertainty_rl/training/Dockerfile
+      args:
+        PYTORCH_VERSION: 24.10-py3
+    container_name: uncertainty-rl-training-inspect-eval-dryrun
+    stdin_open: true
+    tty: true
+    runtime: nvidia
+    profiles:
+      - inspect-eval-dryrun
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      # Must match ros2-bridge-inspect (default 43) so this container shares the
+      # inspect DDS domain and is isolated from any worker bridges on domain 42.
+      - ROS_DOMAIN_ID=${INSPECT_ROS_DOMAIN_ID:-43}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
+      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/workspace
+      - DISPLAY=${DISPLAY}
+      - CARLA_HOST=carla-server-demo
+      - CARLA_PORT=2100
+      - INSPECT_VIEW=${INSPECT_VIEW:-third_person}
+      - INSPECT_PAUSE=${INSPECT_PAUSE:-3.0}
+      - INSPECT_MANUAL=${INSPECT_MANUAL:-false}
+      - INSPECT_SCENARIO=${INSPECT_SCENARIO:-}
+      - INSPECT_BASELINE=${INSPECT_BASELINE:-}
+    depends_on:
+      carla-server-demo:
+        condition: service_healthy
+      ros2-bridge-inspect:
+        condition: service_healthy
+    networks:
+      - uncertainty-rl-network
+    volumes:
+      - ./uncertainty_rl:/workspace/uncertainty_rl:ro
+      - ./configs:/workspace/configs:ro
+      - ./scripts:/workspace/scripts:ro
+      - ./logs:/workspace/logs:rw
+      - ./checkpoints:/workspace/checkpoints:rw
+      - ./tests:/workspace/tests:ro
+      - ./outputs:/workspace/outputs:rw
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    working_dir: /workspace
+    command: >
+      bash -c "python -m scripts.inspect.lot_inspector
+      --mode eval_dryrun
+      --host carla-server-demo
+      --port 2100
+      --inspect-view ${INSPECT_VIEW:-third_person}
+      --termination-pause ${INSPECT_PAUSE:-3.0}
+      $([ '${INSPECT_MANUAL:-false}' = 'true' ] && echo --manual || true)
+      $([ -n '${EPISODES}' ] && echo --episodes ${EPISODES} || true)
+      $([ -n '${INSPECT_SCENARIO}' ] && echo --scenario ${INSPECT_SCENARIO} || true)
       $([ -n '${INSPECT_BASELINE}' ] && echo --baseline ${INSPECT_BASELINE} || true)
       2> >(grep -Ev '^(>>>|<<<|$$|This error state|with this new error|rcutils_reset_error|rcutils_set_error_state|error_handling\.c|serdata\.cpp|should be called after|.*serdata.*)' >&2)"
     deploy:
