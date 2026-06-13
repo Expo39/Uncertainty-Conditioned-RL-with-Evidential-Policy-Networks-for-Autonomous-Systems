@@ -10,15 +10,12 @@ EKF uncertainty levels.
 import argparse
 import logging
 import os
-from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import yaml
 
 try:
@@ -35,259 +32,26 @@ except ImportError:
     VecNormalize = None  # type: ignore[assignment,misc]
 
 try:
-    from uncertainty_rl.envs import CARLAParkingEnv
-    from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
     from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 except ImportError:
-    CARLAParkingEnv = None  # type: ignore[assignment,misc]
-    SafetyWrapper = None  # type: ignore[assignment,misc]
     EvidentialPPO = None  # type: ignore[assignment,misc]
 
+# The metric schema, condition -> env contract, and plotting now live in
+# dedicated modules; re-exported here so existing import paths
+# (uncertainty_rl.evaluation.evaluate.*) keep working unchanged.
+from uncertainty_rl.evaluation.env_builder import (  # noqa: F401
+    _scale_sensor_noise,
+    build_eval_env_factory,
+    make_eval_env,
+)
+from uncertainty_rl.evaluation.metrics import (  # noqa: F401
+    EvaluationMetrics,
+    _classify_outcome,
+)
+from uncertainty_rl.evaluation.plots import plot_evaluation_results  # noqa: F401
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
-from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
-
-
-@dataclass
-class EvaluationMetrics:
-    """
-    @class EvaluationMetrics
-    @brief Container for evaluation metrics.
-
-    Fields cover per-condition success rate, reward, step counts, final-state
-    pose errors (one entry per episode, read from the terminal info), per-step
-    evidential uncertainty estimates (evidential policy only), the per-episode
-    outcome taxonomy counts, and the full per-episode records that downstream
-    calibration analysis (uncertainty-vs-outcome, abort-threshold sweeps)
-    consumes via episode_records.csv.
-    """
-
-    success_rate: float = 0.0
-    average_reward: float = 0.0
-    average_steps: float = 0.0
-    position_errors: List[float] = field(default_factory=list)
-    orientation_errors: List[float] = field(default_factory=list)
-    epistemic_uncertainties: List[float] = field(default_factory=list)
-    aleatoric_uncertainties: List[float] = field(default_factory=list)
-    # Episodes per outcome class: success / collision / out_of_bounds /
-    # handoff / near_miss / stuck (see _classify_outcome).
-    outcome_counts: Dict[str, int] = field(default_factory=dict)
-    # One dict per episode: outcome, final errors, lengths, uncertainty stats.
-    episode_records: List[Dict[str, Any]] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        """
-        @brief Convert metrics to dictionary.
-        @return Dictionary of metrics. Rates are percentages of episodes,
-                matching the success_rate convention.
-        """
-
-        def _mean_std(lst: List[float]) -> Tuple[float, float]:
-            if not lst:
-                return 0.0, 0.0
-            arr = np.asarray(lst)
-            return float(arr.mean()), float(arr.std())
-
-        pos_mean, pos_std = _mean_std(self.position_errors)
-        ori_mean, ori_std = _mean_std(self.orientation_errors)
-        epi_mean, _ = _mean_std(self.epistemic_uncertainties)
-        ale_mean, _ = _mean_std(self.aleatoric_uncertainties)
-
-        n_outcomes = sum(self.outcome_counts.values())
-
-        def _rate(outcome: str) -> float:
-            if n_outcomes == 0:
-                return 0.0
-            return self.outcome_counts.get(outcome, 0) / n_outcomes * 100.0
-
-        return {
-            "success_rate": self.success_rate,
-            "average_reward": self.average_reward,
-            "average_steps": self.average_steps,
-            "mean_position_error": pos_mean,
-            "std_position_error": pos_std,
-            "mean_orientation_error": ori_mean,
-            "std_orientation_error": ori_std,
-            "mean_epistemic_uncertainty": epi_mean,
-            "mean_aleatoric_uncertainty": ale_mean,
-            "max_epistemic_uncertainty": (
-                float(max(self.epistemic_uncertainties))
-                if self.epistemic_uncertainties
-                else 0.0
-            ),
-            "max_aleatoric_uncertainty": (
-                float(max(self.aleatoric_uncertainties))
-                if self.aleatoric_uncertainties
-                else 0.0
-            ),
-            "collision_rate": _rate("collision"),
-            "out_of_bounds_rate": _rate("out_of_bounds"),
-            "handoff_rate": _rate("handoff"),
-            "near_miss_rate": _rate("near_miss"),
-            "stuck_rate": _rate("stuck"),
-        }
-
-
-def _classify_outcome(
-    terminal_info: Dict[str, Any],
-    near_miss_threshold: float,
-) -> str:
-    """
-    @brief Classify a terminated episode into the failure-mode taxonomy.
-    @param terminal_info: Terminal step info dict (post-wrapper, pre-reset).
-    @param near_miss_threshold: Final position error (m) below which a
-           timed-out episode counts as a near miss rather than stuck.
-    @return One of: "success", "collision", "out_of_bounds", "handoff",
-            "near_miss", "stuck".
-
-    Priority: a collision or run-off is reported as such even if a safety
-    handoff fired on the same step - the physical outcome outranks the
-    intervention. Handoff (SafetyWrapper truncation on high epistemic
-    uncertainty) is its own class: the vehicle stopped deliberately, which
-    the safety analysis must not conflate with a blocked or imprecise park.
-    Remaining timeouts split on the final position error: close misses are
-    precision shortfalls, far ones blocked or abandoned approaches.
-    """
-    if terminal_info.get("success", False):
-        return "success"
-    if terminal_info.get("collision", False):
-        return "collision"
-    if terminal_info.get("oob", False):
-        return "out_of_bounds"
-    if terminal_info.get("safety_handoff", False):
-        return "handoff"
-    if float(terminal_info.get("pos_error", float("inf"))) < near_miss_threshold:
-        return "near_miss"
-    return "stuck"
-
-
-def _scale_sensor_noise(
-    base_sensors: Dict[str, Any],
-    imu_multiplier: float,
-) -> Dict[str, Any]:
-    """
-    @brief Scale base sensor noise parameters by the condition-specific IMU multiplier.
-    @param base_sensors: Base sensor config from train_config.yaml.
-    @param imu_multiplier: Multiplier for all IMU noise stddev values.
-    @return New sensor config dict with scaled noise values.
-    """
-    base_imu: Dict[str, Any] = base_sensors.get("imu", {})
-    scaled_imu = {
-        k: (v * imu_multiplier if "stddev" in k else v) for k, v in base_imu.items()
-    }
-    return {**base_sensors, "imu": scaled_imu}
-
-
-def make_eval_env(
-    condition: Dict[str, Any],
-    config: Dict[str, Any],
-    base_sensors: Dict[str, Any],
-    env_config: Optional[Dict[str, Any]] = None,
-) -> DummyVecEnv:
-    """
-    @brief Create evaluation environment for a specific physical condition.
-    @param condition: Condition dict with noise multipliers and traffic counts.
-    @param config: Evaluation configuration dictionary.
-    @param base_sensors: Base sensor noise config from env_config.yaml.
-    @param env_config: Environment config for parking_scenarios and obs flags.
-    @return Vectorised evaluation environment.
-    """
-    # Scale sensor noise by condition multipliers
-    scaled_sensors = _scale_sensor_noise(
-        base_sensors,
-        imu_multiplier=condition.get("imu_noise_multiplier", 1.0),
-    )
-
-    # Build parking_scenarios_config: NPC counts and lot layout from condition
-    # overrides + training defaults. eval_config.yaml uses num_patrol_vehicles
-    # (not num_vehicles) to match CARLAParkingEnv's parking_scenarios_config keys.
-    base_scenarios: Dict[str, Any] = (
-        dict(env_config.get("parking_scenarios", {})) if env_config is not None else {}
-    )
-    floor_plans: Dict[str, Any] = base_scenarios.get("floor_plans", {})
-
-    # Perimeter cone flag: per-condition > eval_config global > env_config default.
-    _cones_fallback = base_scenarios.get(
-        "spawn_perimeter_cones", config.get("spawn_perimeter_cones", False)
-    )
-    spawn_cones: bool = condition.get("spawn_perimeter_cones", _cones_fallback)
-
-    # In evaluation, occupancy is fixed per condition (min == max).
-    # eval_config.yaml uses bay_occupancy_rate (a single value); training uses
-    # bay_occupancy_min/max for the per-episode uniform resample range.
-    bay_occupancy: float = condition.get(
-        "bay_occupancy_rate", base_scenarios.get("bay_occupancy_max", 0.6)
-    )
-
-    # Dynamic actors (patrol vehicles, pedestrians) are out of scope: training
-    # uses static parked cars only, so both default to zero and a condition
-    # must opt in explicitly to deviate from the training distribution.
-    parking_config: Dict[str, Any] = {
-        "spawn_perimeter_cones": spawn_cones,
-        "num_patrol_vehicles_max": condition.get("num_patrol_vehicles", 0),
-        "pedestrian_spawn_probability": condition.get(
-            "pedestrian_spawn_probability", 0.0
-        ),
-        "bay_occupancy_min": bay_occupancy,
-        "bay_occupancy_max": bay_occupancy,
-        "floor_plans": floor_plans,
-    }
-    # Allow per-condition floor plan override (e.g. OOD evaluation)
-    if "floor_plan" in condition:
-        floor_plan_name: str = condition["floor_plan"]
-        if floor_plan_name in floor_plans:
-            parking_config["floor_plans"] = {
-                floor_plan_name: floor_plans[floor_plan_name]
-            }
-
-    # Observation flags and env-specific settings resolved once from env_config
-    _ec = env_config if env_config is not None else {}
-    include_covariance: bool = _ec.get("include_covariance", True)
-    include_obstacle_obs: bool = _ec.get("include_obstacle_obs", True)
-    use_extra_spawns: bool = _ec.get("use_extra_spawns", False)
-    gnss_profiles_path: Optional[str] = _ec.get("gnss_noise_profiles", None)
-
-    # GNSS noise multiplier override: locks tier for this eval condition.
-    gnss_override: Optional[float] = condition.get("gnss_noise_multiplier", None)
-
-    # debug: per-step DebugLogger diagnostics - off by default, same as training.
-    debug: bool = config.get("debug", False)
-
-    # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
-    aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 0.5))
-    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 5.0))
-
-    # Connection / timing / ROS 2 come from env_config so evaluation runs the same
-    # environment the policy was trained in (single source of truth - eval_config
-    # holds only the condition sweep, not env settings).
-    def _init() -> Any:
-        base_env: Any = CARLAParkingEnv(
-            carla_host=_ec.get("carla_host", "localhost"),
-            carla_port=_ec.get("carla_port", 2000),
-            town=_ec.get("town", "FlatPlane"),
-            max_steps=_ec.get("max_steps", 500),
-            ros2_config=_ec.get("ros2", {}),
-            carla_sensors_config=scaled_sensors,
-            parking_scenarios_config=parking_config,
-            include_covariance=include_covariance,
-            include_obstacle_obs=include_obstacle_obs,
-            use_extra_spawns=use_extra_spawns,
-            gnss_noise_profiles_path=gnss_profiles_path,
-            gnss_noise_multiplier_override=gnss_override,
-            # Evaluation is judged at the strict published criterion, not the
-            # env default (0.0) or any relaxed training/curriculum margin.
-            bay_margin=STRICT_BAY_MARGIN,
-            debug=debug,
-        )
-        return SafetyWrapper(
-            base_env,
-            aleatoric_scaling=aleatoric_scaling,
-            handoff_threshold=handoff_threshold,
-        )
-
-    env = DummyVecEnv([_init])
-    return env
 
 
 def evaluate_agent(
@@ -659,6 +423,7 @@ def evaluate_across_conditions(
                 "gnss_noise_multiplier", float("nan")
             ),
             "imu_noise_multiplier": condition.get("imu_noise_multiplier", 1.0),
+            "lidar_noise_multiplier": condition.get("lidar_noise_multiplier", 1.0),
             "num_patrol_vehicles": condition.get("num_patrol_vehicles", 0),
             "pedestrian_spawn_probability": condition.get(
                 "pedestrian_spawn_probability", 0.0
@@ -699,118 +464,6 @@ def evaluate_across_conditions(
     logger.info("Per-episode records saved to %s", episodes_csv_path)
 
     return df, run_output_dir
-
-
-def plot_evaluation_results(
-    df: pd.DataFrame,
-    output_dir: str = "./evaluation_results",
-) -> None:
-    """
-    @brief Create visualisations of evaluation results across conditions.
-    @param df: DataFrame with evaluation results.
-    @param output_dir: Directory to save plots.
-    """
-    sns.set_style("whitegrid")
-
-    conditions = df["condition"].tolist()
-    x_arr = np.arange(len(conditions))
-    x_list = x_arr.tolist()
-
-    fig, axes = plt.subplots(2, 2, figsize=(16, 10))
-
-    # Plots 1-3: single-series bar charts, data-driven
-    bar_specs = [
-        (
-            axes[0, 0],
-            "success_rate",
-            "steelblue",
-            "Success Rate (%)",
-            "Success Rate vs Condition",
-        ),
-        (
-            axes[0, 1],
-            "average_reward",
-            "forestgreen",
-            "Average Reward",
-            "Average Reward vs Condition",
-        ),
-        (
-            axes[1, 0],
-            "average_steps",
-            "firebrick",
-            "Average Steps",
-            "Average Steps to Termination vs Condition",
-        ),
-    ]
-    for ax, col, colour, ylabel, title in bar_specs:
-        ax.bar(x_list, df[col], color=colour, alpha=0.8)
-        ax.set_xticks(x_list)
-        ax.set_xticklabels(conditions, rotation=45, ha="right")
-        ax.set_ylabel(ylabel, fontsize=12)
-        ax.set_title(title, fontsize=14)
-        ax.grid(True, alpha=0.3, axis="y")
-
-    # Plot 4: Policy uncertainty estimates (grouped bars)
-    if "mean_epistemic_uncertainty" in df.columns:
-        bar_width = 0.35
-        axes[1, 1].bar(
-            x_arr - bar_width / 2,
-            df["mean_epistemic_uncertainty"],
-            bar_width,
-            label="Epistemic",
-            alpha=0.8,
-        )
-        axes[1, 1].bar(
-            x_arr + bar_width / 2,
-            df["mean_aleatoric_uncertainty"],
-            bar_width,
-            label="Aleatoric",
-            alpha=0.8,
-        )
-        axes[1, 1].set_xticks(x_list)
-        axes[1, 1].set_xticklabels(conditions, rotation=45, ha="right")
-        axes[1, 1].set_ylabel("Uncertainty", fontsize=12)
-        axes[1, 1].set_title("Policy Uncertainty Estimates", fontsize=14)
-        axes[1, 1].legend(fontsize=10)
-        axes[1, 1].grid(True, alpha=0.3, axis="y")
-
-    plt.tight_layout()
-
-    plot_path = os.path.join(output_dir, "evaluation_plots.png")
-    plt.savefig(plot_path, dpi=300, bbox_inches="tight")
-    logger.info("Plots saved to %s", plot_path)
-
-    plt.close()
-
-    # Failure-mode breakdown: stacked outcome shares per condition. Success at
-    # the base, then the failure taxonomy - the "degrades gracefully" figure.
-    outcome_specs = [
-        ("success_rate", "Success", "steelblue"),
-        ("near_miss_rate", "Near miss", "gold"),
-        ("stuck_rate", "Stuck", "darkorange"),
-        ("handoff_rate", "Handoff", "slategrey"),
-        ("out_of_bounds_rate", "Out of bounds", "sienna"),
-        ("collision_rate", "Collision", "firebrick"),
-    ]
-    present = [s for s in outcome_specs if s[0] in df.columns]
-    if present:
-        fig2, ax2 = plt.subplots(figsize=(12, 6))
-        bottom = np.zeros(len(conditions))
-        for col, label, colour in present:
-            values = df[col].to_numpy(dtype=float)
-            ax2.bar(x_list, values, bottom=bottom, label=label, color=colour)
-            bottom += values
-        ax2.set_xticks(x_list)
-        ax2.set_xticklabels(conditions, rotation=45, ha="right")
-        ax2.set_ylabel("Share of Episodes (%)", fontsize=12)
-        ax2.set_title("Episode Outcomes vs Condition", fontsize=14)
-        ax2.legend(fontsize=10)
-        ax2.grid(True, alpha=0.3, axis="y")
-        plt.tight_layout()
-        outcome_path = os.path.join(output_dir, "failure_modes.png")
-        plt.savefig(outcome_path, dpi=300, bbox_inches="tight")
-        logger.info("Failure-mode plot saved to %s", outcome_path)
-        plt.close()
 
 
 def main() -> None:

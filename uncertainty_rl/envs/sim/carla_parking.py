@@ -174,8 +174,12 @@ class CARLAParkingEnv(gym.Env):
         @param gnss_noise_profiles_path: Path to GNSS noise profiles YAML. If
                provided, the env samples an RTK fix-state tier each reset() and
                spawns the GNSS sensor with the corresponding noise multiplier.
-        @param gnss_noise_multiplier_override: If set, bypasses tier sampling and
-               uses this fixed multiplier every episode. Used during evaluation
+        @param gnss_noise_multiplier_override: If set, locks the GNSS noise to a
+               single fix-state tier for the WHOLE episode (Markov drift held off
+               in the relay) every reset. The multiplier is resolved to the tier
+               whose metric_stddev_m / 0.020 m base matches it; the matched tier
+               drives both the relay noise and the held-level signalling, so the
+               level is a controlled independent variable. Used during evaluation
                to lock GNSS noise to a specific condition.
         @param success_dwell_steps: Number of consecutive steps all success
                criteria (position, orientation, velocity) must be satisfied
@@ -233,6 +237,10 @@ class CARLAParkingEnv(gym.Env):
         self._gnss_tier_weights: np.ndarray = np.empty(0, dtype=np.float64)
         self._current_gnss_multiplier: float = 1.0
         self._current_gnss_tier: Optional[Dict[str, Any]] = None
+        # When a multiplier override locks a single tier for evaluation, the
+        # relay must HOLD that tier (no Markov drift) so the level is a clean
+        # independent variable. publish_episode_config carries this flag.
+        self._hold_gnss_tier: bool = False
         if gnss_noise_profiles_path:
             self._load_gnss_noise_profiles(gnss_noise_profiles_path)
 
@@ -676,22 +684,63 @@ class CARLAParkingEnv(gym.Env):
             tier_names,
         )
 
+    def _resolve_tier_for_multiplier(self, multiplier: float) -> Dict[str, Any]:
+        """
+        @brief Map a GNSS noise multiplier to its loaded fix-state tier.
+
+        The eval multipliers are defined as metric_stddev_m / 0.020 m (the
+        RTK-fixed base), so the matching tier is the one whose metric stddev
+        is closest to multiplier * base. Returns the nearest tier rather than
+        requiring an exact match so eval config rounding never raises.
+
+        @param multiplier: GNSS noise multiplier from the eval condition.
+        @return The nearest loaded tier dict.
+        @raises RuntimeError if no GNSS tiers are loaded.
+        """
+        if len(self._gnss_noise_tiers) == 0:
+            raise RuntimeError(
+                "gnss_noise_multiplier_override set but no GNSS tiers loaded; "
+                "pass gnss_noise_profiles_path."
+            )
+        base_stddev = 0.02  # RTK-fixed base (metres) - matches tier table.
+        target_stddev = multiplier * base_stddev
+        return min(
+            self._gnss_noise_tiers,
+            key=lambda t: abs(
+                float(t.get("metric_stddev_m", base_stddev)) - target_stddev
+            ),
+        )
+
     def _sample_gnss_noise_tier(self) -> None:
         """
         @brief Sample a GNSS noise tier for the current episode.
 
-        When gnss_noise_multiplier_override is set (evaluation mode),
-        bypasses random tier sampling and uses the fixed multiplier.
+        When gnss_noise_multiplier_override is set (evaluation mode), the
+        multiplier is resolved to the matching fix-state tier and HELD for the
+        whole episode (the relay's Markov drift is suppressed via the hold
+        flag), so the condition is a clean independent variable. Otherwise a
+        tier is sampled and the relay wanders it via the Markov chain, exactly
+        as in training.
         """
         if self._gnss_noise_multiplier_override is not None:
+            tier = self._resolve_tier_for_multiplier(
+                self._gnss_noise_multiplier_override
+            )
+            self._current_gnss_tier = tier
             self._current_gnss_multiplier = self._gnss_noise_multiplier_override
-            self._current_gnss_tier = None
+            self._hold_gnss_tier = True
             logger.info(
-                "Episode %d: GNSS multiplier override=%.1f",
+                "Episode %d: GNSS multiplier override=%.1f -> held tier '%s' "
+                "(%.2f m stddev, no drift)",
                 self._episode_id,
                 self._current_gnss_multiplier,
+                tier.get("name", "unknown"),
+                float(tier.get("metric_stddev_m", 0.02)),
             )
             return
+
+        # No override: the relay wanders the start tier via the Markov chain.
+        self._hold_gnss_tier = False
 
         if len(self._gnss_noise_tiers) == 0:
             self._current_gnss_multiplier = 1.0
@@ -1481,8 +1530,16 @@ class CARLAParkingEnv(gym.Env):
             self.client.set_timeout(120.0)
             self.world = self.client.get_world()
 
+            # generate_opendrive_world() leaves the world reporting
+            # "Carla/Maps/OpenDriveMap", not "FlatPlane", so both names mean
+            # the FlatPlane OpenDRIVE world is already present. Regenerating an
+            # already-loaded world resets CARLA's elapsed-seconds sensor clock
+            # to zero; the long-lived ros2-bridge EKF then rejects every fresh
+            # transform as TF_OLD_DATA and stops writing ekf_state.json (the
+            # evaluation sweep builds a fresh env per condition, so this fired
+            # at every condition boundary). Skip regen when either name is seen.
             current_map_name = self.world.get_map().name.split("/")[-1]
-            if current_map_name != "FlatPlane":
+            if current_map_name not in ("FlatPlane", "OpenDriveMap"):
                 xodr = Path("configs/layouts/flat_plane.xodr").read_text(
                     encoding="utf-8"
                 )
@@ -1938,6 +1995,7 @@ class CARLAParkingEnv(gym.Env):
                     tier_name=str(tier.get("name", "")),
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,
+                    hold_tier=self._hold_gnss_tier,
                 )
 
         if reuse_vehicle:

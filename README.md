@@ -211,9 +211,10 @@ Uncertainty-Conditioned-RL.../
 |   |   +-- Dockerfile                 NGC PyTorch 24.10 + SB3 + rclpy (Humble)
 |   |
 |   |-- evaluation/                    Condition-sweep evaluation
-|   |   +-- evaluate.py                EvaluationMetrics, evaluate_agent,
-|   |                                  evaluate_across_conditions,
-|   |                                  plot_evaluation_results
+|   |   |-- evaluate.py                evaluate_agent, evaluate_across_conditions
+|   |   |-- metrics.py                 EvaluationMetrics, _classify_outcome
+|   |   |-- env_builder.py             build_eval_env_factory, make_eval_env
+|   |   +-- plots.py                   plot_evaluation_results
 |   |
 |   |-- ros2/                          ROS 2 bridge to robot_localisation EKF
 |   |   |-- uncertainty_rl_ros2/

@@ -310,6 +310,78 @@ class TestObservationSpaceShape:
         env.close()
 
 
+class TestGnssMultiplierTierResolution:
+    """
+    @class TestGnssMultiplierTierResolution
+    @brief The eval GNSS-override multiplier must resolve to the matching tier.
+
+    Evaluation locks GNSS noise by passing a multiplier (metric_stddev / 0.020 m
+    base). The env resolves it to a real loaded tier so the same per-episode
+    publish path training uses (datum re-latch + tier signalling) runs, rather
+    than the dead-multiplier path that never reached the relay. Constructing the
+    env needs no CARLA connection (only reset() connects).
+    """
+
+    _PROFILES = "configs/deployment/sim/gnss_noise_profiles.yaml"
+
+    @pytest.mark.parametrize(
+        "multiplier, expected_tier",
+        [
+            (1.0, "rtk_fixed"),
+            (18.0, "rtk_float"),
+            (90.0, "standalone"),
+            (250.0, "degraded"),
+        ],
+    )
+    def test_multiplier_maps_to_expected_tier(
+        self, multiplier: float, expected_tier: str
+    ) -> None:
+        """
+        @brief Each eval multiplier resolves to its documented fix-state tier.
+        @param multiplier: GNSS noise multiplier from an eval condition.
+        @param expected_tier: The tier name the multiplier must select.
+        """
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5, gnss_noise_profiles_path=self._PROFILES)
+        tier = env._resolve_tier_for_multiplier(multiplier)
+        assert tier.get("name") == expected_tier
+        env.close()
+
+    def test_override_sets_held_tier_and_flag(self) -> None:
+        """
+        @brief An override resolves to a non-None tier and arms the hold flag.
+
+        The hold flag is what suppresses the relay's Markov drift, keeping the
+        evaluated level constant (a controlled independent variable). Without a
+        resolved tier the per-episode publish - which re-latches the GNSS datum -
+        would be skipped, stalling the EKF (the original eval crash).
+        """
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(
+            max_steps=5,
+            gnss_noise_profiles_path=self._PROFILES,
+            gnss_noise_multiplier_override=18.0,
+        )
+        env._sample_gnss_noise_tier()
+        assert env._current_gnss_tier is not None
+        assert env._current_gnss_tier.get("name") == "rtk_float"
+        assert env._hold_gnss_tier is True
+        env.close()
+
+    def test_no_override_leaves_hold_flag_off(self) -> None:
+        """
+        @brief Without an override the chain wanders (hold flag stays False).
+        """
+        from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
+
+        env = CARLAParkingEnv(max_steps=5, gnss_noise_profiles_path=self._PROFILES)
+        env._sample_gnss_noise_tier()
+        assert env._hold_gnss_tier is False
+        env.close()
+
+
 # ---------------------------------------------------------------------------
 # Gymnasium API contract (requires live CARLA server - integration only)
 # ---------------------------------------------------------------------------

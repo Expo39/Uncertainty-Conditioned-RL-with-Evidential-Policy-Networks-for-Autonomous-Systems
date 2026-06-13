@@ -336,6 +336,7 @@ class _CovarianceSubscriber:
         tier_name: str,
         datum_lat: Optional[float] = None,
         datum_lon: Optional[float] = None,
+        hold_tier: bool = False,
     ) -> None:
         """
         @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
@@ -343,11 +344,16 @@ class _CovarianceSubscriber:
                           the episode STARTS in.
         @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
         @param datum_lon: Longitude (degrees) of vehicle spawn.
+        @param hold_tier: If True, the relay holds this tier for the whole
+                          episode (Markov drift suppressed) - the controlled
+                          fixed-level evaluation conditions. Training leaves it
+                          False so the chain wanders.
         """
         self._episode_config_seq += 1
         data: Dict[str, Any] = {
             "seq": self._episode_config_seq,
             "tier_name": tier_name,
+            "hold_tier": bool(hold_tier),
         }
         if datum_lat is not None:
             data["datum_lat"] = datum_lat
@@ -358,8 +364,9 @@ class _CovarianceSubscriber:
                 json.dump(data, f)
             os.replace(self._episode_config_tmp, self._episode_config_path)
             logger.info(
-                "GNSS noise config written: tier=%s (seq=%d)",
+                "GNSS noise config written: tier=%s hold=%s (seq=%d)",
                 tier_name,
+                hold_tier,
                 self._episode_config_seq,
             )
         except OSError as exc:

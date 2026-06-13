@@ -235,7 +235,7 @@ class TestScaleSensorNoise:
 
     def _base_sensors(self) -> dict:
         """
-        @brief Return a representative sensor config mirroring train_config.yaml.
+        @brief Return a representative sensor config mirroring env_config.yaml.
         """
         return {
             "imu": {
@@ -247,6 +247,11 @@ class TestScaleSensorNoise:
             "lidar": {
                 "channels": 1,
                 "range": 30.0,
+                "noise": {
+                    "range_random_stddev_m": 0.020,
+                    "range_bias_limit_m": 0.060,
+                    "dropout_rate": 0.0,
+                },
             },
         }
 
@@ -301,15 +306,60 @@ class TestScaleSensorNoise:
 
         assert sensors["imu"]["accel_stddev"] == pytest.approx(original_accel)
 
-    def test_lidar_section_untouched(self) -> None:
+    def test_imu_multiplier_does_not_touch_lidar(self) -> None:
         """
-        @brief Non-IMU sections are copied unchanged even with a large multiplier.
+        @brief The IMU multiplier must not scale any LiDAR noise value.
         """
         sensors = self._base_sensors()
         result = _scale_sensor_noise(sensors, imu_multiplier=100.0)
 
         assert result["lidar"]["channels"] == 1
         assert result["lidar"]["range"] == pytest.approx(30.0)
+        assert result["lidar"]["noise"]["range_random_stddev_m"] == pytest.approx(0.020)
+
+    def test_lidar_stddev_scaled_by_lidar_multiplier(self) -> None:
+        """
+        @brief Keys containing 'stddev' in the LiDAR noise block are multiplied.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=1.0, lidar_multiplier=25.0)
+
+        assert result["lidar"]["noise"]["range_random_stddev_m"] == pytest.approx(0.5)
+
+    def test_lidar_non_stddev_keys_unchanged(self) -> None:
+        """
+        @brief LiDAR bias and dropout keys are not scaled by the multiplier.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=1.0, lidar_multiplier=25.0)
+
+        assert result["lidar"]["noise"]["range_bias_limit_m"] == pytest.approx(0.060)
+        assert result["lidar"]["noise"]["dropout_rate"] == pytest.approx(0.0)
+
+    def test_lidar_noise_enabled_forced_on(self) -> None:
+        """
+        @brief The LiDAR noise enabled flag is forced on regardless of input.
+
+        Every training stage runs with LiDAR noise enabled (the constant
+        realism floor); the flag is stage-owned, so the stage-less eval merge
+        would otherwise drop it and break train/eval parity.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=1.0)
+        assert result["lidar"]["noise"]["enabled"] is True
+
+        sensors["lidar"]["noise"]["enabled"] = False
+        result = _scale_sensor_noise(sensors, imu_multiplier=1.0)
+        assert result["lidar"]["noise"]["enabled"] is True
+
+    def test_lidar_multiplier_defaults_to_noop(self) -> None:
+        """
+        @brief Omitting lidar_multiplier leaves LiDAR noise values unscaled.
+        """
+        sensors = self._base_sensors()
+        result = _scale_sensor_noise(sensors, imu_multiplier=3.0)
+
+        assert result["lidar"]["noise"]["range_random_stddev_m"] == pytest.approx(0.020)
 
 
 class _StubModel:

@@ -11,10 +11,15 @@
 # configs/deployment/sim/gnss_noise_profiles.yaml as metric_stddev_m / 0.020 m
 # (the RTK-fixed base). A condition WITHOUT the key runs the training noise
 # process itself: per-episode tier sampling + mid-episode Markov drift.
+#
+# imu_noise_multiplier / lidar_noise_multiplier scale the CARLA sensor stddev
+# values above the fixed training noise floor (bias and tick-rate keys are
+# never scaled). LiDAR noise itself is always enabled at eval, matching the
+# constant realism floor every training stage runs with.
 
 model_path: "checkpoints/final_model"  # Overridden by make docker-eval.
 
-n_episodes: 100  # Episodes per condition. Use 200+ for final headline runs.
+n_episodes: 10  # Episodes per condition. Use 200+ for final headline runs.
 deterministic: true  # Use deterministic (mean) actions.
 debug: false
 
@@ -23,13 +28,17 @@ debug: false
 near_miss_threshold_m: 1.5
 
 eval_conditions:
-  # In-distribution anchor: the exact noise process training ran (tier
-  # sampling + Markov drift). This is the deployment condition.
-  - name: "in_distribution_markov"
-    description: "Training GNSS process (tier sampling + drift), occupancy 0.5"
+  # Deployment anchor: the exact noise process training ran (per-episode RTK
+  # fix-state tier sampling + mid-episode Markov drift). This is the condition
+  # the real instrumented lot would actually run.
+  - name: "anchor_deployment"
+    description: "Training GNSS process (tier sampling + Markov drift), occupancy 0.5"
     bay_occupancy_rate: 0.5
 
   # --- GNSS axis (occupancy pinned at 0.5, rectangle) ---------------------
+  # Each condition holds one RTK fix-state tier constant for the whole episode,
+  # bypassing the Markov chain, so the localisation level is a controlled
+  # independent variable. Names match the tier keys in gnss_noise_profiles.yaml.
   - name: "gnss_rtk_fixed"
     description: "RTK fixed (~2 cm) held all episode"
     gnss_noise_multiplier: 1.0  # 0.020 m / 0.020 m
@@ -46,57 +55,73 @@ eval_conditions:
     bay_occupancy_rate: 0.5
 
   - name: "gnss_degraded"
-    description: "Degraded GNSS (~5 m) held - safety handoff expected"
+    description: "Degraded GNSS (~5 m, worst tier) held - safety handoff expected"
     gnss_noise_multiplier: 250.0  # 5.0 m / 0.020 m
     bay_occupancy_rate: 0.5
 
   # --- Occupancy axis (GNSS pinned at RTK fixed, rectangle) ---------------
-  - name: "occ_empty"
+  - name: "occupancy_empty"
     description: "Empty lot (below training minimum 0.2 - mild OOD)"
     gnss_noise_multiplier: 1.0
     bay_occupancy_rate: 0.0
 
-  - name: "occ_light"
-    description: "Light occupancy (training minimum)"
+  - name: "occupancy_min"
+    description: "Training-minimum occupancy (0.2)"
     gnss_noise_multiplier: 1.0
     bay_occupancy_rate: 0.2
 
-  - name: "occ_busy"
-    description: "Busy lot (training maximum)"
+  - name: "occupancy_max"
+    description: "Training-maximum occupancy (0.8)"
     gnss_noise_multiplier: 1.0
     bay_occupancy_rate: 0.8
 
+  # --- LiDAR axis (GNSS pinned at RTK fixed, occupancy 0.5, rectangle) ----
+  # Degrades only the obstacle channel (obs 8-12). The EKF fuses GNSS + IMU and
+  # never consumes LiDAR, so the localisation stds stay at the RTK-fixed floor:
+  # an EKF-std safety gate is structurally blind to this condition, while the
+  # evidential head sees the corrupted obstacle features. Multiplier scales the
+  # 0.020 m datasheet stddev floor; 25x = 0.5 m 1-sigma range noise (a failing
+  # or interfered sensor, far beyond any in-distribution level).
+  - name: "lidar_degraded"
+    description: "25x LiDAR range noise (0.5 m 1-sigma), RTK fixed - EKF-blind degradation"
+    gnss_noise_multiplier: 1.0
+    lidar_noise_multiplier: 25.0
+    bay_occupancy_rate: 0.5
+
   # --- Generalisation: unseen geometry (occupancy 0.5) --------------------
   # Trapezoid is held out from training (rectangle only); irregular_a is the
-  # designated OOD layout - the epistemic-uncertainty calibration check.
-  - name: "heldout_trapezoid"
-    description: "Held-out floor plan (trapezoid), RTK fixed"
+  # designated OOD layout - the epistemic-uncertainty calibration check. Each
+  # geometry is run at two GNSS tiers (RTK fixed and RTK float) so layout
+  # generalisation and localisation degradation stay separable.
+  - name: "heldout_trapezoid_rtk_fixed"
+    description: "Held-out floor plan (trapezoid), RTK fixed (~2 cm)"
     gnss_noise_multiplier: 1.0
     bay_occupancy_rate: 0.5
     floor_plan: "trapezoid"
 
-  - name: "heldout_trapezoid_degraded"
-    description: "Held-out floor plan (trapezoid), RTK float"
+  - name: "heldout_trapezoid_rtk_float"
+    description: "Held-out floor plan (trapezoid), RTK float (~36 cm)"
     gnss_noise_multiplier: 18.0
     bay_occupancy_rate: 0.5
     floor_plan: "trapezoid"
 
-  - name: "ood_layout"
-    description: "OOD floor plan (irregular_a), RTK fixed"
+  - name: "ood_irregular_rtk_fixed"
+    description: "OOD floor plan (irregular_a), RTK fixed (~2 cm)"
     gnss_noise_multiplier: 1.0
     bay_occupancy_rate: 0.5
     floor_plan: "irregular_a"
 
-  - name: "ood_layout_degraded"
-    description: "OOD floor plan (irregular_a), RTK float"
+  - name: "ood_irregular_rtk_float"
+    description: "OOD floor plan (irregular_a), RTK float (~36 cm)"
     gnss_noise_multiplier: 18.0
     bay_occupancy_rate: 0.5
     floor_plan: "irregular_a"
 
   # --- Stress beyond training ranges ---------------------------------------
   # IMU multiplier scales the CARLA IMU sensor stddevs above the fixed
-  # training noise (the ROS 2 relay noise is not scaled).
-  - name: "worst_case"
+  # training noise (the ROS 2 relay noise is not scaled). Combines the worst
+  # GNSS tier (250x, ~5 m) with 3x IMU noise - the safety-handoff demo.
+  - name: "gnss_stress_imu"
     description: "Degraded GNSS (~5 m) + 3x IMU noise - handoff demo"
     gnss_noise_multiplier: 250.0
     imu_noise_multiplier: 3.0

@@ -143,11 +143,16 @@ All containers share `ROS_DOMAIN_ID=42` (set in `docker-compose.yml`).
 
 ## Evaluation Condition Sweep
 
-`eval_config.yaml` orders conditions by `gnss_noise_multiplier` (scales the GNSS noise),
-plus traffic density and held-out / OOD layouts - e.g. `nominal_empty`/`nominal_busy`
-(RTK fixed, 1.0x), `rtk_float` (15x, ~30 cm), `rtk_standalone` (100x, ~2 m),
-`rtk_lost`/`worst_case` (250x, ~5 m, safety-handoff demos), `ood_layout` (irregular_a),
-`heldout_trapezoid`. Each runs `n_episodes`. No weather conditions exist.
+`eval_config.yaml` is a de-confounded sweep: each condition varies ONE factor against the
+`anchor_deployment` condition (training GNSS Markov process, occupancy 0.5, rectangle).
+Condition names follow the RTK fix-state tiers in `gnss_noise_profiles.yaml`: the GNSS axis
+holds one tier constant per episode - `gnss_rtk_fixed` (1.0x, ~2 cm), `gnss_rtk_float`
+(18x, ~36 cm), `gnss_standalone` (90x, ~1.8 m), `gnss_degraded` (250x, ~5 m, worst tier).
+Other axes: `occupancy_empty`/`occupancy_min`/`occupancy_max`, `lidar_degraded` (25x,
+EKF-blind), the held-out / OOD layouts run at two tiers each
+(`heldout_trapezoid_rtk_fixed`/`_rtk_float`, `ood_irregular_rtk_fixed`/`_rtk_float`), and
+`gnss_stress_imu` (250x GNSS + 3x IMU, handoff demo). Each runs `n_episodes`. No weather
+conditions exist.
 
 ## What NOT to Generate
 
