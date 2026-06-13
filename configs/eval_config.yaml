@@ -39,12 +39,12 @@ eval_conditions:
   # Each condition holds one RTK fix-state tier constant for the whole episode,
   # bypassing the Markov chain, so the localisation level is a controlled
   # independent variable. Names match the tier keys in gnss_noise_profiles.yaml.
-  - name: "gnss_rtk_fixed"
+  - name: "gnss_fixed"
     description: "RTK fixed (~2 cm) held all episode"
     held_gnss_tier: rtk_fixed
     bay_occupancy_rate: 0.5
 
-  - name: "gnss_rtk_float"
+  - name: "gnss_float"
     description: "RTK float (~36 cm) held all episode"
     held_gnss_tier: rtk_float
     bay_occupancy_rate: 0.5

@@ -80,14 +80,14 @@ _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
     },
 }
 
-# Fallback per-step transition matrix used only if
-# configs cannot be loaded at startup.
+# Fallback used only if configs cannot be loaded at startup. Mirror of the
+# transition_matrix in gnss_noise_profiles.yaml (standalone ~4 s, degraded ~7 s dwell).
 _DEFAULT_TRANSITION_MATRIX: List[List[float]] = [
     # to:  fixed   float   standalone  degraded
-    [0.9950, 0.0050, 0.0000, 0.0000],  # from: rtk_fixed
-    [0.0030, 0.9920, 0.0050, 0.0000],  # from: rtk_float
-    [0.0000, 0.0040, 0.9930, 0.0030],  # from: standalone
-    [0.0000, 0.0000, 0.0050, 0.9950],  # from: degraded
+    [0.9920, 0.0080, 0.0000, 0.0000],  # from: rtk_fixed
+    [0.0400, 0.9550, 0.0050, 0.0000],  # from: rtk_float
+    [0.0000, 0.0080, 0.9875, 0.0045],  # from: standalone
+    [0.0000, 0.0000, 0.0071, 0.9929],  # from: degraded
 ]
 
 # Map tier name to the corresponding NavSatStatus value that a real receiver

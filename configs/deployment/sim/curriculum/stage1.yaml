@@ -16,7 +16,8 @@ bay_margin: -0.75  # Loosest acceptance box (negative inflates it outward).
 
 parking_scenarios:
   fixed_floor_plan: rectangle  # Training layout; trapezoid/irregular held out for OOD eval.
-  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  # fixed_gnss_tier omitted: start tier is SAMPLED from the init weights in
+  # gnss_noise_profiles.yaml (any fix state), then wanders via the Markov chain.
   allowed_bay_ids:  # Drop the radial-homing crutch (25); keep a straight-in anchor (38).
     - perpendicular_0    # cluster 0-11,  yaw 270, lower row (turn-in, right of spawn)
     - perpendicular_22   # cluster 12-24, yaw 90,  south row (turn-in, opposite orientation)

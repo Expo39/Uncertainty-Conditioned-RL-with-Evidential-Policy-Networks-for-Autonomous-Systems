@@ -32,8 +32,6 @@ WALL_TOP_DIAGONAL = 2  # P2 -> P3
 WALL_TOP_FLAT = 3  # P3 -> P4
 WALL_LEFT = 4  # P4 -> P0
 
-TOP_FLAT_AISLE = 6.0  # Aisle between top-flat back-to-back perp rows.
-LEFT_ANG_BOTTOM_Y = 3.0  # Local y of the bottom-most left-wall bay.
 
 
 def generate() -> Dict[str, Any]:
@@ -61,10 +59,7 @@ def generate() -> Dict[str, Any]:
         bay_type="perpendicular",
         n=4,
         wall=WALL_LEFT,
-        start_along=LEFT_ANG_BOTTOM_Y
-        - lot.wall_y(WALL_BOTTOM)
-        + perp_corner_clearance
-        - lot.wall_gap,
+        start_along=perp_corner_clearance + 12.0,
         pack_from="end",
     )
 
@@ -79,15 +74,14 @@ def generate() -> Dict[str, Any]:
         start_along=diag_wall_len - end_clearance - 10 * perp_spacing - 5.0,
     )
 
-    # Top-flat back-to-back perp rows
+    # Top-flat back-to-back perp rows (bays at the P4-near end removed)
     top_flat_back = lot.row_along_perimeter(
         bay_type="perpendicular",
-        n=6,
+        n=4,
         wall=WALL_TOP_FLAT,
         pack_from="end",
+        start_along=dims_perp["width"] / 2.0 + lot.wall_gap + 2 * dims_perp["width"],
     )
-    top_flat_facing = lot.facing_row(top_flat_back, gap=TOP_FLAT_AISLE, n=4)
-
     # Right wall perpendicular bays
     right_perp = lot.row_along_perimeter(
         bay_type="perpendicular",
@@ -97,7 +91,7 @@ def generate() -> Dict[str, Any]:
     )
 
     # Spawns
-    lot.spawn(x=3.0, y=25.0, yaw_deg=0.0, primary=True)
+    lot.spawn(x=3.0, y=35.0, yaw_deg=0.0, primary=True)
     _diagonal_top_spawn(lot)
     lot.spawn(x=45.0, y=5.0, yaw_deg=90.0)
 
@@ -115,7 +109,6 @@ def generate() -> Dict[str, Any]:
 
     # Pedestrian zones
     lot.add_zone(PedestrianZone.along_row(bottom_perp, side="north"))
-    lot.add_zone(PedestrianZone.along_row(top_flat_facing, side="south"))
     lot.add_zone(PedestrianZone.along_row(right_perp, side="west"))
 
     return lot.build()

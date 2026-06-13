@@ -6,7 +6,8 @@ bay_margin: -0.25  # Strict, held.
 
 parking_scenarios:
   fixed_floor_plan: rectangle
-  fixed_gnss_tier: rtk_fixed  # Per-episode start tier.
+  # fixed_gnss_tier omitted: start tier is SAMPLED from the init weights in
+  # gnss_noise_profiles.yaml (any fix state), then wanders via the Markov chain.
   bay_occupancy_min: 0.2
   bay_occupancy_max: 0.5
 
