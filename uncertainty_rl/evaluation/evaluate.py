@@ -102,6 +102,10 @@ def evaluate_agent(
     # the probe sees the full eval-state distribution.
     _obs_cap = int(os.environ.get("EVAL_DUMP_OBS", "0") or "0")
     captured_obs: List[np.ndarray] = []
+    # Per-step EKF calibration pairs (predicted std vs actual GT-EKF error),
+    # collected for every baseline so the calibration analysis covers the
+    # no-covariance arms too. Always on (cheap; one small dict per step).
+    calibration_pairs: List[Dict[str, Any]] = []
 
     episode_rewards = np.empty(n_episodes, dtype=np.float64)
     episode_steps = np.empty(n_episodes, dtype=np.int32)
@@ -190,6 +194,34 @@ def evaluate_agent(
             _std_x = float(_info0.get("ekf_std_x", float("nan")))
             _std_y = float(_info0.get("ekf_std_y", float("nan")))
             _std_yaw = float(_info0.get("ekf_std_yaw", float("nan")))
+            # Calibration pairs: the EKF's PREDICTED uncertainty (std) against its
+            # ACTUAL error (ground truth minus EKF estimate). gt_* / ekf_* are in
+            # the info for every baseline (GT is reward-only, never observed), so
+            # this measures whether the covariance fed to the policy is honest -
+            # the precondition for conditioning on it being justified at all.
+            _gt_x = float(_info0.get("gt_x", float("nan")))
+            _gt_y = float(_info0.get("gt_y", float("nan")))
+            _gt_yaw = float(_info0.get("gt_yaw", float("nan")))
+            _ekf_x = float(_info0.get("ekf_x", float("nan")))
+            _ekf_y = float(_info0.get("ekf_y", float("nan")))
+            _ekf_yaw = float(_info0.get("ekf_yaw", float("nan")))
+            if np.isfinite(_gt_x) and np.isfinite(_ekf_x) and np.isfinite(_std_x):
+                err_x = _gt_x - _ekf_x
+                err_y = _gt_y - _ekf_y
+                # Wrap heading error to [-pi, pi] before taking magnitude.
+                err_yaw = (_gt_yaw - _ekf_yaw + np.pi) % (2.0 * np.pi) - np.pi
+                calibration_pairs.append(
+                    {
+                        "condition": "",  # filled by the caller per condition
+                        "std_x": _std_x,
+                        "std_y": _std_y,
+                        "std_yaw": _std_yaw,
+                        "abs_err_x": abs(err_x),
+                        "abs_err_y": abs(err_y),
+                        "abs_err_pos": float(np.hypot(err_x, err_y)),
+                        "abs_err_yaw": abs(float(err_yaw)),
+                    }
+                )
             if np.isfinite(_std_x) and np.isfinite(_std_y):
                 ep_std_pos.append((_std_x + _std_y) / 2.0)
             if np.isfinite(_std_yaw):
@@ -274,6 +306,8 @@ def evaluate_agent(
     metrics.average_steps = float(episode_steps.mean())
     if captured_obs:
         metrics.captured_observations = captured_obs
+    if calibration_pairs:
+        metrics.calibration_pairs = calibration_pairs
 
     return metrics
 
@@ -348,6 +382,9 @@ def evaluate_across_conditions(
     # Real observations captured across the whole sweep when EVAL_DUMP_OBS is set
     # (the on-manifold covariance-probe input). Empty otherwise.
     captured_obs_all: List[Any] = []
+    # EKF calibration pairs (predicted std vs actual error) across the sweep,
+    # tagged by condition - the honesty-of-the-covariance table.
+    calibration_rows: List[Dict[str, Any]] = []
     vec_normalize_exists = os.path.exists(vec_normalize_path)
     if not vec_normalize_exists:
         logger.warning(
@@ -429,6 +466,11 @@ def evaluate_across_conditions(
         if metrics.captured_observations:
             captured_obs_all.extend(metrics.captured_observations)
 
+        # Accumulate EKF calibration pairs, tagging each with this condition so
+        # the analysis can split honesty by GNSS tier.
+        for pair in metrics.calibration_pairs:
+            calibration_rows.append({**pair, "condition": name})
+
         # Store results: merge metrics dict with condition metadata in one pass
         optional_fields = (
             {"floor_plan": condition["floor_plan"]} if "floor_plan" in condition else {}
@@ -480,6 +522,14 @@ def evaluate_across_conditions(
     episodes_csv_path = os.path.join(run_output_dir, "episode_records.csv")
     episodes_df.to_csv(episodes_csv_path, index=False)
     logger.info("Per-episode records saved to %s", episodes_csv_path)
+
+    # EKF calibration records (predicted std vs actual error) for the
+    # honesty-of-the-covariance analysis (scripts/evaluation/calibration.py).
+    if calibration_rows:
+        calib_df = pd.DataFrame(calibration_rows)
+        calib_csv_path = os.path.join(run_output_dir, "calibration_records.csv")
+        calib_df.to_csv(calib_csv_path, index=False)
+        logger.info("EKF calibration records saved to %s", calib_csv_path)
 
     # Dump captured real observations for the on-manifold covariance probe.
     if captured_obs_all:
