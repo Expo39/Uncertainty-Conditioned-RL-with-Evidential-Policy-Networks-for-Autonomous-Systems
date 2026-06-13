@@ -31,7 +31,7 @@ present appear.
 | Key | Type | Meaning |
 |-----|------|---------|
 | `floor_plan` | str | Layout name, matching the file stem |
-| `ood` | bool | True only for `irregular_a` (excluded from training, evaluation-only) |
+| `ood` | bool | True for `trapezoid` and `irregular_a` (excluded from training, evaluation-only); only `rectangle` is trained on |
 | `origin` | `{x, y, z, heading_deg}` | Lot origin in the CARLA world frame - the only block re-measured by hand |
 | `spawn_transform` | `{x, y, z, yaw_deg}` | Primary spawn pose (exactly one) |
 | `extra_spawn_transforms` | list of `{x, y, z, yaw_deg}` | Additional spawns for varied approach angles (at least one) |

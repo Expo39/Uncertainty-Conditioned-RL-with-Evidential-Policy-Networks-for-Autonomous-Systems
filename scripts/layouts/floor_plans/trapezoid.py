@@ -12,7 +12,7 @@ ORIGIN_X = 0.0
 ORIGIN_Y = 30.0
 ORIGIN_Z = 0.3
 HEADING_DEG = 0.0
-OOD = False
+OOD = True
 
 # Lot dimensions and structural offsets.
 WIDTH_FRONT = 60.0

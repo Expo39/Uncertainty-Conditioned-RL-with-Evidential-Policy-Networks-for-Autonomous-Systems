@@ -4,10 +4,10 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 ## At a glance
 
-- 14 de-confounded conditions: every condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors)
+- 6 de-confounded conditions: every condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors)
 - Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()` (LiDAR noise always enabled at eval, matching the training realism floor)
 - Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `STRICT_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `SUCCESS_DWELL_STEPS`
-- `n_episodes = 100` per condition, deterministic (mean) actions
+- `n_episodes = 10` per condition by default (use 200+ for headline runs), deterministic (mean) actions
 - OOD conditions use `irregular_a` floor plan (never seen during training)
 - No weather variation - FlatPlane does not render weather effects
 
@@ -74,30 +74,33 @@ which is why no condition needs a separate code path. The anchor leaves the flag
 off and runs the training noise process itself (per-episode tier sampling +
 mid-episode Markov drift). The exact list lives in `configs/eval_config.yaml`.
 
-### Anchor
+### Anchor (training noise process, rectangle)
+
+The two anchor conditions both run the full training GNSS process (per-episode
+tier sampling + mid-episode Markov drift); they differ only in occupancy. The
+empty-lot control removes the LiDAR neighbour-car crutch so the policy must park
+on localisation alone - the `anchor` / `anchor_empty` pair isolates how much the
+policy leans on neighbours versus localisation.
 
 | Condition | GNSS | Bay occ. | Notes |
 |-----------|------|----------|-------|
 | `anchor_deployment` | training Markov process | 0.5 | The deployment condition |
+| `anchor_empty` | training Markov process | 0.0 | No-obstacle control (LiDAR sees nothing) |
 
-### GNSS axis (occupancy 0.5, rectangle)
+### GNSS axis - degradation-slope endpoints (occupancy 0.5, rectangle)
 
-| Condition | GNSS mult | Approx. noise | Notes |
+Hold one RTK fix-state tier constant all episode (`held_gnss_tier`, bypassing the
+Markov chain) so the localisation level is a controlled independent variable. Only
+the slope ENDPOINTS are kept: the intermediate float/standalone tiers (~0.36/0.47 m
+EKF error) sit inside the bay's lateral slack at occupancy 0.5, so the covariance
+arms and the blind arms are indistinguishable there.
+
+| Condition | Held tier | Approx. noise | Notes |
 |-----------|-----------|---------------|-------|
-| `gnss_rtk_fixed` | 1.0x | ~0.02 m | Nominal RTK fixed |
-| `gnss_rtk_float` | 18.0x | ~0.36 m | Marginal for 2.5 m bays |
-| `gnss_standalone` | 90.0x | ~1.8 m | Cautious or abort expected |
-| `gnss_degraded` | 250.0x | ~5.0 m | Worst tier; safety handoff expected |
+| `gnss_fixed` | `rtk_fixed` | ~0.02 m | Clean baseline (slope start) |
+| `gnss_degraded` | `degraded` | ~5.0 m | Worst tier; safety handoff expected (slope end) |
 
-### Occupancy axis (GNSS RTK fixed, rectangle)
-
-| Condition | Bay occ. | Notes |
-|-----------|----------|-------|
-| `occupancy_empty` | 0.0 | Below training minimum 0.2 (mild OOD) |
-| `occupancy_min` | 0.2 | Training minimum |
-| `occupancy_max` | 0.8 | Training maximum |
-
-### LiDAR axis (GNSS RTK fixed, occupancy 0.5, rectangle)
+### LiDAR axis (GNSS held at RTK fixed, occupancy 0.5, rectangle)
 
 Degrades only the obstacle channel (obs 8-12). The EKF fuses GNSS + IMU and
 never consumes LiDAR, so the localisation stds stay at the RTK-fixed floor:
@@ -108,23 +111,15 @@ evidential head sees the corrupted obstacle features.
 |-----------|------------|---------------|-------|
 | `lidar_degraded` | 25.0x | 0.5 m 1-sigma | EKF-blind sensor degradation |
 
-### OOD layout generalisation (occupancy 0.5)
+### OOD layout generalisation (GNSS held at RTK fixed, occupancy 0.5)
 
 Training uses the `rectangle` floor plan only; `irregular_a` (five-sided lot with
-a diagonal top wall) is the designated OOD layout. Success here measures
-generalisation across lot geometry, run at two GNSS tiers so layout
-generalisation and localisation degradation stay separable.
+a diagonal top wall) is the designated OOD layout. Held at RTK fixed so the only
+OOD factor is the layout - isolating generalisation from localisation degradation.
 
-| Condition | Floor plan | GNSS mult |
+| Condition | Floor plan | Held tier |
 |-----------|-----------|-----------|
-| `ood_irregular_rtk_fixed` | `irregular_a` | 1.0x |
-| `ood_irregular_rtk_float` | `irregular_a` | 18.0x |
-
-### Stress beyond training ranges
-
-| Condition | GNSS mult | IMU mult | Bay occ. | Notes |
-|-----------|-----------|----------|----------|-------|
-| `gnss_stress_imu` | 250.0x | 3.0x | 0.5 | Worst GNSS tier + IMU stress; handoff demo |
+| `ood_irregular_rtk_fixed` | `irregular_a` | `rtk_fixed` |
 
 ## Metrics collected
 
