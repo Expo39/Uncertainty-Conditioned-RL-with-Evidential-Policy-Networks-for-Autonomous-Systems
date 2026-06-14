@@ -320,6 +320,7 @@ def evaluate_across_conditions(
     n_episodes: int = 0,
     output_dir: str = "./evaluation_results",
     baseline_path: Optional[str] = None,
+    condition_names: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, str]:
     """
     @brief Evaluate agent across different physical conditions.
@@ -334,7 +335,12 @@ def evaluate_across_conditions(
     @param baseline_path: Baseline config naming the evaluated ablation cell. Its
         include_covariance / include_obstacle_obs / policy_type drive the obs shape
         and model class. None defaults to the full method (DEFAULT_BASELINE).
+    @param condition_names: If given, restrict the sweep to the conditions whose
+        name is in this list (order follows eval_config). None or empty evaluates
+        every condition in eval_config.
     @return Tuple of (results DataFrame, resolved run output directory).
+    @warning Raises ValueError if any requested condition name is absent from
+        eval_config, so a typo fails loudly rather than silently evaluating nothing.
     """
     from uncertainty_rl.training.train_ppo import (
         DEFAULT_BASELINE,
@@ -359,6 +365,20 @@ def evaluate_across_conditions(
 
     base_sensors = env_config.get("carla_sensors", {})
     conditions = eval_config.get("eval_conditions", [])
+
+    # Optional subset selection: keep only the named conditions, preserving the
+    # eval_config order. A requested name with no match is a configuration error
+    # (likely a typo), so fail loudly rather than silently sweep nothing.
+    if condition_names:
+        requested = set(condition_names)
+        available = {c.get("name", "unknown") for c in conditions}
+        missing = requested - available
+        if missing:
+            raise ValueError(
+                "Unknown eval condition(s) %s; available: %s"
+                % (sorted(missing), sorted(available))
+            )
+        conditions = [c for c in conditions if c.get("name") in requested]
     # n_episodes: caller can override; fall back to eval_config, then hard default.
     n_episodes = n_episodes or int(eval_config.get("n_episodes", 100))
     # Timeout episodes closer than this (m) to the bay are near_miss, else stuck.
@@ -598,6 +618,16 @@ def main() -> None:
         default="./evaluation_results",
         help="Directory for output files",
     )
+    parser.add_argument(
+        "--conditions",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "Restrict the sweep to these eval_config condition names (space "
+            "separated). Omit to evaluate every condition in eval_config."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -621,6 +651,7 @@ def main() -> None:
         n_episodes=args.n_episodes,
         output_dir=args.output_dir,
         baseline_path=args.baseline,
+        condition_names=args.conditions,
     )
 
     # Create plots alongside the CSVs.

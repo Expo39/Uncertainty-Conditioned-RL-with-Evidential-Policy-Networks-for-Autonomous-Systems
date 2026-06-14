@@ -19,7 +19,7 @@
 
 model_path: "checkpoints/final_model"  # Overridden by make docker-eval.
 
-n_episodes: 10  # Episodes per condition. Use 200+ for final headline runs.
+n_episodes: 100  # Episodes per condition. Use 200+ for final headline runs.
 deterministic: true  # Use deterministic (mean) actions.
 debug: false
 
@@ -60,7 +60,7 @@ eval_conditions:
   - name: "gnss_fixed"
     description: "RTK fixed (~2 cm) held - clean baseline (slope start)"
     held_gnss_tier: rtk_fixed
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0
 
   - name: "gnss_degraded"
     description: "Degraded GNSS (~5 m, worst tier) held - slope end"

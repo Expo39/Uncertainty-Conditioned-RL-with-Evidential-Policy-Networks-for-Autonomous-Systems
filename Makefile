@@ -162,8 +162,8 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
-	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)"
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"]
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
@@ -174,6 +174,7 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		$(if $(BASELINE),--baseline $(BASELINE_YAML),) \
+		$(if $(filter command line,$(origin SCENARIO)),--conditions $(SCENARIO),) \
 		--output-dir outputs/evaluation_results
 
 docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/evaluation_results/full_method/<leaf>/real_observations.npy]
@@ -420,11 +421,11 @@ visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
 
-eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [REALTIME=false] [STAGE=N]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [REALTIME=false] [STAGE=N] [GNSS_TIER=fixed|float|standalone|degraded]
 	$(call ensure-venv)
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
-	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(CHECKPOINT_NAME)"
+	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(CHECKPOINT_NAME), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>)"
 	@# Tear down any pre-existing stack first (orphans included).
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) down --remove-orphans
@@ -439,6 +440,7 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		DEMO_CHECKPOINT=$(CHECKPOINT_MODEL) \
 		DEMO_BASELINE_YAML=$(if $(BASELINE),$(BASELINE_YAML),) \
 		DEMO_STAGE=$(STAGE) \
+		DEMO_GNSS_TIER=$(GNSS_TIER) \
 		DEMO_REALTIME=$(REALTIME) \
 		DEMO_VIS_FILE=$(_VIS_FILE) \
 		bash scripts/visualise/eval_visualise_2d.sh

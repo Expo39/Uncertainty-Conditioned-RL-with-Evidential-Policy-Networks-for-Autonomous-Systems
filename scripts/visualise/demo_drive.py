@@ -77,6 +77,18 @@ def _parse_args() -> argparse.Namespace:
         "the base env_config difficulty.",
     )
     parser.add_argument(
+        "--gnss-tier",
+        type=str,
+        default=None,
+        choices=["fixed", "float", "standalone", "degraded"],
+        help="Hold one RTK fix-state tier for the whole drive (bypasses the "
+        "per-episode tier sampling and the Markov drift), so the localisation "
+        "uncertainty is a fixed, controlled level. Maps to a tier in "
+        "gnss_noise_profiles.yaml: fixed->rtk_fixed (~2 cm), float->rtk_float "
+        "(~36 cm), standalone (~1.8 m), degraded (~5 m). Omit to run the normal "
+        "training noise process (sampled start tier + Markov drift).",
+    )
+    parser.add_argument(
         "--episodes",
         type=int,
         default=0,
@@ -155,10 +167,25 @@ _TRACE_COLUMNS = [
 ]
 
 
-def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
+# Map the short --gnss-tier choice to the tier key in gnss_noise_profiles.yaml.
+_GNSS_TIER_NAMES = {
+    "fixed": "rtk_fixed",
+    "float": "rtk_float",
+    "standalone": "standalone",
+    "degraded": "degraded",
+}
+
+
+def _make_env(
+    env_config: Dict[str, Any], held_gnss_tier: Optional[str] = None
+) -> DummyVecEnv:
     """
     @brief Create the CARLA parking environment from environment config.
     @param env_config: Parsed environment configuration dictionary.
+    @param held_gnss_tier: If set, the gnss_noise_profiles.yaml tier name to hold
+           for the whole drive (no per-episode sampling, no Markov drift), so the
+           localisation uncertainty is a fixed controlled level. None runs the
+           normal training noise process.
     @return Vectorised environment.
 
     The success acceptance margin is read from the (stage-merged) env_config
@@ -180,6 +207,7 @@ def _make_env(env_config: Dict[str, Any]) -> DummyVecEnv:
                 env_config,
                 bay_margin=bay_margin,
                 rank=0,
+                held_gnss_tier_override=held_gnss_tier,
                 host_override=host_override,
                 port_override=port_override,
             )
@@ -254,8 +282,15 @@ def main() -> None:
     else:
         model = PPO.load(args.checkpoint)
 
-    # Create environment
-    base_env = _make_env(env_config)
+    # Create environment. With --gnss-tier, hold that fix-state tier for the
+    # whole drive (no sampling / drift); otherwise run the normal training noise
+    # process - the default behaviour.
+    held_gnss_tier = (
+        _GNSS_TIER_NAMES[args.gnss_tier] if args.gnss_tier is not None else None
+    )
+    if held_gnss_tier is not None:
+        print(f"Holding GNSS tier '{held_gnss_tier}' for the whole drive.")
+    base_env = _make_env(env_config, held_gnss_tier=held_gnss_tier)
     env = base_env
 
     # Apply normalisation statistics if available
