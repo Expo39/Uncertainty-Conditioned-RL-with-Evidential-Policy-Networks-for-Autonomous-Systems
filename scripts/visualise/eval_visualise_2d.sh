@@ -11,6 +11,7 @@ cd "${REPO_ROOT}"
 DEMO_CHECKPOINT="${DEMO_CHECKPOINT:?set DEMO_CHECKPOINT to the model path}"
 DEMO_BASELINE_YAML="${DEMO_BASELINE_YAML:-}"  # empty -> demo_drive.py default
 DEMO_STAGE="${DEMO_STAGE:-}"                  # empty -> demo_drive.py default
+DEMO_GNSS_TIER="${DEMO_GNSS_TIER:-}"         # empty -> normal noise process
 DEMO_REALTIME="${DEMO_REALTIME:-true}"        # false -> step flat out
 DEMO_VIS_FILE="${DEMO_VIS_FILE:-outputs/vis_history.jsonl}"
 DISPLAY="${DISPLAY:?no display attached}"
@@ -32,6 +33,9 @@ if [ -n "${DEMO_BASELINE_YAML}" ]; then
 fi
 if [ -n "${DEMO_STAGE}" ]; then
     demo_args+=(--stage "${DEMO_STAGE}")
+fi
+if [ -n "${DEMO_GNSS_TIER}" ]; then
+    demo_args+=(--gnss-tier "${DEMO_GNSS_TIER}")
 fi
 if [ "${DEMO_REALTIME}" = "false" ]; then
     demo_args+=(--no-realtime)

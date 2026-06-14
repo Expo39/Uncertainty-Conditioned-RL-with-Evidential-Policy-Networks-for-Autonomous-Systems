@@ -1,15 +1,5 @@
-# Curriculum Stage 1 - bootstrap the perpendicular corridor approach. Drops the bay
-# (perpendicular_25) where a greedy radial drive-at-the-centre accidentally lands, since
-# that crutch lets the policy skip learning to get onto the bay centreline and run in
-# square. Keeps four bays for gradient breadth and success-seeding: a 2-bay set went
-# entropy/std-unstable AND stuck near 0%, so the count stays up. The straight-in east
-# column anchor is perpendicular_38: its approach corridor (centreline y=8.5) runs
-# along the open main aisle past the primary spawn, whereas bay 40's centreline
-# (y=2.3) crosses the middle parked row, so a corridor-following approach to 40 drives
-# through occupied bays. The three turn-in bays force the corridor skill. dx/dy/dyaw
-# are all exercised (dy both signs, dyaw spans yaw 90, 180 and 270). Loosest margin to
-# seed the first successes. The GNSS Markov chain keeps the covariance channel live
-# from stage 1. See CURRICULUM_PLAN.md.
+# Curriculum Stage 1 - bootstrap the perpendicular corridor approach (4 bays, loosest
+# margin). Primary axis: the parking manoeuvre itself; bay count and margin ramp later.
 
 use_extra_spawns: false  # Single primary spawn (off in every stage).
 bay_margin: -0.75  # Loosest acceptance box (negative inflates it outward).
@@ -35,17 +25,16 @@ carla_sensors:
 
 # standard_overrides (vanilla, input_uncertainty) / evidential_overrides
 # (output_uncertainty, full_method), selected by policy_type; identical at init.
-# ent_coef decays to the 0.0005 floor. stage_timesteps counts SB3 timesteps =
-# policy decisions; each decision spans action_repeat sim ticks, so 1.5M
-# decisions = 6M sim ticks at action_repeat=4.
+# stage_timesteps counts policy decisions (action_repeat ticks each). Bootstrap
+# budget raised to offset GNSS-dilution of the clean parking signal.
 standard_overrides:
-  stage_timesteps: 1500000
+  stage_timesteps: 3000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
   ent_coef: 0.003
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 1500000
+  stage_timesteps: 3000000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
   ent_coef: 0.003
