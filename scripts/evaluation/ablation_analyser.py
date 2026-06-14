@@ -15,13 +15,6 @@ the contrasts the dissertation actually claims:
     error grows from the cleanest GNSS tier (rtk_fixed) to the worst (degraded).
     The thesis is that the covariance arms degrade more gracefully (shallower
     slope), so this is the headline number.
-
-A per-condition bar grid (success + position error, arms side by side) and a
-degradation-slope figure are written to the output directory. Pure pandas /
-numpy / matplotlib on the host .venv - no CARLA, ROS 2, or torch. Run via
-`make analyse-ablation` (never python directly).
-
-@author Antonio Galdes
 """
 
 from __future__ import annotations

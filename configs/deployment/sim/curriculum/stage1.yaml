@@ -25,17 +25,18 @@ carla_sensors:
 
 # standard_overrides (vanilla, input_uncertainty) / evidential_overrides
 # (output_uncertainty, full_method), selected by policy_type; identical at init.
-# stage_timesteps counts policy decisions (action_repeat ticks each). Bootstrap
-# budget raised to offset GNSS-dilution of the clean parking signal.
+# stage_timesteps counts policy decisions (action_repeat ticks each).
 standard_overrides:
-  stage_timesteps: 3000000
+  stage_timesteps: 1500000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
   ent_coef: 0.003
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 3000000
+  stage_timesteps: 1500000
   learning_rate: 0.0003
   learning_rate_final: 0.00005
   ent_coef: 0.003
-  ent_coef_final: 0.0005
+  # Higher floor than the standard block: action std = sqrt(aleatoric), so a
+  # collapsing head kills exploration (the standard log_std is decoupled).
+  ent_coef_final: 0.0015
