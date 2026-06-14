@@ -16,13 +16,6 @@ Two modes:
     sweeping only the covariance block on each and reporting the mean action
     delta across the real-state distribution. This answers the same causal
     question on-manifold, which is the stronger claim.
-
-Needs torch + stable-baselines3, so it runs in the training container via
-`make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf>`. Lives under
-scripts/evaluation/ (bind-mounted to /workspace/scripts in the container) with
-the host-side analysers, though it alone needs the container to run.
-
-@author Antonio Galdes
 """
 
 from __future__ import annotations

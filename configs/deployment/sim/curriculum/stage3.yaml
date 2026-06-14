@@ -19,14 +19,16 @@ carla_sensors:
 
 # Identical standard/evidential blocks - see Stage 1.
 standard_overrides:
-  stage_timesteps: 3000000
+  stage_timesteps: 2000000
   learning_rate: 0.00015
   learning_rate_final: 0.00004
   ent_coef: 0.0015
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 3000000
+  stage_timesteps: 2000000
   learning_rate: 0.00015
   learning_rate_final: 0.00004
   ent_coef: 0.0015
-  ent_coef_final: 0.0005
+  # Higher floor than the standard block: action std = sqrt(aleatoric), so a
+  # collapsing head kills exploration (the standard log_std is decoupled).
+  ent_coef_final: 0.0015

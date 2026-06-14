@@ -19,8 +19,6 @@ stuck) and needlessly aborting an episode that would have succeeded. The area
 under that curve (AUC) is the single comparison number: a higher-AUC signal is
 the better safety gate. Pure pandas / numpy / matplotlib on the host .venv.
 Run via `make analyse-gate` (never python directly).
-
-@author Antonio Galdes
 """
 
 from __future__ import annotations

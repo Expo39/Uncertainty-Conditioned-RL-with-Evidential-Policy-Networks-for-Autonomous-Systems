@@ -34,14 +34,16 @@ carla_sensors:
 # Identical standard/evidential blocks - see Stage 1. Resumed stages restart the
 # learning rate at ~3x the previous stage's final value, not the from-scratch rate.
 standard_overrides:
-  stage_timesteps: 2500000
+  stage_timesteps: 1500000
   learning_rate: 0.00015
   learning_rate_final: 0.00005
   ent_coef: 0.0015
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 2500000
+  stage_timesteps: 1500000
   learning_rate: 0.00015
   learning_rate_final: 0.00005
   ent_coef: 0.0015
-  ent_coef_final: 0.0005
+  # Higher floor than the standard block: action std = sqrt(aleatoric), so a
+  # collapsing head kills exploration (the standard log_std is decoupled).
+  ent_coef_final: 0.0015
