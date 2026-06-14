@@ -30,5 +30,7 @@ evidential_overrides:
   stage_timesteps: 2500000
   learning_rate: 0.0001
   learning_rate_final: 0.00002
-  ent_coef: 0.001
-  ent_coef_final: 0.0005
+  # Higher start + floor than the standard block: action std = sqrt(aleatoric),
+  # so a collapsing head kills exploration (the standard log_std is decoupled).
+  ent_coef: 0.002
+  ent_coef_final: 0.0015

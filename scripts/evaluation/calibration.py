@@ -15,11 +15,6 @@ reward-only and never observed). Reports the std-vs-error correlation overall an
 per GNSS condition, a binned error-vs-std table (does mean error rise across std
 bins?), and a scatter + binned-mean figure. Pure pandas / numpy / matplotlib on
 the host .venv. Run via `make analyse-calibration` (never python directly).
-
-The EKF is identical across ablation arms, so any arm's calibration_records.csv
-answers the question; the most recently modified one is used by default.
-
-@author Antonio Galdes
 """
 
 from __future__ import annotations
