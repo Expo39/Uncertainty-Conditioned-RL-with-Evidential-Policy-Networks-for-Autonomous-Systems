@@ -7,7 +7,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 - NIG evidential actor outputs four parameters per action dimension: $\gamma$ (mean), $\nu$, $\alpha$, $\beta$.
 - Aleatoric uncertainty (data noise): $\beta / (\alpha - 1)$. Action std uses $\sqrt{\text{aleatoric}}$ only.
 - Epistemic uncertainty (model confidence): $\beta / (\nu(\alpha - 1))$. Not added to action noise.
-- Softplus-clamped NIG parameters with an additional aleatoric ceiling enforced before the sqrt in the action distribution.
+- Softplus-clamped NIG parameters with an aleatoric floor and ceiling enforced before the sqrt in the action distribution (the floor stops the action std collapsing; the ceiling caps it at the action half-range).
 - Two actor modes: flat MLP or dual-encoder (state and covariance through separate pathways before fusion).
 - Evidential loss applies to the actor only. Critic is a standard Gaussian MLP.
 - Prior-anchoring quadratic-ratio regularisation (RL-stable, replaces the Amini 2020 supervised term).
@@ -208,7 +208,7 @@ for the full wiring.
 
 | Config file | Keys |
 |-------------|------|
-| [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.use_uncertainty_conditioning` |
+| [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.aleatoric_floor`, `evidential.use_uncertainty_conditioning` |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM`, `ACTION_DIM` |
 
 <!-- img:placeholder name="uncertainty_evolution" caption="Epistemic and aleatoric uncertainty during a parking episode" -->

@@ -381,6 +381,11 @@ analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
 
+trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (collapse vs hard-task). Usage: make trace-tier-breakdown TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>
+	$(call ensure-venv)
+	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
+	$(PYTHON) scripts/miscellaneous/trace_tier_breakdown.py --trace-dir $(TRACE_DIR)
+
 analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/ablation_analyser.py \

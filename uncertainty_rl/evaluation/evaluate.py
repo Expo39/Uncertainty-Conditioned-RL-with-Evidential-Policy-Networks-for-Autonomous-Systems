@@ -93,7 +93,8 @@ def evaluate_agent(
     ep_epistemic: List[float] = []
     ep_aleatoric: List[float] = []
     # Action-distribution std per decision: sqrt(aleatoric) for the evidential
-    # head (its predicted outcome variance IS the sampling variance).
+    # head - the TRUE predicted outcome variance (confidence signal), un-floored,
+    # so it can fall below the training-time sampling-std floor.
     ep_action_std: List[float] = []
     # Optional capture of real (normalised) observations for the on-manifold
     # covariance probe (scripts/evaluation/covariance_probe.py --real-obs).
