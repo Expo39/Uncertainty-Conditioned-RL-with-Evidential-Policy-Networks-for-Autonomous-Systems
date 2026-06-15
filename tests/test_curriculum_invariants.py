@@ -9,7 +9,8 @@ re-degenerates a channel (the original Stage 1 -> 2 failure mode) fails CI:
     mid-episode drift is always on (the process is stage-invariant - not a stage key);
   - LiDAR channel: bay_occupancy_max > 0 and LiDAR noise enabled;
   - target-pose channel: the bay set spans >= 2 approach orientations.
-Also checks the per-policy override blocks are allowlisted and start identical.
+Also checks the per-policy override blocks are allowlisted and agree on every
+schedule except the entropy coefficient (the documented evidential ent_coef split).
 """
 
 from pathlib import Path
@@ -118,7 +119,7 @@ def test_start_tier_sampled_and_spawns_fixed(n: int) -> None:
 
 
 @pytest.mark.parametrize("n", _STAGES)
-def test_override_blocks_allowlisted_and_identical(n: int) -> None:
+def test_override_blocks_allowlisted_and_aligned(n: int) -> None:
     cfg = _stage(n)
     std = cfg.get("standard_overrides")
     evi = cfg.get("evidential_overrides")
@@ -126,5 +127,15 @@ def test_override_blocks_allowlisted_and_identical(n: int) -> None:
     for name, blk in (("standard", std), ("evidential", evi)):
         bad = set(blk) - _ALLOWLIST
         assert not bad, f"stage{n}: {name}_overrides has non-allowlisted keys {bad}"
-    # Initialised identical (fairness by default; split only on observed instability).
-    assert std == evi, f"stage{n}: standard/evidential overrides must start identical"
+    # The two blocks must agree on every schedule EXCEPT the entropy coefficient: the
+    # evidential head's action std IS sqrt(aleatoric), so a collapsing head needs a
+    # higher ent_coef floor than the standard log_std (a documented, deliberate split,
+    # not a confound). Everything else - budget, LR schedule, structural PPO keys -
+    # stays identical so the ablation is fair.
+    _ENTROPY_KEYS = {"ent_coef", "ent_coef_final"}
+    std_shared = {k: v for k, v in std.items() if k not in _ENTROPY_KEYS}
+    evi_shared = {k: v for k, v in evi.items() if k not in _ENTROPY_KEYS}
+    assert std_shared == evi_shared, (
+        f"stage{n}: standard/evidential overrides must match outside the entropy "
+        f"coefficient (only ent_coef/ent_coef_final may differ)"
+    )
