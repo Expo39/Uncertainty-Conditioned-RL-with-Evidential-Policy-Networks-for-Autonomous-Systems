@@ -77,7 +77,8 @@ Schedule conventions:
   destabilised at a difficulty boundary.
 - `ent_coef` decays to the 0.0005 floor in every stage; for the standard policy the
   action std is entropy-driven, so the floor bounds exploration noise at
-  convergence.
+  convergence. The evidential policy's action std is the NIG aleatoric, bounded below
+  by the (stage-invariant) `evidential.aleatoric_floor` in `train_config.yaml`.
 
 ## Running a stage
 
