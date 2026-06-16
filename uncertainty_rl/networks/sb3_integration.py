@@ -709,6 +709,8 @@ class EvidentialPPO(PPO):
         env: Union[GymEnv, str],
         lambda_reg: float = 0.01,
         lambda_reg_warmup_steps: int = 50000,
+        lambda_evidence: float = 0.0,
+        lambda_evidence_warmup_steps: int = 50000,
         aleatoric_floor: float = 1e-6,
         **kwargs: Any,
     ) -> None:
@@ -720,16 +722,28 @@ class EvidentialPPO(PPO):
         @param lambda_reg_warmup_steps: Number of environment steps over which
                lambda_reg is linearly annealed from 0 to lambda_reg. Allows the NLL to
                establish good predictions before the regularisation term fires.
+        @param lambda_evidence: Evidence-accrual weight (target value after warmup) for
+               the nu-only advantage-gated term in train(). Drives nu off its prior so
+               the epistemic estimate carries state-dependent signal. 0.0 (the default)
+               disables the term, recovering the prior-anchored-nu behaviour.
+        @param lambda_evidence_warmup_steps: Number of environment steps over which
+               lambda_evidence is linearly annealed from 0 to lambda_evidence, so PPO
+               settles the action mean (gamma) before evidence accrual begins.
         @param aleatoric_floor: Minimum predictive aleatoric (action variance) floor for
                the policy's sampling std; forwarded to EvidentialActorCriticPolicy to
                prevent exploration collapse. @see EvidentialDistribution.
         """
         self.lambda_reg = lambda_reg
         self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
+        self.lambda_evidence = lambda_evidence
+        self.lambda_evidence_warmup_steps = lambda_evidence_warmup_steps
         logger.info(
-            "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d, aleatoric_floor=%.4g",
+            "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d, "
+            "lambda_evidence=%.4f, evidence_warmup_steps=%d, aleatoric_floor=%.4g",
             lambda_reg,
             lambda_reg_warmup_steps,
+            lambda_evidence,
+            lambda_evidence_warmup_steps,
             aleatoric_floor,
         )
         # Pass evidential policy params to policy_kwargs.
@@ -761,6 +775,17 @@ class EvidentialPPO(PPO):
             ramp = 1.0
         current_lambda_reg = self.lambda_reg * ramp
 
+        # Same linear warmup for the evidence-accrual term: defer it until PPO has
+        # settled the action mean (gamma), so the residual it reads is meaningful.
+        if self.lambda_evidence_warmup_steps > 0:
+            evidence_ramp = min(
+                1.0,
+                float(self.num_timesteps) / float(self.lambda_evidence_warmup_steps),
+            )
+        else:
+            evidence_ramp = 1.0
+        current_lambda_evidence = self.lambda_evidence * evidence_ramp
+
         clip_range_fn = cast(Schedule, self.clip_range)
         clip_range = clip_range_fn(self._current_progress_remaining)
 
@@ -785,6 +810,7 @@ class EvidentialPPO(PPO):
         pg_losses: List[th.Tensor] = []
         value_losses: List[th.Tensor] = []
         evidential_reg_losses: List[th.Tensor] = []
+        evidence_losses: List[th.Tensor] = []
         # clip_fraction as a running float sum.
         clip_fraction_sum: float = 0.0
         clip_fraction_count: int = 0
@@ -794,8 +820,10 @@ class EvidentialPPO(PPO):
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
         # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
-        # nu: softplus(0.9). alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0).
-        _nu_prior = 1.241
+        # alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0). nu is NOT anchored
+        # here when the evidence term is active (lambda_evidence > 0): the evidence
+        # term governs nu instead, so anchoring it as well would fight that gradient
+        # and re-pin nu (collapsing epistemic onto a rescaled aleatoric).
         _alpha_prior = 2.741
         _beta_prior = 0.693
         continue_training = True
@@ -815,15 +843,46 @@ class EvidentialPPO(PPO):
                 # Prior-anchoring penalty on the NIG evidence parameters as
                 # a raw-ratio quadratic (x / prior - 1)^2 - zero at the prior,
                 # with a restoring gradient that grows linearly with distance.
-                # All three of nu/alpha/beta are anchored.
+                # Only alpha and beta are anchored; nu is left to the evidence term.
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
-                evidential_reg = (
-                    (nu / _nu_prior - 1.0).pow(2).mean()
-                    + (alpha / _alpha_prior - 1.0).pow(2).mean()
-                    + (beta / _beta_prior - 1.0).pow(2).mean()
-                )
+                evidential_reg = (alpha / _alpha_prior - 1.0).pow(2).mean() + (
+                    beta / _beta_prior - 1.0
+                ).pow(2).mean()
+
+                # Advantage-gated evidence accrual on nu only. The action mean
+                # (gamma) is detached so this term routes gradient solely into the
+                # evidence mass nu, never competing with the PPO surrogate over the
+                # mean. The residual is measured in the pre-squash space the actor
+                # parameterises (actions are tanh-squashed, so atanh maps them back).
+                # The advantage weight is clamped to be non-negative so only
+                # better-than-baseline actions are allowed to ACCRUE evidence.
+                # The per-element term 0.5*sq_resid*nu - 0.5*log(nu) is the nu-only
+                # Gaussian-precision negative log-likelihood; its stationary point
+                # nu* = 1 / sq_resid raises nu where the action was well-predicted
+                # (confident/familiar) and lowers it where it was surprising, so
+                # epistemic = beta / (nu * (alpha - 1)) becomes state-dependent.
+                # alpha and beta are absent, so this cannot collapse them.
+                if self.lambda_evidence > 0.0:
+                    raw_advantages = rollout_data.advantages
+                    weight = th.clamp(raw_advantages, min=0.0).unsqueeze(-1)
+                    # Same atanh-stability epsilon the distribution uses to invert
+                    # the squash, so the residual is measured on a matching scale.
+                    atanh_eps = EvidentialDistribution._SQUASH_EPS
+                    with th.no_grad():
+                        clipped_actions = th.clamp(
+                            actions,
+                            -1.0 + atanh_eps,
+                            1.0 - atanh_eps,
+                        )
+                        pre_squash = th.atanh(clipped_actions)
+                        sq_resid = (pre_squash - gamma.detach()).pow(2)
+                    evidence_loss = (
+                        weight * (0.5 * sq_resid * nu - 0.5 * th.log(nu))
+                    ).mean()
+                else:
+                    evidence_loss = th.zeros((), device=nu.device)
 
                 with th.no_grad():
                     alpha_m1 = alpha - 1
@@ -875,14 +934,17 @@ class EvidentialPPO(PPO):
                     entropy_loss = -th.mean(entropy)
                 entropy_losses.append(entropy_loss.detach())
 
-                # Combined loss with annealed evidential regularisation
+                # Combined loss with annealed evidential regularisation and the
+                # annealed evidence-accrual term (both warmed up independently).
                 loss = (
                     policy_loss
                     + ent_coef * entropy_loss
                     + self.vf_coef * value_loss
                     + current_lambda_reg * evidential_reg
+                    + current_lambda_evidence * evidence_loss
                 )
                 evidential_reg_losses.append(evidential_reg.detach())
+                evidence_losses.append(evidence_loss.detach())
 
                 # KL divergence for early stopping - only sync to CPU when target_kl is
                 # set.
@@ -951,6 +1013,7 @@ class EvidentialPPO(PPO):
 
         # Evidential-specific logs
         self.logger.record("train/evidential_reg_loss", _mean(evidential_reg_losses))
+        self.logger.record("train/evidence_loss", _mean(evidence_losses))
         self.logger.record(
             "train/epistemic_uncertainty", _mean(epistemic_uncertainties)
         )
@@ -958,6 +1021,7 @@ class EvidentialPPO(PPO):
             "train/aleatoric_uncertainty", _mean(aleatoric_uncertainties)
         )
         self.logger.record("train/lambda_reg", current_lambda_reg)
+        self.logger.record("train/lambda_evidence", current_lambda_evidence)
 
 
 class ScheduledEntCoefPPO(PPO):

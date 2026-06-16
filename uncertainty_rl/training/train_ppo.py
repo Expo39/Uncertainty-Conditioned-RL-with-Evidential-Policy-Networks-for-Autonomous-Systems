@@ -784,6 +784,10 @@ def train(
             lambda_reg_warmup_steps = evidential_config.get(
                 "lambda_reg_warmup_steps", 50000
             )
+            lambda_evidence = evidential_config.get("lambda_evidence", 0.0)
+            lambda_evidence_warmup_steps = evidential_config.get(
+                "lambda_evidence_warmup_steps", 50000
+            )
             aleatoric_floor = evidential_config.get("aleatoric_floor", 1e-6)
             use_uncertainty_conditioning = evidential_config.get(
                 "use_uncertainty_conditioning", False
@@ -813,6 +817,8 @@ def train(
                 policy=EvidentialActorCriticPolicy,
                 lambda_reg=lambda_reg,
                 lambda_reg_warmup_steps=lambda_reg_warmup_steps,
+                lambda_evidence=lambda_evidence,
+                lambda_evidence_warmup_steps=lambda_evidence_warmup_steps,
                 aleatoric_floor=aleatoric_floor,
                 **ppo_kwargs,
             )
