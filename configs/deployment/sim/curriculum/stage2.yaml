@@ -1,5 +1,5 @@
-# Curriculum Stage 2 - bay variety up (3 per cluster, 2 from the 5-bay east block;
-# Stage 1 bays retained). Resume from Stage 1. Primary axis: bay count.
+# Curriculum Stage 2 - bay variety up (3 per cluster, 3 from the 5-bay east block;
+# all Stage 1 bays retained). Resume from Stage 1. Primary axis: bay count.
 
 use_extra_spawns: false
 bay_margin: -0.55
@@ -8,21 +8,22 @@ parking_scenarios:
   fixed_floor_plan: rectangle
   # fixed_gnss_tier omitted: start tier is SAMPLED from the init weights in
   # gnss_noise_profiles.yaml (any fix state), then wanders via the Markov chain.
-  allowed_bay_ids:  # All 5 clusters covered (yaws 270, 90, 180).
+  allowed_bay_ids:  # All 5 clusters covered (yaws 270, 90, 180). Stage 1 anchors retained.
     - perpendicular_0
     - perpendicular_3
-    - perpendicular_8    # cluster 0-11,  yaw 270, north row
+    - perpendicular_8    # cluster 0-11,  yaw 270, north row (0 = stage 1 anchor)
     - perpendicular_26
+    - perpendicular_27   # cluster 25-32, yaw 270, upper row west block (27 = stage 1 anchor; 25 excluded - radial-homing crutch)
     - perpendicular_29
-    - perpendicular_32   # cluster 25-32, yaw 270, upper row west block (25 excluded - radial-homing crutch)
+    - perpendicular_32
     - perpendicular_33
     - perpendicular_37   # cluster 33-37, yaw 270, upper row east block
     - perpendicular_14
     - perpendicular_17
-    - perpendicular_22   # cluster 12-24, yaw 90,  south row
+    - perpendicular_22   # cluster 12-24, yaw 90,  south row (22 = stage 1 anchor)
     - perpendicular_38
     - perpendicular_41
-    - perpendicular_44   # cluster 38-46, yaw 180, east column
+    - perpendicular_44   # cluster 38-46, yaw 180, east column (38 = stage 1 anchor)
   bay_occupancy_min: 0.0  # Empty in-distribution (see stage1).
   bay_occupancy_max: 0.1
 
