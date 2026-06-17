@@ -1083,6 +1083,8 @@ def main() -> None:
         config["n_eval_episodes"] = args.n_eval_episodes
     if args.seed is not None:
         config["seed"] = args.seed
+    # Stash the resolved stage so the run leaf can prefix it (<stage>_seed<N>_...).
+    config["curriculum_stage"] = stage
 
     # Configure logging after all overrides are applied.
     _log_level = logging.DEBUG if config.get("debug", False) else logging.INFO

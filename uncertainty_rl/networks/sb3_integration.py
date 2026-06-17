@@ -419,7 +419,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                     bias[2] = -1.0  # gamma brake (default-off)
                 else:
                     bias[0 * n : 1 * n].fill_(0.0)
-                bias[1 * n : 2 * n].fill_(0.9)  # nu
+                # nu bias must match EvidentialLayer.__init__: softplus(-1.0) < 1
+                # so epistemic > aleatoric in the no-evidence regime. @see the
+                # rationale in EvidentialLayer.__init__.
+                bias[1 * n : 2 * n].fill_(-1.0)  # nu
                 bias[2 * n : 3 * n].fill_(0.9)  # alpha
                 bias[3 * n : 4 * n].fill_(0.0)  # beta
 
