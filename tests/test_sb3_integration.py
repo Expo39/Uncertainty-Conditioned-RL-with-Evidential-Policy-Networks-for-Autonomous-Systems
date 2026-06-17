@@ -890,10 +890,11 @@ class TestNIGInit:
         act_space: spaces.Box,
     ) -> None:
         """
-        @brief After build, nu bias approx 1.24 and alpha bias approx 2.24.
+        @brief After build, nu bias approx 0.31 (sub-1) and alpha bias approx 2.24.
 
         With weight scaled by 0.01 and zero input the raw output equals the bias.
-        softplus(0.9) + 1e-6 ~ 1.2411 + 1e-6 ~ 1.2411 (nu).
+        softplus(-1.0) + 1e-6 ~ 0.3133 (nu): a sub-1 prior keeps the no-evidence
+        regime epistemic-dominant, since epistemic = aleatoric / nu.
         softplus(0.9) + 1.0 ~ 1.2411 + 1.0 ~ 2.2411 (alpha).
         """
         import torch.nn.functional as F
@@ -918,9 +919,10 @@ class TestNIGInit:
             nu_activated = F.softplus(nu_raw) + 1e-6
             alpha_activated = F.softplus(alpha_raw) + 1.0
 
-        # nu ~ softplus(0.9) + 1e-6 ~ 1.2411
-        assert torch.all(nu_activated > 1.1), f"nu too small: {nu_activated}"
-        assert torch.all(nu_activated < 1.4), f"nu too large: {nu_activated}"
+        # nu ~ softplus(-1.0) + 1e-6 ~ 0.3133. Must be < 1 so epistemic =
+        # aleatoric / nu starts epistemic-dominant before evidence accrues.
+        assert torch.all(nu_activated > 0.25), f"nu too small: {nu_activated}"
+        assert torch.all(nu_activated < 1.0), f"nu not sub-1: {nu_activated}"
 
         # alpha ~ softplus(0.9) + 1.0 ~ 2.2411
         assert torch.all(alpha_activated > 2.1), f"alpha too small: {alpha_activated}"
