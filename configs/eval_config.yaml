@@ -91,3 +91,19 @@ eval_conditions:
     held_gnss_tier: rtk_fixed
     bay_occupancy_rate: 0.5
     floor_plan: "irregular_a"
+
+  # --- Monotone degradation: starts good, degrades, never recovers ----------
+  # degrade_one_way pins the START tier to rtk_fixed and lets the relay Markov
+  # chain walk DOWN the ladder only (recovery transitions zeroed), so localisation
+  # drifts fixed -> float -> standalone -> degraded and stays there. Unlike
+  # gnss_degraded (a held worst-tier level from step 0) this gives a clean
+  # within-episode trajectory from confident to ignorant: the discriminating test
+  # for whether epistemic uncertainty RISES as the state leaves the data manifold
+  # (the handoff signal) distinctly from aleatoric (the slow-down signal). Mutually
+  # exclusive with held_gnss_tier. Occupancy 0.5 so the LiDAR landmark (neighbour
+  # cars) survives once GNSS is gone - without it both arms are blind (see the
+  # anchor_empty note on the broken degraded-empty case).
+  - name: "gnss_degrade_one_way"
+    description: "Starts RTK fixed, drifts one-way to degraded (never recovers)"
+    degrade_one_way: true
+    bay_occupancy_rate: 0.5

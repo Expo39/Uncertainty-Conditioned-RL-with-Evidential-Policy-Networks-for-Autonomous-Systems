@@ -158,6 +158,11 @@ def build_eval_env_factory(
     # condition (no Markov drift). None runs the training noise process.
     held_tier: Optional[str] = condition.get("held_gnss_tier", None)
 
+    # Monotone-degradation override: start at rtk_fixed and let the chain drift
+    # only downward (never recover) - the "starts good, ends degraded" condition.
+    # Ignored downstream when a held tier is set (a held tier suppresses drift).
+    degrade_one_way: bool = bool(condition.get("degrade_one_way", False))
+
     # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
     aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 2.0))
     handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 0.02))
@@ -181,6 +186,7 @@ def build_eval_env_factory(
         rank=0,
         carla_sensors_override=scaled_sensors,
         held_gnss_tier_override=held_tier,
+        degrade_one_way_override=degrade_one_way,
         host_override=host_override,
         port_override=port_override,
     )
