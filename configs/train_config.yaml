@@ -29,7 +29,7 @@ evidential:
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
   lambda_evidence: 0.01  # Evidence-accrual coefficient (target after warmup). Drives nu off its prior so epistemic = beta/(nu*(alpha-1)) carries state-dependent signal (else nu is pinned and epistemic = aleatoric/nu_prior). Tune gently - too high collapses aleatoric.
   lambda_evidence_warmup_steps: 50000  # Steps to linearly anneal lambda_evidence from 0 to target (let PPO settle gamma first).
-  lambda_nu_anchor: 0.0  # Log-space restoring force pulling nu back to its sub-1 prior; opposes lambda_evidence so nu reaches an equilibrium instead of collapsing epistemic onto aleatoric. 0 = unanchored (old behaviour).
+  lambda_nu_anchor: 0.002  # Log-space restoring force pulling nu back to its sub-1 prior; opposes lambda_evidence so nu reaches an equilibrium instead of collapsing epistemic onto aleatoric. 0 = unanchored (old behaviour).
   aleatoric_floor: 0.04  # Min predictive aleatoric (action variance); sampling std floored at sqrt(0.04)=0.2. Stops the NIG variance collapsing to a Dirac delta (exploration death). Evidential-actor analogue of the SAC log_std clamp. Tunable.
   use_uncertainty_conditioning: false  # Route covariance through a dual-encoder pathway. False keeps the 2x2 ablation clean (covariance enters identically for both heads).
 
