@@ -3,7 +3,10 @@
 @brief Unit tests for the SafetyWrapper Gymnasium wrapper.
 
 CPU-only, no CARLA or ROS 2 required. The underlying env is mocked so
-all tests run without a live simulation.
+all tests run without a live simulation. The wrapper keys both responses
+(throttle cap, full-stop handoff) off the TOTAL predictive uncertainty
+(epistemic + aleatoric); see
+documentation/detailed_notes/epistemic_aleatoric_disentanglement.md.
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -73,67 +76,83 @@ def _make_action(
 class TestSafetyWrapperApply:
     """
     @class TestSafetyWrapperApply
-    @brief Tests for the static SafetyWrapper.apply() logic.
+    @brief Tests for the static SafetyWrapper.apply() logic (single total signal).
     """
 
     def test_no_uncertainty_passes_action_unchanged(self) -> None:
         """
-        @brief Zero uncertainty should leave the action unchanged.
+        @brief Zero total uncertainty should leave the action unchanged.
         """
         action = _make_action(steer=0.3, throttle=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
-            epistemic=0.0,
-            aleatoric=0.0,
-            aleatoric_scaling=0.5,
+            total_uncertainty=0.0,
+            caution_gain=0.5,
+            slow_threshold=0.0,
             handoff_threshold=5.0,
         )
         assert not handoff
         assert modulated[0] == pytest.approx(0.3)
         assert modulated[1] == pytest.approx(0.8)
 
-    def test_aleatoric_caps_throttle(self) -> None:
+    def test_moderate_uncertainty_caps_throttle(self) -> None:
         """
-        @brief High aleatoric uncertainty caps the throttle component.
+        @brief Total uncertainty below the handoff threshold caps the throttle.
         """
         action = _make_action(throttle=1.0)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
-            epistemic=0.0,
-            aleatoric=4.0,
-            aleatoric_scaling=0.5,
+            total_uncertainty=4.0,
+            caution_gain=0.5,
+            slow_threshold=0.0,
             handoff_threshold=5.0,
         )
-        # aleatoric_scale = 1 / (1 + 0.5*4) = 1/3 ~= 0.333
+        # throttle_cap = 1 / (1 + 0.5*4) = 1/3 ~= 0.333
         assert not handoff
         assert modulated[1] < 1.0
         assert modulated[1] == pytest.approx(1.0 / 3.0, rel=1e-4)
 
-    def test_aleatoric_does_not_cap_steering(self) -> None:
+    def test_below_slow_threshold_passes_throttle_through(self) -> None:
         """
-        @brief Aleatoric uncertainty must not change the steering component.
+        @brief Total uncertainty below slow_threshold leaves the throttle uncapped.
+        """
+        action = _make_action(throttle=0.9)
+        modulated, handoff, cap = SafetyWrapper.apply(
+            action,
+            total_uncertainty=0.1,
+            caution_gain=2.0,
+            slow_threshold=0.5,
+            handoff_threshold=5.0,
+        )
+        assert not handoff
+        assert cap == pytest.approx(1.0)
+        assert modulated[1] == pytest.approx(0.9)
+
+    def test_caution_does_not_cap_steering(self) -> None:
+        """
+        @brief The throttle cap must not change the steering component.
         """
         action = _make_action(steer=0.9, throttle=0.5)
         modulated, _, _s = SafetyWrapper.apply(
             action,
-            epistemic=0.0,
-            aleatoric=10.0,
-            aleatoric_scaling=1.0,
-            handoff_threshold=5.0,
+            total_uncertainty=10.0,
+            caution_gain=1.0,
+            slow_threshold=0.0,
+            handoff_threshold=50.0,
         )
         assert modulated[0] == pytest.approx(0.9)
 
-    def test_epistemic_above_threshold_triggers_handoff(self) -> None:
+    def test_total_above_threshold_triggers_handoff(self) -> None:
         """
-        @brief Epistemic >= handoff_threshold must command a full stop (zero
-               steering and throttle, full brake) and return handoff=True.
+        @brief Total >= handoff_threshold must command a full stop (zero steering
+               and throttle, full brake) and return handoff=True.
         """
         action = _make_action(steer=0.5, throttle=0.9)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
-            epistemic=5.0,
-            aleatoric=0.0,
-            aleatoric_scaling=0.5,
+            total_uncertainty=5.0,
+            caution_gain=0.5,
+            slow_threshold=0.0,
             handoff_threshold=5.0,
         )
         assert handoff
@@ -141,16 +160,16 @@ class TestSafetyWrapperApply:
             modulated, np.array([0.0, 0.0, 1.0], dtype=action.dtype)
         )
 
-    def test_epistemic_below_threshold_no_handoff(self) -> None:
+    def test_total_below_threshold_no_handoff(self) -> None:
         """
-        @brief Epistemic just below threshold must not trigger handoff.
+        @brief Total just below threshold must not trigger handoff.
         """
         action = _make_action(throttle=0.8)
         modulated, handoff, _ = SafetyWrapper.apply(
             action,
-            epistemic=4.99,
-            aleatoric=0.0,
-            aleatoric_scaling=0.5,
+            total_uncertainty=4.99,
+            caution_gain=0.0,
+            slow_threshold=0.0,
             handoff_threshold=5.0,
         )
         assert not handoff
@@ -164,9 +183,9 @@ class TestSafetyWrapperApply:
         original = action.copy()
         SafetyWrapper.apply(
             action,
-            epistemic=10.0,
-            aleatoric=5.0,
-            aleatoric_scaling=0.5,
+            total_uncertainty=15.0,
+            caution_gain=0.5,
+            slow_threshold=0.0,
             handoff_threshold=5.0,
         )
         np.testing.assert_array_equal(action, original)
@@ -179,9 +198,9 @@ class TestSafetyWrapperApply:
         action = _make_action(throttle=0.0, brake=0.7)
         modulated, _, _s = SafetyWrapper.apply(
             action,
-            epistemic=0.0,
-            aleatoric=4.0,
-            aleatoric_scaling=0.5,
+            total_uncertainty=4.0,
+            caution_gain=0.5,
+            slow_threshold=0.0,
             handoff_threshold=5.0,
         )
         assert modulated[2] == pytest.approx(0.7)
@@ -210,21 +229,22 @@ class TestSafetyWrapperStep:
 
     def test_step_info_contains_safety_keys(self) -> None:
         """
-        @brief step() info dict must contain aleatoric_scale, safety_handoff,
-               epistemic, and aleatoric.
+        @brief step() info dict must contain throttle_cap, safety_handoff,
+               epistemic, aleatoric, and total_uncertainty.
         """
         env = _make_mock_env()
         wrapper = SafetyWrapper(env)
         wrapper.set_uncertainty(epistemic=0.0, aleatoric=1.0)
         _, _, _, _, info = wrapper.step(_make_action())
-        assert "aleatoric_scale" in info
+        assert "throttle_cap" in info
         assert "safety_handoff" in info
         assert "epistemic" in info
         assert "aleatoric" in info
+        assert "total_uncertainty" in info
 
     def test_handoff_sets_truncated_true(self) -> None:
         """
-        @brief When epistemic >= threshold, step() must set truncated=True.
+        @brief When total >= threshold, step() must set truncated=True.
         """
         env = _make_mock_env()
         wrapper = SafetyWrapper(env, handoff_threshold=1.0)
@@ -233,9 +253,22 @@ class TestSafetyWrapperStep:
         assert truncated is True
         assert info["safety_handoff"] is True
 
+    def test_handoff_uses_total_not_just_epistemic(self) -> None:
+        """
+        @brief Handoff is keyed on the TOTAL: epistemic+aleatoric crossing the
+               threshold triggers it even when epistemic alone is below it.
+        """
+        env = _make_mock_env()
+        wrapper = SafetyWrapper(env, handoff_threshold=1.0)
+        # epistemic 0.6 < 1.0, but total 0.6 + 0.6 = 1.2 >= 1.0.
+        wrapper.set_uncertainty(epistemic=0.6, aleatoric=0.6)
+        _, _, _, truncated, info = wrapper.step(_make_action())
+        assert truncated is True
+        assert info["safety_handoff"] is True
+
     def test_no_handoff_does_not_force_truncated(self) -> None:
         """
-        @brief When epistemic < threshold the underlying truncated value is preserved.
+        @brief When total < threshold the underlying truncated value is preserved.
         """
         # _StubEnv.step() returns truncated=False; the wrapper must preserve it.
         env = _make_mock_env()
@@ -271,7 +304,7 @@ class TestSafetyWrapperReset:
         stats = wrapper.get_episode_safety_stats()
         assert stats["handoff_count"] == 0.0
         assert stats["total_steps"] == 0.0
-        assert stats["avg_aleatoric_scale"] == pytest.approx(1.0)
+        assert stats["avg_throttle_cap"] == pytest.approx(1.0)
 
     def test_reset_clears_uncertainty_state(self) -> None:
         """
@@ -311,14 +344,14 @@ class TestSafetyWrapperStats:
         assert stats["handoff_count"] == pytest.approx(3.0)
         assert stats["total_steps"] == pytest.approx(3.0)
 
-    def test_avg_aleatoric_scale_zero_steps(self) -> None:
+    def test_avg_throttle_cap_zero_steps(self) -> None:
         """
-        @brief avg_aleatoric_scale should be 1.0 (no scaling) when no steps taken.
+        @brief avg_throttle_cap should be 1.0 (no cap) when no steps taken.
         """
         env = _make_mock_env()
         wrapper = SafetyWrapper(env)
         stats = wrapper.get_episode_safety_stats()
-        assert stats["avg_aleatoric_scale"] == pytest.approx(1.0)
+        assert stats["avg_throttle_cap"] == pytest.approx(1.0)
 
     def test_set_uncertainty_persists_until_next_set(self) -> None:
         """
