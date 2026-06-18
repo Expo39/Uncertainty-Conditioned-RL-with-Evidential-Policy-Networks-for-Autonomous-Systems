@@ -1,14 +1,13 @@
 """
 @file uncertainty_verdict.py
-@brief One-shot verdict on whether epistemic uncertainty SEPARATES from aleatoric.
+@brief One-shot verdict on whether the epistemic/aleatoric ratio varies with state.
 
 Reads an eval run's per-step uncertainty trace (per_step_records.csv, written when
-EVAL_PER_STEP_CAP > 0 for an evidential head) and answers the question the training
-TensorBoard cannot: does epistemic rise above aleatoric MORE on novel / degraded
-conditions than on clean ones? That state-dependent separation is the handoff signal -
-distinct from aleatoric, which is the slow-down signal. A flat epi/ale ratio across all
-conditions means the two channels are still one signal (nu pinned), regardless of whether
-the mean ratio is high or low.
+EVAL_PER_STEP_CAP > 0 for an evidential head) and reports, per condition, the epi/ale
+ratio and implied nu. A FLAT ratio across clean vs novel/degraded conditions confirms the
+single-head NIG conflation (epistemic = aleatoric/nu with nu state-independent) - the two
+channels are one signal, as expected for this architecture. See the detailed note below.
+For the safety controller, threshold the TOTAL uncertainty, not the (non-separating) split.
 
 Read-only diagnostic. Run via `make uncertainty-verdict EVAL_DIR=<run output dir>`.
 @see uncertainty_rl/evaluation/evaluate.py (per_step_records.csv), scripts/miscellaneous/CLAUDE.md.
@@ -151,12 +150,15 @@ def main() -> int:
     if lift >= 1.5:
         print("  -> GOOD: epistemic separates - it rises on novel/degraded states.")
     elif lift >= 1.1:
-        print("  -> WEAK: some separation, but the margin is small; consider lowering")
-        print("     lambda_nu_anchor so nu can vary more across states.")
+        print("  -> WEAK: some separation, but the margin is small.")
     else:
-        print("  -> FLAT: epistemic does NOT separate (one signal). nu is not varying")
+        print("  -> FLAT: epistemic does NOT separate (one signal). Expected on the")
+        print("     single-head NIG actor: epistemic = aleatoric/nu and RL leaves nu")
         print(
-            "     with state - adjust the lambda_nu_anchor / lambda_evidence balance."
+            "     unsupervised, so the two channels stay a fixed ratio. Not tunable -"
+        )
+        print(
+            "     see documentation/detailed_notes/epistemic_aleatoric_disentanglement.md."
         )
     return 0
 

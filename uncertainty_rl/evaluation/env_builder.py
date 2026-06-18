@@ -80,8 +80,8 @@ def build_eval_env_factory(
            the windowed inspect stack). None uses the per-rank default.
     @param port_override: Override the CARLA port. None uses the per-rank
            default.
-    @return Tuple of (env_factory, aleatoric_scaling, handoff_threshold). The
-            factory yields a bare CARLAParkingEnv built with the condition's
+    @return Tuple of (env_factory, caution_gain, slow_threshold,
+            handoff_threshold). The factory yields a bare CARLAParkingEnv built with the condition's
             scaled sensor noise, pinned occupancy/floor-plan/GNSS tier, and the
             exact training dynamics. The two SafetyWrapper parameters are
             returned so callers that DO want the wrapper (the headless eval
@@ -164,7 +164,8 @@ def build_eval_env_factory(
     degrade_one_way: bool = bool(condition.get("degrade_one_way", False))
 
     # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
-    aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 2.0))
+    caution_gain: float = float(_ec.get("safety_caution_gain", 2.0))
+    slow_threshold: float = float(_ec.get("safety_slow_threshold", 0.0))
     handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 0.02))
 
     # Build the env through the shared factory so evaluation inherits the EXACT
@@ -190,7 +191,7 @@ def build_eval_env_factory(
         host_override=host_override,
         port_override=port_override,
     )
-    return env_factory, aleatoric_scaling, handoff_threshold
+    return env_factory, caution_gain, slow_threshold, handoff_threshold
 
 
 def make_eval_env(
@@ -207,11 +208,13 @@ def make_eval_env(
     @param env_config: Environment config for parking_scenarios and obs flags.
     @return Vectorised evaluation environment (SafetyWrapper + DummyVecEnv).
     """
-    env_factory, aleatoric_scaling, handoff_threshold = build_eval_env_factory(
-        condition,
-        config,
-        base_sensors,
-        env_config,
+    env_factory, caution_gain, slow_threshold, handoff_threshold = (
+        build_eval_env_factory(
+            condition,
+            config,
+            base_sensors,
+            env_config,
+        )
     )
 
     # EVAL_DISABLE_SAFETY_WRAPPER bypasses the wrapper (raw policy actions) for the
@@ -226,7 +229,8 @@ def make_eval_env(
             return bare
         return SafetyWrapper(
             bare,
-            aleatoric_scaling=aleatoric_scaling,
+            caution_gain=caution_gain,
+            slow_threshold=slow_threshold,
             handoff_threshold=handoff_threshold,
         )
 
