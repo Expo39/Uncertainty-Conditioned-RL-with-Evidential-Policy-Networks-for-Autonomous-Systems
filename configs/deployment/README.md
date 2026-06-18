@@ -33,7 +33,8 @@ Behaviour settings that must match the trained policy. Check these before every 
 |-----|---------|-------|
 | `baseline` | `configs/baselines/full_method.yaml` | Names the baseline the deployed checkpoint was trained as; its `include_covariance` / `include_obstacle_obs` / `policy_type` (the obs shape and policy class) are read from there. Must match the checkpoint. |
 | `max_ego_speed_ms` | `8.0` | Hard speed cap (m/s). |
-| `safety_handoff_threshold` | `5.0` | Epistemic uncertainty above this triggers full stop. |
+| `safety_handoff_threshold` | `0.02` | Epistemic uncertainty above this triggers full stop (clean-condition epistemic p99, on the head's measured ~0.002-0.23 scale). |
+| `safety_aleatoric_scaling` | `2.0` | How aggressively aleatoric uncertainty caps the throttle (caution); ~40% cap at the worst measured aleatoric. |
 | `real_world_datum` / `actuation_calibration` | paths | Real-vehicle datum and calibration files loaded by the deployment path. |
 
 ## Config loading chain

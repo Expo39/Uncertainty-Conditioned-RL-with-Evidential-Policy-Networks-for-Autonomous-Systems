@@ -16,6 +16,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -89,6 +90,10 @@ logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 # neither flag still needs one of each: start at the curriculum head, full method.
 DEFAULT_STAGE = 1
 DEFAULT_BASELINE = "configs/baselines/full_method.yaml"
+
+# Run-identifier timestamps use local wall-clock time (the container runs UTC).
+# Europe/Malta is DST-aware (UTC+2 summer, UTC+1 winter), unlike a fixed offset.
+_LOCAL_TZ = ZoneInfo("Europe/Malta")
 
 
 def _short_path(path: str) -> str:
@@ -529,11 +534,12 @@ def train(
 
     # Each run gets its own subtree nested by baseline so the ablation grid is
     # navigable: <root>/<baseline_name>/<run_leaf>/, where run_leaf is
-    # seed<N>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/, and
-    # outputs/bay_successes/training/. The seed<N>_ prefix on the leaf is load-
-    # bearing: demo_drive.py parses the seed and start timestamp back out of the
-    # leaf directory name. baseline_name is set explicitly in baseline override
-    # configs; for ad-hoc runs it is derived from policy_type and observation flags.
+    # <stage>_<seed>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/,
+    # and outputs/ (bay_successes, demo_traces). The seed (second token) is parsed
+    # back out by demo_drive.py via a _<seed>_ pattern. baseline_name is set
+    # explicitly in baseline override configs; for ad-hoc runs it is derived from
+    # policy_type and observation flags. Timestamp is local (Europe/Malta,
+    # DST-aware) so leaf times match the wall clock the runs are launched at.
     policy_type = config.get("policy_type", "evidential")
     include_cov = config.get("include_covariance", True)
     include_obs = config.get("include_obstacle_obs", True)
@@ -543,11 +549,12 @@ def train(
         f"_obs{'on' if include_obs else 'off'}"
     )
     baseline_name = config.get("baseline_name", _default_run_name)
-    _timestamp = datetime.now().strftime("%d%m%Y-%H%M")
-    # run_leaf defaults to seed<N>_<timestamp>; callers that need a deterministic
-    # leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may override it so
-    # the on-disk tree stays <baseline>/<leaf>/ in both cases.
-    run_leaf = config.get("run_leaf", f"seed{seed}_{_timestamp}")
+    _timestamp = datetime.now(_LOCAL_TZ).strftime("%d%m%Y-%H%M")
+    _stage = config.get("curriculum_stage", DEFAULT_STAGE)
+    # run_leaf defaults to <stage>_<seed>_<timestamp>; callers that need a
+    # deterministic leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may
+    # override it so the on-disk tree stays <baseline>/<leaf>/ in both cases.
+    run_leaf = config.get("run_leaf", f"{_stage}_{seed}_{_timestamp}")
     # Provenance label mirroring the on-disk tree (<baseline>/<leaf>).
     run_name = f"{baseline_name}/{run_leaf}"
 
@@ -867,7 +874,7 @@ def train(
         "seed": seed,
         "total_timesteps": total_timesteps,
         "resumed_from": resume_from if resume_from is not None else "(fresh)",
-        "started": datetime.now().strftime("%d-%m-%Y %H:%M"),
+        "started": datetime.now(_LOCAL_TZ).strftime("%d-%m-%Y %H:%M"),
     }
 
     callbacks = [

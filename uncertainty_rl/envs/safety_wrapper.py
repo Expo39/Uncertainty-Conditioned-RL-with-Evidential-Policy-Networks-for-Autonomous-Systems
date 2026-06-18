@@ -45,17 +45,16 @@ class SafetyWrapper(gym.Wrapper):
     def __init__(
         self,
         env: gym.Env,
-        aleatoric_scaling: float = 0.5,
-        handoff_threshold: float = 5.0,
+        aleatoric_scaling: float = 2.0,
+        handoff_threshold: float = 0.02,
     ) -> None:
         """
         @brief Initialise the safety wrapper.
         @param env: The underlying CARLAParkingEnv instance.
-        @param aleatoric_scaling: Controls how aggressively aleatoric
-            uncertainty scales actions. Higher = more conservative.
-        @param handoff_threshold: Epistemic uncertainty level above which
-            the wrapper triggers a full safety handoff (zero action).
-            Set high - only extreme cases should trigger this.
+        @param aleatoric_scaling: Throttle-cap aggressiveness. Higher = more
+            conservative. Defaults match agent_config.yaml.
+        @param handoff_threshold: Epistemic level that triggers a full stop +
+            handoff. Defaults match agent_config.yaml.
         """
         super().__init__(env)
         self._aleatoric_scaling = aleatoric_scaling

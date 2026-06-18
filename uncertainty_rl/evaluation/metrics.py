@@ -48,6 +48,13 @@ class EvaluationMetrics:
     # dict per decision, for the honesty-of-the-covariance analysis. Populated
     # for every baseline (ground truth is reward-only, never in the obs).
     calibration_pairs: List[Dict[str, Any]] = field(default_factory=list)
+    # Per-step uncertainty trace (one dict per decision: step index within the
+    # episode, epistemic, aleatoric, EKF stds). Populated only for evidential
+    # heads, capped per episode by EVAL_PER_STEP_CAP. Lets the per-step gating
+    # analysis test whether epistemic[t] tracks the instantaneous situation
+    # rather than drifting with episode length (a real-time handoff needs the
+    # former). @see evaluate_agent.
+    per_step_records: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """
