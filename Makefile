@@ -530,6 +530,11 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/miscellaneous/tb_read.py $(LOG) $(ARGS)
 
+uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper
+	$(call ensure-venv)
+	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
+	$(PYTHON) $(SCRIPTS_DIR)/miscellaneous/uncertainty_verdict.py $(EVAL_DIR)
+
 backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
 	@echo "TODO.md" >> /tmp/_backup_files.txt
