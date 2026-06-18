@@ -18,7 +18,7 @@ doppler_std/speed (so it degrades with the same factor) and published on
 import json
 import math
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 import numpy as np
 import rclpy
@@ -100,6 +100,32 @@ _TIER_STATUS: Dict[str, int] = {
     "standalone": NavSatStatus.STATUS_FIX,
     "degraded": NavSatStatus.STATUS_FIX,
 }
+
+
+def mask_recovery_transitions(
+    row: np.ndarray,
+    active_idx: int,
+) -> Optional[np.ndarray]:
+    """
+    @brief Mask out recovery (upward) transitions for the monotone-degradation mode.
+    @param row: The active tier's row of the per-step transition matrix.
+    @param active_idx: Index of the current tier in _TIER_ORDER (0 = best fix).
+    @return A renormalised copy of the row with all transitions to a BETTER tier
+            (lower index) zeroed, so the chain can only stay put or degrade. The
+            mass on the forbidden upward rungs folds onto the remaining same-or-
+            worse entries, lengthening the dwell before the next drop. Returns
+            None when no mass remains (the worst tier with no self-loop), signalling
+            the caller to hold the current tier.
+
+    Pure function (no node state) so the one-way ratchet can be unit-tested without
+    a running ROS 2 node. @see GnssNoiseRelayNode._step_markov.
+    """
+    masked = np.asarray(row, dtype=np.float64).copy()
+    masked[:active_idx] = 0.0
+    total = masked.sum()
+    if total <= 0.0:
+        return None
+    return cast(np.ndarray, masked / total)
 
 
 class GnssNoiseRelayNode(Node):
@@ -250,6 +276,12 @@ class GnssNoiseRelayNode(Node):
         # Markov chain is suppressed for that episode so the level stays fixed
         # (controlled evaluation conditions). Training leaves it False.
         self._hold_tier: bool = False
+        # Per-episode override: when set, the chain may only walk DOWN the tier
+        # ladder (toward degraded) and never recovers - the monotone-degradation
+        # eval condition (starts at a clean fix, drifts to degraded, stays there).
+        # Implemented by zeroing the upward transitions in _step_markov. Training
+        # leaves it False so the chain recovers normally.
+        self._degrade_one_way: bool = False
 
         self._extra_alt_stddev_m: float = 0.0
         # Current tier's NavSatStatus code, updated by _apply_tier and stamped
@@ -484,6 +516,7 @@ class GnssNoiseRelayNode(Node):
             # whole episode so the level stays fixed (controlled evaluation
             # conditions). Absent/false in training, where the chain wanders.
             self._hold_tier = bool(data.get("hold_tier", False))
+            self._degrade_one_way = bool(data.get("degrade_one_way", False))
 
             tier_name: Optional[str] = data.get("tier_name")
             if tier_name and tier_name in _TIER_ORDER:
@@ -524,7 +557,8 @@ class GnssNoiseRelayNode(Node):
                 )
 
             self.get_logger().info(
-                f"GNSS noise config updated (seq={seq}, tier={tier_name}): "
+                f"GNSS noise config updated (seq={seq}, tier={tier_name}, "
+                f"hold={self._hold_tier}, degrade_one_way={self._degrade_one_way}): "
                 f"metric_stddev={self._metric_stddev_m:.3f}m"
             )
         except (json.JSONDecodeError, OSError, ValueError) as exc:
@@ -557,6 +591,10 @@ class GnssNoiseRelayNode(Node):
     def _step_markov(self) -> None:
         """@brief Advance the Markov chain by one step."""
         row = self._transition_matrix[self._active_tier_idx]
+        if self._degrade_one_way:
+            row = mask_recovery_transitions(row, self._active_tier_idx)
+            if row is None:
+                return  # Already at the worst tier with no self-loop mass; hold.
         next_idx = int(self._rng.choice(len(_TIER_ORDER), p=row))
         if next_idx != self._active_tier_idx:
             from_name = _TIER_ORDER[self._active_tier_idx]
