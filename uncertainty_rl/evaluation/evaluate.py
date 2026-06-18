@@ -13,6 +13,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -52,6 +53,10 @@ from uncertainty_rl.evaluation.plots import plot_evaluation_results  # noqa: F40
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
+
+# Run-identifier timestamps use local wall-clock time (the container runs UTC);
+# Europe/Malta is DST-aware (UTC+2 summer, UTC+1 winter).
+_LOCAL_TZ = ZoneInfo("Europe/Malta")
 
 
 def evaluate_agent(
@@ -107,6 +112,15 @@ def evaluate_agent(
     # collected for every baseline so the calibration analysis covers the
     # no-covariance arms too. Always on (cheap; one small dict per step).
     calibration_pairs: List[Dict[str, Any]] = []
+    # Per-step uncertainty trace for evidential heads. The per-step gating
+    # analysis needs epistemic[t]/aleatoric[t] at matched states (e.g. the first
+    # few steps, before policies diverge) to test instantaneous response rather
+    # than the time-averaged episode aggregate. EVAL_PER_STEP_CAP bounds how many
+    # leading steps per episode are kept (0 disables); the early steps are the
+    # informative ones for novelty, so capping the head of each episode keeps the
+    # file small without losing the matched-state window.
+    per_step_records: List[Dict[str, Any]] = []
+    _per_step_cap = int(os.environ.get("EVAL_PER_STEP_CAP", "0") or "0")
 
     episode_rewards = np.empty(n_episodes, dtype=np.float64)
     episode_steps = np.empty(n_episodes, dtype=np.int32)
@@ -126,6 +140,10 @@ def evaluate_agent(
         )
         _set_uncertainty = env.env_method
         _policy_device = model.policy.device
+        # The wrapper consumes set_uncertainty() to modulate actions; the bare env
+        # (EVAL_DISABLE_SAFETY_WRAPPER) has no such method, so feeding it is a no-op
+        # there. Probe once rather than try/except every step.
+        _has_set_uncertainty = hasattr(env.envs[0], "set_uncertainty")
 
         def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
             obs_tensor = th.as_tensor(obs, device=_policy_device)
@@ -140,7 +158,8 @@ def evaluate_agent(
             ep_epistemic.append(epistemic)
             ep_aleatoric.append(aleatoric)
             ep_action_std.append(float(np.sqrt(aleatoric)))
-            _set_uncertainty("set_uncertainty", epistemic, aleatoric)
+            if _has_set_uncertainty:
+                _set_uncertainty("set_uncertainty", epistemic, aleatoric)
             next_obs, reward, done, infos = env.step(action)
             return next_obs, float(reward[0]), done, infos
 
@@ -227,6 +246,23 @@ def evaluate_agent(
                 ep_std_pos.append((_std_x + _std_y) / 2.0)
             if np.isfinite(_std_yaw):
                 ep_std_yaw.append(_std_yaw)
+            # Per-step uncertainty trace (evidential heads only). step_fn has just
+            # appended this decision's epistemic/aleatoric to the episode lists, so
+            # read them off the tail. Keep only the leading steps per episode so a
+            # full sweep stays a few MB, not hundreds.
+            if is_evidential and _per_step_cap and steps <= _per_step_cap:
+                per_step_records.append(
+                    {
+                        "condition": "",  # filled by the caller per condition
+                        "episode": episode + 1,
+                        "step": steps,
+                        "epistemic": ep_epistemic[-1],
+                        "aleatoric": ep_aleatoric[-1],
+                        "action_std": ep_action_std[-1],
+                        "ekf_std_pos_m": (_std_x + _std_y) / 2.0,
+                        "ekf_std_yaw_rad": _std_yaw,
+                    }
+                )
             if done[0]:
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
                 # On the terminal step DummyVecEnv has already auto-reset the
@@ -309,6 +345,8 @@ def evaluate_agent(
         metrics.captured_observations = captured_obs
     if calibration_pairs:
         metrics.calibration_pairs = calibration_pairs
+    if per_step_records:
+        metrics.per_step_records = per_step_records
 
     return metrics
 
@@ -406,6 +444,9 @@ def evaluate_across_conditions(
     # EKF calibration pairs (predicted std vs actual error) across the sweep,
     # tagged by condition - the honesty-of-the-covariance table.
     calibration_rows: List[Dict[str, Any]] = []
+    # Per-step uncertainty trace across the sweep, tagged by condition - the
+    # per-step gating table (EVAL_PER_STEP_CAP leading steps per episode).
+    per_step_rows: List[Dict[str, Any]] = []
     vec_normalize_exists = os.path.exists(vec_normalize_path)
     if not vec_normalize_exists:
         logger.warning(
@@ -422,7 +463,7 @@ def evaluate_across_conditions(
     # parent directory name (seed<N>_<timestamp>); the baseline comes from the
     # evaluated baseline config, falling back to the checkpoint's grandparent so
     # the path is unambiguous even for ad-hoc checkpoints.
-    _eval_leaf = Path(model_path).parent.name or datetime.now().strftime(
+    _eval_leaf = Path(model_path).parent.name or datetime.now(_LOCAL_TZ).strftime(
         "%d-%m-%Y-%H%M%S"
     )
     _eval_baseline = baseline_cfg.get(
@@ -430,10 +471,17 @@ def evaluate_across_conditions(
     )
     _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
     _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_baseline / _eval_leaf
-    # Results nest by <baseline>/<leaf>, mirroring checkpoints/logs/bay
-    # successes, so successive ablation arms and seeds never overwrite each
-    # other's evaluation_results.csv / episode_records.csv.
-    run_output_dir = os.path.join(output_dir, _eval_baseline, _eval_leaf)
+    # Results nest by <baseline>/<leaf>/<wrapper_variant>, mirroring checkpoints/
+    # logs/bay successes. The with_wrapper/without_wrapper leaf keeps the two
+    # SafetyWrapper variants of the SAME checkpoint side by side for the A/B.
+    _wrapper_variant = (
+        "without_wrapper"
+        if bool(int(os.environ.get("EVAL_DISABLE_SAFETY_WRAPPER", "0") or "0"))
+        else "with_wrapper"
+    )
+    run_output_dir = os.path.join(
+        output_dir, _eval_baseline, _eval_leaf, _wrapper_variant
+    )
 
     for condition in conditions:
         name = condition.get("name", "unknown")
@@ -473,7 +521,7 @@ def evaluate_across_conditions(
                 "description": description,
                 "n_episodes": n_episodes,
                 "held_gnss_tier": condition.get("held_gnss_tier", "markov"),
-                "evaluated": datetime.now().strftime("%d-%m-%Y %H:%M"),
+                "evaluated": datetime.now(_LOCAL_TZ).strftime("%d-%m-%Y %H:%M"),
             },
         )
 
@@ -491,6 +539,12 @@ def evaluate_across_conditions(
         # the analysis can split honesty by GNSS tier.
         for pair in metrics.calibration_pairs:
             calibration_rows.append({**pair, "condition": name})
+
+        # Accumulate the per-step uncertainty trace, tagged by condition, so the
+        # per-step gating analysis can compare epistemic[t] across conditions at
+        # matched steps.
+        for rec in metrics.per_step_records:
+            per_step_rows.append({**rec, "condition": name})
 
         # Store results: merge metrics dict with condition metadata in one pass
         optional_fields = (
@@ -551,6 +605,15 @@ def evaluate_across_conditions(
         calib_csv_path = os.path.join(run_output_dir, "calibration_records.csv")
         calib_df.to_csv(calib_csv_path, index=False)
         logger.info("EKF calibration records saved to %s", calib_csv_path)
+
+    # Per-step uncertainty trace (EVAL_PER_STEP_CAP leading steps per episode),
+    # the input to the per-step / matched-state gating analysis. Only written
+    # when EVAL_PER_STEP_CAP > 0 and the head is evidential.
+    if per_step_rows:
+        per_step_df = pd.DataFrame(per_step_rows)
+        per_step_csv_path = os.path.join(run_output_dir, "per_step_records.csv")
+        per_step_df.to_csv(per_step_csv_path, index=False)
+        logger.info("Per-step uncertainty trace saved to %s", per_step_csv_path)
 
     # Dump captured real observations for the on-manifold covariance probe.
     if captured_obs_all:
