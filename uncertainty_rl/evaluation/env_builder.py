@@ -11,6 +11,7 @@ DummyVecEnv the headless sweep needs. Kept separate from evaluate.py so the
 eval-dryrun inspector and the sweep share one definition of the scenario.
 """
 
+import os
 from typing import Any, Callable, Dict, Optional, Tuple
 
 try:
@@ -158,8 +159,8 @@ def build_eval_env_factory(
     held_tier: Optional[str] = condition.get("held_gnss_tier", None)
 
     # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
-    aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 0.5))
-    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 5.0))
+    aleatoric_scaling: float = float(_ec.get("safety_aleatoric_scaling", 2.0))
+    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 0.02))
 
     # Build the env through the shared factory so evaluation inherits the EXACT
     # dynamics the policy was trained with - action_repeat (decision = N ticks),
@@ -207,9 +208,18 @@ def make_eval_env(
         env_config,
     )
 
+    # EVAL_DISABLE_SAFETY_WRAPPER bypasses the wrapper (raw policy actions) for the
+    # with/without A/B comparison.
+    disable_wrapper = bool(
+        int(os.environ.get("EVAL_DISABLE_SAFETY_WRAPPER", "0") or "0")
+    )
+
     def _init() -> Any:
+        bare = env_factory()
+        if disable_wrapper:
+            return bare
         return SafetyWrapper(
-            env_factory(),
+            bare,
             aleatoric_scaling=aleatoric_scaling,
             handoff_threshold=handoff_threshold,
         )

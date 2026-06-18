@@ -27,6 +27,12 @@ CHECKPOINT   ?=
 BASELINE     ?=
 STAGE        ?=
 SEED         ?=
+# Leading steps per episode logged to per_step_records.csv in docker-eval
+# (evidential only). 0 disables.
+PER_STEP_CAP ?= 0
+# NO_SAFETY=1 bypasses the SafetyWrapper in docker-eval. Results nest under
+# <baseline>/<leaf>/{with_wrapper,without_wrapper}/ for the A/B.
+NO_SAFETY    ?=
 
 # BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
 # layout <root>/<baseline>/<leaf>/. You type only the names:
@@ -162,13 +168,13 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"]
-	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>)"
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
+	$(DOCKER_COMPOSE) exec -e EVAL_PER_STEP_CAP=$(PER_STEP_CAP) -e EVAL_DISABLE_SAFETY_WRAPPER=$(if $(NO_SAFETY),1,0) training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path $(CHECKPOINT_MODEL) \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
