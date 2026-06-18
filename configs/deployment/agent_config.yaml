@@ -32,11 +32,12 @@ actuator_model:
   brake_max_delta_per_decision: 0.5  # Brake rate limit (0 -> full in 0.4 s).
   brake_override_throttle_threshold: 0.3  # Throttle is zeroed when brake exceeds this fraction.
 
-# SafetyWrapper: aleatoric_scaling caps throttle under outcome noise (caution);
-# handoff_threshold is the epistemic level that triggers a stop + handoff.
-# Calibrated to the head's measured scale (epistemic ~0.002-0.23, aleatoric
-# ~0.03-0.33); handoff_threshold is the clean-condition epistemic p99.
-safety_aleatoric_scaling: 2.0
+# SafetyWrapper: single TOTAL-uncertainty (epistemic+aleatoric) signal, two thresholds.
+# Above slow_threshold throttle is capped (caution); above handoff_threshold full stop.
+# caution_gain sets how hard throttle is cut. Calibrate thresholds to clean-condition
+# total: slow ~ p50, handoff ~ p99 (set after eval).
+safety_caution_gain: 2.0
+safety_slow_threshold: 0.0
 safety_handoff_threshold: 0.02
 
 # ---------------------------------------------------------------------------

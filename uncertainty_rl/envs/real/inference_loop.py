@@ -65,7 +65,7 @@ class RealWorldInferenceLoop:
         @param policy: Loaded EvidentialActorCriticPolicy (from EvidentialPPO).
         @param deployment: RealWorldDeployment instance (surveyed datum + actuation calibration).
         @param target_bay: Dict with keys x, y, yaw in lot layout frame.
-        @param safety_wrapper_cfg: Dict with keys aleatoric_scaling, handoff_threshold.
+        @param safety_wrapper_cfg: Dict with keys caution_gain, slow_threshold, handoff_threshold.
         @param ros2_cfg: ROS 2 config dict (covariance_timeout, ekf_convergence_timeout,
                          ekf_state_file).
         @param include_covariance: Must match the trained policy's obs flags.
@@ -78,9 +78,8 @@ class RealWorldInferenceLoop:
         self._max_steps = max_steps
         self._include_covariance = include_covariance
         self._include_obstacle_obs = include_obstacle_obs
-        self._aleatoric_scaling: float = safety_wrapper_cfg.get(
-            "aleatoric_scaling", 0.5
-        )
+        self._caution_gain: float = safety_wrapper_cfg.get("caution_gain", 0.5)
+        self._slow_threshold: float = safety_wrapper_cfg.get("slow_threshold", 0.0)
         self._handoff_threshold: float = safety_wrapper_cfg.get(
             "handoff_threshold", 5.0
         )
@@ -184,7 +183,8 @@ class RealWorldInferenceLoop:
             deployment=deployment,
             target_bay=target_bay,
             safety_wrapper_cfg={
-                "aleatoric_scaling": agent_cfg.get("safety_aleatoric_scaling", 0.5),
+                "caution_gain": agent_cfg.get("safety_caution_gain", 0.5),
+                "slow_threshold": agent_cfg.get("safety_slow_threshold", 0.0),
                 "handoff_threshold": agent_cfg.get("safety_handoff_threshold", 5.0),
             },
             ros2_cfg=agent_cfg.get("ros2", {}),
@@ -500,18 +500,18 @@ class RealWorldInferenceLoop:
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @return Tuple (modulated_action, handoff_triggered).
         """
-        modulated, handoff, _aleatoric_scale = SafetyWrapper.apply(
+        modulated, handoff, _throttle_cap = SafetyWrapper.apply(
             action,
-            epistemic=epistemic,
-            aleatoric=aleatoric,
-            aleatoric_scaling=self._aleatoric_scaling,
+            total_uncertainty=epistemic + aleatoric,
+            caution_gain=self._caution_gain,
+            slow_threshold=self._slow_threshold,
             handoff_threshold=self._handoff_threshold,
         )
         if handoff:
             logger.warning(
-                "Safety handoff triggered (epistemic=%.3f >= threshold=%.3f). "
+                "Safety handoff triggered (total uncertainty=%.3f >= threshold=%.3f). "
                 "Commanding full stop.",
-                epistemic,
+                epistemic + aleatoric,
                 self._handoff_threshold,
             )
         return modulated, handoff

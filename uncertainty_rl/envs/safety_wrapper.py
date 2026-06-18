@@ -2,17 +2,23 @@
 @file safety_wrapper.py
 @brief Gymnasium wrapper that intercepts actions based on policy uncertainty.
 
-Sits around CARLAParkingEnv and modulates actions at inference/eval time
-based on the evidential policy's epistemic and aleatoric uncertainty
-outputs. Training runs WITHOUT the wrapper (the policy learns freely).
-Evaluation runs WITH the wrapper (safety layer active).
+Sits around CARLAParkingEnv at evaluation/deployment time and modulates the policy
+action from the evidential head's total predictive uncertainty. Training runs WITHOUT
+the wrapper (the policy learns freely).
 
-Two uncertainty types produce two distinct responses:
-- Aleatoric (outcome noise): cap the throttle limit (slower driving).
-- Epistemic (novelty/ignorance): full stop when above handoff_threshold.
+Single signal, two thresholds. Both responses key off the TOTAL predictive uncertainty
+(epistemic + aleatoric), by MAGNITUDE:
+- total >= slow_threshold: cap the throttle (slower, more cautious driving);
+- total >= handoff_threshold: full stop and hand off.
 
-Actions are [steering, throttle, brake]: steering in [-1, 1], throttle and
-brake non-negative in [0, 1].
+On a single-head NIG actor epistemic = aleatoric / nu, so the two channels are one
+signal scaled by nu and cannot disagree per state. Keying separate responses to the
+epistemic-vs-aleatoric SPLIT would leave one branch unable to fire, so the controller
+uses the total instead - which gives the same caution-then-handoff behaviour.
+@see documentation/detailed_notes/epistemic_aleatoric_disentanglement.md
+
+Actions are [steering, throttle, brake]: steering in [-1, 1], throttle and brake
+non-negative in [0, 1].
 """
 
 import logging
@@ -27,15 +33,13 @@ logger = logging.getLogger("uncertainty_rl.envs.safety_wrapper")
 class SafetyWrapper(gym.Wrapper):
     """
     @class SafetyWrapper
-    @brief Intercepts actions based on evidential uncertainty at eval time.
+    @brief Intercepts actions based on total evidential uncertainty at eval time.
 
-    The wrapper does NOT call the policy itself. Instead, the evaluation
-    loop must set the current uncertainty estimates via set_uncertainty()
-    before each step. The wrapper reads these estimates and modulates
-    the action accordingly.
+    The wrapper does NOT call the policy itself. The evaluation loop sets the current
+    uncertainty estimates via set_uncertainty() before each step; the wrapper sums them
+    into the total signal it thresholds.
 
-    @note Training runs without this wrapper. Only evaluation/deployment
-          uses it, so the policy learns freely during training.
+    @note Only evaluation/deployment uses this wrapper; training runs without it.
     """
 
     # -----------------------------------------------------------------------
@@ -45,39 +49,37 @@ class SafetyWrapper(gym.Wrapper):
     def __init__(
         self,
         env: gym.Env,
-        aleatoric_scaling: float = 2.0,
+        caution_gain: float = 2.0,
+        slow_threshold: float = 0.0,
         handoff_threshold: float = 0.02,
     ) -> None:
         """
         @brief Initialise the safety wrapper.
         @param env: The underlying CARLAParkingEnv instance.
-        @param aleatoric_scaling: Throttle-cap aggressiveness. Higher = more
-            conservative. Defaults match agent_config.yaml.
-        @param handoff_threshold: Epistemic level that triggers a full stop +
-            handoff. Defaults match agent_config.yaml.
+        @param caution_gain: How hard the throttle is cut as total uncertainty rises
+            above slow_threshold (higher = more conservative).
+        @param slow_threshold: Total-uncertainty level at/above which throttle is capped.
+        @param handoff_threshold: Total-uncertainty level that triggers a full stop + handoff.
         """
         super().__init__(env)
-        self._aleatoric_scaling = aleatoric_scaling
+        self._caution_gain = caution_gain
+        self._slow_threshold = slow_threshold
         self._handoff_threshold = handoff_threshold
 
-        # Per-step uncertainty estimates, set by evaluation loop.
+        # Per-step uncertainty estimates, set by the evaluation loop.
         self._current_epistemic: float = 0.0
         self._current_aleatoric: float = 0.0
 
         # Episode-level counters.
         self._handoff_count: int = 0
-        self._aleatoric_scale_sum: float = 0.0
+        self._throttle_cap_sum: float = 0.0
         self._step_count: int = 0
 
-    def set_uncertainty(
-        self,
-        epistemic: float,
-        aleatoric: float,
-    ) -> None:
+    def set_uncertainty(self, epistemic: float, aleatoric: float) -> None:
         """
-        @brief Set the current step's uncertainty estimates.
-        @param epistemic: Mean epistemic uncertainty from evidential actor.
-        @param aleatoric: Mean aleatoric uncertainty from evidential actor.
+        @brief Set the current step's uncertainty estimates (summed to the total signal).
+        @param epistemic: Mean epistemic uncertainty from the evidential actor.
+        @param aleatoric: Mean aleatoric uncertainty from the evidential actor.
 
         Must be called before each step() during evaluation.
         """
@@ -87,92 +89,90 @@ class SafetyWrapper(gym.Wrapper):
     @staticmethod
     def apply(
         action: np.ndarray,
-        epistemic: float,
-        aleatoric: float,
-        aleatoric_scaling: float,
+        total_uncertainty: float,
+        caution_gain: float,
+        slow_threshold: float,
         handoff_threshold: float,
     ) -> Tuple[np.ndarray, bool, float]:
         """
-        @brief Apply safety interception logic to a raw policy action.
+        @brief Apply single-signal safety interception to a raw policy action.
 
-        Static method so it can be called by both SafetyWrapper.step() (sim eval)
-        and RealWorldInferenceLoop (real deployment) without duplicating logic.
+        Static so SafetyWrapper.step() (sim eval) and RealWorldInferenceLoop (real
+        deployment) share one implementation.
 
         @param action: Raw policy action [steering, throttle, brake].
-        @param epistemic: Epistemic uncertainty from evidential actor.
-        @param aleatoric: Aleatoric uncertainty from evidential actor.
-        @param aleatoric_scaling: Scaling factor for the throttle cap.
-        @param handoff_threshold: Epistemic level above which full stop is triggered.
-        @return Tuple (modulated_action, handoff_triggered, aleatoric_scale).
+        @param total_uncertainty: Epistemic + aleatoric from the evidential actor.
+        @param caution_gain: Throttle-cut aggressiveness above slow_threshold.
+        @param slow_threshold: Total-uncertainty level at/above which throttle is capped.
+        @param handoff_threshold: Total-uncertainty level above which a full stop fires.
+        @return Tuple (modulated_action, handoff_triggered, throttle_cap).
         """
-        # Epistemic: full stop if above threshold (out-of-distribution state).
-        # Zero steering and throttle, full brake, to bring the vehicle to rest.
-        handoff = epistemic >= handoff_threshold
-        if handoff:
+        # High uncertainty: full stop and hand off (zero steer/throttle, full brake).
+        if total_uncertainty >= handoff_threshold:
             stop = np.zeros_like(action)
             stop[2] = 1.0
             return stop, True, 0.0
 
-        # Aleatoric: cap throttle only - steering and brake are unrestricted.
-        # High aleatoric = unpredictable outcomes (e.g. pedestrian cutting across).
-        # Reducing speed lowers collision risk without compromising directional control.
-        aleatoric_scale = 1.0 / (1.0 + aleatoric_scaling * aleatoric)
+        # Moderate uncertainty: cap throttle only (steering and brake unrestricted), so
+        # the car slows without losing directional control. Below slow_threshold the
+        # action passes through (cap 1.0).
+        if total_uncertainty >= slow_threshold:
+            throttle_cap = 1.0 / (1.0 + caution_gain * total_uncertainty)
+        else:
+            throttle_cap = 1.0
         modulated = action.copy()
-        throttle = float(modulated[1])
-        modulated[1] = throttle if throttle <= aleatoric_scale else aleatoric_scale
+        modulated[1] = min(float(modulated[1]), throttle_cap)
 
-        return modulated, False, aleatoric_scale
+        return modulated, False, throttle_cap
 
     def step(
-        self,
-        action: np.ndarray,
+        self, action: np.ndarray
     ) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         """
-        @brief Modulate action based on uncertainty, then step the env.
-        @param action: Raw action from policy.
+        @brief Modulate the action by total uncertainty, then step the env.
+        @param action: Raw action from the policy.
         @return Standard Gymnasium (obs, reward, terminated, truncated, info).
         """
         self._step_count += 1
+        total = self._current_epistemic + self._current_aleatoric
 
-        modulated_action, handoff, aleatoric_scale = SafetyWrapper.apply(
+        modulated_action, handoff, throttle_cap = SafetyWrapper.apply(
             action,
-            epistemic=self._current_epistemic,
-            aleatoric=self._current_aleatoric,
-            aleatoric_scaling=self._aleatoric_scaling,
+            total_uncertainty=total,
+            caution_gain=self._caution_gain,
+            slow_threshold=self._slow_threshold,
             handoff_threshold=self._handoff_threshold,
         )
-        self._aleatoric_scale_sum += aleatoric_scale
+        self._throttle_cap_sum += throttle_cap
 
         if handoff:
             self._handoff_count += 1
             logger.info(
-                "Safety handoff triggered (epistemic=%.3f >= threshold=%.3f)",
-                self._current_epistemic,
+                "Safety handoff triggered (total uncertainty=%.3f >= threshold=%.3f)",
+                total,
                 self._handoff_threshold,
             )
 
         obs, reward, terminated, truncated, info = self.env.step(modulated_action)
 
-        info["aleatoric_scale"] = aleatoric_scale
+        info["throttle_cap"] = throttle_cap
         info["safety_handoff"] = handoff
         info["epistemic"] = self._current_epistemic
         info["aleatoric"] = self._current_aleatoric
+        info["total_uncertainty"] = total
 
         if handoff:
             truncated = True
 
         return obs, reward, terminated, truncated, info
 
-    def reset(
-        self,
-        **kwargs: Any,
-    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(self, **kwargs: Any) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        @brief Reset environment and clear episode counters.
+        @brief Reset the environment and clear episode counters.
         @return Standard Gymnasium (obs, info).
         """
         self._handoff_count = 0
-        self._aleatoric_scale_sum = 0.0
+        self._throttle_cap_sum = 0.0
         self._step_count = 0
         self._current_epistemic = 0.0
         self._current_aleatoric = 0.0
@@ -181,16 +181,14 @@ class SafetyWrapper(gym.Wrapper):
 
     def get_episode_safety_stats(self) -> Dict[str, float]:
         """
-        @brief Get safety statistics for the completed episode.
-        @return Dict with handoff_count, avg_aleatoric_scale, total_steps.
+        @brief Safety statistics for the completed episode.
+        @return Dict with handoff_count, avg_throttle_cap, total_steps.
         """
-        avg_scale = (
-            self._aleatoric_scale_sum / self._step_count
-            if self._step_count > 0
-            else 1.0
+        avg_cap = (
+            self._throttle_cap_sum / self._step_count if self._step_count > 0 else 1.0
         )
         return {
             "handoff_count": float(self._handoff_count),
-            "avg_aleatoric_scale": avg_scale,
+            "avg_throttle_cap": avg_cap,
             "total_steps": float(self._step_count),
         }
