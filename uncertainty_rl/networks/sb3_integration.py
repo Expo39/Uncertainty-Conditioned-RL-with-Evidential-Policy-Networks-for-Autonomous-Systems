@@ -714,6 +714,7 @@ class EvidentialPPO(PPO):
         lambda_reg_warmup_steps: int = 50000,
         lambda_evidence: float = 0.0,
         lambda_evidence_warmup_steps: int = 50000,
+        lambda_nu_anchor: float = 0.0,
         aleatoric_floor: float = 1e-6,
         **kwargs: Any,
     ) -> None:
@@ -732,6 +733,13 @@ class EvidentialPPO(PPO):
         @param lambda_evidence_warmup_steps: Number of environment steps over which
                lambda_evidence is linearly annealed from 0 to lambda_evidence, so PPO
                settles the action mean (gamma) before evidence accrual begins.
+        @param lambda_nu_anchor: Weight of a log-space restoring force pulling nu
+               toward its sub-1 prior (softplus(-1.0) ~ 0.313). The evidence term can
+               only RAISE nu, so alone it drives nu past 1 everywhere and epistemic
+               collapses onto a fixed fraction of aleatoric. This anchor opposes it on
+               the same 1/nu scale, so nu reaches a tunable equilibrium: above 1 only
+               where evidence overcomes the anchor (in-distribution), below 1 on novel
+               states (epistemic-dominant handoff regime). 0.0 (default) = unanchored.
         @param aleatoric_floor: Minimum predictive aleatoric (action variance) floor for
                the policy's sampling std; forwarded to EvidentialActorCriticPolicy to
                prevent exploration collapse. @see EvidentialDistribution.
@@ -740,13 +748,16 @@ class EvidentialPPO(PPO):
         self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
         self.lambda_evidence = lambda_evidence
         self.lambda_evidence_warmup_steps = lambda_evidence_warmup_steps
+        self.lambda_nu_anchor = lambda_nu_anchor
         logger.info(
             "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d, "
-            "lambda_evidence=%.4f, evidence_warmup_steps=%d, aleatoric_floor=%.4g",
+            "lambda_evidence=%.4f, evidence_warmup_steps=%d, "
+            "lambda_nu_anchor=%.4f, aleatoric_floor=%.4g",
             lambda_reg,
             lambda_reg_warmup_steps,
             lambda_evidence,
             lambda_evidence_warmup_steps,
+            lambda_nu_anchor,
             aleatoric_floor,
         )
         # Pass evidential policy params to policy_kwargs.
@@ -814,6 +825,7 @@ class EvidentialPPO(PPO):
         value_losses: List[th.Tensor] = []
         evidential_reg_losses: List[th.Tensor] = []
         evidence_losses: List[th.Tensor] = []
+        nu_anchor_losses: List[th.Tensor] = []
         # clip_fraction as a running float sum.
         clip_fraction_sum: float = 0.0
         clip_fraction_count: int = 0
@@ -823,12 +835,14 @@ class EvidentialPPO(PPO):
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
         # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
-        # alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0). nu is NOT anchored
-        # here when the evidence term is active (lambda_evidence > 0): the evidence
-        # term governs nu instead, so anchoring it as well would fight that gradient
-        # and re-pin nu (collapsing epistemic onto a rescaled aleatoric).
+        # alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0). nu: softplus(-1.0).
+        # alpha/beta use a raw-ratio quadratic anchor; nu is anchored in LOG space
+        # (lambda_nu_anchor) so its restoring gradient matches the evidence term's
+        # 1/nu scale (a tunable equilibrium, not a boundary tug-of-war).
         _alpha_prior = 2.741
         _beta_prior = 0.693
+        _nu_prior = 0.313  # softplus(-1.0) + 1e-6; sub-1 => epistemic-dominant prior.
+        _log_nu_prior = float(np.log(_nu_prior))
         continue_training = True
         for epoch in range(self.n_epochs):
             approx_kl_divs: List[float] = []
@@ -886,6 +900,13 @@ class EvidentialPPO(PPO):
                     ).mean()
                 else:
                     evidence_loss = th.zeros((), device=nu.device)
+
+                # Log-space restoring force pulling nu back to its sub-1 prior;
+                # opposes the (one-directional) evidence term so nu settles, not runs up.
+                if self.lambda_nu_anchor > 0.0:
+                    nu_anchor_loss = (th.log(nu) - _log_nu_prior).pow(2).mean()
+                else:
+                    nu_anchor_loss = th.zeros((), device=nu.device)
 
                 with th.no_grad():
                     alpha_m1 = alpha - 1
@@ -945,9 +966,11 @@ class EvidentialPPO(PPO):
                     + self.vf_coef * value_loss
                     + current_lambda_reg * evidential_reg
                     + current_lambda_evidence * evidence_loss
+                    + self.lambda_nu_anchor * nu_anchor_loss
                 )
                 evidential_reg_losses.append(evidential_reg.detach())
                 evidence_losses.append(evidence_loss.detach())
+                nu_anchor_losses.append(nu_anchor_loss.detach())
 
                 # KL divergence for early stopping - only sync to CPU when target_kl is
                 # set.
@@ -1017,6 +1040,8 @@ class EvidentialPPO(PPO):
         # Evidential-specific logs
         self.logger.record("train/evidential_reg_loss", _mean(evidential_reg_losses))
         self.logger.record("train/evidence_loss", _mean(evidence_losses))
+        self.logger.record("train/nu_anchor_loss", _mean(nu_anchor_losses))
+        self.logger.record("train/lambda_nu_anchor", self.lambda_nu_anchor)
         self.logger.record(
             "train/epistemic_uncertainty", _mean(epistemic_uncertainties)
         )

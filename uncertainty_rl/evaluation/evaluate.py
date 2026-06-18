@@ -127,8 +127,12 @@ def evaluate_agent(
     success_flags = np.zeros(n_episodes, dtype=bool)
 
     # Detect evidential policy once; hoist method references out of the loop.
-    is_evidential = isinstance(model, EvidentialPPO) and hasattr(
-        model.policy, "get_action_with_uncertainty"
+    # EvidentialPPO is None when SB3 is unavailable (host/CI without torch), so
+    # guard the isinstance against the None sentinel - isinstance(x, None) raises.
+    is_evidential = (
+        EvidentialPPO is not None
+        and isinstance(model, EvidentialPPO)
+        and hasattr(model.policy, "get_action_with_uncertainty")
     )
 
     # Bind a single step function to eliminate the per-step branch.

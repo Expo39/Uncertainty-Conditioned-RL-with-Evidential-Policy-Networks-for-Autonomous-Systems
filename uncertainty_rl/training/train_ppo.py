@@ -15,7 +15,7 @@ import warnings
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, cast
 from zoneinfo import ZoneInfo
 
 import numpy as np
@@ -783,6 +783,29 @@ def train(
         # ent_coef that never reaches the decay floor.
         model.lr_schedule = lr_schedule
         model.ent_coef = ent_coef_schedule
+
+        # Re-bind the evidential loss coefficients from the current config too.
+        # PPO.load() restores them from the checkpoint (the PREVIOUS run's values),
+        # so a tuned lambda would otherwise silently not take effect on resume -
+        # the same staleness the ent_coef re-bind above guards against.
+        if policy_type == "evidential":
+            ev_model = cast(EvidentialPPO, model)
+            evidential_config = config.get("evidential", {})
+            ev_model.lambda_reg = evidential_config.get(
+                "lambda_reg", ev_model.lambda_reg
+            )
+            ev_model.lambda_reg_warmup_steps = evidential_config.get(
+                "lambda_reg_warmup_steps", ev_model.lambda_reg_warmup_steps
+            )
+            ev_model.lambda_evidence = evidential_config.get(
+                "lambda_evidence", ev_model.lambda_evidence
+            )
+            ev_model.lambda_evidence_warmup_steps = evidential_config.get(
+                "lambda_evidence_warmup_steps", ev_model.lambda_evidence_warmup_steps
+            )
+            ev_model.lambda_nu_anchor = evidential_config.get(
+                "lambda_nu_anchor", ev_model.lambda_nu_anchor
+            )
     else:
         # Create fresh agent
         if policy_type == "evidential":
@@ -795,6 +818,7 @@ def train(
             lambda_evidence_warmup_steps = evidential_config.get(
                 "lambda_evidence_warmup_steps", 50000
             )
+            lambda_nu_anchor = evidential_config.get("lambda_nu_anchor", 0.0)
             aleatoric_floor = evidential_config.get("aleatoric_floor", 1e-6)
             use_uncertainty_conditioning = evidential_config.get(
                 "use_uncertainty_conditioning", False
@@ -826,6 +850,7 @@ def train(
                 lambda_reg_warmup_steps=lambda_reg_warmup_steps,
                 lambda_evidence=lambda_evidence,
                 lambda_evidence_warmup_steps=lambda_evidence_warmup_steps,
+                lambda_nu_anchor=lambda_nu_anchor,
                 aleatoric_floor=aleatoric_floor,
                 **ppo_kwargs,
             )
