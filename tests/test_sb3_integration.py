@@ -1172,3 +1172,59 @@ class TestUncertaintyConditionedActorWiring:
         # Gradients must reach the dual-encoder action_net parameters
         for param in policy.action_net.parameters():
             assert param.grad is not None, "No gradient in dual-encoder action_net"
+
+
+class TestNuAnchorLoss:
+    """
+    @class TestNuAnchorLoss
+    @brief Verify the log-space nu anchor is a restoring force toward the sub-1
+           prior: zero at the prior, and a gradient that lowers nu when it is above
+           the prior and raises it when below. This is what stops the one-directional
+           evidence term from driving nu past 1 everywhere (the nu-collapse).
+    """
+
+    # softplus(-1.0) + 1e-6, the EvidentialLayer nu bias prior; mirrors the value
+    # in EvidentialPPO.train() (_log_nu_prior). Kept in step with that constant.
+    _NU_PRIOR = 0.313
+
+    def _anchor_loss(self, nu: "torch.Tensor") -> "torch.Tensor":
+        log_nu_prior = float(np.log(self._NU_PRIOR))
+        return (torch.log(nu) - log_nu_prior).pow(2).mean()
+
+    def test_zero_at_prior(self) -> None:
+        """@brief The anchor loss is ~0 when nu sits exactly at the prior."""
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), self._NU_PRIOR)
+        assert self._anchor_loss(nu).item() == pytest.approx(0.0, abs=1e-10)
+
+    def test_gradient_lowers_nu_when_above_prior(self) -> None:
+        """
+        @brief When nu is above the prior (the collapse regime, nu >> 1), a
+               gradient-descent step on the anchor decreases nu.
+        """
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), 13.0, requires_grad=True)
+        self._anchor_loss(nu).backward()
+        # Descent moves nu by -grad; grad must be positive so the step lowers nu.
+        assert torch.all(nu.grad > 0.0)
+
+    def test_gradient_raises_nu_when_below_prior(self) -> None:
+        """
+        @brief When nu is below the prior, the anchor pulls it back up (so the
+               anchor cannot itself pin nu arbitrarily low).
+        """
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), 0.05, requires_grad=True)
+        self._anchor_loss(nu).backward()
+        assert torch.all(nu.grad < 0.0)
+
+    def test_disabled_by_default(self) -> None:
+        """
+        @brief lambda_nu_anchor defaults to 0.0 so the anchor is off unless opted
+               in (preserving the previous unanchored behaviour and CI baseline).
+        """
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=gym.make("Pendulum-v1"),
+            lambda_reg=0.01,
+            n_steps=64,
+            batch_size=32,
+        )
+        assert model.lambda_nu_anchor == 0.0
