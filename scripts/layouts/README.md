@@ -191,5 +191,6 @@ After any change to a floor plan module, re-run `make generate-layouts LAYOUT=<n
 
 - [BUILDER.md](BUILDER.md) - full `LotBuilder`, `BayGroup`, `PedestrianZone`, `PatrolPath` method reference
 - [scripts/inspect/README.md](../inspect/README.md) - CARLA geometry verification
+- [scripts/evaluation/README.md](../evaluation/README.md) - eval analysis tooling (covariance / gate / uncertainty claims)
 - [configs/layouts/README.md](../../configs/layouts/README.md) - pre-computed YAML schema reference
 - [uncertainty_rl/envs/README.md](../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that consumes the YAML files

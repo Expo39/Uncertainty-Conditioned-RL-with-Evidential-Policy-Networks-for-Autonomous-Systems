@@ -18,6 +18,10 @@ Offline tooling for layout generation, CARLA inspection, live visualisation, and
 | Checkpoint demo + 2D viewer | `make eval-visualise-2d` |
 | Checkpoint demo + 3D CARLA view | `make docker-eval-visualise-3d` |
 | Diagnose GNSS tier Markov chain | `make analyse-markov` |
+| Cross-arm covariance contrast + degradation slope | `make analyse-ablation` |
+| EKF covariance calibration (std vs error) | `make analyse-calibration` |
+| Safety-gate ROC (EKF-std vs epistemic) | `make analyse-gate` |
+| Causal covariance-input probe | `make docker-covariance-probe BASELINE=full_method CHECKPOINT=<leaf>` |
 
 ## Directory map
 
@@ -31,7 +35,8 @@ flowchart TB
         TRN["training/\ntrain.sh"]
         MLT["multi_workers/\nWorker stack scripts"]
         CLN["cleanup/\nstack_clean.sh"]
-        MSC["miscellaneous/\nmarkov_analyser.py"]
+        MSC["miscellaneous/\nmarkov_analyser.py\ntb_read.py"]
+        EVL["evaluation/\nablation_analyser.py\ncalibration.py\ngate_roc.py\ncovariance_probe.py"]
     end
 
     subgraph make["make targets"]
@@ -41,10 +46,13 @@ flowchart TB
         DT["docker-train\ndocker-train-short"]
     end
 
+    AN["analyse-ablation\nanalyse-calibration\nanalyse-gate\ndocker-covariance-probe"]
+
     LAY --> GL
     INS --> DI
     VIS --> EV
     TRN --> DT
+    EVL --> AN
 ```
 
 ## Subdirectories
@@ -126,9 +134,25 @@ make analyse-markov                              # Defaults from gnss_noise_prof
 make analyse-markov N_EPISODES=10000 N_STEPS=1750
 ```
 
+### `evaluation/`
+
+Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the dissertation's input-covariance and uncertainty claims. Run only after an eval has written results under `outputs/evaluation_results/<baseline>/<leaf>/`.
+
+```bash
+make analyse-ablation                                                  # Cross-arm covariance contrast + degradation slope
+make analyse-calibration ARM=full_method                              # Is the EKF covariance an honest signal?
+make analyse-gate                                                      # EKF-std vs evidential-epistemic safety-gate ROC
+make docker-covariance-probe BASELINE=full_method CHECKPOINT=<leaf>   # Causal "does the policy use covariance?" probe
+make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper  # Epistemic-vs-aleatoric separation
+make handover-timing ARM=full_method                                  # Handover timing vs degradation onset
+```
+
+Host-side scripts are read-only - they consume the eval CSVs and write report files/figures only. See [evaluation/README.md](evaluation/README.md) for the per-script reference and CSV schema.
+
 ## See also
 
 - [scripts/layouts/README.md](layouts/README.md) - layout module reference and regeneration
+- [scripts/evaluation/README.md](evaluation/README.md) - eval analysis tooling and CSV schema
 - [scripts/inspect/README.md](inspect/README.md) - inspector argument reference
 - [scripts/visualise/README.md](visualise/README.md) - visualiser protocol and JSONL schema
 - `scripts/colours/__init__.py` - palette constants
