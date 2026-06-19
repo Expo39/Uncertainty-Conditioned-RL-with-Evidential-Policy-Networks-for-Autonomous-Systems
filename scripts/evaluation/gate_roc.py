@@ -24,15 +24,22 @@ Run via `make analyse-gate` (never python directly).
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-import matplotlib
+# Make the repo root importable so the shared discovery helper resolves when this
+# file is run directly (python scripts/evaluation/gate_roc.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
+
+from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
 
 # Outcomes the gate SHOULD pre-empt (a handoff before these is the desired
 # behaviour). success is the only non-failure; "handoff" episodes already
@@ -49,16 +56,14 @@ _SIGNALS: Dict[str, Optional[List[str]]] = {
 
 def _discover_arm_csvs(results_root: Path) -> Dict[str, Path]:
     """
-    @brief Find each arm's episode_records.csv (most recent leaf per arm).
+    @brief Find each arm's episode_records.csv (without_wrapper preferred).
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @return Mapping arm name -> episode_records.csv path.
+
+    Handles both the two-level (legacy) and three-level (wrapper-variant)
+    layouts; per arm the without_wrapper variant wins, then the newest leaf.
     """
-    found: Dict[str, Path] = {}
-    for csv_path in sorted(results_root.glob("*/*/episode_records.csv")):
-        arm = csv_path.parent.parent.name
-        if arm not in found or csv_path.stat().st_mtime > found[arm].stat().st_mtime:
-            found[arm] = csv_path
-    return found
+    return discover_arm_csvs(results_root, "episode_records.csv")
 
 
 def _load(arm_csvs: Dict[str, Path]) -> pd.DataFrame:

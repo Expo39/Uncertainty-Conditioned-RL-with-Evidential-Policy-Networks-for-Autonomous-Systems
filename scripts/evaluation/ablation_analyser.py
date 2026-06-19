@@ -20,16 +20,23 @@ the contrasts the dissertation actually claims:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import matplotlib
+# Make the repo root importable so the shared discovery helper resolves when this
+# file is run directly (python scripts/evaluation/ablation_analyser.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
+
+from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
 
 # The four ablation arms in plot order: covariance-off then covariance-on,
 # standard heads then evidential heads. The contrast pairs are adjacent.
@@ -62,20 +69,18 @@ def _discover_arm_csvs(results_root: Path) -> Dict[str, Path]:
     """
     @brief Find each ablation arm's episode_records.csv under the nested tree.
     @param results_root: outputs/evaluation_results (the <baseline>/<leaf> root).
-    @return Mapping arm name -> path to its episode_records.csv. If an arm has
-            several leaves (re-runs), the most recently modified one is used.
+    @return Mapping arm name -> path to its episode_records.csv. Per arm the
+            without_wrapper variant is preferred, then the most recent leaf.
 
     The arm name is the first path component under the root (the baseline
-    directory). Only the four known ablation arms are kept.
+    directory); discover_arm_csvs handles both the two-level (legacy) and
+    three-level (wrapper-variant) layouts. Only the known ablation arms are kept.
     """
-    found: Dict[str, Path] = {}
-    for csv_path in sorted(results_root.glob("*/*/episode_records.csv")):
-        arm = csv_path.parent.parent.name
-        if arm not in _ARM_ORDER:
-            continue
-        if arm not in found or csv_path.stat().st_mtime > found[arm].stat().st_mtime:
-            found[arm] = csv_path
-    return found
+    return {
+        arm: path
+        for arm, path in discover_arm_csvs(results_root, "episode_records.csv").items()
+        if arm in _ARM_ORDER
+    }
 
 
 def _load_records(arm_csvs: Dict[str, Path]) -> pd.DataFrame:
