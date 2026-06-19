@@ -37,8 +37,8 @@ actuator_model:
 # caution_gain sets how hard throttle is cut. Calibrate thresholds to clean-condition
 # total: slow ~ p50, handoff ~ p99 (set after eval).
 safety_caution_gain: 2.0
-safety_slow_threshold: 0.0
-safety_handoff_threshold: 0.02
+safety_slow_threshold: 0.084  # Clean-condition total p50; caution from the median clean step up.
+safety_handoff_threshold: 0.699  # Clean-condition total p99; OOD p90 (1.33) sits well above it.
 
 # ---------------------------------------------------------------------------
 # Deployed baseline (real vehicle)

@@ -35,7 +35,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import discover_records  # noqa: E402
+from scripts.evaluation._discovery import (  # noqa: E402
+    arm_leaf_subpath,
+    discover_records,
+)
 
 # Std/error axis pairs to analyse: the predicted-std column against its matched
 # actual-error column. Position uses the combined magnitudes.
@@ -47,12 +50,33 @@ _AXES: List[Tuple[str, str, str]] = [
 # Number of quantile bins for the error-vs-std monotonicity table.
 _N_BINS = 5
 
+# Conditions where the GNSS tier MOVES within the episode (Markov drift or the
+# one-way good->bad drift), so the predicted std takes a real range. These are
+# the genuine calibration test: only a varying std can be correlated against
+# error. The held endpoints pin one tier all episode, so their std barely moves
+# and a within-condition correlation there is statistically empty (the sign is
+# dominated by noise) - they are reported but EXCLUDED from the verdict.
+# Names match configs/eval_config.yaml; unlisted conditions are treated as held.
+_VARYING_CONDITIONS = {
+    "anchor_deployment",
+    "anchor_empty",
+    "gnss_degrade_one_way",
+}
 
-def _find_calibration_csv(results_root: Path, arm: Optional[str]) -> Path:
+# Minimum std spread (p90 - p10, metres) for a condition's correlation to count
+# as a real test. Below this the std is effectively constant (a held tier), so
+# the correlation is flagged weak and kept out of the headline verdict.
+_MIN_STD_SPREAD_M = 0.01
+
+
+def _find_calibration_csv(
+    results_root: Path, arm: Optional[str], leaf: Optional[str]
+) -> Path:
     """
     @brief Locate a calibration_records.csv under the nested results tree.
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @param arm: Optional baseline name to restrict to; None = any arm.
+    @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
     @return Path to the most recently modified matching calibration_records.csv.
 
     evaluate.py writes <baseline>/<leaf>/<wrapper_variant>/calibration_records.csv
@@ -60,9 +84,11 @@ def _find_calibration_csv(results_root: Path, arm: Optional[str]) -> Path:
     then prefer the without_wrapper variant - the wrapper caps throttle and so
     corrupts the very uncertainty/error signal this analysis reads.
     """
-    candidates = discover_records(results_root, "calibration_records.csv", arm)
+    candidates = discover_records(
+        results_root, "calibration_records.csv", arm, leaf=leaf
+    )
     if not candidates:
-        scope = f"{arm}/" if arm else ""
+        scope = "/".join(p for p in (arm, leaf) if p)
         raise FileNotFoundError(
             f"No calibration_records.csv under {results_root}/{scope}. "
             f"Re-run make docker-eval to generate it."
@@ -89,17 +115,25 @@ def _correlations(df: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Pearson and Spearman correlation of predicted std vs actual error.
     @param df: Calibration records with the combined columns added.
-    @return DataFrame: one row per (scope, axis) with pearson, spearman, n.
+    @return DataFrame: one row per (scope, axis) with pearson, spearman, n,
+            group (varying / held), and std_spread (p90 - p10 of the std).
 
-    Spearman (rank) is the headline - it captures monotone "more std => more
-    error" without assuming linearity. Computed overall ("all") and per condition
-    so degradation tiers can be inspected separately.
+    Spearman (rank) is the headline - monotone "more std => more error" without
+    assuming linearity. Computed per condition plus a pooled "varying" scope over
+    ONLY the conditions whose tier moves within the episode (_VARYING_CONDITIONS):
+    a within-condition correlation needs the std to actually vary, which a held
+    tier (pinned all episode) does not provide. The std_spread column exposes
+    that directly - a near-zero spread means the row is a held tier and its
+    correlation is not a real test.
     """
     rows = []
-    scopes = [("all", df)] + [
+    varying_df = df[df["condition"].isin(_VARYING_CONDITIONS)]
+    # Pooled scope is the VARYING conditions only - the genuine calibration test.
+    scopes = [("varying_pooled", varying_df)] + [
         (str(c), df[df["condition"] == c]) for c in sorted(df["condition"].unique())
     ]
     for scope, sub in scopes:
+        is_varying = scope == "varying_pooled" or scope in _VARYING_CONDITIONS
         for axis, std_col, err_col in _AXES:
             pair = sub[[std_col, err_col]].dropna()
             if len(pair) < 3 or pair[std_col].nunique() < 2:
@@ -111,12 +145,17 @@ def _correlations(df: pd.DataFrame) -> pd.DataFrame:
             spearman = float(
                 pair[std_col].rank().corr(pair[err_col].rank(), method="pearson")
             )
+            std_spread = float(
+                pair[std_col].quantile(0.9) - pair[std_col].quantile(0.1)
+            )
             rows.append(
                 {
                     "scope": scope,
                     "axis": axis,
+                    "group": "varying" if is_varying else "held",
                     "pearson": pearson,
                     "spearman": spearman,
+                    "std_spread": std_spread,
                     "n": int(len(pair)),
                 }
             )
@@ -192,15 +231,21 @@ def _plot(df: pd.DataFrame, binned: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
-def analyse(results_root: Path, out_dir: Path, arm: Optional[str]) -> None:
+def analyse(
+    results_root: Path, out_dir: Path, arm: Optional[str], leaf: Optional[str]
+) -> None:
     """
     @brief Run the EKF calibration analysis and write the tables + figure.
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV tables and PNG figure.
     @param arm: Optional baseline name to restrict the source CSV to.
+    @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
     """
+    csv_path = _find_calibration_csv(results_root, arm, leaf)
+    # Nest the output under <baseline>/<leaf> (mirroring the eval) so a different
+    # arm or checkpoint never overwrites a previous calibration result.
+    out_dir = out_dir / arm_leaf_subpath(csv_path, results_root)
     out_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = _find_calibration_csv(results_root, arm)
     print(f"Calibration source: {csv_path}")
     df = _add_combined_columns(pd.read_csv(csv_path))
 
@@ -214,17 +259,46 @@ def analyse(results_root: Path, out_dir: Path, arm: Optional[str]) -> None:
     if corr.empty:
         print("  (insufficient variation to correlate)")
     else:
-        for _, r in corr.iterrows():
+
+        def _print_row(r: "pd.Series") -> None:
+            flag = (
+                "" if r["std_spread"] >= _MIN_STD_SPREAD_M else "  (std pinned - weak)"
+            )
             print(
                 f"  {str(r['scope']):20s} {str(r['axis']):9s} "
                 f"spearman {r['spearman']:+.3f}  pearson {r['pearson']:+.3f}  "
-                f"(n={int(r['n'])})"
+                f"spread {r['std_spread']:.3f}  (n={int(r['n'])}){flag}"
             )
+
+        print("\n  -- VARYING conditions (std moves within episode - the real test) --")
+        for _, r in corr[corr["group"] == "varying"].iterrows():
+            _print_row(r)
         print(
-            "  Positive, growing-with-degradation correlation = the covariance "
-            "is honest\n  (high std really does mean high error) - so conditioning "
-            "on it is justified."
+            "\n  -- HELD conditions (std pinned all episode - weak, not in verdict) --"
         )
+        for _, r in corr[corr["group"] == "held"].iterrows():
+            _print_row(r)
+
+        # Verdict from the pooled VARYING position correlation only - the held
+        # tiers cannot test calibration (no std spread to correlate against).
+        verdict = corr[
+            (corr["scope"] == "varying_pooled") & (corr["axis"] == "position")
+        ]
+        print("\n  -- Verdict (VARYING position only) --")
+        if verdict.empty or verdict.iloc[0]["std_spread"] < _MIN_STD_SPREAD_M:
+            print(
+                "  No varying-condition position signal with real std spread - "
+                "re-run\n  the FULL eval (anchors + one_way), not just the held "
+                "endpoints."
+            )
+        else:
+            s = float(verdict.iloc[0]["spearman"])
+            tag = (
+                "HONEST (conditioning justified)"
+                if s >= 0.2
+                else "WEAK/ABSENT - investigate before claiming"
+            )
+            print(f"  pooled VARYING position spearman = {s:+.3f} -> {tag}")
 
     print("\n=== Mean actual error per predicted-std bin (monotone = calibrated) ===")
     if binned.empty:
@@ -265,8 +339,15 @@ def main() -> None:
         default=None,
         help="Restrict to one baseline's CSV (default: any, most recent).",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Pin to one checkpoint leaf, e.g. 1_42_19062026-0120 "
+        "(default: newest run for the arm).",
+    )
     args = parser.parse_args()
-    analyse(Path(args.results_root), Path(args.output_dir), args.arm)
+    analyse(Path(args.results_root), Path(args.output_dir), args.arm, args.checkpoint)
 
 
 if __name__ == "__main__":

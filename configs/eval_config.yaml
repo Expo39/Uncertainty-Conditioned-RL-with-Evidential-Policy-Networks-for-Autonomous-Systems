@@ -60,7 +60,9 @@ eval_conditions:
   - name: "gnss_fixed"
     description: "RTK fixed (~2 cm) held - clean baseline (slope start)"
     held_gnss_tier: rtk_fixed
-    bay_occupancy_rate: 0
+    # Occupancy matched to gnss_degraded (0.5) so the GNSS tier is the ONLY
+    # variable across the slope; neighbour cars are the LiDAR landmark mechanism.
+    bay_occupancy_rate: 0.5
 
   - name: "gnss_degraded"
     description: "Degraded GNSS (~5 m, worst tier) held - slope end"
