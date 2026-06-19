@@ -51,12 +51,18 @@ from uncertainty_rl.evaluation.metrics import (  # noqa: F401
 )
 from uncertainty_rl.evaluation.plots import plot_evaluation_results  # noqa: F401
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
+from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
 
 # Run-identifier timestamps use local wall-clock time (the container runs UTC);
 # Europe/Malta is DST-aware (UTC+2 summer, UTC+1 winter).
 _LOCAL_TZ = ZoneInfo("Europe/Malta")
+
+# GNSS fix-state tier whose onset marks "degraded" for handover-latency timing.
+# Matches the worst tier in configs/deployment/sim/gnss_noise_profiles.yaml; the
+# step info reports the live tier name (env step() "gnss_tier").
+DEGRADED_TIER_NAME = "degraded"
 
 
 def evaluate_agent(
@@ -206,6 +212,24 @@ def evaluate_agent(
         # runs; include_covariance only controls whether the policy SEES them.
         ep_std_pos: List[float] = []
         ep_std_yaw: List[float] = []
+        # Handover-timing trace. handoff_step = first decision the SafetyWrapper
+        # triggered a full-stop handoff; degraded_onset_step = first decision the
+        # GNSS tier reached the degraded multiplier (the drift crossing, per
+        # episode). Both are step indices, NaN if the event never occurred; the
+        # latency and its onset regime (spawn vs mid-episode switch) are derived
+        # downstream from the condition, which this loop does not know.
+        handoff_step: float = float("nan")
+        degraded_onset_step: float = float("nan")
+        # Caution-behaviour trace: per-step speed (while MOVING, so the terminal
+        # park-stop does not drag the mean to zero), yaw-rate magnitude, brake
+        # command, and action jerk (||cmd_t - cmd_{t-1}||). Aggregated per episode
+        # and binned against EKF std downstream to test whether the policy drives
+        # more cautiously as localisation uncertainty rises.
+        ep_speed_moving: List[float] = []
+        ep_abs_vyaw: List[float] = []
+        ep_brake: List[float] = []
+        ep_action_jerk: List[float] = []
+        prev_cmd: Optional[np.ndarray] = None
 
         while not done[0]:
             if _obs_cap and len(captured_obs) < _obs_cap:
@@ -250,6 +274,39 @@ def evaluate_agent(
                 ep_std_pos.append((_std_x + _std_y) / 2.0)
             if np.isfinite(_std_yaw):
                 ep_std_yaw.append(_std_yaw)
+            # Handover-timing capture: first handoff step and first step the GNSS
+            # tier reaches DEGRADED_TIER_NAME. Recorded as step indices so the
+            # analysis can compute latency against the right onset reference.
+            if np.isnan(handoff_step) and bool(_info0.get("safety_handoff", False)):
+                handoff_step = float(steps)
+            if (
+                np.isnan(degraded_onset_step)
+                and str(_info0.get("gnss_tier", "")) == DEGRADED_TIER_NAME
+            ):
+                degraded_onset_step = float(steps)
+            # Caution-behaviour per step. Speed is kept only while moving (above
+            # the success velocity floor) so the terminal park-stop does not bias
+            # the mean toward zero. Jerk is the change in the post-clamp command
+            # actually delivered to CARLA (steer/throttle/brake).
+            _speed = float(_info0.get("speed", float("nan")))
+            if np.isfinite(_speed) and _speed >= SUCCESS_THRESHOLD_VELOCITY:
+                ep_speed_moving.append(_speed)
+            _vyaw = float(_info0.get("ekf_vyaw", float("nan")))
+            if np.isfinite(_vyaw):
+                ep_abs_vyaw.append(abs(_vyaw))
+            _cmd = np.array(
+                [
+                    float(_info0.get("steer_cmd", float("nan"))),
+                    float(_info0.get("throttle_cmd", float("nan"))),
+                    float(_info0.get("brake_cmd", float("nan"))),
+                ],
+                dtype=np.float32,
+            )
+            if np.all(np.isfinite(_cmd)):
+                ep_brake.append(float(_cmd[2]))
+                if prev_cmd is not None:
+                    ep_action_jerk.append(float(np.linalg.norm(_cmd - prev_cmd)))
+                prev_cmd = _cmd
             # Per-step uncertainty trace (evidential heads only). step_fn has just
             # appended this decision's epistemic/aleatoric to the episode lists, so
             # read them off the tail. Keep only the leading steps per episode so a
@@ -334,6 +391,18 @@ def evaluate_agent(
                         "ekf_std_pos_mean_m": std_pos_mean,
                         "ekf_std_pos_max_m": std_pos_max,
                         "ekf_std_yaw_mean_rad": std_yaw_mean,
+                        # Handover timing (step indices, NaN if never). The onset
+                        # regime and latency are derived per condition downstream.
+                        "handoff_step": handoff_step,
+                        "degraded_onset_step": degraded_onset_step,
+                        # Caution behaviour (per-episode means). Binned against
+                        # EKF std downstream to test drive-carefully-when-unsure:
+                        # speed/jerk/vyaw should FALL and brake RISE as std grows.
+                        "mean_speed_moving_ms": _mean_max(ep_speed_moving)[0],
+                        "mean_abs_vyaw_rads": _mean_max(ep_abs_vyaw)[0],
+                        "mean_brake_cmd": _mean_max(ep_brake)[0],
+                        "mean_action_jerk": _mean_max(ep_action_jerk)[0],
+                        "n_moving_steps": len(ep_speed_moving),
                     }
                 )
                 if render:

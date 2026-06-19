@@ -44,63 +44,117 @@ def _arm_of(csv_path: Path, results_root: Path) -> Optional[str]:
     return rel.parts[0] if rel.parts else None
 
 
-def _variant_rank(csv_path: Path) -> int:
+def arm_leaf_subpath(csv_path: Path, results_root: Path) -> Path:
     """
-    @brief Sort key putting without_wrapper ahead of with_wrapper, others last.
+    @brief The <baseline>/<leaf> sub-path of a discovered per-run CSV.
     @param csv_path: Path to a matched per-run CSV.
-    @return Index into the variant preference list; len() for anything else.
+    @param results_root: The evaluation_results root the glob ran from.
+    @return Path("<baseline>/<leaf>") so a per-arm analysis can mirror the eval's
+            nesting in its own output dir. Falls back to Path() if the CSV does
+            not sit under results_root.
+
+    Per-arm analyses (calibration, handover timing) write under
+    <output_dir>/<baseline>/<leaf>/ so re-running on a different arm or checkpoint
+    never overwrites a previous result - mirroring how the evals themselves nest.
+    The leaf is the SECOND component (the wrapper variant, if present, is dropped
+    so without_/with_wrapper analyses of the same run share a leaf dir).
+    """
+    try:
+        rel = csv_path.relative_to(results_root)
+    except ValueError:
+        return Path()
+    parts = rel.parts
+    if len(parts) >= 2:
+        return Path(parts[0]) / parts[1]
+    return Path(parts[0]) if parts else Path()
+
+
+def _variant_rank(csv_path: Path, preferred: Optional[str] = None) -> int:
+    """
+    @brief Sort key ranking the preferred wrapper variant first, others last.
+    @param csv_path: Path to a matched per-run CSV.
+    @param preferred: Variant to rank first ("without_wrapper" by default, or
+           "with_wrapper" for analyses like handover timing that need the wrapper
+           to have fired). None uses the module default order.
+    @return Index into the (reordered) variant preference list; len() otherwise.
 
     The variant is the CSV's parent directory name when the three-level layout
     is in use; for the legacy two-level layout it is the leaf (never a known
     variant), so it ranks last - which is correct, there is nothing to prefer.
     """
+    order = _VARIANT_PREFERENCE
+    if preferred in _VARIANT_PREFERENCE:
+        order = [preferred] + [v for v in _VARIANT_PREFERENCE if v != preferred]
     parent = csv_path.parent.name
     return (
-        _VARIANT_PREFERENCE.index(parent)
+        order.index(parent)
         if parent in _VARIANT_PREFERENCE
         else len(_VARIANT_PREFERENCE)
     )
 
 
 def discover_records(
-    results_root: Path, name: str, arm: Optional[str] = None
+    results_root: Path,
+    name: str,
+    arm: Optional[str] = None,
+    prefer_variant: Optional[str] = None,
+    leaf: Optional[str] = None,
 ) -> List[Path]:
     """
-    @brief Find per-run CSVs of a given name, newest and without_wrapper first.
+    @brief Find per-run CSVs of a given name, preferred variant then newest first.
     @param results_root: outputs/evaluation_results.
     @param name: CSV file name to match (e.g. "calibration_records.csv").
     @param arm: Optional baseline name to restrict to; None = any arm.
+    @param prefer_variant: Wrapper variant to return first. Default
+           "without_wrapper" (free-running policy - uncertainty/behaviour reads);
+           pass "with_wrapper" for handover-timing, which needs the wrapper fired.
+    @param leaf: Optional checkpoint leaf (run dir) to PIN to, e.g.
+           "1_42_19062026-0120". When given, only that run's CSVs match - so
+           analysis never silently reads a different checkpoint when several
+           exist. When None, every leaf matches and the newest mtime wins.
     @return Matching paths sorted by (variant preference, mtime descending).
             Empty if none match.
 
     Globs the two-level and three-level layouts and concatenates them. The
-    variant preference dominates the sort so a without_wrapper CSV is returned
-    ahead of a with_wrapper one even if the latter is marginally newer.
+    variant preference dominates the sort so the preferred variant is returned
+    ahead of the other even if the other is marginally newer.
     """
     base = arm if arm else "*"
-    patterns = [f"{base}/*/{name}", f"{base}/*/*/{name}"]
+    run = leaf if leaf else "*"
+    patterns = [f"{base}/{run}/{name}", f"{base}/{run}/*/{name}"]
     seen: Dict[Path, None] = {}
     for pattern in patterns:
         for path in results_root.glob(pattern):
             seen[path] = None
     return sorted(
-        seen, key=lambda p: (_variant_rank(p), -p.stat().st_mtime)
+        seen, key=lambda p: (_variant_rank(p, prefer_variant), -p.stat().st_mtime)
     )
 
 
-def discover_arm_csvs(results_root: Path, name: str) -> Dict[str, Path]:
+def discover_arm_csvs(
+    results_root: Path,
+    name: str,
+    prefer_variant: Optional[str] = None,
+    leaf: Optional[str] = None,
+) -> Dict[str, Path]:
     """
     @brief Map each arm to its best per-run CSV of the given name.
     @param results_root: outputs/evaluation_results.
     @param name: CSV file name to match (e.g. "episode_records.csv").
-    @return Mapping arm name -> chosen CSV path (without_wrapper preferred, then
-            most recent). One entry per arm.
+    @param prefer_variant: Wrapper variant to prefer per arm (see discover_records).
+    @param leaf: Optional checkpoint leaf to pin to. Cross-arm callers (ablation)
+           usually leave this None, since each arm has its own leaf; pin only when
+           analysing a single arm's specific run.
+    @return Mapping arm name -> chosen CSV path (preferred variant, then most
+            recent). One entry per arm.
 
-    For each arm the first hit in discover_records order wins, so the
-    without_wrapper variant is chosen when present.
+    For each arm the first hit in discover_records order wins, so the preferred
+    variant is chosen when present.
     """
     chosen: Dict[str, Path] = {}
-    for path in discover_records(results_root, name):
+    for path in discover_records(
+        results_root, name, prefer_variant=prefer_variant, leaf=leaf
+    ):
         arm = _arm_of(path, results_root)
         if arm is None or arm in chosen:
             continue
