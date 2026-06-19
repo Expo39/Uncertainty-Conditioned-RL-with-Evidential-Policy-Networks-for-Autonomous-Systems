@@ -126,7 +126,7 @@ The `SCENARIO` value is any condition `name` in `configs/eval_config.yaml`; omit
 | `--episodes` | int | unlimited | Max episodes (dryrun / eval_dryrun) |
 | `--duration` | int (seconds) | `86400` | Max run time (24 h) |
 | `--manual` | flag | off | Keyboard control (dryrun / eval_dryrun) |
-| `--stage` | int | `1` | Curriculum stage (dryrun only) |
+| `--stage` | int | `None` -> `DEFAULT_STAGE` (1) | Curriculum stage (dryrun only); omit to default to stage 1 |
 | `--baseline` | path | full method | Baseline obs flags / policy_type (dryrun / eval_dryrun) |
 | `--scenario` | string | first condition | `eval_config.yaml` condition name (eval_dryrun only) |
 | `--eval-config` | path | `configs/eval_config.yaml` | Condition sweep file (eval_dryrun only) |

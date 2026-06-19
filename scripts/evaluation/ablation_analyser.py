@@ -481,6 +481,38 @@ def _caution_slopes(records: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def _caution_levels(records: pd.DataFrame) -> pd.DataFrame:
+    """
+    @brief Per-arm ABSOLUTE caution level and the precision/success payoff.
+    @param records: Tidy per-episode frame from _load_records.
+    @return DataFrame: one row per arm with mean approach speed, mean brake,
+            success rate, median final pos error, and collision rate. Empty if
+            the caution columns are absent.
+
+    The slope (_caution_slopes) measures how behaviour CHANGES with std; this
+    measures the baseline LEVEL. A covariance arm that drives slower overall is
+    only "cautious" rather than "undertrained" if the slowness buys accuracy -
+    higher success and lower final pos error - so those are reported alongside.
+    """
+    if "mean_speed_moving_ms" not in records.columns:
+        return pd.DataFrame()
+    rows: List[Dict[str, object]] = []
+    for arm in [a for a in _ARM_ORDER if a in set(records["arm"])]:
+        sub = records[records["arm"] == arm]
+        rows.append(
+            {
+                "arm": arm,
+                "mean_speed_moving_ms": float(sub["mean_speed_moving_ms"].mean()),
+                "mean_brake_cmd": float(sub.get("mean_brake_cmd", pd.Series()).mean()),
+                "success_rate": float(100.0 * sub["success"].mean()),
+                "median_pos_error_m": float(sub["final_pos_error_m"].median()),
+                "collision_rate": float(100.0 * (sub["outcome"] == "collision").mean()),
+                "n": int(len(sub)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
 def _caution_contrast(slopes: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Cross-arm caution-slope difference for each covariance contrast pair.
@@ -567,6 +599,7 @@ def analyse(
     behaviour = _behaviour_by_std(records)
     caution_slopes = _caution_slopes(records)
     caution_contrast = _caution_contrast(caution_slopes)
+    caution_levels = _caution_levels(records)
 
     summary.to_csv(out_dir / "condition_summary.csv", index=False)
     contrasts.to_csv(out_dir / "covariance_contrasts.csv", index=False)
@@ -577,6 +610,8 @@ def analyse(
         caution_slopes.to_csv(out_dir / "caution_slopes.csv", index=False)
     if not caution_contrast.empty:
         caution_contrast.to_csv(out_dir / "caution_contrast.csv", index=False)
+    if not caution_levels.empty:
+        caution_levels.to_csv(out_dir / "caution_levels.csv", index=False)
 
     _plot_condition_bars(summary, out_dir)
     _plot_degradation_slope(slope, out_dir)
@@ -584,6 +619,7 @@ def analyse(
 
     _print_headline(contrasts, slope, slope_clean, slope_degraded)
     _print_caution(caution_slopes, caution_contrast)
+    _print_caution_levels(caution_levels)
     print(f"\nTables and figures written to {out_dir}")
 
 
@@ -673,6 +709,36 @@ def _print_caution(slopes: pd.DataFrame, contrast: pd.DataFrame) -> None:
                     f"      {r['metric']:22s} treat {r['treat_slope']:+.3f} "
                     f"vs control {r['control_slope']:+.3f}  diff {r['caution_diff']:+.3f} {mark}"
                 )
+
+
+def _print_caution_levels(levels: pd.DataFrame) -> None:
+    """
+    @brief Console summary of absolute caution LEVEL and its accuracy payoff.
+    @param levels: Per-arm level table from _caution_levels.
+
+    Speed-vs-std SLOPE can be flat even when an arm drives cautiously at a low
+    baseline; this shows the absolute speed/brake level alongside success and
+    pos-error so a slower arm can be read as cautious (slower AND more accurate)
+    rather than merely undertrained (slower AND worse).
+    """
+    print("\n=== Caution LEVEL (absolute) + accuracy payoff ===")
+    if levels.empty:
+        print("  (no caution columns - re-run eval with the updated evaluate.py)")
+        return
+    print(
+        f"  {'arm':20s} {'speed':>6} {'brake':>6} {'succ%':>6} "
+        f"{'pos_err':>8} {'collide%':>9}"
+    )
+    for _, r in levels.iterrows():
+        print(
+            f"  {str(r['arm']):20s} {r['mean_speed_moving_ms']:6.2f} "
+            f"{r['mean_brake_cmd']:6.3f} {r['success_rate']:6.1f} "
+            f"{r['median_pos_error_m']:8.2f} {r['collision_rate']:9.1f}"
+        )
+    print(
+        "  A covariance arm that is SLOWER and MORE accurate (higher succ%, lower\n"
+        "  pos_err) is cautious, not undertrained - the slowness buys precision."
+    )
 
 
 def main() -> None:

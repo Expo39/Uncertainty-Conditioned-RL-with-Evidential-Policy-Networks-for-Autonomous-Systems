@@ -455,7 +455,7 @@ def main() -> None:
         eval_env_config["no_rendering_mode"] = False
         eval_env_config["action_repeat"] = 1
 
-        env_factory, _aleatoric, _slow, _handoff = build_eval_env_factory(
+        env_factory, *_wrapper_params = build_eval_env_factory(
             condition,
             eval_config,
             base_sensors,

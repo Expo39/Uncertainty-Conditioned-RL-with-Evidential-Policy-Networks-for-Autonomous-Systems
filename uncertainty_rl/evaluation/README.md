@@ -4,7 +4,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 ## At a glance
 
-- 6 de-confounded conditions: every condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors)
+- 7 conditions: 6 de-confounded single-factor conditions plus one mid-episode degradation condition. Each de-confounded condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors)
 - Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()` (LiDAR noise always enabled at eval, matching the training realism floor)
 - Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `STRICT_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `SUCCESS_DWELL_STEPS`
 - `n_episodes = 10` per condition by default (use 200+ for headline runs), deterministic (mean) actions
@@ -42,8 +42,8 @@ flowchart TB
         ENV["env_builder.make_eval_env()\nCARLAParkingEnv"]
     end
 
-    subgraph out["evaluation_results/baseline/leaf/"]
-        CSV["evaluation_results.csv\nepisode_records.csv"]
+    subgraph out["evaluation_results/baseline/leaf/{with,without}_wrapper/"]
+        CSV["evaluation_results.csv\nepisode_records.csv\ncalibration_records.csv"]
         PNG["evaluation_plots.png\nfailure_modes.png"]
     end
 
@@ -121,6 +121,18 @@ OOD factor is the layout - isolating generalisation from localisation degradatio
 |-----------|-----------|-----------|
 | `ood_irregular_rtk_fixed` | `irregular_a` | `rtk_fixed` |
 
+### Mid-episode degradation (occupancy 0.5, rectangle)
+
+Unlike the held-tier conditions, this one starts clean and drifts one-way into the
+degraded tier mid-episode (`degrade_one_way`, never recovering). It is the causal
+test for handover TIMING: does the controller hand over soon AFTER the localisation
+crosses into the degraded regime, rather than from the spawn? See
+`scripts/evaluation/handover_timing.py` (switch regime).
+
+| Condition | GNSS | Bay occ. | Notes |
+|-----------|------|----------|-------|
+| `gnss_degrade_one_way` | RTK fixed -> degraded, one-way | 0.5 | Onset mid-episode; handover-timing money shot |
+
 ## Metrics collected
 
 | Metric | Source |
@@ -153,14 +165,16 @@ df, run_output_dir = evaluate_across_conditions(
     env_config_path="configs/deployment/sim/env_config.yaml",
     train_config_path="configs/train_config.yaml",
 )
-# df: one row per condition; run_output_dir: evaluation_results/<baseline>/<leaf>
+# df: one row per condition; run_output_dir:
+# evaluation_results/<baseline>/<leaf>/<with|without>_wrapper
+# (the wrapper variant is set by EVAL_DISABLE_SAFETY_WRAPPER / NO_SAFETY=1)
 plot_evaluation_results(df, output_dir=run_output_dir)
 ```
 
 Run via Make:
 
 ```bash
-make docker-eval          # Full 13-condition sweep (100 episodes per condition)
+make docker-eval          # Full 7-condition sweep (n_episodes per condition; 200+ for headlines)
 make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 ```
 
