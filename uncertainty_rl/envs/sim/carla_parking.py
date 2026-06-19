@@ -2442,6 +2442,16 @@ class CARLAParkingEnv(gym.Env):
             "ekf_std_x": float(self._last_ekf_std[0]),
             "ekf_std_y": float(self._last_ekf_std[1]),
             "ekf_std_yaw": float(self._last_ekf_std[2]),
+            # Current GNSS fix-state tier (name + noise multiplier vs RTK-fixed).
+            # Lets timing analysis recover the step the Markov drift first reaches
+            # a degraded tier (the onset reference for handover-latency), which
+            # varies per episode under the degrade_one_way drift.
+            "gnss_tier": (
+                self._current_gnss_tier.get("name", "")
+                if self._current_gnss_tier is not None
+                else ""
+            ),
+            "gnss_multiplier": float(self._current_gnss_multiplier),
             # Target bay this episode (id, world pose, dimensions). Constant
             # within an episode; surfaced so trace tooling can record which bay
             # the run targeted without reaching into the env internals.

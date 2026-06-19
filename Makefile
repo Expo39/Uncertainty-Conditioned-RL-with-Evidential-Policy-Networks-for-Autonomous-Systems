@@ -392,13 +392,14 @@ trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (coll
 	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
 	$(PYTHON) scripts/miscellaneous/trace_tier_breakdown.py --trace-dir $(TRACE_DIR)
 
-analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
+analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/ablation_analyser.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis) \
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
-		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
+		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded) \
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
 
 analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis]
 	$(call ensure-venv)
@@ -406,12 +407,21 @@ analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs.
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis)
 
-analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method]
+analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/calibration.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/calibration_analysis) \
-		$(if $(ARM),--arm $(ARM),)
+		$(if $(ARM),--arm $(ARM),) \
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
+
+handover-timing: ## When does the wrapper hand over vs degradation onset? Usage: make handover-timing [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/handover_timing] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
+	$(call ensure-venv)
+	$(PYTHON) scripts/evaluation/handover_timing.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/handover_timing) \
+		$(if $(ARM),--arm $(ARM),) \
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)

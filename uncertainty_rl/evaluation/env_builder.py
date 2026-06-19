@@ -69,7 +69,7 @@ def build_eval_env_factory(
     env_config: Optional[Dict[str, Any]] = None,
     host_override: Optional[str] = None,
     port_override: Optional[int] = None,
-) -> Tuple[Callable[[], Any], float, float]:
+) -> Tuple[Callable[[], Any], float, float, float]:
     """
     @brief Build the raw (unwrapped) eval env factory for a physical condition.
     @param condition: Condition dict with noise multipliers and traffic counts.
