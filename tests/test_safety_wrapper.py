@@ -142,37 +142,39 @@ class TestSafetyWrapperApply:
         )
         assert modulated[0] == pytest.approx(0.9)
 
-    def test_total_above_threshold_triggers_handoff(self) -> None:
+    def test_total_above_threshold_flags_over_not_stop(self) -> None:
         """
-        @brief Total >= handoff_threshold must command a full stop (zero steering
-               and throttle, full brake) and return handoff=True.
+        @brief Total >= handoff_threshold raises the over_threshold flag but
+               returns a DRIVING (throttle-capped) action, not a full stop. The
+               full stop is the caller's job once the debounce confirms a handoff,
+               so a single over-threshold step cannot truncate the episode.
         """
         action = _make_action(steer=0.5, throttle=0.9)
-        modulated, handoff, _ = SafetyWrapper.apply(
+        modulated, over_threshold, _ = SafetyWrapper.apply(
             action,
             total_uncertainty=5.0,
             caution_gain=0.5,
             slow_threshold=0.0,
             handoff_threshold=5.0,
         )
-        assert handoff
-        np.testing.assert_array_equal(
-            modulated, np.array([0.0, 0.0, 1.0], dtype=action.dtype)
-        )
+        assert over_threshold
+        # Not a stop: steering preserved, throttle capped (not zeroed), brake untouched.
+        assert modulated[0] == pytest.approx(0.5)
+        assert 0.0 < modulated[1] <= 0.9
 
-    def test_total_below_threshold_no_handoff(self) -> None:
+    def test_total_below_threshold_no_crossing(self) -> None:
         """
-        @brief Total just below threshold must not trigger handoff.
+        @brief Total just below threshold must not raise the over_threshold flag.
         """
         action = _make_action(throttle=0.8)
-        modulated, handoff, _ = SafetyWrapper.apply(
+        modulated, over_threshold, _ = SafetyWrapper.apply(
             action,
             total_uncertainty=4.99,
             caution_gain=0.0,
             slow_threshold=0.0,
             handoff_threshold=5.0,
         )
-        assert not handoff
+        assert not over_threshold
         assert modulated[1] == pytest.approx(0.8)
 
     def test_original_action_not_mutated(self) -> None:
@@ -277,6 +279,42 @@ class TestSafetyWrapperStep:
         _, _, terminated, truncated, _ = wrapper.step(_make_action())
         assert not terminated
         assert not truncated
+
+    def test_debounce_single_crossing_does_not_handoff(self) -> None:
+        """
+        @brief With handoff_consecutive_steps > 1, a single over-threshold step
+               must NOT hand off - the debounce guards against a momentary spike.
+        """
+        env = _make_mock_env()
+        wrapper = SafetyWrapper(env, handoff_threshold=1.0, handoff_consecutive_steps=3)
+        wrapper.set_uncertainty(epistemic=2.0, aleatoric=0.0)  # over threshold
+        _, _, _, truncated, info = wrapper.step(_make_action())
+        assert info["safety_handoff"] is False
+        assert truncated is False
+
+    def test_debounce_handoff_after_n_consecutive(self) -> None:
+        """
+        @brief Handoff fires only once total has been over threshold for
+               handoff_consecutive_steps decisions in a row; a sub-threshold step
+               resets the counter.
+        """
+        env = _make_mock_env()
+        wrapper = SafetyWrapper(env, handoff_threshold=1.0, handoff_consecutive_steps=3)
+        wrapper.set_uncertainty(epistemic=2.0, aleatoric=0.0)  # over threshold
+        # Two crossings: not yet (need 3).
+        wrapper.step(_make_action())
+        _, _, _, truncated, info = wrapper.step(_make_action())
+        assert info["safety_handoff"] is False
+        # A sub-threshold step resets the counter.
+        wrapper.set_uncertainty(epistemic=0.0, aleatoric=0.0)
+        wrapper.step(_make_action())
+        # Now three fresh consecutive crossings -> handoff on the third.
+        wrapper.set_uncertainty(epistemic=2.0, aleatoric=0.0)
+        wrapper.step(_make_action())
+        wrapper.step(_make_action())
+        _, _, _, truncated, info = wrapper.step(_make_action())
+        assert info["safety_handoff"] is True
+        assert truncated is True
 
 
 # ---------------------------------------------------------------------------
