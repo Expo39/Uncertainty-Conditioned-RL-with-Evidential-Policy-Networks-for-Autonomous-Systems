@@ -10,7 +10,7 @@ channels are one signal, as expected for this architecture. See the detailed not
 For the safety controller, threshold the TOTAL uncertainty, not the (non-separating) split.
 
 Read-only diagnostic. Run via `make uncertainty-verdict EVAL_DIR=<run output dir>`.
-@see uncertainty_rl/evaluation/evaluate.py (per_step_records.csv), scripts/miscellaneous/CLAUDE.md.
+@see uncertainty_rl/evaluation/evaluate.py (per_step_records.csv), scripts/evaluation/CLAUDE.md.
 """
 
 import argparse
