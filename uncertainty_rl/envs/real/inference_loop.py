@@ -83,6 +83,12 @@ class RealWorldInferenceLoop:
         self._handoff_threshold: float = safety_wrapper_cfg.get(
             "handoff_threshold", 5.0
         )
+        # Handoff debounce: consecutive over-threshold decisions before stopping,
+        # so a single uncertainty spike does not trigger an irreversible handoff.
+        self._handoff_consecutive_steps: int = max(
+            1, int(safety_wrapper_cfg.get("handoff_consecutive_steps", 1))
+        )
+        self._consecutive_over: int = 0
         self._ros2_cfg = ros2_cfg
         self._ekf_convergence_timeout: float = float(
             ros2_cfg.get("ekf_convergence_timeout", 15.0)
@@ -186,6 +192,9 @@ class RealWorldInferenceLoop:
                 "caution_gain": agent_cfg.get("safety_caution_gain", 0.5),
                 "slow_threshold": agent_cfg.get("safety_slow_threshold", 0.0),
                 "handoff_threshold": agent_cfg.get("safety_handoff_threshold", 5.0),
+                "handoff_consecutive_steps": agent_cfg.get(
+                    "safety_handoff_consecutive_steps", 1
+                ),
             },
             ros2_cfg=agent_cfg.get("ros2", {}),
             include_covariance=bool(baseline_cfg.get("include_covariance", True)),
@@ -500,19 +509,30 @@ class RealWorldInferenceLoop:
         @param aleatoric: Aleatoric uncertainty from evidential actor.
         @return Tuple (modulated_action, handoff_triggered).
         """
-        modulated, handoff, _throttle_cap = SafetyWrapper.apply(
+        modulated, over_threshold, _throttle_cap = SafetyWrapper.apply(
             action,
             total_uncertainty=epistemic + aleatoric,
             caution_gain=self._caution_gain,
             slow_threshold=self._slow_threshold,
             handoff_threshold=self._handoff_threshold,
         )
+        # Debounce: only hand off after a sustained run of over-threshold decisions,
+        # matching the sim SafetyWrapper. A single spike resets the counter.
+        if over_threshold:
+            self._consecutive_over += 1
+        else:
+            self._consecutive_over = 0
+        handoff = self._consecutive_over >= self._handoff_consecutive_steps
         if handoff:
+            # Confirmed handoff: full stop (zero steer/throttle, full brake).
+            modulated = np.zeros_like(action)
+            modulated[2] = 1.0
             logger.warning(
-                "Safety handoff triggered (total uncertainty=%.3f >= threshold=%.3f). "
-                "Commanding full stop.",
+                "Safety handoff triggered (total uncertainty=%.3f >= threshold=%.3f "
+                "for %d consecutive steps). Commanding full stop.",
                 epistemic + aleatoric,
                 self._handoff_threshold,
+                self._consecutive_over,
             )
         return modulated, handoff
 

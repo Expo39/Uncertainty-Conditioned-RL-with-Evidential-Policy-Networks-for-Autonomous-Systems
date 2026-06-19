@@ -17,7 +17,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 | Module | Classes / functions |
 |--------|-------------------|
 | `evidential_policy.py` | `EvidentialLayer`, `EvidentialPolicyNetwork`, `UncertaintyConditionedActor` |
-| `sb3_integration.py` | `EvidentialDistribution`, `EvidentialActorCriticPolicy`, `EvidentialPPO` |
+| `sb3_integration.py` | `EvidentialDistribution`, `EvidentialActorCriticPolicy`, `EvidentialPPO`, `ScheduledEntCoefPPO`, `LayerNormActorCriticPolicy` |
 | `__init__.py` | Re-exports the public names |
 
 ## Internal data flow

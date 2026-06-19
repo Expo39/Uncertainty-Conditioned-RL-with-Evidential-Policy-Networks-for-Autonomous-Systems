@@ -166,7 +166,7 @@ make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=seed42_11062026-0628
 # 4. Attach the 2D visualiser at any time (host terminal, non-blocking)
 make visualise
 
-# 5. Run evaluation across all 9 uncertainty conditions
+# 5. Run evaluation across all 7 uncertainty conditions
 make docker-eval
 
 # 6. Stop when done
@@ -239,7 +239,7 @@ Uncertainty-Conditioned-RL.../
 |
 |-- configs/                           YAML only - nothing hardcoded in source
 |   |-- train_config.yaml              PPO + evidential hyperparameters
-|   |-- eval_config.yaml               13-condition evaluation sweep
+|   |-- eval_config.yaml               7-condition evaluation sweep
 |   |-- ros2_config.yaml               EKF topics and QoS settings
 |   |-- deployment/sim/env_config.yaml CARLA env, sensors, GNSS noise profiles
 |   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage6)

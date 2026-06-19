@@ -53,7 +53,7 @@ from uncertainty_rl.networks import (
 )
 
 # Environment
-from uncertainty_rl.envs import CARLAParkingEnv
+from uncertainty_rl.envs import CARLAParkingEnv, make_env, SafetyWrapper
 
 # Training
 from uncertainty_rl.training import train, load_config, TrainResult

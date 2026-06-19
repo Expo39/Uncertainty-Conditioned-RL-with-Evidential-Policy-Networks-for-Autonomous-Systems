@@ -69,7 +69,7 @@ def build_eval_env_factory(
     env_config: Optional[Dict[str, Any]] = None,
     host_override: Optional[str] = None,
     port_override: Optional[int] = None,
-) -> Tuple[Callable[[], Any], float, float, float]:
+) -> Tuple[Callable[[], Any], float, float, float, int]:
     """
     @brief Build the raw (unwrapped) eval env factory for a physical condition.
     @param condition: Condition dict with noise multipliers and traffic counts.
@@ -81,12 +81,13 @@ def build_eval_env_factory(
     @param port_override: Override the CARLA port. None uses the per-rank
            default.
     @return Tuple of (env_factory, caution_gain, slow_threshold,
-            handoff_threshold). The factory yields a bare CARLAParkingEnv built with the condition's
-            scaled sensor noise, pinned occupancy/floor-plan/GNSS tier, and the
-            exact training dynamics. The two SafetyWrapper parameters are
-            returned so callers that DO want the wrapper (the headless eval
-            sweep) can apply it, while the manual eval-dryrun inspector can use
-            the bare env it needs to reach env.vehicle / env.world directly.
+            handoff_threshold, handoff_consecutive_steps). The factory yields a
+            bare CARLAParkingEnv built with the condition's scaled sensor noise,
+            pinned occupancy/floor-plan/GNSS tier, and the exact training
+            dynamics. The SafetyWrapper parameters are returned so callers that DO
+            want the wrapper (the headless eval sweep) can apply it, while the
+            manual eval-dryrun inspector can use the bare env it needs to reach
+            env.vehicle / env.world directly.
 
     @note This is the single source of truth for the condition -> env mapping;
           make_eval_env() wraps it in SafetyWrapper + DummyVecEnv for the sweep,
@@ -167,6 +168,7 @@ def build_eval_env_factory(
     caution_gain: float = float(_ec.get("safety_caution_gain", 2.0))
     slow_threshold: float = float(_ec.get("safety_slow_threshold", 0.0))
     handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 0.02))
+    handoff_consecutive_steps: int = int(_ec.get("safety_handoff_consecutive_steps", 1))
 
     # Build the env through the shared factory so evaluation inherits the EXACT
     # dynamics the policy was trained with - action_repeat (decision = N ticks),
@@ -191,7 +193,13 @@ def build_eval_env_factory(
         host_override=host_override,
         port_override=port_override,
     )
-    return env_factory, caution_gain, slow_threshold, handoff_threshold
+    return (
+        env_factory,
+        caution_gain,
+        slow_threshold,
+        handoff_threshold,
+        handoff_consecutive_steps,
+    )
 
 
 def make_eval_env(
@@ -208,13 +216,17 @@ def make_eval_env(
     @param env_config: Environment config for parking_scenarios and obs flags.
     @return Vectorised evaluation environment (SafetyWrapper + DummyVecEnv).
     """
-    env_factory, caution_gain, slow_threshold, handoff_threshold = (
-        build_eval_env_factory(
-            condition,
-            config,
-            base_sensors,
-            env_config,
-        )
+    (
+        env_factory,
+        caution_gain,
+        slow_threshold,
+        handoff_threshold,
+        handoff_consecutive_steps,
+    ) = build_eval_env_factory(
+        condition,
+        config,
+        base_sensors,
+        env_config,
     )
 
     # EVAL_DISABLE_SAFETY_WRAPPER bypasses the wrapper (raw policy actions) for the
@@ -232,6 +244,7 @@ def make_eval_env(
             caution_gain=caution_gain,
             slow_threshold=slow_threshold,
             handoff_threshold=handoff_threshold,
+            handoff_consecutive_steps=handoff_consecutive_steps,
         )
 
     env = DummyVecEnv([_init])

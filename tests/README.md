@@ -64,6 +64,10 @@ make docker-test               # Full suite (unit + integration)
 | `test_debug_logger.py` | `DebugLogger`: no-op contract when disabled, dict population when enabled |
 | `test_actuation_calibration.py` | `ActuatorMap` (gain, deadband, bias, clamp), `ActuationCalibration` (identity, `from_config`) |
 | `test_lidar_noise.py` | SICK TiM571 LiDAR noise model in `SensorManager`: Gaussian range noise, per-point bias, dropout rate |
+| `test_bay_success.py` | `BaySuccessTracker`: per-bay success/attempt counting, CSV persistence |
+| `test_curriculum_invariants.py` | Curriculum stage invariants: every obs channel live in every stage, architecture keys constant, one axis ramps per stage |
+| `test_gnss_noise_relay.py` | `GnssNoiseRelayNode`: Doppler-style velocity / COG model, tier defaults, course-noise helper, and the `gnss_noise_profiles.yaml` mirror invariant |
+| `test_observation_norm.py` | `normalise_observation`: fixed physical-range scaling, bounds, channel alignment |
 
 ### Integration tests (Docker + GPU - `@pytest.mark.integration`)
 
@@ -96,7 +100,11 @@ make docker-test               # Full suite (unit + integration)
 | `utils/covariance_utils.py` | `test_covariance_utils.py` |
 | `utils/logging.py` | `test_debug_logger.py` |
 | `utils/actuation_calibration.py` | `test_actuation_calibration.py` |
+| `utils/bay_success.py` | `test_bay_success.py` |
+| `envs/_parking_core.py` (`normalise_observation`) | `test_observation_norm.py` |
+| `ros2/.../sensor_relay/gnss_noise_relay.py` | `test_gnss_noise_relay.py` |
 | `configs/baselines/*.yaml` | `test_baseline_configs.py` |
+| `configs/deployment/sim/curriculum/*.yaml` | `test_curriculum_invariants.py` |
 | ROS 2 EKF pipeline | `test_ros2_integration.py` |
 
 ## See also

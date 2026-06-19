@@ -40,6 +40,12 @@ Structural constants fixed by system architecture. Changing any of these require
 | `CORRIDOR_HALF_WIDTH` | $2.0$ m | Cross-track reference: the `on_line` reward factor is $1$ on the bay centreline and $0$ at this offset. |
 | `ALONG_TRACK_SCALE` | $6.0$ m | Along-track reference: the `near_depth` reward factor ramps from $1$ at the parked depth to $0$ over this distance. |
 | `APPROACH_INNER_ALIGNMENT_CUTOFF` | $\pi/4$ rad | Alignment-factor saturation cutoff in the corridor `aligned` term ($45$ deg). |
+| `CORRIDOR_W_ALONG` / `CORRIDOR_W_CROSS` / `CORRIDOR_W_HEAD` | $1.0$ / $2.0$ / $3.0$ | Relative weights of the along-track, cross-track, and heading factors in the corridor potential. |
+| `ENDGAME_MOVE_COEF` / `ENDGAME_HOLD_COEF` | $0.008$ / $0.006$ | Finisher bonus coefficients while approaching the parked pose vs holding the stop. |
+| `PROGRESS_TARGET` / `PHI_NORM_FLOOR` | $39.0$ / $5.0$ | Per-episode dense-reward normaliser (`phi(start)` scale) and its soft-zero floor. |
+| `TIMEOUT_POS_COEF` / `TIMEOUT_YAW_COEF` | $1.5$ / $2.5$ | Graded timeout-penalty weights on final position vs orientation error. |
+| `TIMEOUT_PENALTY_FLOOR_NORM` | $-24.0$ | Minimum (most negative) normalised timeout penalty. |
+| `STALL_TRUNCATION_DECISIONS` / `STALL_GATE_EKF_STD_M` | $50$ / $0.4$ m | Stall-truncation decision count and the EKF-std gate below which a stalled episode is truncated (above it, wait for localisation to recover). |
 | `OBSTACLE_CLEARANCE_SAFE` / `OBSTACLE_CLEARANCE_DANGER` | $0.8$ / $0.3$ m | Clearance-penalty ramp band; SAFE sits below the $\sim 0.98$ m gap a correctly parked car leaves beside an occupied neighbour, so a correct park pays $\sim 0$. |
 | `OUT_OF_BOUNDS_THRESHOLD` | $20.0$ m | Radial distance from the target above which the real-world inference loop aborts. The sim path uses the soft polygon boundary below instead. |
 | `OOB_INFLATION_MARGIN` | $5.0$ m | Metres the lot polygon is offset outward (uniformly, on every edge) to form the soft out-of-bounds boundary (a run-off skirt beyond the lot edge). |
