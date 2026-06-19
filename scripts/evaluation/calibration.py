@@ -20,14 +20,22 @@ the host .venv. Run via `make analyse-calibration` (never python directly).
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import matplotlib
+# Make the repo root importable so the shared discovery helper resolves when this
+# file is run directly (python scripts/evaluation/calibration.py), which puts the
+# script's own directory on sys.path rather than the repo root.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
+
+from scripts.evaluation._discovery import discover_records  # noqa: E402
 
 # Std/error axis pairs to analyse: the predicted-std column against its matched
 # actual-error column. Position uses the combined magnitudes.
@@ -46,17 +54,18 @@ def _find_calibration_csv(results_root: Path, arm: Optional[str]) -> Path:
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @param arm: Optional baseline name to restrict to; None = any arm.
     @return Path to the most recently modified matching calibration_records.csv.
+
+    evaluate.py writes <baseline>/<leaf>/<wrapper_variant>/calibration_records.csv
+    (three levels). Older runs wrote <baseline>/<leaf>/ (two levels). Match both,
+    then prefer the without_wrapper variant - the wrapper caps throttle and so
+    corrupts the very uncertainty/error signal this analysis reads.
     """
-    pattern = (
-        f"{arm}/*/calibration_records.csv" if arm else "*/*/calibration_records.csv"
-    )
-    candidates = sorted(
-        results_root.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True
-    )
+    candidates = discover_records(results_root, "calibration_records.csv", arm)
     if not candidates:
+        scope = f"{arm}/" if arm else ""
         raise FileNotFoundError(
-            f"No calibration_records.csv under {results_root} "
-            f"(pattern {pattern}). Re-run make docker-eval to generate it."
+            f"No calibration_records.csv under {results_root}/{scope}. "
+            f"Re-run make docker-eval to generate it."
         )
     return candidates[0]
 
