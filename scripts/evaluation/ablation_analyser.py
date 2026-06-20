@@ -66,13 +66,16 @@ _N_STD_BINS = 5
 
 
 def _discover_arm_csvs(
-    results_root: Path, leaf: Optional[str] = None
+    results_root: Path, leaf: Optional[str] = None, stage: Optional[str] = None
 ) -> Dict[str, Path]:
     """
     @brief Find each ablation arm's episode_records.csv under the nested tree.
     @param results_root: outputs/evaluation_results (the <baseline>/<leaf> root).
     @param leaf: Optional checkpoint leaf to pin to (single-arm runs); None lets
            each arm's newest run win.
+    @param stage: Optional curriculum stage (e.g. "1") so the cross-arm contrast
+           compares arms at the SAME stage rather than each arm's newest leaf
+           (which may differ - e.g. full_method at stage 2 vs others at stage 1).
     @return Mapping arm name -> path to its episode_records.csv. Per arm the
             without_wrapper variant (free-running policy - the caution/precision
             reads) is preferred, then the most recent leaf.
@@ -88,6 +91,7 @@ def _discover_arm_csvs(
             "episode_records.csv",
             prefer_variant="without_wrapper",
             leaf=leaf,
+            stage=stage,
         ).items()
         if arm in _ARM_ORDER
     }
@@ -567,6 +571,7 @@ def analyse(
     slope_clean: str = _SLOPE_CLEAN_CONDITION,
     slope_degraded: str = _SLOPE_DEGRADED_CONDITION,
     leaf: Optional[str] = None,
+    stage: Optional[str] = None,
 ) -> None:
     """
     @brief Run the full cross-arm analysis and write tables + figures.
@@ -577,9 +582,19 @@ def analyse(
     @param slope_degraded: Degradation-slope end condition (worst GNSS tier).
     @param leaf: Optional checkpoint leaf to pin to (single-arm runs); None lets
            each arm's newest run win.
+    @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
+           same stage; None uses each arm's newest leaf (may mix stages).
     """
+    # Nest by stage (or pinned leaf) so STAGE=1 and STAGE=2 runs never overwrite
+    # each other; an unpinned mixed-stage run lands in "latest".
+    if stage is not None:
+        out_dir = out_dir / f"stage{stage}"
+    elif leaf is not None:
+        out_dir = out_dir / leaf
+    else:
+        out_dir = out_dir / "latest"
     out_dir.mkdir(parents=True, exist_ok=True)
-    arm_csvs = _discover_arm_csvs(results_root, leaf=leaf)
+    arm_csvs = _discover_arm_csvs(results_root, leaf=leaf, stage=stage)
     if not arm_csvs:
         raise FileNotFoundError(
             f"No arm episode_records.csv under {results_root}. "
@@ -785,6 +800,13 @@ def main() -> None:
         help="Pin to one checkpoint leaf, e.g. 1_42_19062026-0120 "
         "(single-arm runs; default: each arm's newest run).",
     )
+    parser.add_argument(
+        "--stage",
+        type=str,
+        default=None,
+        help="Compare all arms at this curriculum stage (e.g. 1), instead of "
+        "each arm's newest leaf which may sit at different stages.",
+    )
     args = parser.parse_args()
     analyse(
         Path(args.results_root),
@@ -793,6 +815,7 @@ def main() -> None:
         args.slope_clean,
         args.slope_degraded,
         leaf=args.checkpoint,
+        stage=args.stage,
     )
 
 
