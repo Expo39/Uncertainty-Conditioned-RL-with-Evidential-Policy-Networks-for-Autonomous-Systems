@@ -54,16 +54,26 @@ _SIGNALS: Dict[str, Optional[List[str]]] = {
 }
 
 
-def _discover_arm_csvs(results_root: Path) -> Dict[str, Path]:
+def _discover_arm_csvs(
+    results_root: Path, stage: Optional[str] = None
+) -> Dict[str, Path]:
     """
     @brief Find each arm's episode_records.csv (without_wrapper preferred).
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param stage: Optional curriculum stage (e.g. "1") so the gate comparison uses
+           arms at the SAME stage rather than each arm's newest leaf (which may sit
+           at different stages); None = any stage.
     @return Mapping arm name -> episode_records.csv path.
 
     Handles both the two-level (legacy) and three-level (wrapper-variant)
     layouts; per arm the without_wrapper variant wins, then the newest leaf.
     """
-    return discover_arm_csvs(results_root, "episode_records.csv")
+    return discover_arm_csvs(
+        results_root,
+        "episode_records.csv",
+        prefer_variant="without_wrapper",
+        stage=stage,
+    )
 
 
 def _load(arm_csvs: Dict[str, Path]) -> pd.DataFrame:
@@ -187,14 +197,18 @@ def _plot_roc(records: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
-def analyse(results_root: Path, out_dir: Path) -> None:
+def analyse(results_root: Path, out_dir: Path, stage: Optional[str] = None) -> None:
     """
     @brief Run the gate comparison and write the AUC table + ROC figure.
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV table and PNG figure.
+    @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
+           same stage; None uses each arm's newest leaf (may mix stages).
     """
+    # Nest by stage so STAGE=1 and STAGE=2 runs never overwrite; unpinned in "latest".
+    out_dir = out_dir / (f"stage{stage}" if stage is not None else "latest")
     out_dir.mkdir(parents=True, exist_ok=True)
-    arm_csvs = _discover_arm_csvs(results_root)
+    arm_csvs = _discover_arm_csvs(results_root, stage=stage)
     records = _load(arm_csvs)
     auc_table = _evaluate_signals(records)
     auc_table.to_csv(out_dir / "gate_auc.csv", index=False)
@@ -238,8 +252,15 @@ def main() -> None:
         default="outputs/gate_analysis",
         help="Directory for the AUC table and ROC figure.",
     )
+    parser.add_argument(
+        "--stage",
+        type=str,
+        default=None,
+        help="Compare all arms at this curriculum stage (e.g. 1), instead of "
+        "each arm's newest leaf which may sit at different stages.",
+    )
     args = parser.parse_args()
-    analyse(Path(args.results_root), Path(args.output_dir))
+    analyse(Path(args.results_root), Path(args.output_dir), stage=args.stage)
 
 
 if __name__ == "__main__":
