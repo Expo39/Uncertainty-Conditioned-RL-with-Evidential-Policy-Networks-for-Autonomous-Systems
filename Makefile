@@ -392,20 +392,22 @@ trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (coll
 	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
 	$(PYTHON) scripts/miscellaneous/trace_tier_breakdown.py --trace-dir $(TRACE_DIR)
 
-analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded] [CHECKPOINT=1_42_19062026-0120]
+analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded] [CHECKPOINT=1_42_19062026-0120] [STAGE=1]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/ablation_analyser.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis) \
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
 		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded) \
-		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),) \
+		$(if $(STAGE),--stage $(STAGE),)
 
-analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis]
+analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis] [STAGE=1]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/gate_roc.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis)
+		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis) \
+		$(if $(STAGE),--stage $(STAGE),)
 
 analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)

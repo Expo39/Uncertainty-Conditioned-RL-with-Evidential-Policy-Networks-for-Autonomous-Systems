@@ -93,12 +93,23 @@ def _variant_rank(csv_path: Path, preferred: Optional[str] = None) -> int:
     )
 
 
+def _leaf_stage(leaf_name: str) -> Optional[str]:
+    """
+    @brief Curriculum stage of a run leaf, from its <stage>_<seed>_<timestamp> name.
+    @param leaf_name: The run directory name, e.g. "2_42_20062026-0451".
+    @return The leading stage component ("2"), or None if the name has no "_".
+    """
+    head = leaf_name.split("_", 1)[0]
+    return head if head else None
+
+
 def discover_records(
     results_root: Path,
     name: str,
     arm: Optional[str] = None,
     prefer_variant: Optional[str] = None,
     leaf: Optional[str] = None,
+    stage: Optional[str] = None,
 ) -> List[Path]:
     """
     @brief Find per-run CSVs of a given name, preferred variant then newest first.
@@ -112,6 +123,9 @@ def discover_records(
            "1_42_19062026-0120". When given, only that run's CSVs match - so
            analysis never silently reads a different checkpoint when several
            exist. When None, every leaf matches and the newest mtime wins.
+    @param stage: Optional curriculum stage to restrict to (e.g. "1"), matched
+           against the leaf's leading <stage>_ component. Keeps a cross-arm read
+           apples-to-apples when arms sit at different stages; None = any stage.
     @return Matching paths sorted by (variant preference, mtime descending).
             Empty if none match.
 
@@ -126,8 +140,16 @@ def discover_records(
     for pattern in patterns:
         for path in results_root.glob(pattern):
             seen[path] = None
+    matches = list(seen)
+    if stage is not None:
+        # Leaf is the component directly under the arm dir (parts[1] below root).
+        matches = [
+            p
+            for p in matches
+            if _leaf_stage(p.relative_to(results_root).parts[1]) == str(stage)
+        ]
     return sorted(
-        seen, key=lambda p: (_variant_rank(p, prefer_variant), -p.stat().st_mtime)
+        matches, key=lambda p: (_variant_rank(p, prefer_variant), -p.stat().st_mtime)
     )
 
 
@@ -136,6 +158,7 @@ def discover_arm_csvs(
     name: str,
     prefer_variant: Optional[str] = None,
     leaf: Optional[str] = None,
+    stage: Optional[str] = None,
 ) -> Dict[str, Path]:
     """
     @brief Map each arm to its best per-run CSV of the given name.
@@ -145,6 +168,9 @@ def discover_arm_csvs(
     @param leaf: Optional checkpoint leaf to pin to. Cross-arm callers (ablation)
            usually leave this None, since each arm has its own leaf; pin only when
            analysing a single arm's specific run.
+    @param stage: Optional curriculum stage to restrict to (e.g. "1"), so a
+           cross-arm read compares arms at the SAME stage instead of each arm's
+           newest leaf (which may sit at different stages); None = any stage.
     @return Mapping arm name -> chosen CSV path (preferred variant, then most
             recent). One entry per arm.
 
@@ -153,7 +179,7 @@ def discover_arm_csvs(
     """
     chosen: Dict[str, Path] = {}
     for path in discover_records(
-        results_root, name, prefer_variant=prefer_variant, leaf=leaf
+        results_root, name, prefer_variant=prefer_variant, leaf=leaf, stage=stage
     ):
         arm = _arm_of(path, results_root)
         if arm is None or arm in chosen:
