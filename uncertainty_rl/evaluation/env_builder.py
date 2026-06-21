@@ -69,7 +69,7 @@ def build_eval_env_factory(
     env_config: Optional[Dict[str, Any]] = None,
     host_override: Optional[str] = None,
     port_override: Optional[int] = None,
-) -> Tuple[Callable[[], Any], float, float, float, int]:
+) -> Tuple[Callable[[], Any], float]:
     """
     @brief Build the raw (unwrapped) eval env factory for a physical condition.
     @param condition: Condition dict with noise multipliers and traffic counts.
@@ -80,11 +80,10 @@ def build_eval_env_factory(
            the windowed inspect stack). None uses the per-rank default.
     @param port_override: Override the CARLA port. None uses the per-rank
            default.
-    @return Tuple of (env_factory, caution_gain, slow_threshold,
-            handoff_threshold, handoff_consecutive_steps). The factory yields a
+    @return Tuple of (env_factory, handoff_threshold). The factory yields a
             bare CARLAParkingEnv built with the condition's scaled sensor noise,
             pinned occupancy/floor-plan/GNSS tier, and the exact training
-            dynamics. The SafetyWrapper parameters are returned so callers that DO
+            dynamics. The SafetyWrapper threshold is returned so callers that DO
             want the wrapper (the headless eval sweep) can apply it, while the
             manual eval-dryrun inspector can use the bare env it needs to reach
             env.vehicle / env.world directly.
@@ -164,11 +163,8 @@ def build_eval_env_factory(
     # Ignored downstream when a held tier is set (a held tier suppresses drift).
     degrade_one_way: bool = bool(condition.get("degrade_one_way", False))
 
-    # SafetyWrapper parameters from agent_config.yaml (merged into env_config).
-    caution_gain: float = float(_ec.get("safety_caution_gain", 2.0))
-    slow_threshold: float = float(_ec.get("safety_slow_threshold", 0.0))
-    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 0.02))
-    handoff_consecutive_steps: int = int(_ec.get("safety_handoff_consecutive_steps", 1))
+    # SafetyWrapper threshold from agent_config.yaml (merged into env_config).
+    handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 1.2))
 
     # Build the env through the shared factory so evaluation inherits the EXACT
     # dynamics the policy was trained with - action_repeat (decision = N ticks),
@@ -193,13 +189,7 @@ def build_eval_env_factory(
         host_override=host_override,
         port_override=port_override,
     )
-    return (
-        env_factory,
-        caution_gain,
-        slow_threshold,
-        handoff_threshold,
-        handoff_consecutive_steps,
-    )
+    return (env_factory, handoff_threshold)
 
 
 def make_eval_env(
@@ -216,13 +206,7 @@ def make_eval_env(
     @param env_config: Environment config for parking_scenarios and obs flags.
     @return Vectorised evaluation environment (SafetyWrapper + DummyVecEnv).
     """
-    (
-        env_factory,
-        caution_gain,
-        slow_threshold,
-        handoff_threshold,
-        handoff_consecutive_steps,
-    ) = build_eval_env_factory(
+    env_factory, handoff_threshold = build_eval_env_factory(
         condition,
         config,
         base_sensors,
@@ -239,13 +223,7 @@ def make_eval_env(
         bare = env_factory()
         if disable_wrapper:
             return bare
-        return SafetyWrapper(
-            bare,
-            caution_gain=caution_gain,
-            slow_threshold=slow_threshold,
-            handoff_threshold=handoff_threshold,
-            handoff_consecutive_steps=handoff_consecutive_steps,
-        )
+        return SafetyWrapper(bare, handoff_threshold=handoff_threshold)
 
     env = DummyVecEnv([_init])
     return env
