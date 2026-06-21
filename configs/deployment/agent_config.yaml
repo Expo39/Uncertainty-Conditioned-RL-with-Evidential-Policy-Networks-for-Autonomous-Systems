@@ -32,18 +32,9 @@ actuator_model:
   brake_max_delta_per_decision: 0.5  # Brake rate limit (0 -> full in 0.4 s).
   brake_override_throttle_threshold: 0.3  # Throttle is zeroed when brake exceeds this fraction.
 
-# SafetyWrapper: single TOTAL-uncertainty (epistemic+aleatoric) signal, two thresholds.
-# Above slow_threshold throttle is capped (caution); above handoff_threshold full stop.
-# caution_gain sets how hard throttle is cut. Calibrate thresholds to clean-condition
-# total: slow ~ p50, handoff ~ p99 (set after eval).
-safety_caution_gain: 2.0
-safety_slow_threshold: 0.20  # Clean total p90; below this clean drives uncapped.
-safety_handoff_threshold: 1.2  # OOD total p90; clean p99 sits below, so OOD-driven.
-# Handoff debounce: total must stay >= handoff_threshold for this many CONSECUTIVE
-# decisions before handing off, so a single noisy uncertainty spike (clean total
-# spikes to ~1.3 even on RTK-fixed) does not truncate the episode. One decision is
-# action_repeat ticks (~0.2 s), so 5 ~ 1 s of sustained high uncertainty.
-safety_handoff_consecutive_steps: 5
+# SafetyWrapper: full-stop handoff when TOTAL uncertainty (epistemic+aleatoric) reaches
+# the threshold. Calibrate per checkpoint to the calm-condition total upper tail.
+safety_handoff_threshold: 1.2
 
 # ---------------------------------------------------------------------------
 # Deployed baseline (real vehicle)

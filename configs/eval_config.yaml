@@ -33,7 +33,7 @@ eval_conditions:
   # the real instrumented lot would actually run.
   - name: "anchor_deployment"
     description: "Training GNSS process (tier sampling + Markov drift), occupancy 0.5"
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0.1
 
   # Same GNSS process as the anchor but an EMPTY lot (occupancy 0.0): the
   # no-obstacle control. With zero parked cars the LiDAR channel (obs 8-12) sees
@@ -62,12 +62,12 @@ eval_conditions:
     held_gnss_tier: rtk_fixed
     # Occupancy matched to gnss_degraded (0.5) so the GNSS tier is the ONLY
     # variable across the slope; neighbour cars are the LiDAR landmark mechanism.
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0.1
 
   - name: "gnss_degraded"
     description: "Degraded GNSS (~5 m, worst tier) held - slope end"
     held_gnss_tier: degraded
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0.1
 
   # --- LiDAR axis (GNSS pinned at RTK fixed, occupancy 0.5, rectangle) ----
   # Degrades only the obstacle channel (obs 8-12). The EKF fuses GNSS + IMU and
@@ -80,7 +80,7 @@ eval_conditions:
     description: "25x LiDAR range noise (0.5 m 1-sigma), RTK fixed - EKF-blind degradation"
     held_gnss_tier: rtk_fixed
     lidar_noise_multiplier: 25.0
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0.1
 
   # --- Generalisation: unseen geometry (occupancy 0.5) --------------------
   # irregular_a is the designated OOD layout (training is rectangle only) - the
@@ -91,7 +91,7 @@ eval_conditions:
   - name: "ood_irregular_rtk_fixed"
     description: "OOD floor plan (irregular_a), RTK fixed (~2 cm)"
     held_gnss_tier: rtk_fixed
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0.1
     floor_plan: "irregular_a"
 
   # --- Monotone degradation: starts good, degrades, never recovers ----------
@@ -108,4 +108,4 @@ eval_conditions:
   - name: "gnss_degrade_one_way"
     description: "Starts RTK fixed, drifts one-way to degraded (never recovers)"
     degrade_one_way: true
-    bay_occupancy_rate: 0.5
+    bay_occupancy_rate: 0.1

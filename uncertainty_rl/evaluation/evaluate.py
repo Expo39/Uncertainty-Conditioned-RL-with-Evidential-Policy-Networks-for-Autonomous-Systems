@@ -311,17 +311,39 @@ def evaluate_agent(
             # appended this decision's epistemic/aleatoric to the episode lists, so
             # read them off the tail. Keep only the leading steps per episode so a
             # full sweep stays a few MB, not hundreds.
-            if is_evidential and _per_step_cap and steps <= _per_step_cap:
+            if _per_step_cap and steps <= _per_step_cap:
+                # Behaviour + EKF columns per step (every arm) so caution-vs-
+                # covariance is readable WITHIN an episode. Standard heads have no
+                # state uncertainty: epistemic/aleatoric NaN, action_std the
+                # constant exp(log_std). abs_err_pos_m is the GT-EKF position error.
+                _err_pos = (
+                    float(np.hypot(_gt_x - _ekf_x, _gt_y - _ekf_y))
+                    if np.isfinite(_gt_x) and np.isfinite(_ekf_x)
+                    else float("nan")
+                )
                 per_step_records.append(
                     {
                         "condition": "",  # filled by the caller per condition
                         "episode": episode + 1,
                         "step": steps,
-                        "epistemic": ep_epistemic[-1],
-                        "aleatoric": ep_aleatoric[-1],
-                        "action_std": ep_action_std[-1],
+                        "epistemic": (
+                            ep_epistemic[-1] if is_evidential else float("nan")
+                        ),
+                        "aleatoric": (
+                            ep_aleatoric[-1] if is_evidential else float("nan")
+                        ),
+                        "action_std": (
+                            ep_action_std[-1] if is_evidential else const_action_std
+                        ),
                         "ekf_std_pos_m": (_std_x + _std_y) / 2.0,
                         "ekf_std_yaw_rad": _std_yaw,
+                        "speed_ms": _speed,
+                        "abs_yaw_rate_rads": (
+                            abs(_vyaw) if np.isfinite(_vyaw) else float("nan")
+                        ),
+                        "throttle_cmd": float(_cmd[1]),
+                        "brake_cmd": float(_cmd[2]),
+                        "abs_err_pos_m": _err_pos,
                     }
                 )
             if done[0]:
