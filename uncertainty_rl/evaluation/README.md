@@ -193,7 +193,7 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 <!-- gif:placeholder name="baseline_comparison" caption="Vanilla PPO vs full method side by side under degraded GNSS" -->
 ![Baseline comparison placeholder](../../docs/media/baseline_comparison.gif)
 
-<!-- gif:placeholder name="safety_handoff" caption="SafetyWrapper under rtk_lost conditions - aleatoric throttle cap slows the approach, then epistemic crosses the handoff threshold and the vehicle brakes to a stop" -->
+<!-- gif:placeholder name="safety_handoff" caption="SafetyWrapper under rtk_lost conditions - total predictive uncertainty crosses the handoff threshold and the vehicle brakes to a stop" -->
 ![Safety handoff placeholder](../../docs/media/safety_handoff.gif)
 
 ## See also
