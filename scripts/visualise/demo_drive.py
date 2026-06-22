@@ -13,6 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from types import FrameType
 from typing import Any, Dict, List, Optional, TextIO, cast
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import torch as th
@@ -312,16 +313,20 @@ def main() -> None:
 
     # Output dirs mirror the checkpoint tree and add a per-demo-run level:
     # <baseline>/<checkpoint_leaf>/<demo_stamp>/. The checkpoint leaf carries the
-    # TRAINING run identity (seed + training timestamp), so repeated demos of the
-    # same checkpoint group under one folder, each run in its own <demo_stamp>
-    # subfolder (so two runs of the same checkpoint never collide). The baseline
-    # and leaf come from the checkpoint's <baseline>/<leaf> path; a bare checkpoint
-    # with no such structure falls back to a flat <demo_stamp>/. Written under
-    # outputs/ (the rw-mounted volume) so they survive the --rm container exit.
-    run_stamp = datetime.now().strftime("%d-%m-%Y-%H%M%S")
+    # TRAINING run identity (stage + seed + training timestamp), so repeated demos
+    # of the same checkpoint group under one folder, each run in its own
+    # <demo_stamp> subfolder (so two runs of the same checkpoint never collide).
+    # The baseline and leaf come from the checkpoint's <baseline>/<leaf> path; a
+    # bare checkpoint with no such structure falls back to a flat <demo_stamp>/.
+    # Written under outputs/ (the rw-mounted volume) so they survive --rm exit.
+    # Local wall-clock time (container runs UTC); Europe/Malta is DST-aware.
+    run_stamp = datetime.now(ZoneInfo("Europe/Malta")).strftime("%d-%m-%Y-%H%M%S")
     _ckpt_leaf = Path(args.checkpoint).parent.name
     _ckpt_baseline = Path(args.checkpoint).parent.parent.name
-    if _ckpt_baseline and re.search(r"seed(\d+)", _ckpt_leaf):
+    # A real training leaf ends in the <DDMMYYYY-HHMM> stamp (both the current
+    # <stage>_<seed>_<stamp> and the legacy seed<N>_<stamp> forms); trial_<N> and
+    # bare paths do not, so they fall back to a flat <demo_stamp>/.
+    if _ckpt_baseline and re.search(r"\d{8}-\d{4}$", _ckpt_leaf):
         _run_subtree = Path(_ckpt_baseline) / _ckpt_leaf / run_stamp
     else:
         _run_subtree = Path(run_stamp)

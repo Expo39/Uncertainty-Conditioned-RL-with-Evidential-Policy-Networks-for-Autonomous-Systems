@@ -24,6 +24,7 @@ def make_env(
     host_override: Optional[str] = None,
     port_override: Optional[int] = None,
     held_gnss_tier_override: Optional[str] = None,
+    degrade_one_way_override: bool = False,
 ) -> Callable[[], gym.Env]:
     """
     @brief Create a callable that returns a new environment instance.
@@ -45,6 +46,10 @@ def make_env(
            sampling and the Markov drift). Evaluation passes the per-condition
            tier name so a GNSS level becomes a controlled independent variable;
            None runs the training noise process (sampling + drift).
+    @param degrade_one_way_override: If True, the episode starts at rtk_fixed and
+           the Markov chain may only degrade (never recover) - the monotone-
+           degradation eval condition. Ignored when held_gnss_tier_override is set
+           (a held tier has no drift). None/False runs the normal recovering chain.
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
@@ -92,6 +97,7 @@ def make_env(
             use_extra_spawns=config.get("use_extra_spawns", False),
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             held_gnss_tier_override=held_gnss_tier_override,
+            degrade_one_way_override=degrade_one_way_override,
             vis_output_path=vis_path,
             bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),

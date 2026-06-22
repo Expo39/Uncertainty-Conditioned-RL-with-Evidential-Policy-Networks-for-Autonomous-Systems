@@ -32,10 +32,9 @@ actuator_model:
   brake_max_delta_per_decision: 0.5  # Brake rate limit (0 -> full in 0.4 s).
   brake_override_throttle_threshold: 0.3  # Throttle is zeroed when brake exceeds this fraction.
 
-# SafetyWrapper parameters: aleatoric_scaling caps longitudinal speed under outcome
-# noise; handoff_threshold is the epistemic level that triggers a stop + handoff.
-safety_aleatoric_scaling: 0.5
-safety_handoff_threshold: 5.0
+# SafetyWrapper: full-stop handoff when TOTAL uncertainty (epistemic+aleatoric) reaches
+# the threshold. Calibrate per checkpoint to the calm-condition total upper tail.
+safety_handoff_threshold: 1.903  # clean p95 (honest, OU stage6)
 
 # ---------------------------------------------------------------------------
 # Deployed baseline (real vehicle)

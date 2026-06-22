@@ -160,7 +160,15 @@ class TestEvidentialDistribution:
         log_prob = evidential_dist.log_prob(actions)
         assert log_prob.shape == (BATCH_SIZE,)
 
-    def test_entropy_returns_none(
+    def test_entropy_none_before_distribution_set(
+        self, evidential_dist: EvidentialDistribution
+    ) -> None:
+        """
+        @brief entropy() returns None until proba_distribution() is called.
+        """
+        assert evidential_dist.entropy() is None
+
+    def test_entropy_finite_and_correct_shape(
         self,
         evidential_dist: EvidentialDistribution,
         nig_params: Tuple[
@@ -171,11 +179,35 @@ class TestEvidentialDistribution:
         ],
     ) -> None:
         """
-        @brief entropy() returns None - squashed Gaussian has no closed form.
+        @brief entropy() returns a finite per-sample tensor of shape (batch_size,).
         """
         gamma, nu, alpha, beta = nig_params
         evidential_dist.proba_distribution(gamma, nu, alpha, beta)
-        assert evidential_dist.entropy() is None
+        entropy = evidential_dist.entropy()
+        assert entropy is not None
+        assert entropy.shape == (BATCH_SIZE,)
+        assert torch.all(torch.isfinite(entropy))
+
+    def test_entropy_increases_with_std(self) -> None:
+        """
+        @brief A wider predictive (larger aleatoric) yields higher entropy.
+
+        Holds nu/alpha fixed and raises beta (so aleatoric = beta/(alpha-1) and the
+        sampling std both grow); the closed-form Gaussian entropy must increase.
+        """
+        gamma = torch.zeros(1, ACTION_DIM)
+        nu = torch.full((1, ACTION_DIM), 1.0)
+        alpha = torch.full((1, ACTION_DIM), 2.0)
+        dist = EvidentialDistribution(action_dim=ACTION_DIM)
+
+        narrow = dist.proba_distribution(
+            gamma, nu, alpha, torch.full((1, ACTION_DIM), 0.05)
+        ).entropy()
+        wide = dist.proba_distribution(
+            gamma, nu, alpha, torch.full((1, ACTION_DIM), 0.5)
+        ).entropy()
+        assert narrow is not None and wide is not None
+        assert float(wide.item()) > float(narrow.item())
 
     def test_sample_shape_and_squashed(
         self,
@@ -196,6 +228,39 @@ class TestEvidentialDistribution:
         assert sample.shape == (BATCH_SIZE, ACTION_DIM)
         assert torch.all(sample > -1.0)
         assert torch.all(sample < 1.0)
+
+    def test_aleatoric_floor_clamps_sampling_std(self) -> None:
+        """
+        @brief A collapsing NIG (beta -> 0) cannot drive the sampling std below
+               sqrt(aleatoric_floor).
+
+        Feeds near-zero beta (aleatoric = beta/(alpha-1) -> ~0) with a non-trivial
+        floor and asserts the resulting Normal std equals sqrt(floor), not ~0.
+        """
+        floor = 0.04
+        dist = EvidentialDistribution(action_dim=ACTION_DIM, aleatoric_floor=floor)
+        gamma = torch.zeros(BATCH_SIZE, ACTION_DIM)
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), 1.0)
+        alpha = torch.full((BATCH_SIZE, ACTION_DIM), 2.0)
+        beta = torch.full((BATCH_SIZE, ACTION_DIM), 1e-8)  # collapsed evidence
+        dist.proba_distribution(gamma, nu, alpha, beta)
+        std = dist.distribution.stddev
+        assert torch.allclose(
+            std, torch.full_like(std, float(np.sqrt(floor))), atol=1e-6
+        )
+
+    def test_default_floor_allows_small_std(self) -> None:
+        """
+        @brief With the default (~1e-6) floor, a collapsing NIG yields a near-zero
+               std, confirming the floor is what gates collapse, not a side effect.
+        """
+        dist = EvidentialDistribution(action_dim=ACTION_DIM)  # default floor 1e-6
+        gamma = torch.zeros(BATCH_SIZE, ACTION_DIM)
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), 1.0)
+        alpha = torch.full((BATCH_SIZE, ACTION_DIM), 2.0)
+        beta = torch.full((BATCH_SIZE, ACTION_DIM), 1e-8)
+        dist.proba_distribution(gamma, nu, alpha, beta)
+        assert torch.all(dist.distribution.stddev < 0.01)
 
     def test_mode_equals_tanh_gamma(
         self,
@@ -340,8 +405,8 @@ class TestEvidentialActorCriticPolicy:
         self, policy: EvidentialActorCriticPolicy
     ) -> None:
         """
-        @brief evaluate_actions() returns correct shapes. Entropy is None for
-               the squashed Gaussian (no closed form).
+        @brief evaluate_actions() returns correct shapes. Entropy is the closed-form
+               pre-squash Gaussian entropy, shape (batch_size,).
         """
         obs = torch.randn(BATCH_SIZE, STATE_DIM)
         # Squashed actions in (-1, 1); torch.tanh of randn keeps them off the boundary.
@@ -349,7 +414,9 @@ class TestEvidentialActorCriticPolicy:
         values, log_prob, entropy = policy.evaluate_actions(obs, actions)
         assert values.shape == (BATCH_SIZE, 1)
         assert log_prob.shape == (BATCH_SIZE,)
-        assert entropy is None
+        assert entropy is not None
+        assert entropy.shape == (BATCH_SIZE,)
+        assert torch.all(torch.isfinite(entropy))
 
     def test_evaluate_actions_caches_nig_params(
         self, policy: EvidentialActorCriticPolicy
@@ -452,6 +519,29 @@ class TestEvidentialActorCriticPolicy:
             loaded = EvidentialActorCriticPolicy.load(path)
             assert loaded.lambda_reg == policy.lambda_reg
 
+    def test_save_load_preserves_aleatoric_floor(
+        self, obs_space: spaces.Box, act_space: spaces.Box
+    ) -> None:
+        """
+        @brief aleatoric_floor round-trips through save/load (so a resumed stage
+               keeps the same exploration floor) and reaches the distribution.
+        """
+        floor = 0.04
+        policy = EvidentialActorCriticPolicy(
+            observation_space=obs_space,
+            action_space=act_space,
+            lr_schedule=lambda _: 3e-4,
+            net_arch=[64, 64],
+            aleatoric_floor=floor,
+        )
+        assert policy.action_dist.aleatoric_floor == floor
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = f"{tmpdir}/test_policy"
+            policy.save(path)
+            loaded = EvidentialActorCriticPolicy.load(path)
+            assert loaded.aleatoric_floor == floor
+            assert loaded.action_dist.aleatoric_floor == floor
+
 
 # ===========================================================================
 # TestEvidentialPPO
@@ -496,6 +586,21 @@ class TestEvidentialPPO:
             batch_size=32,
         )
         assert model.policy.lambda_reg == 0.05
+
+    def test_aleatoric_floor_passed_to_policy(self, dummy_env: gym.Env) -> None:
+        """
+        @brief aleatoric_floor propagates from EvidentialPPO to the policy's
+               distribution.
+        """
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=dummy_env,
+            aleatoric_floor=0.04,
+            n_steps=64,
+            batch_size=32,
+        )
+        assert model.policy.aleatoric_floor == 0.04
+        assert model.policy.action_dist.aleatoric_floor == 0.04
 
     def test_train_step_runs(self, dummy_env: gym.Env) -> None:
         """
@@ -785,10 +890,11 @@ class TestNIGInit:
         act_space: spaces.Box,
     ) -> None:
         """
-        @brief After build, nu bias approx 1.24 and alpha bias approx 2.24.
+        @brief After build, nu bias approx 0.31 (sub-1) and alpha bias approx 2.24.
 
         With weight scaled by 0.01 and zero input the raw output equals the bias.
-        softplus(0.9) + 1e-6 ~ 1.2411 + 1e-6 ~ 1.2411 (nu).
+        softplus(-1.0) + 1e-6 ~ 0.3133 (nu): a sub-1 prior keeps the no-evidence
+        regime epistemic-dominant, since epistemic = aleatoric / nu.
         softplus(0.9) + 1.0 ~ 1.2411 + 1.0 ~ 2.2411 (alpha).
         """
         import torch.nn.functional as F
@@ -813,9 +919,10 @@ class TestNIGInit:
             nu_activated = F.softplus(nu_raw) + 1e-6
             alpha_activated = F.softplus(alpha_raw) + 1.0
 
-        # nu ~ softplus(0.9) + 1e-6 ~ 1.2411
-        assert torch.all(nu_activated > 1.1), f"nu too small: {nu_activated}"
-        assert torch.all(nu_activated < 1.4), f"nu too large: {nu_activated}"
+        # nu ~ softplus(-1.0) + 1e-6 ~ 0.3133. Must be < 1 so epistemic =
+        # aleatoric / nu starts epistemic-dominant before evidence accrues.
+        assert torch.all(nu_activated > 0.25), f"nu too small: {nu_activated}"
+        assert torch.all(nu_activated < 1.0), f"nu not sub-1: {nu_activated}"
 
         # alpha ~ softplus(0.9) + 1.0 ~ 2.2411
         assert torch.all(alpha_activated > 2.1), f"alpha too small: {alpha_activated}"
@@ -1065,3 +1172,59 @@ class TestUncertaintyConditionedActorWiring:
         # Gradients must reach the dual-encoder action_net parameters
         for param in policy.action_net.parameters():
             assert param.grad is not None, "No gradient in dual-encoder action_net"
+
+
+class TestNuAnchorLoss:
+    """
+    @class TestNuAnchorLoss
+    @brief Verify the log-space nu anchor is a restoring force toward the sub-1
+           prior: zero at the prior, and a gradient that lowers nu when it is above
+           the prior and raises it when below. This is what stops the one-directional
+           evidence term from driving nu past 1 everywhere (the nu-collapse).
+    """
+
+    # softplus(-1.0) + 1e-6, the EvidentialLayer nu bias prior; mirrors the value
+    # in EvidentialPPO.train() (_log_nu_prior). Kept in step with that constant.
+    _NU_PRIOR = 0.313
+
+    def _anchor_loss(self, nu: "torch.Tensor") -> "torch.Tensor":
+        log_nu_prior = float(np.log(self._NU_PRIOR))
+        return (torch.log(nu) - log_nu_prior).pow(2).mean()
+
+    def test_zero_at_prior(self) -> None:
+        """@brief The anchor loss is ~0 when nu sits exactly at the prior."""
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), self._NU_PRIOR)
+        assert self._anchor_loss(nu).item() == pytest.approx(0.0, abs=1e-10)
+
+    def test_gradient_lowers_nu_when_above_prior(self) -> None:
+        """
+        @brief When nu is above the prior (the collapse regime, nu >> 1), a
+               gradient-descent step on the anchor decreases nu.
+        """
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), 13.0, requires_grad=True)
+        self._anchor_loss(nu).backward()
+        # Descent moves nu by -grad; grad must be positive so the step lowers nu.
+        assert torch.all(nu.grad > 0.0)
+
+    def test_gradient_raises_nu_when_below_prior(self) -> None:
+        """
+        @brief When nu is below the prior, the anchor pulls it back up (so the
+               anchor cannot itself pin nu arbitrarily low).
+        """
+        nu = torch.full((BATCH_SIZE, ACTION_DIM), 0.05, requires_grad=True)
+        self._anchor_loss(nu).backward()
+        assert torch.all(nu.grad < 0.0)
+
+    def test_disabled_by_default(self) -> None:
+        """
+        @brief lambda_nu_anchor defaults to 0.0 so the anchor is off unless opted
+               in (preserving the previous unanchored behaviour and CI baseline).
+        """
+        model = EvidentialPPO(
+            policy=EvidentialActorCriticPolicy,
+            env=gym.make("Pendulum-v1"),
+            lambda_reg=0.01,
+            n_steps=64,
+            batch_size=32,
+        )
+        assert model.lambda_nu_anchor == 0.0

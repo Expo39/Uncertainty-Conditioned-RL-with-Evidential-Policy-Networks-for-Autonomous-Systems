@@ -20,16 +20,23 @@ the contrasts the dissertation actually claims:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
-import matplotlib
+# Make the repo root importable so the shared discovery helper resolves when this
+# file is run directly (python scripts/evaluation/ablation_analyser.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+import matplotlib  # noqa: E402
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
+
+from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
 
 # The four ablation arms in plot order: covariance-off then covariance-on,
 # standard heads then evidential heads. The contrast pairs are adjacent.
@@ -58,24 +65,36 @@ _N_BOOTSTRAP = 10000
 _N_STD_BINS = 5
 
 
-def _discover_arm_csvs(results_root: Path) -> Dict[str, Path]:
+def _discover_arm_csvs(
+    results_root: Path, leaf: Optional[str] = None, stage: Optional[str] = None
+) -> Dict[str, Path]:
     """
     @brief Find each ablation arm's episode_records.csv under the nested tree.
     @param results_root: outputs/evaluation_results (the <baseline>/<leaf> root).
-    @return Mapping arm name -> path to its episode_records.csv. If an arm has
-            several leaves (re-runs), the most recently modified one is used.
+    @param leaf: Optional checkpoint leaf to pin to (single-arm runs); None lets
+           each arm's newest run win.
+    @param stage: Optional curriculum stage (e.g. "1") so the cross-arm contrast
+           compares arms at the SAME stage rather than each arm's newest leaf
+           (which may differ - e.g. full_method at stage 2 vs others at stage 1).
+    @return Mapping arm name -> path to its episode_records.csv. Per arm the
+            without_wrapper variant (free-running policy - the caution/precision
+            reads) is preferred, then the most recent leaf.
 
     The arm name is the first path component under the root (the baseline
-    directory). Only the four known ablation arms are kept.
+    directory); discover_arm_csvs handles both the two-level (legacy) and
+    three-level (wrapper-variant) layouts. Only the known ablation arms are kept.
     """
-    found: Dict[str, Path] = {}
-    for csv_path in sorted(results_root.glob("*/*/episode_records.csv")):
-        arm = csv_path.parent.parent.name
-        if arm not in _ARM_ORDER:
-            continue
-        if arm not in found or csv_path.stat().st_mtime > found[arm].stat().st_mtime:
-            found[arm] = csv_path
-    return found
+    return {
+        arm: path
+        for arm, path in discover_arm_csvs(
+            results_root,
+            "episode_records.csv",
+            prefer_variant="without_wrapper",
+            leaf=leaf,
+            stage=stage,
+        ).items()
+        if arm in _ARM_ORDER
+    }
 
 
 def _load_records(arm_csvs: Dict[str, Path]) -> pd.DataFrame:
@@ -337,9 +356,19 @@ def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
     std_col = "ekf_std_pos_mean_m"
     if std_col not in records.columns:
         return pd.DataFrame()
-    df = records[[std_col, "final_pos_error_m", "final_speed_ms", "arm"]].dropna(
-        subset=[std_col]
-    )
+    # Caution metrics added later (mean_speed_moving_ms etc.); older CSVs lack
+    # them, so aggregate only those present. final_pos_error_m is the precision
+    # outcome; final_speed_ms is kept for backward compatibility.
+    _CAUTION_COLS = [
+        "final_pos_error_m",
+        "final_speed_ms",
+        "mean_speed_moving_ms",
+        "mean_abs_vyaw_rads",
+        "mean_brake_cmd",
+        "mean_action_jerk",
+    ]
+    present = [c for c in _CAUTION_COLS if c in records.columns]
+    df = records[[std_col, "arm", *present]].dropna(subset=[std_col])
     if len(df) < _N_STD_BINS:
         return pd.DataFrame()
     try:
@@ -347,13 +376,15 @@ def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
     except ValueError:
         return pd.DataFrame()
     grouped = df.groupby(["arm", "std_bin"], observed=True)
-    out = grouped.agg(
-        std_low=(std_col, lambda s: float(s.min())),
-        std_high=(std_col, lambda s: float(s.max())),
-        mean_pos_error_m=("final_pos_error_m", "mean"),
-        mean_speed_ms=("final_speed_ms", "mean"),
-        n=(std_col, "size"),
-    ).reset_index()
+    agg_spec: Dict[str, Tuple[str, object]] = {
+        "std_low": (std_col, lambda s: float(s.min())),
+        "std_high": (std_col, lambda s: float(s.max())),
+        "n": (std_col, "size"),
+    }
+    # Each present caution metric becomes a mean_<col> column.
+    for col in present:
+        agg_spec[f"mean_{col}"] = (col, "mean")
+    out = grouped.agg(**agg_spec).reset_index()
     out["std_mid"] = (out["std_low"] + out["std_high"]) / 2.0
     return out
 
@@ -367,11 +398,24 @@ def _plot_behaviour(behaviour: pd.DataFrame, out_dir: Path) -> None:
     if behaviour.empty:
         return
     sns.set_style("whitegrid")
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    for ax, metric, label in (
-        (axes[0], "mean_pos_error_m", "Mean final position error (m)"),
-        (axes[1], "mean_speed_ms", "Mean final speed (m/s)"),
-    ):
+    # Plot every caution metric present (precision outcome first, then the
+    # drive-carefully signals). Expected directions as std rises: pos-error flat
+    # for the covariance arm; speed/jerk/vyaw DOWN; brake UP.
+    panels = [
+        ("mean_final_pos_error_m", "Mean final position error (m)"),
+        ("mean_mean_speed_moving_ms", "Mean approach speed (m/s)"),
+        ("mean_mean_brake_cmd", "Mean brake command"),
+        ("mean_mean_abs_vyaw_rads", "Mean |yaw rate| (rad/s)"),
+        ("mean_mean_action_jerk", "Mean action jerk"),
+    ]
+    panels = [(c, lbl) for c, lbl in panels if c in behaviour.columns]
+    if not panels:
+        return
+    ncols = min(3, len(panels))
+    nrows = (len(panels) + ncols - 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4.5 * nrows))
+    axes = np.atleast_1d(axes).ravel()
+    for ax, (metric, label) in zip(axes, panels):
         for arm in _ARM_ORDER:
             a = behaviour[behaviour["arm"] == arm]
             if a.empty:
@@ -380,11 +424,144 @@ def _plot_behaviour(behaviour: pd.DataFrame, out_dir: Path) -> None:
         ax.set_xlabel("EKF position std bin midpoint (m)")
         ax.set_ylabel(label)
         ax.legend(title="arm", fontsize=8)
-    axes[0].set_title("Precision under localisation uncertainty")
-    axes[1].set_title("Caution under localisation uncertainty")
+    for ax in axes[len(panels) :]:
+        ax.axis("off")
+    fig.suptitle("Behaviour vs localisation uncertainty (caution mechanism)")
     fig.tight_layout()
     fig.savefig(out_dir / "behaviour_by_std.png", dpi=150)
     plt.close(fig)
+
+
+# Caution metrics and the direction that means "more conservative as std rises".
+# Sign is the EXPECTED sign of the Spearman(metric, EKF std) for a cautious
+# policy: brake should rise (+1), speed / yaw-rate / jerk should fall (-1). The
+# cross-arm DIFFERENCE in these slopes (covariance arm minus blind arm) is the
+# causal test: caution attributable to SEEING the covariance, not to the episode
+# merely being harder (which the blind arm also experiences).
+_CAUTION_DIRECTION: List[Tuple[str, int]] = [
+    ("mean_brake_cmd", +1),
+    ("mean_speed_moving_ms", -1),
+    ("mean_abs_vyaw_rads", -1),
+    ("mean_action_jerk", -1),
+]
+
+
+def _caution_slopes(records: pd.DataFrame) -> pd.DataFrame:
+    """
+    @brief Per-arm Spearman of each caution metric against EKF position std.
+    @param records: Tidy per-episode frame from _load_records.
+    @return DataFrame: one row per (arm, metric) with the rank correlation, its
+            expected cautious sign, whether the sign matches, and n. Empty if the
+            caution columns are absent (older CSVs).
+
+    A negative speed/yaw/jerk slope and a positive brake slope mean the arm drives
+    more conservatively as localisation uncertainty rises. This is the WITHIN-arm
+    read; the cross-arm difference (_caution_contrast) is the causal claim.
+    """
+    std_col = "ekf_std_pos_mean_m"
+    metrics = [m for m, _ in _CAUTION_DIRECTION if m in records.columns]
+    if std_col not in records.columns or not metrics:
+        return pd.DataFrame()
+    direction = dict(_CAUTION_DIRECTION)
+    rows: List[Dict[str, object]] = []
+    for arm in [a for a in _ARM_ORDER if a in set(records["arm"])]:
+        sub = records[records["arm"] == arm]
+        for metric in metrics:
+            pair = sub[[std_col, metric]].dropna()
+            if len(pair) < 3 or pair[std_col].nunique() < 2:
+                continue
+            spearman = float(pair[std_col].rank().corr(pair[metric].rank()))
+            exp = direction[metric]
+            rows.append(
+                {
+                    "arm": arm,
+                    "metric": metric,
+                    "spearman_vs_std": spearman,
+                    "expected_sign": exp,
+                    "is_cautious": bool(spearman * exp > 0),
+                    "n": int(len(pair)),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def _caution_levels(records: pd.DataFrame) -> pd.DataFrame:
+    """
+    @brief Per-arm ABSOLUTE caution level and the precision/success payoff.
+    @param records: Tidy per-episode frame from _load_records.
+    @return DataFrame: one row per arm with mean approach speed, mean brake,
+            success rate, median final pos error, and collision rate. Empty if
+            the caution columns are absent.
+
+    The slope (_caution_slopes) measures how behaviour CHANGES with std; this
+    measures the baseline LEVEL. A covariance arm that drives slower overall is
+    only "cautious" rather than "undertrained" if the slowness buys accuracy -
+    higher success and lower final pos error - so those are reported alongside.
+    """
+    if "mean_speed_moving_ms" not in records.columns:
+        return pd.DataFrame()
+    rows: List[Dict[str, object]] = []
+    for arm in [a for a in _ARM_ORDER if a in set(records["arm"])]:
+        sub = records[records["arm"] == arm]
+        rows.append(
+            {
+                "arm": arm,
+                "mean_speed_moving_ms": float(sub["mean_speed_moving_ms"].mean()),
+                "mean_brake_cmd": float(sub.get("mean_brake_cmd", pd.Series()).mean()),
+                "success_rate": float(100.0 * sub["success"].mean()),
+                "median_pos_error_m": float(sub["final_pos_error_m"].median()),
+                "collision_rate": float(100.0 * (sub["outcome"] == "collision").mean()),
+                "n": int(len(sub)),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _caution_contrast(slopes: pd.DataFrame) -> pd.DataFrame:
+    """
+    @brief Cross-arm caution-slope difference for each covariance contrast pair.
+    @param slopes: Per-(arm, metric) slope table from _caution_slopes.
+    @return DataFrame: per (pair, metric) the treatment slope, control slope, and
+            their difference oriented so POSITIVE = the covariance arm is more
+            cautious than its blind control. Empty if either arm is missing.
+
+    This is the causal claim for "input uncertainty makes the car conservative":
+    the covariance arm (treatment) should show a stronger cautious slope than the
+    matched no-covariance arm (control). Difference is signed by the metric's
+    expected direction so a positive value always means "covariance => more
+    caution", whichever metric.
+    """
+    if slopes.empty:
+        return pd.DataFrame()
+    direction = dict(_CAUTION_DIRECTION)
+    by_arm_metric = {
+        (r["arm"], r["metric"]): float(r["spearman_vs_std"])
+        for _, r in slopes.iterrows()
+    }
+    rows: List[Dict[str, object]] = []
+    for pair_name, treat_arm, control_arm in _CONTRAST_PAIRS:
+        for metric, exp in _CAUTION_DIRECTION:
+            t = by_arm_metric.get((treat_arm, metric))
+            c = by_arm_metric.get((control_arm, metric))
+            if t is None or c is None:
+                continue
+            # Orient by expected direction: positive difference = treatment more
+            # cautious. For a "down" metric (exp=-1) a more-negative treatment
+            # slope is more cautious, so multiply the raw (t - c) by exp.
+            diff = (t - c) * direction[metric]
+            rows.append(
+                {
+                    "pair": pair_name,
+                    "treatment": treat_arm,
+                    "control": control_arm,
+                    "metric": metric,
+                    "treat_slope": t,
+                    "control_slope": c,
+                    "caution_diff": diff,
+                    "covariance_more_cautious": bool(diff > 0),
+                }
+            )
+    return pd.DataFrame(rows)
 
 
 def analyse(
@@ -393,6 +570,8 @@ def analyse(
     seed: int,
     slope_clean: str = _SLOPE_CLEAN_CONDITION,
     slope_degraded: str = _SLOPE_DEGRADED_CONDITION,
+    leaf: Optional[str] = None,
+    stage: Optional[str] = None,
 ) -> None:
     """
     @brief Run the full cross-arm analysis and write tables + figures.
@@ -401,9 +580,21 @@ def analyse(
     @param seed: Bootstrap RNG seed (reproducibility).
     @param slope_clean: Degradation-slope start condition (cleanest GNSS tier).
     @param slope_degraded: Degradation-slope end condition (worst GNSS tier).
+    @param leaf: Optional checkpoint leaf to pin to (single-arm runs); None lets
+           each arm's newest run win.
+    @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
+           same stage; None uses each arm's newest leaf (may mix stages).
     """
+    # Nest by stage (or pinned leaf) so STAGE=1 and STAGE=2 runs never overwrite
+    # each other; an unpinned mixed-stage run lands in "latest".
+    if stage is not None:
+        out_dir = out_dir / f"stage{stage}"
+    elif leaf is not None:
+        out_dir = out_dir / leaf
+    else:
+        out_dir = out_dir / "latest"
     out_dir.mkdir(parents=True, exist_ok=True)
-    arm_csvs = _discover_arm_csvs(results_root)
+    arm_csvs = _discover_arm_csvs(results_root, leaf=leaf, stage=stage)
     if not arm_csvs:
         raise FileNotFoundError(
             f"No arm episode_records.csv under {results_root}. "
@@ -421,18 +612,29 @@ def analyse(
     contrasts = _contrast_table(records, seed)
     slope = _degradation_slope(summary, slope_clean, slope_degraded)
     behaviour = _behaviour_by_std(records)
+    caution_slopes = _caution_slopes(records)
+    caution_contrast = _caution_contrast(caution_slopes)
+    caution_levels = _caution_levels(records)
 
     summary.to_csv(out_dir / "condition_summary.csv", index=False)
     contrasts.to_csv(out_dir / "covariance_contrasts.csv", index=False)
     slope.to_csv(out_dir / "degradation_slope.csv", index=False)
     if not behaviour.empty:
         behaviour.to_csv(out_dir / "behaviour_by_std.csv", index=False)
+    if not caution_slopes.empty:
+        caution_slopes.to_csv(out_dir / "caution_slopes.csv", index=False)
+    if not caution_contrast.empty:
+        caution_contrast.to_csv(out_dir / "caution_contrast.csv", index=False)
+    if not caution_levels.empty:
+        caution_levels.to_csv(out_dir / "caution_levels.csv", index=False)
 
     _plot_condition_bars(summary, out_dir)
     _plot_degradation_slope(slope, out_dir)
     _plot_behaviour(behaviour, out_dir)
 
     _print_headline(contrasts, slope, slope_clean, slope_degraded)
+    _print_caution(caution_slopes, caution_contrast)
+    _print_caution_levels(caution_levels)
     print(f"\nTables and figures written to {out_dir}")
 
 
@@ -478,6 +680,82 @@ def _print_headline(
         )
 
 
+def _print_caution(slopes: pd.DataFrame, contrast: pd.DataFrame) -> None:
+    """
+    @brief Console summary of the caution-vs-uncertainty result.
+    @param slopes: Per-(arm, metric) slope table from _caution_slopes.
+    @param contrast: Cross-arm difference table from _caution_contrast.
+
+    Two reads: WITHIN-arm (does each arm drive more cautiously as std rises?) and
+    CROSS-arm (is the caution stronger for the covariance arm - the causal claim).
+    The cross-arm block is empty until both arms of a pair are evaluated.
+    """
+    print("\n=== Caution vs EKF std: within-arm slopes (Spearman) ===")
+    if slopes.empty:
+        print("  (no caution columns - re-run eval with the updated evaluate.py)")
+    else:
+        for arm in [a for a in _ARM_ORDER if a in set(slopes["arm"])]:
+            a = slopes[slopes["arm"] == arm]
+            parts = "  ".join(
+                f"{r['metric'].replace('mean_', '').replace('_', ''):14s}"
+                f"{r['spearman_vs_std']:+.3f}{'ok' if r['is_cautious'] else 'XX'}"
+                for _, r in a.iterrows()
+            )
+            print(f"  {arm:20s} {parts}")
+        print("  brake should be +, speed/vyaw/jerk should be - (ok = cautious sign).")
+
+    print("\n=== Caution CROSS-arm (covariance - blind): the causal claim ===")
+    if contrast.empty:
+        print(
+            "  (need BOTH arms of a contrast pair: input_uncertainty vs vanilla_ppo,\n"
+            "   full_method vs output_uncertainty - only then is caution attributable\n"
+            "   to SEEING the covariance, not to the episode merely being harder)"
+        )
+    else:
+        for pair in contrast["pair"].unique():
+            p = contrast[contrast["pair"] == pair]
+            wins = int(p["covariance_more_cautious"].sum())
+            print(f"  [{pair}] covariance more cautious on {wins}/{len(p)} metrics:")
+            for _, r in p.iterrows():
+                mark = (
+                    "->covariance" if r["covariance_more_cautious"] else "->blind/equal"
+                )
+                print(
+                    f"      {r['metric']:22s} treat {r['treat_slope']:+.3f} "
+                    f"vs control {r['control_slope']:+.3f}  diff {r['caution_diff']:+.3f} {mark}"
+                )
+
+
+def _print_caution_levels(levels: pd.DataFrame) -> None:
+    """
+    @brief Console summary of absolute caution LEVEL and its accuracy payoff.
+    @param levels: Per-arm level table from _caution_levels.
+
+    Speed-vs-std SLOPE can be flat even when an arm drives cautiously at a low
+    baseline; this shows the absolute speed/brake level alongside success and
+    pos-error so a slower arm can be read as cautious (slower AND more accurate)
+    rather than merely undertrained (slower AND worse).
+    """
+    print("\n=== Caution LEVEL (absolute) + accuracy payoff ===")
+    if levels.empty:
+        print("  (no caution columns - re-run eval with the updated evaluate.py)")
+        return
+    print(
+        f"  {'arm':20s} {'speed':>6} {'brake':>6} {'succ%':>6} "
+        f"{'pos_err':>8} {'collide%':>9}"
+    )
+    for _, r in levels.iterrows():
+        print(
+            f"  {str(r['arm']):20s} {r['mean_speed_moving_ms']:6.2f} "
+            f"{r['mean_brake_cmd']:6.3f} {r['success_rate']:6.1f} "
+            f"{r['median_pos_error_m']:8.2f} {r['collision_rate']:9.1f}"
+        )
+    print(
+        "  A covariance arm that is SLOWER and MORE accurate (higher succ%, lower\n"
+        "  pos_err) is cautious, not undertrained - the slowness buys precision."
+    )
+
+
 def main() -> None:
     """
     @brief CLI entry point for the cross-arm ablation analysis.
@@ -515,6 +793,20 @@ def main() -> None:
         default=_SLOPE_DEGRADED_CONDITION,
         help="Degradation-slope end condition (worst held GNSS tier).",
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Pin to one checkpoint leaf, e.g. 1_42_19062026-0120 "
+        "(single-arm runs; default: each arm's newest run).",
+    )
+    parser.add_argument(
+        "--stage",
+        type=str,
+        default=None,
+        help="Compare all arms at this curriculum stage (e.g. 1), instead of "
+        "each arm's newest leaf which may sit at different stages.",
+    )
     args = parser.parse_args()
     analyse(
         Path(args.results_root),
@@ -522,6 +814,8 @@ def main() -> None:
         args.seed,
         args.slope_clean,
         args.slope_degraded,
+        leaf=args.checkpoint,
+        stage=args.stage,
     )
 
 

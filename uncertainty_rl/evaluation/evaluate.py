@@ -13,6 +13,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -50,8 +51,18 @@ from uncertainty_rl.evaluation.metrics import (  # noqa: F401
 )
 from uncertainty_rl.evaluation.plots import plot_evaluation_results  # noqa: F401
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
+from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
 logger = logging.getLogger("uncertainty_rl.evaluation")
+
+# Run-identifier timestamps use local wall-clock time (the container runs UTC);
+# Europe/Malta is DST-aware (UTC+2 summer, UTC+1 winter).
+_LOCAL_TZ = ZoneInfo("Europe/Malta")
+
+# GNSS fix-state tier whose onset marks "degraded" for handover-latency timing.
+# Matches the worst tier in configs/deployment/sim/gnss_noise_profiles.yaml; the
+# step info reports the live tier name (env step() "gnss_tier").
+DEGRADED_TIER_NAME = "degraded"
 
 
 def evaluate_agent(
@@ -93,7 +104,8 @@ def evaluate_agent(
     ep_epistemic: List[float] = []
     ep_aleatoric: List[float] = []
     # Action-distribution std per decision: sqrt(aleatoric) for the evidential
-    # head (its predicted outcome variance IS the sampling variance).
+    # head - the TRUE predicted outcome variance (confidence signal), un-floored,
+    # so it can fall below the training-time sampling-std floor.
     ep_action_std: List[float] = []
     # Optional capture of real (normalised) observations for the on-manifold
     # covariance probe (scripts/evaluation/covariance_probe.py --real-obs).
@@ -106,14 +118,27 @@ def evaluate_agent(
     # collected for every baseline so the calibration analysis covers the
     # no-covariance arms too. Always on (cheap; one small dict per step).
     calibration_pairs: List[Dict[str, Any]] = []
+    # Per-step uncertainty trace for evidential heads. The per-step gating
+    # analysis needs epistemic[t]/aleatoric[t] at matched states (e.g. the first
+    # few steps, before policies diverge) to test instantaneous response rather
+    # than the time-averaged episode aggregate. EVAL_PER_STEP_CAP bounds how many
+    # leading steps per episode are kept (0 disables); the early steps are the
+    # informative ones for novelty, so capping the head of each episode keeps the
+    # file small without losing the matched-state window.
+    per_step_records: List[Dict[str, Any]] = []
+    _per_step_cap = int(os.environ.get("EVAL_PER_STEP_CAP", "0") or "0")
 
     episode_rewards = np.empty(n_episodes, dtype=np.float64)
     episode_steps = np.empty(n_episodes, dtype=np.int32)
     success_flags = np.zeros(n_episodes, dtype=bool)
 
     # Detect evidential policy once; hoist method references out of the loop.
-    is_evidential = isinstance(model, EvidentialPPO) and hasattr(
-        model.policy, "get_action_with_uncertainty"
+    # EvidentialPPO is None when SB3 is unavailable (host/CI without torch), so
+    # guard the isinstance against the None sentinel - isinstance(x, None) raises.
+    is_evidential = (
+        EvidentialPPO is not None
+        and isinstance(model, EvidentialPPO)
+        and hasattr(model.policy, "get_action_with_uncertainty")
     )
 
     # Bind a single step function to eliminate the per-step branch.
@@ -125,6 +150,10 @@ def evaluate_agent(
         )
         _set_uncertainty = env.env_method
         _policy_device = model.policy.device
+        # The wrapper consumes set_uncertainty() to modulate actions; the bare env
+        # (EVAL_DISABLE_SAFETY_WRAPPER) has no such method, so feeding it is a no-op
+        # there. Probe once rather than try/except every step.
+        _has_set_uncertainty = hasattr(env.envs[0], "set_uncertainty")
 
         def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
             obs_tensor = th.as_tensor(obs, device=_policy_device)
@@ -139,7 +168,8 @@ def evaluate_agent(
             ep_epistemic.append(epistemic)
             ep_aleatoric.append(aleatoric)
             ep_action_std.append(float(np.sqrt(aleatoric)))
-            _set_uncertainty("set_uncertainty", epistemic, aleatoric)
+            if _has_set_uncertainty:
+                _set_uncertainty("set_uncertainty", epistemic, aleatoric)
             next_obs, reward, done, infos = env.step(action)
             return next_obs, float(reward[0]), done, infos
 
@@ -182,6 +212,24 @@ def evaluate_agent(
         # runs; include_covariance only controls whether the policy SEES them.
         ep_std_pos: List[float] = []
         ep_std_yaw: List[float] = []
+        # Handover-timing trace. handoff_step = first decision the SafetyWrapper
+        # triggered a full-stop handoff; degraded_onset_step = first decision the
+        # GNSS tier reached the degraded multiplier (the drift crossing, per
+        # episode). Both are step indices, NaN if the event never occurred; the
+        # latency and its onset regime (spawn vs mid-episode switch) are derived
+        # downstream from the condition, which this loop does not know.
+        handoff_step: float = float("nan")
+        degraded_onset_step: float = float("nan")
+        # Caution-behaviour trace: per-step speed (while MOVING, so the terminal
+        # park-stop does not drag the mean to zero), yaw-rate magnitude, brake
+        # command, and action jerk (||cmd_t - cmd_{t-1}||). Aggregated per episode
+        # and binned against EKF std downstream to test whether the policy drives
+        # more cautiously as localisation uncertainty rises.
+        ep_speed_moving: List[float] = []
+        ep_abs_vyaw: List[float] = []
+        ep_brake: List[float] = []
+        ep_action_jerk: List[float] = []
+        prev_cmd: Optional[np.ndarray] = None
 
         while not done[0]:
             if _obs_cap and len(captured_obs) < _obs_cap:
@@ -226,6 +274,78 @@ def evaluate_agent(
                 ep_std_pos.append((_std_x + _std_y) / 2.0)
             if np.isfinite(_std_yaw):
                 ep_std_yaw.append(_std_yaw)
+            # Handover-timing capture: first handoff step and first step the GNSS
+            # tier reaches DEGRADED_TIER_NAME. Recorded as step indices so the
+            # analysis can compute latency against the right onset reference.
+            if np.isnan(handoff_step) and bool(_info0.get("safety_handoff", False)):
+                handoff_step = float(steps)
+            if (
+                np.isnan(degraded_onset_step)
+                and str(_info0.get("gnss_tier", "")) == DEGRADED_TIER_NAME
+            ):
+                degraded_onset_step = float(steps)
+            # Caution-behaviour per step. Speed is kept only while moving (above
+            # the success velocity floor) so the terminal park-stop does not bias
+            # the mean toward zero. Jerk is the change in the post-clamp command
+            # actually delivered to CARLA (steer/throttle/brake).
+            _speed = float(_info0.get("speed", float("nan")))
+            if np.isfinite(_speed) and _speed >= SUCCESS_THRESHOLD_VELOCITY:
+                ep_speed_moving.append(_speed)
+            _vyaw = float(_info0.get("ekf_vyaw", float("nan")))
+            if np.isfinite(_vyaw):
+                ep_abs_vyaw.append(abs(_vyaw))
+            _cmd = np.array(
+                [
+                    float(_info0.get("steer_cmd", float("nan"))),
+                    float(_info0.get("throttle_cmd", float("nan"))),
+                    float(_info0.get("brake_cmd", float("nan"))),
+                ],
+                dtype=np.float32,
+            )
+            if np.all(np.isfinite(_cmd)):
+                ep_brake.append(float(_cmd[2]))
+                if prev_cmd is not None:
+                    ep_action_jerk.append(float(np.linalg.norm(_cmd - prev_cmd)))
+                prev_cmd = _cmd
+            # Per-step uncertainty trace (evidential heads only). step_fn has just
+            # appended this decision's epistemic/aleatoric to the episode lists, so
+            # read them off the tail. Keep only the leading steps per episode so a
+            # full sweep stays a few MB, not hundreds.
+            if _per_step_cap and steps <= _per_step_cap:
+                # Behaviour + EKF columns per step (every arm) so caution-vs-
+                # covariance is readable WITHIN an episode. Standard heads have no
+                # state uncertainty: epistemic/aleatoric NaN, action_std the
+                # constant exp(log_std). abs_err_pos_m is the GT-EKF position error.
+                _err_pos = (
+                    float(np.hypot(_gt_x - _ekf_x, _gt_y - _ekf_y))
+                    if np.isfinite(_gt_x) and np.isfinite(_ekf_x)
+                    else float("nan")
+                )
+                per_step_records.append(
+                    {
+                        "condition": "",  # filled by the caller per condition
+                        "episode": episode + 1,
+                        "step": steps,
+                        "epistemic": (
+                            ep_epistemic[-1] if is_evidential else float("nan")
+                        ),
+                        "aleatoric": (
+                            ep_aleatoric[-1] if is_evidential else float("nan")
+                        ),
+                        "action_std": (
+                            ep_action_std[-1] if is_evidential else const_action_std
+                        ),
+                        "ekf_std_pos_m": (_std_x + _std_y) / 2.0,
+                        "ekf_std_yaw_rad": _std_yaw,
+                        "speed_ms": _speed,
+                        "abs_yaw_rate_rads": (
+                            abs(_vyaw) if np.isfinite(_vyaw) else float("nan")
+                        ),
+                        "throttle_cmd": float(_cmd[1]),
+                        "brake_cmd": float(_cmd[2]),
+                        "abs_err_pos_m": _err_pos,
+                    }
+                )
             if done[0]:
                 # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
                 # On the terminal step DummyVecEnv has already auto-reset the
@@ -293,6 +413,18 @@ def evaluate_agent(
                         "ekf_std_pos_mean_m": std_pos_mean,
                         "ekf_std_pos_max_m": std_pos_max,
                         "ekf_std_yaw_mean_rad": std_yaw_mean,
+                        # Handover timing (step indices, NaN if never). The onset
+                        # regime and latency are derived per condition downstream.
+                        "handoff_step": handoff_step,
+                        "degraded_onset_step": degraded_onset_step,
+                        # Caution behaviour (per-episode means). Binned against
+                        # EKF std downstream to test drive-carefully-when-unsure:
+                        # speed/jerk/vyaw should FALL and brake RISE as std grows.
+                        "mean_speed_moving_ms": _mean_max(ep_speed_moving)[0],
+                        "mean_abs_vyaw_rads": _mean_max(ep_abs_vyaw)[0],
+                        "mean_brake_cmd": _mean_max(ep_brake)[0],
+                        "mean_action_jerk": _mean_max(ep_action_jerk)[0],
+                        "n_moving_steps": len(ep_speed_moving),
                     }
                 )
                 if render:
@@ -308,6 +440,8 @@ def evaluate_agent(
         metrics.captured_observations = captured_obs
     if calibration_pairs:
         metrics.calibration_pairs = calibration_pairs
+    if per_step_records:
+        metrics.per_step_records = per_step_records
 
     return metrics
 
@@ -405,6 +539,9 @@ def evaluate_across_conditions(
     # EKF calibration pairs (predicted std vs actual error) across the sweep,
     # tagged by condition - the honesty-of-the-covariance table.
     calibration_rows: List[Dict[str, Any]] = []
+    # Per-step uncertainty trace across the sweep, tagged by condition - the
+    # per-step gating table (EVAL_PER_STEP_CAP leading steps per episode).
+    per_step_rows: List[Dict[str, Any]] = []
     vec_normalize_exists = os.path.exists(vec_normalize_path)
     if not vec_normalize_exists:
         logger.warning(
@@ -421,7 +558,7 @@ def evaluate_across_conditions(
     # parent directory name (seed<N>_<timestamp>); the baseline comes from the
     # evaluated baseline config, falling back to the checkpoint's grandparent so
     # the path is unambiguous even for ad-hoc checkpoints.
-    _eval_leaf = Path(model_path).parent.name or datetime.now().strftime(
+    _eval_leaf = Path(model_path).parent.name or datetime.now(_LOCAL_TZ).strftime(
         "%d-%m-%Y-%H%M%S"
     )
     _eval_baseline = baseline_cfg.get(
@@ -429,10 +566,17 @@ def evaluate_across_conditions(
     )
     _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
     _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_baseline / _eval_leaf
-    # Results nest by <baseline>/<leaf>, mirroring checkpoints/logs/bay
-    # successes, so successive ablation arms and seeds never overwrite each
-    # other's evaluation_results.csv / episode_records.csv.
-    run_output_dir = os.path.join(output_dir, _eval_baseline, _eval_leaf)
+    # Results nest by <baseline>/<leaf>/<wrapper_variant>, mirroring checkpoints/
+    # logs/bay successes. The with_wrapper/without_wrapper leaf keeps the two
+    # SafetyWrapper variants of the SAME checkpoint side by side for the A/B.
+    _wrapper_variant = (
+        "without_wrapper"
+        if bool(int(os.environ.get("EVAL_DISABLE_SAFETY_WRAPPER", "0") or "0"))
+        else "with_wrapper"
+    )
+    run_output_dir = os.path.join(
+        output_dir, _eval_baseline, _eval_leaf, _wrapper_variant
+    )
 
     for condition in conditions:
         name = condition.get("name", "unknown")
@@ -472,7 +616,7 @@ def evaluate_across_conditions(
                 "description": description,
                 "n_episodes": n_episodes,
                 "held_gnss_tier": condition.get("held_gnss_tier", "markov"),
-                "evaluated": datetime.now().strftime("%d-%m-%Y %H:%M"),
+                "evaluated": datetime.now(_LOCAL_TZ).strftime("%d-%m-%Y %H:%M"),
             },
         )
 
@@ -490,6 +634,12 @@ def evaluate_across_conditions(
         # the analysis can split honesty by GNSS tier.
         for pair in metrics.calibration_pairs:
             calibration_rows.append({**pair, "condition": name})
+
+        # Accumulate the per-step uncertainty trace, tagged by condition, so the
+        # per-step gating analysis can compare epistemic[t] across conditions at
+        # matched steps.
+        for rec in metrics.per_step_records:
+            per_step_rows.append({**rec, "condition": name})
 
         # Store results: merge metrics dict with condition metadata in one pass
         optional_fields = (
@@ -550,6 +700,15 @@ def evaluate_across_conditions(
         calib_csv_path = os.path.join(run_output_dir, "calibration_records.csv")
         calib_df.to_csv(calib_csv_path, index=False)
         logger.info("EKF calibration records saved to %s", calib_csv_path)
+
+    # Per-step uncertainty trace (EVAL_PER_STEP_CAP leading steps per episode),
+    # the input to the per-step / matched-state gating analysis. Only written
+    # when EVAL_PER_STEP_CAP > 0 and the head is evidential.
+    if per_step_rows:
+        per_step_df = pd.DataFrame(per_step_rows)
+        per_step_csv_path = os.path.join(run_output_dir, "per_step_records.csv")
+        per_step_df.to_csv(per_step_csv_path, index=False)
+        logger.info("Per-step uncertainty trace saved to %s", per_step_csv_path)
 
     # Dump captured real observations for the on-manifold covariance probe.
     if captured_obs_all:

@@ -131,6 +131,7 @@ class CARLAParkingEnv(gym.Env):
         use_extra_spawns: bool = False,
         gnss_noise_profiles_path: Optional[str] = None,
         held_gnss_tier_override: Optional[str] = None,
+        degrade_one_way_override: bool = False,
         success_dwell_steps: int = SUCCESS_DWELL_STEPS,
         bay_margin: float = 0.0,
         actuator_model: Optional[Dict[str, float]] = None,
@@ -182,6 +183,11 @@ class CARLAParkingEnv(gym.Env):
                held-level signalling, so the level is a controlled independent
                variable. Used during evaluation to lock GNSS noise to a specific
                condition.
+        @param degrade_one_way_override: If True, the episode STARTS at rtk_fixed
+               and the relay lets the Markov chain only degrade (never recover) -
+               the monotone-degradation eval condition (starts good, drifts to
+               degraded, stays there). Mutually exclusive with a held tier (a held
+               tier suppresses drift entirely). Training leaves it False.
         @param success_dwell_steps: Number of consecutive steps all success
                criteria (position, orientation, velocity) must be satisfied
                before the episode terminates as a success. Prevents a fast
@@ -230,6 +236,12 @@ class CARLAParkingEnv(gym.Env):
         self._prev_throttle_cmd: float = 0.0
         self._prev_brake_cmd: float = 0.0
         self._held_gnss_tier_override = held_gnss_tier_override
+        # Monotone-degradation eval condition: start at rtk_fixed and let the
+        # relay drift only downward. Ignored when a held tier is set (held tiers
+        # have no drift at all).
+        self._degrade_one_way_override = bool(degrade_one_way_override) and (
+            held_gnss_tier_override is None
+        )
 
         self._bay_margin: float = float(bay_margin)
 
@@ -746,8 +758,14 @@ class CARLAParkingEnv(gym.Env):
             self._current_gnss_tier = None
             return
 
+        # Monotone-degradation condition: pin the START tier to rtk_fixed (so the
+        # episode genuinely "starts good") and let the relay's one-way chain drift
+        # it down to degraded without recovery. The downward-only behaviour is
+        # enforced relay-side via the degrade_one_way flag in publish_episode_config.
+        if self._degrade_one_way_override:
+            tier = self._resolve_held_tier("rtk_fixed")
         # When a fixed tier is configured, bypass the weighted sampler.
-        if self._fixed_gnss_tier is not None:
+        elif self._fixed_gnss_tier is not None:
             tier = self._resolve_held_tier(self._fixed_gnss_tier)
         else:
             idx = self.np_random.choice(
@@ -1981,6 +1999,7 @@ class CARLAParkingEnv(gym.Env):
                     datum_lat=datum_lat,
                     datum_lon=datum_lon,
                     hold_tier=self._hold_gnss_tier,
+                    degrade_one_way=self._degrade_one_way_override,
                 )
 
         if reuse_vehicle:
@@ -2423,6 +2442,16 @@ class CARLAParkingEnv(gym.Env):
             "ekf_std_x": float(self._last_ekf_std[0]),
             "ekf_std_y": float(self._last_ekf_std[1]),
             "ekf_std_yaw": float(self._last_ekf_std[2]),
+            # Current GNSS fix-state tier (name + noise multiplier vs RTK-fixed).
+            # Lets timing analysis recover the step the Markov drift first reaches
+            # a degraded tier (the onset reference for handover-latency), which
+            # varies per episode under the degrade_one_way drift.
+            "gnss_tier": (
+                self._current_gnss_tier.get("name", "")
+                if self._current_gnss_tier is not None
+                else ""
+            ),
+            "gnss_multiplier": float(self._current_gnss_multiplier),
             # Target bay this episode (id, world pose, dimensions). Constant
             # within an episode; surfaced so trace tooling can record which bay
             # the run targeted without reaching into the env internals.
