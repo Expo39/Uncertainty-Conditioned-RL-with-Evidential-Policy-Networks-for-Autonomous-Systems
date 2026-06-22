@@ -124,7 +124,7 @@ derivation and the EKF convergence loop parameters.
 
 `RealWorldInferenceLoop._get_lidar_scan()` returns `None` until a hardware-specific
 ROS 2 subscriber is wired up. When `None`, the obstacle features (obs indices 7-11)
-are zeroed. The safety wrapper remains active for epistemic uncertainty handoffs;
+are zeroed. The safety wrapper remains active for total-uncertainty handoffs;
 obstacle avoidance relies on the human safety operator during initial testing.
 
 ---

@@ -11,8 +11,9 @@ matches these values, which transitively pins the relay's _TIER_DEFAULTS too.
 
 import math
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
+import numpy as np
 import pytest
 import yaml
 
@@ -35,6 +36,37 @@ _PROFILES_PATH = (
     / "sim"
     / "gnss_noise_profiles.yaml"
 )
+
+# Default per-step transition matrix, inlined from
+# gnss_noise_relay._DEFAULT_TRANSITION_MATRIX (rows = from-tier in _TIER_ORDER).
+# The relay module imports rclpy at module scope, so it cannot be imported on the
+# host; this mirrors the production matrix the same way _TIER_DEFAULTS is inlined.
+_DEFAULT_TRANSITION_MATRIX = np.array(
+    [
+        [0.9920, 0.0080, 0.0000, 0.0000],  # from: rtk_fixed
+        [0.0400, 0.9550, 0.0050, 0.0000],  # from: rtk_float
+        [0.0000, 0.0080, 0.9875, 0.0045],  # from: standalone
+        [0.0000, 0.0000, 0.0071, 0.9929],  # from: degraded
+    ]
+)
+
+
+def _mask_recovery_transitions(
+    row: np.ndarray,
+    active_idx: int,
+) -> Optional[np.ndarray]:
+    """
+    @brief Reference reimplementation of gnss_noise_relay.mask_recovery_transitions.
+
+    Kept in lock-step with the production helper (which is unimportable on the host
+    because the relay module imports rclpy). @see gnss_noise_relay.mask_recovery_transitions.
+    """
+    masked = np.asarray(row, dtype=np.float64).copy()
+    masked[:active_idx] = 0.0
+    total = masked.sum()
+    if total <= 0.0:
+        return None
+    return masked / total
 
 
 # ---------------------------------------------------------------------------
@@ -200,3 +232,73 @@ class TestYamlMirror:
                 f"Tier '{tier}' doppler_stddev_ms mismatch: "
                 f"YAML={actual} vs _TIER_DEFAULTS={expected}"
             )
+
+
+# ---------------------------------------------------------------------------
+# One-way (monotone) degradation masking
+# ---------------------------------------------------------------------------
+
+
+class TestRecoveryMasking:
+    """
+    @class TestRecoveryMasking
+    @brief Verify the one-way degradation ratchet used by the gnss_degrade_one_way
+           eval condition: recovery transitions are forbidden and the chain only
+           ever stays put or drops to a worse tier.
+    """
+
+    def test_upward_transitions_zeroed(self) -> None:
+        """
+        @brief From an intermediate tier, all transitions to a better fix are zero.
+        """
+        # From standalone (idx 2): rtk_fixed (0) and rtk_float (1) must be unreachable.
+        masked = _mask_recovery_transitions(_DEFAULT_TRANSITION_MATRIX[2], active_idx=2)
+        assert masked is not None
+        assert masked[0] == 0.0
+        assert masked[1] == 0.0
+
+    def test_masked_row_is_a_distribution(self) -> None:
+        """
+        @brief Each masked row still sums to 1 (renormalised over same-or-worse tiers).
+        """
+        for idx in range(3):  # degraded handled separately (absorbing)
+            masked = _mask_recovery_transitions(
+                _DEFAULT_TRANSITION_MATRIX[idx], active_idx=idx
+            )
+            assert masked is not None
+            assert masked.sum() == pytest.approx(1.0)
+            assert np.all(masked >= 0.0)
+
+    def test_no_recovery_probability_anywhere(self) -> None:
+        """
+        @brief For every starting tier, the masked row places zero mass on any
+               strictly better tier - the defining property of the one-way chain.
+        """
+        for idx in range(len(_TIER_ORDER)):
+            masked = _mask_recovery_transitions(
+                _DEFAULT_TRANSITION_MATRIX[idx], active_idx=idx
+            )
+            if masked is None:
+                continue
+            assert np.all(masked[:idx] == 0.0)
+
+    def test_self_loop_mass_grows_after_masking(self) -> None:
+        """
+        @brief Folding the forbidden upward mass onto the row lengthens the dwell:
+               the renormalised stay-put probability is >= the original.
+        """
+        # rtk_float (idx 1) originally recovers to rtk_fixed with p=0.04.
+        original = _DEFAULT_TRANSITION_MATRIX[1]
+        masked = _mask_recovery_transitions(original, active_idx=1)
+        assert masked is not None
+        assert masked[1] >= original[1]
+
+    def test_degraded_is_absorbing(self) -> None:
+        """
+        @brief From the worst tier the masked row keeps the chain at degraded
+               (no better tier reachable; the self-loop dominates).
+        """
+        masked = _mask_recovery_transitions(_DEFAULT_TRANSITION_MATRIX[3], active_idx=3)
+        assert masked is not None
+        # Only the degraded self-loop (idx 3) carries mass after renormalisation.
+        assert masked[3] == pytest.approx(1.0)

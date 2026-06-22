@@ -11,7 +11,7 @@ parking_scenarios:
   allowed_bay_ids:  # Drop the radial-homing crutch (25); keep a straight-in anchor (38).
     - perpendicular_0    # cluster 0-11,  yaw 270, lower row (turn-in, right of spawn)
     - perpendicular_22   # cluster 12-24, yaw 90,  south row (turn-in, opposite orientation)
-    - perpendicular_37   # cluster 33-37, yaw 270, upper row east block (far - forces corridor setup)
+    - perpendicular_27   # cluster 25-32, yaw 270, upper row (near spawn; same turn-in as 37 without the long corridor)
     - perpendicular_38   # cluster 38-46, yaw 180, east column (straight-in anchor; clear corridor along the main aisle)
   bay_occupancy_min: 0.0  # Include EMPTY lots: careful-under-uncertainty is needed
   # most in open space (no LiDAR to resolve a bad EKF pose), so empty must be
@@ -37,6 +37,4 @@ evidential_overrides:
   learning_rate: 0.0003
   learning_rate_final: 0.00005
   ent_coef: 0.003
-  # Higher floor than the standard block: action std = sqrt(aleatoric), so a
-  # collapsing head kills exploration (the standard log_std is decoupled).
   ent_coef_final: 0.0015

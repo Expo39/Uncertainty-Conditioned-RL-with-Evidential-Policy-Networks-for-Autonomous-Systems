@@ -21,13 +21,13 @@ carla_sensors:
 
 # Identical standard/evidential blocks - see Stage 1.
 standard_overrides:
-  stage_timesteps: 2500000
+  stage_timesteps: 1500000
   learning_rate: 0.0001
   learning_rate_final: 0.00002
   ent_coef: 0.001
   ent_coef_final: 0.0005
 evidential_overrides:
-  stage_timesteps: 2500000
+  stage_timesteps: 1500000
   learning_rate: 0.0001
   learning_rate_final: 0.00002
   # Higher start + floor than the standard block: action std = sqrt(aleatoric),

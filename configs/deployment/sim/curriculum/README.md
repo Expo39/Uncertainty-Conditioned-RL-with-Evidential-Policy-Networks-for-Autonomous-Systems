@@ -10,12 +10,12 @@ per-policy override blocks each stage owns.
 
 | Stage | Bays | Margin | Occupancy | Budget (decisions) | Primary axis |
 |---|---|---|---|---|---|
-| 1 | 4 (4 of 5 clusters) | -0.75 | 0.1 | 1.5M | bootstrap (from scratch) |
-| 2 | 14 (3 per cluster; 2 from the 5-bay east block) | -0.55 | 0.1 | 1.5M | bay variety |
-| 3 | all 47 | -0.40 | 0.1 | 2.0M | bay variety -> full lot |
-| 4 | all 47 | -0.25 | 0.1 | 1.5M | margin -> strict (clean) |
-| 5 | all 47 | -0.25 | 0.2-0.5 | 2.0M | occupancy |
-| 6 | all 47 | -0.25 | 0.2-0.8 | 2.5M | occupancy full (final operating point) |
+| 1 | 4 (4 of 5 clusters) | -0.75 | 0.0-0.1 | 1.5M | bootstrap (from scratch) |
+| 2 | 14 (3 per cluster; 2 from the 5-bay east block) | -0.55 | 0.0-0.1 | 1.5M | bay variety |
+| 3 | all 47 | -0.40 | 0.0-0.1 | 2.0M | bay variety -> full lot |
+| 4 | all 47 | -0.25 | 0.0-0.1 | 1.5M | margin -> strict (clean) |
+| 5 | all 47 | -0.25 | 0.0-0.5 | 2.0M | occupancy |
+| 6 | all 47 | -0.25 | 0.0-0.8 | 2.5M | occupancy full (final operating point) |
 
 Design rules behind the table:
 
@@ -32,7 +32,8 @@ Design rules behind the table:
   the avoidance task. Each stage's bay set is a superset of the previous stage's so
   the resumed policy keeps a success signal.
 - **Occupancy is a per-episode range** (`bay_occupancy_min/max`); the low end stays
-  at 0.2 so easy episodes keep the success signal alive within a stage.
+  at 0.0 (empty in-distribution) so easy episodes keep the success signal alive
+  within a stage, while only the max ramps (0.1 -> 0.5 -> 0.8).
 
 ## Key contract
 
@@ -77,7 +78,8 @@ Schedule conventions:
   destabilised at a difficulty boundary.
 - `ent_coef` decays to the 0.0005 floor in every stage; for the standard policy the
   action std is entropy-driven, so the floor bounds exploration noise at
-  convergence.
+  convergence. The evidential policy's action std is the NIG aleatoric, bounded below
+  by the (stage-invariant) `evidential.aleatoric_floor` in `train_config.yaml`.
 
 ## Running a stage
 

@@ -65,7 +65,13 @@ class EvidentialLayer(nn.Module):
             else:
                 # Generic fallback for non-parking action spaces (test harness).
                 self.linear.bias[0 * n : 1 * n].fill_(0.0)
-            self.linear.bias[1 * n : 2 * n].fill_(0.9)  # nu
+            # nu prior softplus(-1.0) ~ 0.31 < 1. Since epistemic =
+            # beta/(nu*(alpha-1)) = aleatoric/nu, epistemic > aleatoric iff
+            # nu < 1: a sub-1 prior makes the no-evidence regime (novel/OOD
+            # states) epistemic-dominant, the signal a handoff gate reads. The
+            # advantage-gated evidence term raises nu past 1 for well-predicted
+            # in-distribution actions, where aleatoric should dominate instead.
+            self.linear.bias[1 * n : 2 * n].fill_(-1.0)  # nu
             self.linear.bias[2 * n : 3 * n].fill_(0.9)  # alpha
             self.linear.bias[3 * n : 4 * n].fill_(0.0)  # beta
 

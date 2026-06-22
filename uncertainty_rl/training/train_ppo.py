@@ -15,7 +15,8 @@ import warnings
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Deque, Dict, List, Optional
+from typing import Any, Callable, Deque, Dict, List, Optional, cast
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -89,6 +90,10 @@ logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 # neither flag still needs one of each: start at the curriculum head, full method.
 DEFAULT_STAGE = 1
 DEFAULT_BASELINE = "configs/baselines/full_method.yaml"
+
+# Run-identifier timestamps use local wall-clock time (the container runs UTC).
+# Europe/Malta is DST-aware (UTC+2 summer, UTC+1 winter), unlike a fixed offset.
+_LOCAL_TZ = ZoneInfo("Europe/Malta")
 
 
 def _short_path(path: str) -> str:
@@ -529,11 +534,12 @@ def train(
 
     # Each run gets its own subtree nested by baseline so the ablation grid is
     # navigable: <root>/<baseline_name>/<run_leaf>/, where run_leaf is
-    # seed<N>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/, and
-    # outputs/bay_successes/training/. The seed<N>_ prefix on the leaf is load-
-    # bearing: demo_drive.py parses the seed and start timestamp back out of the
-    # leaf directory name. baseline_name is set explicitly in baseline override
-    # configs; for ad-hoc runs it is derived from policy_type and observation flags.
+    # <stage>_<seed>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/,
+    # and outputs/ (bay_successes, demo_traces). The seed (second token) is parsed
+    # back out by demo_drive.py via a _<seed>_ pattern. baseline_name is set
+    # explicitly in baseline override configs; for ad-hoc runs it is derived from
+    # policy_type and observation flags. Timestamp is local (Europe/Malta,
+    # DST-aware) so leaf times match the wall clock the runs are launched at.
     policy_type = config.get("policy_type", "evidential")
     include_cov = config.get("include_covariance", True)
     include_obs = config.get("include_obstacle_obs", True)
@@ -543,11 +549,12 @@ def train(
         f"_obs{'on' if include_obs else 'off'}"
     )
     baseline_name = config.get("baseline_name", _default_run_name)
-    _timestamp = datetime.now().strftime("%d%m%Y-%H%M")
-    # run_leaf defaults to seed<N>_<timestamp>; callers that need a deterministic
-    # leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may override it so
-    # the on-disk tree stays <baseline>/<leaf>/ in both cases.
-    run_leaf = config.get("run_leaf", f"seed{seed}_{_timestamp}")
+    _timestamp = datetime.now(_LOCAL_TZ).strftime("%d%m%Y-%H%M")
+    _stage = config.get("curriculum_stage", DEFAULT_STAGE)
+    # run_leaf defaults to <stage>_<seed>_<timestamp>; callers that need a
+    # deterministic leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may
+    # override it so the on-disk tree stays <baseline>/<leaf>/ in both cases.
+    run_leaf = config.get("run_leaf", f"{_stage}_{seed}_{_timestamp}")
     # Provenance label mirroring the on-disk tree (<baseline>/<leaf>).
     run_name = f"{baseline_name}/{run_leaf}"
 
@@ -776,6 +783,29 @@ def train(
         # ent_coef that never reaches the decay floor.
         model.lr_schedule = lr_schedule
         model.ent_coef = ent_coef_schedule
+
+        # Re-bind the evidential loss coefficients from the current config too.
+        # PPO.load() restores them from the checkpoint (the PREVIOUS run's values),
+        # so a tuned lambda would otherwise silently not take effect on resume -
+        # the same staleness the ent_coef re-bind above guards against.
+        if policy_type == "evidential":
+            ev_model = cast(EvidentialPPO, model)
+            evidential_config = config.get("evidential", {})
+            ev_model.lambda_reg = evidential_config.get(
+                "lambda_reg", ev_model.lambda_reg
+            )
+            ev_model.lambda_reg_warmup_steps = evidential_config.get(
+                "lambda_reg_warmup_steps", ev_model.lambda_reg_warmup_steps
+            )
+            ev_model.lambda_evidence = evidential_config.get(
+                "lambda_evidence", ev_model.lambda_evidence
+            )
+            ev_model.lambda_evidence_warmup_steps = evidential_config.get(
+                "lambda_evidence_warmup_steps", ev_model.lambda_evidence_warmup_steps
+            )
+            ev_model.lambda_nu_anchor = evidential_config.get(
+                "lambda_nu_anchor", ev_model.lambda_nu_anchor
+            )
     else:
         # Create fresh agent
         if policy_type == "evidential":
@@ -784,6 +814,12 @@ def train(
             lambda_reg_warmup_steps = evidential_config.get(
                 "lambda_reg_warmup_steps", 50000
             )
+            lambda_evidence = evidential_config.get("lambda_evidence", 0.0)
+            lambda_evidence_warmup_steps = evidential_config.get(
+                "lambda_evidence_warmup_steps", 50000
+            )
+            lambda_nu_anchor = evidential_config.get("lambda_nu_anchor", 0.0)
+            aleatoric_floor = evidential_config.get("aleatoric_floor", 1e-6)
             use_uncertainty_conditioning = evidential_config.get(
                 "use_uncertainty_conditioning", False
             )
@@ -812,6 +848,10 @@ def train(
                 policy=EvidentialActorCriticPolicy,
                 lambda_reg=lambda_reg,
                 lambda_reg_warmup_steps=lambda_reg_warmup_steps,
+                lambda_evidence=lambda_evidence,
+                lambda_evidence_warmup_steps=lambda_evidence_warmup_steps,
+                lambda_nu_anchor=lambda_nu_anchor,
+                aleatoric_floor=aleatoric_floor,
                 **ppo_kwargs,
             )
         elif policy_type == "standard":
@@ -859,7 +899,7 @@ def train(
         "seed": seed,
         "total_timesteps": total_timesteps,
         "resumed_from": resume_from if resume_from is not None else "(fresh)",
-        "started": datetime.now().strftime("%d-%m-%Y %H:%M"),
+        "started": datetime.now(_LOCAL_TZ).strftime("%d-%m-%Y %H:%M"),
     }
 
     callbacks = [
@@ -1075,6 +1115,8 @@ def main() -> None:
         config["n_eval_episodes"] = args.n_eval_episodes
     if args.seed is not None:
         config["seed"] = args.seed
+    # Stash the resolved stage so the run leaf can prefix it (<stage>_seed<N>_...).
+    config["curriculum_stage"] = stage
 
     # Configure logging after all overrides are applied.
     _log_level = logging.DEBUG if config.get("debug", False) else logging.INFO

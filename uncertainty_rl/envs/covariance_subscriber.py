@@ -337,6 +337,7 @@ class _CovarianceSubscriber:
         datum_lat: Optional[float] = None,
         datum_lon: Optional[float] = None,
         hold_tier: bool = False,
+        degrade_one_way: bool = False,
     ) -> None:
         """
         @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
@@ -348,12 +349,17 @@ class _CovarianceSubscriber:
                           episode (Markov drift suppressed) - the controlled
                           fixed-level evaluation conditions. Training leaves it
                           False so the chain wanders.
+        @param degrade_one_way: If True, the relay lets the Markov chain only
+                          degrade (never recover) - the monotone-degradation eval
+                          condition. Mutually exclusive with hold_tier (a held tier
+                          has no drift). Training leaves it False.
         """
         self._episode_config_seq += 1
         data: Dict[str, Any] = {
             "seq": self._episode_config_seq,
             "tier_name": tier_name,
             "hold_tier": bool(hold_tier),
+            "degrade_one_way": bool(degrade_one_way),
         }
         if datum_lat is not None:
             data["datum_lat"] = datum_lat
@@ -364,9 +370,10 @@ class _CovarianceSubscriber:
                 json.dump(data, f)
             os.replace(self._episode_config_tmp, self._episode_config_path)
             logger.info(
-                "GNSS noise config written: tier=%s hold=%s (seq=%d)",
+                "GNSS noise config written: tier=%s hold=%s degrade_one_way=%s (seq=%d)",
                 tier_name,
                 hold_tier,
+                degrade_one_way,
                 self._episode_config_seq,
             )
         except OSError as exc:

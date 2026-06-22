@@ -27,6 +27,12 @@ CHECKPOINT   ?=
 BASELINE     ?=
 STAGE        ?=
 SEED         ?=
+# Leading steps per episode logged to per_step_records.csv in docker-eval
+# (evidential only). 0 disables.
+PER_STEP_CAP ?= 0
+# NO_SAFETY=1 bypasses the SafetyWrapper in docker-eval. Results nest under
+# <baseline>/<leaf>/{with_wrapper,without_wrapper}/ for the A/B.
+NO_SAFETY    ?=
 
 # BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
 # layout <root>/<baseline>/<leaf>/. You type only the names:
@@ -162,13 +168,13 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"]
-	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>)"
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
-	$(DOCKER_COMPOSE) exec training python $(SRC_DIR)/evaluation/evaluate.py \
+	$(DOCKER_COMPOSE) exec -e EVAL_PER_STEP_CAP=$(PER_STEP_CAP) -e EVAL_DISABLE_SAFETY_WRAPPER=$(if $(NO_SAFETY),1,0) training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path $(CHECKPOINT_MODEL) \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
@@ -381,26 +387,43 @@ analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
 
-analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
+trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (collapse vs hard-task). Usage: make trace-tier-breakdown TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>
+	$(call ensure-venv)
+	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
+	$(PYTHON) scripts/miscellaneous/trace_tier_breakdown.py --trace-dir $(TRACE_DIR)
+
+analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded] [CHECKPOINT=1_42_19062026-0120] [STAGE=1]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/ablation_analyser.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis) \
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
-		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
+		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded) \
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),) \
+		$(if $(STAGE),--stage $(STAGE),)
 
-analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis]
+analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis] [STAGE=1]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/gate_roc.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis)
+		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis) \
+		$(if $(STAGE),--stage $(STAGE),)
 
-analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method]
+analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/calibration.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/calibration_analysis) \
-		$(if $(ARM),--arm $(ARM),)
+		$(if $(ARM),--arm $(ARM),) \
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
+
+handover-timing: ## When does the wrapper hand over vs degradation onset? Usage: make handover-timing [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/handover_timing] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
+	$(call ensure-venv)
+	$(PYTHON) scripts/evaluation/handover_timing.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/handover_timing) \
+		$(if $(ARM),--arm $(ARM),) \
+		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
@@ -518,6 +541,11 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 	$(call ensure-venv)
 	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/miscellaneous/tb_read.py $(LOG) $(ARGS)
+
+uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper
+	$(call ensure-venv)
+	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
+	$(PYTHON) $(SCRIPTS_DIR)/evaluation/uncertainty_verdict.py $(EVAL_DIR)
 
 backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt

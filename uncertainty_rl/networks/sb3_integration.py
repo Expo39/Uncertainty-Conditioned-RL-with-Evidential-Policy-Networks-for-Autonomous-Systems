@@ -63,13 +63,22 @@ class EvidentialDistribution(Distribution):
     # Numerical floor for the tanh Jacobian term; matches SB3.
     _SQUASH_EPS: float = 1e-6
 
-    def __init__(self, action_dim: int) -> None:
+    def __init__(self, action_dim: int, aleatoric_floor: float = 1e-6) -> None:
         """
         @brief Initialise the evidential distribution.
         @param action_dim: Dimension of the action space.
+        @param aleatoric_floor: Minimum predictive aleatoric (action variance) before
+               the sqrt, so the action sampling std cannot fall below
+               sqrt(aleatoric_floor). The NIG variance is the policy's exploration
+               noise, and beta is softplus-unbounded toward 0, so without a floor the
+               reward gradient can shrink it to a Dirac delta and exploration collapses
+               (a documented DER pathology). This is the evidential-actor analogue of
+               the SAC log_std clamp.
+               @see documentation/detailed_notes/evidential_actor_variance_collapse.md
         """
         super().__init__()
         self.action_dim = action_dim
+        self.aleatoric_floor = aleatoric_floor
         self._gamma: Optional[th.Tensor] = None
         self._nu: Optional[th.Tensor] = None
         self._alpha: Optional[th.Tensor] = None
@@ -106,12 +115,12 @@ class EvidentialDistribution(Distribution):
         self._beta = beta
         self._gaussian_actions = None
 
-        # Clamp before sqrt. The min guards against GPU fp32 drift producing
-        # near-zero or negative values (NaN std would crash Normal()). The max
-        # is a hard ceiling on the action sampling std at the action half-range:
-        # the alpha >= 1.5 construction bound constrains only the denominator,
-        # so beta can still inflate aleatoric without this backstop.
-        aleatoric = th.clamp(beta / (alpha - 1), min=1e-6, max=1.0)
+        # Clamp before sqrt. The min is an exploration floor: the NIG variance is the
+        # action sampling std, and beta is softplus-unbounded toward 0, so the reward
+        # gradient can otherwise collapse it to a Dirac delta (DER variance-minimisation
+        # pathology). The max is a hard ceiling at the action half-range; the alpha >= 1.5
+        # construction bound constrains only the denominator.
+        aleatoric = th.clamp(beta / (alpha - 1), min=self.aleatoric_floor, max=1.0)
         std = th.sqrt(aleatoric)
 
         self.distribution = Normal(gamma, std)
@@ -142,10 +151,21 @@ class EvidentialDistribution(Distribution):
 
     def entropy(self) -> Optional[th.Tensor]:
         """
-        @brief Entropy of the squashed distribution.
-        @return None - no closed form; SB3 falls back to -log_prob estimate.
+        @brief Differential entropy of the pre-squash Gaussian, summed over action dims.
+        @return Entropy of shape (batch_size,), or None if no distribution is set.
+
+        The exact entropy of the tanh-squashed distribution has no closed form (it needs
+        the Jacobian expectation), so this returns the base Gaussian entropy
+        0.5*log(2*pi*e*std^2) summed over axes - a tractable proxy that, unlike the
+        -log_prob fallback, depends DIRECTLY on std. The entropy bonus then acts on the
+        action std (the exploration knob), restoring the standard PPO guard against the
+        Gaussian shrinking prematurely (Schulman et al. 2017). std reflects the
+        aleatoric_floor, so the bonus and the floor reinforce the same exploration level.
         """
-        return None
+        dist = getattr(self, "distribution", None)
+        if dist is None:
+            return None
+        return sum_independent_dims(cast(Normal, dist).entropy())
 
     def sample(self) -> th.Tensor:
         """
@@ -244,6 +264,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         action_space: spaces.Space,
         lr_schedule: Schedule,
         lambda_reg: float = 0.01,
+        aleatoric_floor: float = 1e-6,
         use_uncertainty_conditioning: bool = False,
         **kwargs: Any,
     ) -> None:
@@ -253,6 +274,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param action_space: Action space.
         @param lr_schedule: Learning rate schedule.
         @param lambda_reg: Evidential regularisation weight.
+        @param aleatoric_floor: Minimum predictive aleatoric (action variance); the
+               action sampling std cannot fall below sqrt(aleatoric_floor). Passed to
+               EvidentialDistribution to stop exploration collapse. @see that class.
         @param use_uncertainty_conditioning: If True, replace the flat MLP actor
                with UncertaintyConditionedActor (dual-encoder). The covariance
                block (obs indices VEHICLE_STATE_DIM through VEHICLE_STATE_DIM +
@@ -264,6 +288,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                in the env config.
         """
         self.lambda_reg = lambda_reg
+        self.aleatoric_floor = aleatoric_floor
         self.use_uncertainty_conditioning = use_uncertainty_conditioning
         # Evidential distribution is incompatible with SDE
         kwargs["use_sde"] = False
@@ -304,7 +329,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         self._build_mlp_extractor()
 
         action_dim = get_action_dim(self.action_space)
-        self.action_dist = EvidentialDistribution(action_dim)
+        self.action_dist = EvidentialDistribution(
+            action_dim, aleatoric_floor=self.aleatoric_floor
+        )
 
         if self.use_uncertainty_conditioning:
             # Dual-encoder actor. The state encoder receives the full
@@ -392,7 +419,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                     bias[2] = -1.0  # gamma brake (default-off)
                 else:
                     bias[0 * n : 1 * n].fill_(0.0)
-                bias[1 * n : 2 * n].fill_(0.9)  # nu
+                # nu bias must match EvidentialLayer.__init__: softplus(-1.0) < 1
+                # so epistemic > aleatoric in the no-evidence regime. @see the
+                # rationale in EvidentialLayer.__init__.
+                bias[1 * n : 2 * n].fill_(-1.0)  # nu
                 bias[2 * n : 3 * n].fill_(0.9)  # alpha
                 bias[3 * n : 4 * n].fill_(0.0)  # beta
 
@@ -614,6 +644,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 gamma, nu, alpha, beta = flat(latent_pi)
 
             alpha_m1 = alpha - 1
+            # Reported aleatoric is the TRUE model output (the uncertainty signal),
+            # not floored - only the SAMPLING std below is floored, to match training.
             aleatoric = th.clamp(beta / alpha_m1, min=1e-6)
             epistemic = beta / (nu * alpha_m1)
             total = epistemic + aleatoric
@@ -621,10 +653,13 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             if deterministic:
                 action = th.tanh(gamma)
             else:
-                # Consistent with EvidentialDistribution.proba_distribution:
-                # use aleatoric std only, not total. Squash with tanh so the
-                # action is in [-1, 1] on every axis.
-                std = th.sqrt(aleatoric)
+                # Match EvidentialDistribution.proba_distribution exactly: aleatoric std
+                # only (not total), floored at aleatoric_floor so eval/deployment
+                # exploration matches training. Squash with tanh into [-1, 1] per axis.
+                sampling_aleatoric = th.clamp(
+                    beta / alpha_m1, min=self.aleatoric_floor, max=1.0
+                )
+                std = th.sqrt(sampling_aleatoric)
                 dist = Normal(gamma, std)
                 action = th.tanh(dist.sample())
 
@@ -640,13 +675,15 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         """
-        @brief Include lambda_reg and use_uncertainty_conditioning in saved parameters.
+        @brief Include lambda_reg, aleatoric_floor and use_uncertainty_conditioning in
+               saved parameters.
         @return Dictionary of constructor parameters for save/load.
         """
         data: Dict[str, Any] = cast(
             Dict[str, Any], super()._get_constructor_parameters()
         )
         data["lambda_reg"] = self.lambda_reg
+        data["aleatoric_floor"] = self.aleatoric_floor
         data["use_uncertainty_conditioning"] = self.use_uncertainty_conditioning
         return data
 
@@ -675,6 +712,10 @@ class EvidentialPPO(PPO):
         env: Union[GymEnv, str],
         lambda_reg: float = 0.01,
         lambda_reg_warmup_steps: int = 50000,
+        lambda_evidence: float = 0.0,
+        lambda_evidence_warmup_steps: int = 50000,
+        lambda_nu_anchor: float = 0.0,
+        aleatoric_floor: float = 1e-6,
         **kwargs: Any,
     ) -> None:
         """
@@ -685,17 +726,44 @@ class EvidentialPPO(PPO):
         @param lambda_reg_warmup_steps: Number of environment steps over which
                lambda_reg is linearly annealed from 0 to lambda_reg. Allows the NLL to
                establish good predictions before the regularisation term fires.
+        @param lambda_evidence: Evidence-accrual weight (target value after warmup) for
+               the nu-only advantage-gated term in train(). Drives nu off its prior so
+               the epistemic estimate carries state-dependent signal. 0.0 (the default)
+               disables the term, recovering the prior-anchored-nu behaviour.
+        @param lambda_evidence_warmup_steps: Number of environment steps over which
+               lambda_evidence is linearly annealed from 0 to lambda_evidence, so PPO
+               settles the action mean (gamma) before evidence accrual begins.
+        @param lambda_nu_anchor: Weight of a log-space restoring force pulling nu
+               toward its sub-1 prior (softplus(-1.0) ~ 0.313). The evidence term can
+               only RAISE nu, so alone it drives nu past 1 everywhere and epistemic
+               collapses onto a fixed fraction of aleatoric. This anchor opposes it on
+               the same 1/nu scale, so nu reaches a tunable equilibrium: above 1 only
+               where evidence overcomes the anchor (in-distribution), below 1 on novel
+               states (epistemic-dominant handoff regime). 0.0 (default) = unanchored.
+        @param aleatoric_floor: Minimum predictive aleatoric (action variance) floor for
+               the policy's sampling std; forwarded to EvidentialActorCriticPolicy to
+               prevent exploration collapse. @see EvidentialDistribution.
         """
         self.lambda_reg = lambda_reg
         self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
+        self.lambda_evidence = lambda_evidence
+        self.lambda_evidence_warmup_steps = lambda_evidence_warmup_steps
+        self.lambda_nu_anchor = lambda_nu_anchor
         logger.info(
-            "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d",
+            "EvidentialPPO: lambda_reg=%.4f, warmup_steps=%d, "
+            "lambda_evidence=%.4f, evidence_warmup_steps=%d, "
+            "lambda_nu_anchor=%.4f, aleatoric_floor=%.4g",
             lambda_reg,
             lambda_reg_warmup_steps,
+            lambda_evidence,
+            lambda_evidence_warmup_steps,
+            lambda_nu_anchor,
+            aleatoric_floor,
         )
-        # Pass lambda_reg to policy_kwargs
+        # Pass evidential policy params to policy_kwargs.
         policy_kwargs = kwargs.get("policy_kwargs") or {}
         policy_kwargs["lambda_reg"] = lambda_reg
+        policy_kwargs["aleatoric_floor"] = aleatoric_floor
         kwargs["policy_kwargs"] = policy_kwargs
         super().__init__(policy=policy, env=env, **kwargs)
 
@@ -721,6 +789,17 @@ class EvidentialPPO(PPO):
             ramp = 1.0
         current_lambda_reg = self.lambda_reg * ramp
 
+        # Same linear warmup for the evidence-accrual term: defer it until PPO has
+        # settled the action mean (gamma), so the residual it reads is meaningful.
+        if self.lambda_evidence_warmup_steps > 0:
+            evidence_ramp = min(
+                1.0,
+                float(self.num_timesteps) / float(self.lambda_evidence_warmup_steps),
+            )
+        else:
+            evidence_ramp = 1.0
+        current_lambda_evidence = self.lambda_evidence * evidence_ramp
+
         clip_range_fn = cast(Schedule, self.clip_range)
         clip_range = clip_range_fn(self._current_progress_remaining)
 
@@ -745,6 +824,8 @@ class EvidentialPPO(PPO):
         pg_losses: List[th.Tensor] = []
         value_losses: List[th.Tensor] = []
         evidential_reg_losses: List[th.Tensor] = []
+        evidence_losses: List[th.Tensor] = []
+        nu_anchor_losses: List[th.Tensor] = []
         # clip_fraction as a running float sum.
         clip_fraction_sum: float = 0.0
         clip_fraction_count: int = 0
@@ -754,10 +835,14 @@ class EvidentialPPO(PPO):
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
         # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
-        # nu: softplus(0.9). alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0).
-        _nu_prior = 1.241
+        # alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0). nu: softplus(-1.0).
+        # alpha/beta use a raw-ratio quadratic anchor; nu is anchored in LOG space
+        # (lambda_nu_anchor) so its restoring gradient matches the evidence term's
+        # 1/nu scale (a tunable equilibrium, not a boundary tug-of-war).
         _alpha_prior = 2.741
         _beta_prior = 0.693
+        _nu_prior = 0.313  # softplus(-1.0) + 1e-6; sub-1 => epistemic-dominant prior.
+        _log_nu_prior = float(np.log(_nu_prior))
         continue_training = True
         for epoch in range(self.n_epochs):
             approx_kl_divs: List[float] = []
@@ -775,15 +860,53 @@ class EvidentialPPO(PPO):
                 # Prior-anchoring penalty on the NIG evidence parameters as
                 # a raw-ratio quadratic (x / prior - 1)^2 - zero at the prior,
                 # with a restoring gradient that grows linearly with distance.
-                # All three of nu/alpha/beta are anchored.
+                # Only alpha and beta are anchored; nu is left to the evidence term.
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
-                evidential_reg = (
-                    (nu / _nu_prior - 1.0).pow(2).mean()
-                    + (alpha / _alpha_prior - 1.0).pow(2).mean()
-                    + (beta / _beta_prior - 1.0).pow(2).mean()
-                )
+                evidential_reg = (alpha / _alpha_prior - 1.0).pow(2).mean() + (
+                    beta / _beta_prior - 1.0
+                ).pow(2).mean()
+
+                # Advantage-gated evidence accrual on nu only. The action mean
+                # (gamma) is detached so this term routes gradient solely into the
+                # evidence mass nu, never competing with the PPO surrogate over the
+                # mean. The residual is measured in the pre-squash space the actor
+                # parameterises (actions are tanh-squashed, so atanh maps them back).
+                # The advantage weight is clamped to be non-negative so only
+                # better-than-baseline actions are allowed to ACCRUE evidence.
+                # The per-element term 0.5*sq_resid*nu - 0.5*log(nu) is the nu-only
+                # Gaussian-precision negative log-likelihood; its stationary point
+                # nu* = 1 / sq_resid raises nu where the action was well-predicted
+                # (confident/familiar) and lowers it where it was surprising, so
+                # epistemic = beta / (nu * (alpha - 1)) becomes state-dependent.
+                # alpha and beta are absent, so this cannot collapse them.
+                if self.lambda_evidence > 0.0:
+                    raw_advantages = rollout_data.advantages
+                    weight = th.clamp(raw_advantages, min=0.0).unsqueeze(-1)
+                    # Same atanh-stability epsilon the distribution uses to invert
+                    # the squash, so the residual is measured on a matching scale.
+                    atanh_eps = EvidentialDistribution._SQUASH_EPS
+                    with th.no_grad():
+                        clipped_actions = th.clamp(
+                            actions,
+                            -1.0 + atanh_eps,
+                            1.0 - atanh_eps,
+                        )
+                        pre_squash = th.atanh(clipped_actions)
+                        sq_resid = (pre_squash - gamma.detach()).pow(2)
+                    evidence_loss = (
+                        weight * (0.5 * sq_resid * nu - 0.5 * th.log(nu))
+                    ).mean()
+                else:
+                    evidence_loss = th.zeros((), device=nu.device)
+
+                # Log-space restoring force pulling nu back to its sub-1 prior;
+                # opposes the (one-directional) evidence term so nu settles, not runs up.
+                if self.lambda_nu_anchor > 0.0:
+                    nu_anchor_loss = (th.log(nu) - _log_nu_prior).pow(2).mean()
+                else:
+                    nu_anchor_loss = th.zeros((), device=nu.device)
 
                 with th.no_grad():
                     alpha_m1 = alpha - 1
@@ -826,22 +949,28 @@ class EvidentialPPO(PPO):
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.detach())
 
-                # Squashed Gaussian has no closed-form entropy; fall back to
-                # the Monte-Carlo estimate -mean(log_prob) used by SB3.
+                # EvidentialDistribution.entropy() returns the closed-form pre-squash
+                # Gaussian entropy, so the bonus acts directly on the action std. The
+                # -mean(log_prob) branch is a defensive fallback for a None entropy.
                 if entropy is None:
                     entropy_loss = -th.mean(log_prob)
                 else:
                     entropy_loss = -th.mean(entropy)
                 entropy_losses.append(entropy_loss.detach())
 
-                # Combined loss with annealed evidential regularisation
+                # Combined loss with annealed evidential regularisation and the
+                # annealed evidence-accrual term (both warmed up independently).
                 loss = (
                     policy_loss
                     + ent_coef * entropy_loss
                     + self.vf_coef * value_loss
                     + current_lambda_reg * evidential_reg
+                    + current_lambda_evidence * evidence_loss
+                    + self.lambda_nu_anchor * nu_anchor_loss
                 )
                 evidential_reg_losses.append(evidential_reg.detach())
+                evidence_losses.append(evidence_loss.detach())
+                nu_anchor_losses.append(nu_anchor_loss.detach())
 
                 # KL divergence for early stopping - only sync to CPU when target_kl is
                 # set.
@@ -910,6 +1039,9 @@ class EvidentialPPO(PPO):
 
         # Evidential-specific logs
         self.logger.record("train/evidential_reg_loss", _mean(evidential_reg_losses))
+        self.logger.record("train/evidence_loss", _mean(evidence_losses))
+        self.logger.record("train/nu_anchor_loss", _mean(nu_anchor_losses))
+        self.logger.record("train/lambda_nu_anchor", self.lambda_nu_anchor)
         self.logger.record(
             "train/epistemic_uncertainty", _mean(epistemic_uncertainties)
         )
@@ -917,6 +1049,7 @@ class EvidentialPPO(PPO):
             "train/aleatoric_uncertainty", _mean(aleatoric_uncertainties)
         )
         self.logger.record("train/lambda_reg", current_lambda_reg)
+        self.logger.record("train/lambda_evidence", current_lambda_evidence)
 
 
 class ScheduledEntCoefPPO(PPO):
