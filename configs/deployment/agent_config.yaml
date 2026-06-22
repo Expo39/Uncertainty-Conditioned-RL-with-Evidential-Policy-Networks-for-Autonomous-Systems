@@ -34,7 +34,7 @@ actuator_model:
 
 # SafetyWrapper: full-stop handoff when TOTAL uncertainty (epistemic+aleatoric) reaches
 # the threshold. Calibrate per checkpoint to the calm-condition total upper tail.
-safety_handoff_threshold: 1.2
+safety_handoff_threshold: 1.903  # clean p95 (honest, OU stage6)
 
 # ---------------------------------------------------------------------------
 # Deployed baseline (real vehicle)
