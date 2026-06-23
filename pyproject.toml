@@ -1,5 +1,7 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+# Pinned for reproducible builds across machines. Versions captured from the
+# working training image (NGC PyTorch 24.10 base).
+requires = ["setuptools==82.0.1", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -19,12 +21,14 @@ classifiers = [
 ]
 dependencies = [
     # Host-installable deps (no torch/CUDA).  Layout tools, visualiser, type stubs.
-    "pyyaml>=6.0",
-    "matplotlib>=3.7.0",
-    "pygame>=2.5.0",
-    "seaborn>=0.12.0",
-    "pandas>=2.0.0",
-    "numpy>=1.24.0",
+    # Pinned to exact versions for reproducible builds across machines; values
+    # captured from the working training image (NGC PyTorch 24.10 base).
+    "pyyaml==6.0.2",
+    "matplotlib==3.9.2",
+    "pygame==2.6.1",
+    "seaborn==0.13.2",
+    "pandas==2.2.2",
+    "numpy==1.24.4",
 ]
 
 [project.optional-dependencies]
@@ -32,21 +36,23 @@ dependencies = [
 # pip install -e ".[training]". 
 # torch/sb3/gymnasium pull in CUDA and must never run through make install.
 training = [
-    "gymnasium>=0.29.0",
-    "stable-baselines3>=2.0.0",
-    "tensorboard>=2.13.0",
-    "optuna>=3.6.0",
-    "ruamel.yaml>=0.18.0",
+    # Pinned to exact versions for reproducible builds (working training image).
+    "gymnasium==1.2.3",
+    "stable-baselines3==2.8.0",
+    "tensorboard==2.16.2",
+    "optuna==4.9.0",
+    "ruamel.yaml==0.19.1",
 ]
 dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-    "black>=24.0",
-    "isort>=5.13",
-    "flake8>=7.0",
-    "mypy>=1.8.0",
-    "types-PyYAML>=6.0",
-    "pre-commit>=3.6.0",
+    # Pinned to exact versions for reproducible builds (working training image).
+    "pytest==8.1.1",
+    "pytest-cov==7.1.0",
+    "black==24.8.0",
+    "isort==5.13.2",
+    "flake8==7.3.0",
+    "mypy==2.1.0",
+    "types-PyYAML==6.0.12.20260518",
+    "pre-commit==4.6.0",
 ]
 
 [project.scripts]
