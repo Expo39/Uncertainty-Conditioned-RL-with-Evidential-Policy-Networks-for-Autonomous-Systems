@@ -10,6 +10,10 @@ ENV PYTHONUNBUFFERED=1
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
+# apt package versions are NOT pinned: ROS apt repos are rolling and delete old
+# versions, so a version pin would eventually fail to fetch. Reproducibility of
+# the apt layers is instead achieved by distributing the BUILT image (docker
+# save/load), not by rebuilding from this Dockerfile on each machine.
 # Install system dependencies required for ROS 2 apt key setup
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
@@ -54,8 +58,8 @@ ENV LD_LIBRARY_PATH=/opt/ros/humble/lib:/opt/ros/humble/lib/x86_64-linux-gnu
 ENV ROS_DISTRO=humble
 ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 
-# Upgrade pip and install build tools
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+# Upgrade pip and install build tools (pinned for reproducible builds).
+RUN pip install --no-cache-dir pip==26.1.2 setuptools==82.0.1 wheel==0.47.0
 
 # Create workspace directory
 WORKDIR /workspace

@@ -20,6 +20,10 @@ ENV LC_ALL=C.UTF-8
 # Install system dependencies and ROS 2 packages in a single layer.
 # - robot-localization: EKF node + navsat_transform_node (fuses GNSS+IMU, outputs /odometry/filtered)
 # - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
+# apt package versions are NOT pinned: ROS apt repos are rolling and delete old
+# versions, so a version pin would eventually fail to fetch. Reproducibility of
+# the apt layers is instead achieved by distributing the BUILT image (docker
+# save/load), not by rebuilding from this Dockerfile on each machine.
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-colcon-common-extensions \
@@ -42,10 +46,18 @@ ENV RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
 WORKDIR /workspace
 RUN mkdir -p /workspace/src
 
-# Clone CARLA ROS bridge (master branch has ROS 2 support for CARLA 0.9.13+)
+# Clone CARLA ROS bridge (ROS 2 support for CARLA 0.9.13+). Pinned to an exact
+# commit (not a moving branch) for reproducible builds across machines; this is
+# the commit the working ros2-bridge image was built from. The repo's
+# CARLA_VERSION is overwritten to 0.9.16 below.
+ARG ROS_BRIDGE_COMMIT=e9063d97ff5a724f76adbb1b852dc71da1dcfeec
 COPY uncertainty_rl/ros2/patch_bridge.py /tmp/patch_bridge.py
 RUN cd /workspace/src && \
-    git clone --recurse-submodules https://github.com/carla-simulator/ros-bridge.git && \
+    git clone https://github.com/carla-simulator/ros-bridge.git && \
+    cd ros-bridge && \
+    git checkout ${ROS_BRIDGE_COMMIT} && \
+    git submodule update --init --recursive && \
+    cd /workspace/src && \
     echo "0.9.16" > /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/CARLA_VERSION && \
     sed -i 's|carla_world = carla_client.generate_opendrive_world(str(data))|carla_world = carla_client.generate_opendrive_world(str(data), carla.OpendriveGenerationParameters(vertex_distance=2.0, max_road_length=600.0, wall_height=0.0, additional_width=300.0, smooth_junctions=False, enable_mesh_visibility=True, enable_pedestrian_navigation=False))|' \
     /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
@@ -53,12 +65,13 @@ RUN cd /workspace/src && \
     /workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge/bridge.py && \
     python3 /tmp/patch_bridge.py
 
-# Install Python dependencies for CARLA
+# Install Python dependencies for CARLA (pinned for reproducible builds; versions
+# captured from the working ros2-bridge image).
 # --break-system-packages needed on Ubuntu 24.04 (PEP 668); safe in a container
 RUN pip3 install --no-cache-dir --break-system-packages \
     carla==0.9.16 \
-    numpy \
-    transforms3d
+    numpy==1.26.4 \
+    transforms3d==0.4.2
 
 # Install rosdep dependencies for the packages we need (skip GUI/rviz/PCL packages)
 RUN rosdep update && \
