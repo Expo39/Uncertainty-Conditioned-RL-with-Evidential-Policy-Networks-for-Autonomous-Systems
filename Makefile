@@ -9,7 +9,7 @@
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-eval-dryrun
-.PHONY: docker-train docker-train-short docker-tune
+.PHONY: docker-train docker-train-short docker-tune run-seed-leg
 .PHONY: ensure-dirs
 
 VENV        := .venv
@@ -159,6 +159,9 @@ docker-top: ## Show running processes in containers
 # ----------------------------------------------------------------------
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
+
+run-seed-leg: ensure-dirs ## Full leg for the seed in agent_config.yaml: train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
+	bash scripts/training/run_seed_leg.sh
 
 docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=agent_config"
