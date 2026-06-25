@@ -552,12 +552,15 @@ def evaluate_across_conditions(
     deterministic: bool = eval_config.get("deterministic", True)
 
     # Per-bay success accounting. Each condition gets its own tracker dumped to
-    # outputs/bay_successes/eval/<baseline>/<leaf>/<condition>/, mirroring the
-    # training tree, because a bay's success at RTK-fixed and RTK-degraded are
+    # outputs/bay_successes/eval/seed_<N>/<baseline>/<leaf>/<condition>/, mirroring
+    # the training tree, because a bay's success at RTK-fixed and RTK-degraded are
     # distinct questions and must not be conflated. The leaf is the checkpoint's
-    # parent directory name (seed<N>_<timestamp>); the baseline comes from the
-    # evaluated baseline config, falling back to the checkpoint's grandparent so
-    # the path is unambiguous even for ad-hoc checkpoints.
+    # parent directory name (<stage>_<seed>_<timestamp>); the baseline comes from
+    # the evaluated baseline config, falling back to the checkpoint's grandparent
+    # so the path is unambiguous even for ad-hoc checkpoints. The seed_<N> segment
+    # is parsed from the leaf (single source of truth) so a second seed's bay
+    # successes never overwrite the first's; an unparseable leaf falls back to
+    # seed_unknown.
     _eval_leaf = Path(model_path).parent.name or datetime.now(_LOCAL_TZ).strftime(
         "%d-%m-%Y-%H%M%S"
     )
@@ -565,7 +568,14 @@ def evaluate_across_conditions(
         "baseline_name", Path(model_path).parent.parent.name
     )
     _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
-    _bay_eval_root = Path("./outputs/bay_successes/eval") / _eval_baseline / _eval_leaf
+    _leaf_fields = _eval_leaf.split("_")
+    _eval_seed = _leaf_fields[1] if len(_leaf_fields) >= 2 else "unknown"
+    _bay_eval_root = (
+        Path("./outputs/bay_successes/eval")
+        / f"seed_{_eval_seed}"
+        / _eval_baseline
+        / _eval_leaf
+    )
     # Results nest by <baseline>/<leaf>/<wrapper_variant>, mirroring checkpoints/
     # logs/bay successes. The with_wrapper/without_wrapper leaf keeps the two
     # SafetyWrapper variants of the SAME checkpoint side by side for the A/B.
