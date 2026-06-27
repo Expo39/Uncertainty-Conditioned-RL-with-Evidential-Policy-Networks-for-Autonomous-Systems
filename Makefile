@@ -160,7 +160,7 @@ docker-top: ## Show running processes in containers
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-run-seed-leg: ensure-dirs ## Full leg for the seed in agent_config.yaml: train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
+run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
 	bash scripts/training/run_seed_leg.sh
 
 docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
