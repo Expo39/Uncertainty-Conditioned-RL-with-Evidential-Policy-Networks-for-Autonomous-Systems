@@ -444,6 +444,16 @@ handover-timing: ## When does the wrapper hand over vs degradation onset? Usage:
 		$(if $(ARM),--arm $(ARM),) \
 		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
 
+analyse-cross-seed: ## Pool all seeds into headline tables + per-seed robustness. Usage: make analyse-cross-seed [STAGE=6] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
+	$(call ensure-venv)
+	# Cross-seed spans seeds: parent root, NEVER EVAL_RESULTS_ROOT (which is seed_<N>/).
+	$(PYTHON) scripts/evaluation/cross_seed.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/cross_seed_analysis) \
+		--stage $(or $(STAGE),6) \
+		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
+		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
+
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
 # Two use cases:
