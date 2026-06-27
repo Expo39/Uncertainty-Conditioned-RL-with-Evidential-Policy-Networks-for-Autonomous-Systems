@@ -14,6 +14,7 @@ Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv
 | Causal "does the policy use covariance?" probe | `make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628` |
 | Epistemic-vs-aleatoric separation verdict | `make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper` |
 | Handover timing vs degradation onset | `make handover-timing [ARM=full_method]` |
+| Pool all seeds into headline + per-seed robustness | `make analyse-cross-seed [STAGE=6]` |
 
 ## Modules
 
@@ -62,9 +63,13 @@ When does the safety wrapper hand over, relative to the degradation onset? Turns
 
 Run with `make handover-timing [ARM=<name>]`.
 
+### `cross_seed.py` (host-side)
+
+Pools EVERY seed's stage-`STAGE` eval into the seed-robust headline. The per-seed analyses each read one `outputs/<analysis>/seed_<N>/` tree; a cross-arm difference on a single seed is indistinguishable from seed luck (Henderson et al. 2017), so this aggregator produces two reads side by side: (a) POOLED - concatenate every seed's per-episode records into one sample and run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC AUC, the calibration rank correlation) on the ~3x larger pool, the precision-of-effect headline; (b) PER-SEED ROBUSTNESS - per arm, the mean and `[min, max]` of each metric across seeds, the honest cross-seed-stability check the curriculum plan mandates (a bootstrap on a fixed pool of three runs under-represents between-seed variance). It re-implements no statistics: the per-analysis modules expose pure DataFrame functions, so a pooled frame with an added `seed` column flows through them untouched. Reads `--results-root outputs/evaluation_results` (the PARENT of the `seed_<N>/` trees) and writes the pooled `pooled_*.csv` + per-seed `seed_robustness*.csv` and the figures under `outputs/cross_seed_analysis/all_seeds/stage<S>/` (the cross-seed sibling of the per-seed `seed_<N>/stage<S>/`). Run with `make analyse-cross-seed [STAGE=6]`.
+
 ### `_discovery.py` (shared helper, not a Make target)
 
-Single source of truth for locating per-run CSVs under the nested `<baseline>/<leaf>/<wrapper_variant>/` results tree. Maps each CSV back to its arm name, prefers the `without_wrapper` variant for uncertainty/behaviour reads (the wrapper caps throttle and corrupts the free-running signal), and falls back to the legacy two-level layout. Imported by the analysis scripts; never run directly.
+Single source of truth for locating per-run CSVs under the nested `<baseline>/<leaf>/<wrapper_variant>/` results tree. Maps each CSV back to its arm name, prefers the `without_wrapper` variant for uncertainty/behaviour reads (the wrapper caps throttle and corrupts the free-running signal), and falls back to the legacy two-level layout. `seed_roots()` returns the `seed_<N>/` sub-roots of an output root (or the root itself when there is no seed nesting) so `cross_seed.py` can loop the seeds and reuse the per-seed discovery on each. Imported by the analysis scripts; never run directly.
 
 ## Conventions
 

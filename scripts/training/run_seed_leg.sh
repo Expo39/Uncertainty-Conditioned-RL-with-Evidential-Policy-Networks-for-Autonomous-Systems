@@ -213,6 +213,35 @@ for SEED in "${SEEDS[@]}"; do
     echo "################## SEED ${SEED} COMPLETE ##################"
 done
 
+# ---------------------------------------------------------------------------
+# Cross-seed suite: pool EVERY seed's stage-EVAL_STAGE eval into the seed-robust
+# headline tables (pooled bootstrap contrast + per-seed mean/range). Gated on the
+# full SEEDS x ARMS matrix being evaluated so a partial leg never aggregates half
+# the data. Host-side and cheap, so it always re-runs and overwrites in place once
+# complete (like the per-seed suite tables). FINAL_LEAF holds only the LAST seed's
+# leaves (it is declared inside the per-seed loop), so completeness is recomputed
+# here in a fresh double loop.
+# ---------------------------------------------------------------------------
+missing=()
+for SEED in "${SEEDS[@]}"; do
+    for arm in "${ARMS[@]}"; do
+        leaf="$(complete_leaf "${arm}" "${EVAL_STAGE}" "${SEED}")"
+        if [ -z "${leaf}" ]; then
+            missing+=("${SEED}/${arm} (no stage-${EVAL_STAGE} checkpoint)")
+        elif ! eval_done "${arm}" "${leaf}" without_wrapper; then
+            missing+=("${SEED}/${arm} (eval missing)")
+        fi
+    done
+done
+
+if [ "${DRY_RUN}" != "1" ] && [ "${#missing[@]}" -ne 0 ]; then
+    echo ">>> SKIP cross-seed (waiting on: ${missing[*]})"
+else
+    echo ">>> SUITE cross-seed: pooled headline + robustness (stage ${EVAL_STAGE}, seeds ${SEEDS[*]})"
+    run make analyse-cross-seed STAGE="${EVAL_STAGE}" \
+        SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded
+fi
+
 echo "=================================================================="
 echo " Multi-seed leg COMPLETE for seeds: ${SEEDS[*]}"
 echo " agent_config.yaml left at seed: $(grep -E '^seed:' ${AGENT_CONFIG} | sed -E 's/seed:[[:space:]]*([0-9]+).*/\1/')"
