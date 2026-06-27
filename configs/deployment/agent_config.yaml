@@ -10,7 +10,7 @@
 # ---------------------------------------------------------------------------
 # Single source of truth for the whole experiment: seeds training and the
 # separate-process GNSS/IMU noise relays. Nothing else carries a seed.
-seed: 123  # Change this one line to run a new seed.
+seed: 42  # Change this one line to run a new seed.
 
 # ---------------------------------------------------------------------------
 # Policy safety parameters

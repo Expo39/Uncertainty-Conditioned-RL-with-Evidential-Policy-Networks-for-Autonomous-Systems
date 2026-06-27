@@ -28,7 +28,14 @@ dependencies = [
     "pygame==2.6.1",
     "seaborn==0.13.2",
     "pandas==2.2.2",
-    "numpy==1.24.4",
+    # numpy 1.24.4 has no cp312 wheel (Requires-Python <3.12) and its sdist build
+    # fails on Python 3.12's setuptools. The training image is Python 3.10 (NGC
+    # base) and the ros2-bridge image is Python 3.12 (Jazzy/Noble), so the pin is
+    # split by interpreter: 1.24.4 where it has wheels, 1.26.4 (oldest with a
+    # cp312 wheel, also pandas 2.2's py3.12 floor) on 3.12. They are ABI-separate
+    # processes communicating over DDS, so the two numpy versions never interact.
+    "numpy==1.24.4; python_version < '3.12'",
+    "numpy==1.26.4; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
