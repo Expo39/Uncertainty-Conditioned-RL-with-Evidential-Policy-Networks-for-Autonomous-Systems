@@ -69,6 +69,26 @@ def arm_leaf_subpath(csv_path: Path, results_root: Path) -> Path:
     return Path(parts[0]) if parts else Path()
 
 
+def seed_roots(results_root: Path) -> List[Path]:
+    """
+    @brief The per-seed sub-roots under an output root, for cross-seed pooling.
+    @param results_root: A root that may CONTAIN seed_<N>/ children, e.g.
+           outputs/evaluation_results (whose per-seed trees are
+           outputs/evaluation_results/seed_42/<baseline>/<leaf>/...).
+    @return Sorted list of the seed_<N> child directories. If the root has no
+            seed_*/ children (a single tree with no seed nesting, or a root
+            already pinned to one seed), the singleton [results_root] is returned
+            so a caller pools "one seed" transparently (pool of one).
+
+    The cross-seed aggregator loops this and calls the existing per-seed discovery
+    (discover_records / discover_arm_csvs) on each returned root, reading the seed
+    LABEL from the directory name rather than re-parsing a CSV path - so the seed
+    is always known from the loop, never recovered from a flat path list.
+    """
+    seeds = sorted(p for p in results_root.glob("seed_*") if p.is_dir())
+    return seeds if seeds else [results_root]
+
+
 def _variant_rank(csv_path: Path, preferred: Optional[str] = None) -> int:
     """
     @brief Sort key ranking the preferred wrapper variant first, others last.
