@@ -144,9 +144,7 @@ class RealWorldInferenceLoop:
         try:
             import yaml as _yaml
 
-            from uncertainty_rl.envs.real.deployment_utils import (
-                RealWorldDeployment,
-            )
+            from uncertainty_rl.envs.real.deployment_utils import RealWorldDeployment
             from uncertainty_rl.networks.sb3_integration import EvidentialPPO
         except ImportError as exc:
             raise ImportError(
