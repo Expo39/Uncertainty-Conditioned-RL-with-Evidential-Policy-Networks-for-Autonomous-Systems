@@ -9,7 +9,7 @@
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-eval-dryrun
-.PHONY: docker-train docker-train-short docker-tune
+.PHONY: docker-train docker-train-short docker-tune run-seed-leg
 .PHONY: ensure-dirs
 
 VENV        := .venv
@@ -26,7 +26,23 @@ LAYOUT       ?= rectangle
 CHECKPOINT   ?=
 BASELINE     ?=
 STAGE        ?=
+# SEED selects which seed's results the cross-arm analysis targets read; it does
+# NOT set a run's RNG seed (that is configs/deployment/agent_config.yaml, the one
+# source). Only analyse-gate / analyse-ablation use it (they key on STAGE, not a
+# checkpoint, so they cannot infer the seed otherwise).
 SEED         ?=
+# Seed that owns the eval/analysis output tree. Derived from the checkpoint leaf
+# (<stage>_<seed>_<timestamp>, e.g. 6_42_22062026-1502 -> 42) so per-checkpoint
+# targets (docker-eval, analyse-calibration, handover-timing) get it for free
+# from the run name. The cross-arm targets fall back to SEED then 42. Every
+# eval-related tree nests a seed_<N>/ layer so a second seed never overwrites the
+# first.
+EVAL_SEED = $(or $(word 2,$(subst _, ,$(CHECKPOINT))),$(SEED),42)
+EVAL_RESULTS_ROOT = outputs/evaluation_results/seed_$(EVAL_SEED)
+ABLATION_ROOT     = outputs/ablation_analysis/seed_$(EVAL_SEED)
+GATE_ROOT         = outputs/gate_analysis/seed_$(EVAL_SEED)
+CALIBRATION_ROOT  = outputs/calibration_analysis/seed_$(EVAL_SEED)
+HANDOVER_ROOT     = outputs/handover_timing/seed_$(EVAL_SEED)
 # Leading steps per episode logged to per_step_records.csv in docker-eval
 # (evidential only). 0 disables.
 PER_STEP_CAP ?= 0
@@ -144,21 +160,24 @@ docker-top: ## Show running processes in containers
 # Docker: Training & Evaluation
 # ----------------------------------------------------------------------
 
-docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SEED=123]
-	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(if $(SEED),$(SEED),train_config)"
-	$(DOCKER_COMPOSE) down
-	$(WORKERS_DOWN)
-	$(DOCKER_COMPOSE) up -d --wait
-	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),) $(if $(SEED),--seed $(SEED),)
+run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
+	bash scripts/training/run_seed_leg.sh
 
-docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SEED=123]
-	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(if $(SEED),$(SEED),train_config)"
+docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=agent_config"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	$(WORKERS_UP)
-	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),) $(if $(SEED),--seed $(SEED),)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
+
+docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=agent_config"
+	$(DOCKER_COMPOSE) down
+	$(WORKERS_DOWN)
+	$(DOCKER_COMPOSE) up -d --wait
+	$(WORKERS_UP)
+	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh --total-timesteps 10000 $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
 docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker-tune [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo]
 	@echo "Tuning: layout=$(LAYOUT) stage=$(or $(STAGE),1) baseline=$(BASELINE_NAME)"
@@ -169,21 +188,21 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
 docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
-	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
+	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(EVAL_SEED) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
-	$(DOCKER_COMPOSE) exec -e EVAL_PER_STEP_CAP=$(PER_STEP_CAP) -e EVAL_DISABLE_SAFETY_WRAPPER=$(if $(NO_SAFETY),1,0) training python $(SRC_DIR)/evaluation/evaluate.py \
+	$(DOCKER_COMPOSE) exec -e EVAL_PER_STEP_CAP=$(PER_STEP_CAP) -e EVAL_DISABLE_SAFETY_WRAPPER=$(if $(NO_SAFETY),1,0) -e EVAL_SEED=$(EVAL_SEED) training python $(SRC_DIR)/evaluation/evaluate.py \
 		--model-path $(CHECKPOINT_MODEL) \
 		--eval-config $(CONFIG_DIR)/eval_config.yaml \
 		--env-config $(CONFIG_DIR)/deployment/sim/env_config.yaml \
 		--train-config $(CONFIG_DIR)/train_config.yaml \
 		$(if $(BASELINE),--baseline $(BASELINE_YAML),) \
 		$(if $(filter command line,$(origin SCENARIO)),--conditions $(SCENARIO),) \
-		--output-dir outputs/evaluation_results
+		--output-dir $(EVAL_RESULTS_ROOT)
 
-docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/evaluation_results/full_method/<leaf>/real_observations.npy]
+docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/evaluation_results/seed_42/full_method/<leaf>/real_observations.npy]
 	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)$(if $(REAL_OBS), (on-manifold),)"
 	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/evaluation/covariance_probe.py \
 		--model-path $(CHECKPOINT_MODEL) \
@@ -392,38 +411,48 @@ trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (coll
 	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
 	$(PYTHON) scripts/miscellaneous/trace_tier_breakdown.py --trace-dir $(TRACE_DIR)
 
-analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/ablation_analysis] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded] [CHECKPOINT=1_42_19062026-0120] [STAGE=1]
+analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [STAGE=1] [SEED=42] [CHECKPOINT=1_42_19062026-0120] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/ablation_analyser.py \
-		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/ablation_analysis) \
+		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
+		--output-dir $(or $(OUTPUT_DIR),$(ABLATION_ROOT)) \
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
 		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded) \
 		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),) \
 		$(if $(STAGE),--stage $(STAGE),)
 
-analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/gate_analysis] [STAGE=1]
+analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [STAGE=1] [SEED=42]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/gate_roc.py \
-		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/gate_analysis) \
+		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
+		--output-dir $(or $(OUTPUT_DIR),$(GATE_ROOT)) \
 		$(if $(STAGE),--stage $(STAGE),)
 
-analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/calibration_analysis] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
+analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/calibration.py \
-		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/calibration_analysis) \
+		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
+		--output-dir $(or $(OUTPUT_DIR),$(CALIBRATION_ROOT)) \
 		$(if $(ARM),--arm $(ARM),) \
 		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
 
-handover-timing: ## When does the wrapper hand over vs degradation onset? Usage: make handover-timing [RESULTS_ROOT=outputs/evaluation_results] [OUTPUT_DIR=outputs/handover_timing] [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
+handover-timing: ## When does the wrapper hand over vs degradation onset? Usage: make handover-timing [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
 	$(PYTHON) scripts/evaluation/handover_timing.py \
-		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/handover_timing) \
+		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
+		--output-dir $(or $(OUTPUT_DIR),$(HANDOVER_ROOT)) \
 		$(if $(ARM),--arm $(ARM),) \
 		$(if $(CHECKPOINT),--checkpoint $(CHECKPOINT),)
+
+analyse-cross-seed: ## Pool all seeds into headline tables + per-seed robustness. Usage: make analyse-cross-seed [STAGE=6] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
+	$(call ensure-venv)
+	# Cross-seed spans seeds: parent root, NEVER EVAL_RESULTS_ROOT (which is seed_<N>/).
+	$(PYTHON) scripts/evaluation/cross_seed.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/cross_seed_analysis) \
+		--stage $(or $(STAGE),6) \
+		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
+		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
@@ -542,7 +571,7 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/miscellaneous/tb_read.py $(LOG) $(ARGS)
 
-uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper
+uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
 	$(call ensure-venv)
 	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/evaluation/uncertainty_verdict.py $(EVAL_DIR)
