@@ -44,7 +44,6 @@ checkpoint_dir: "./checkpoints"
 # The run budget is the active stage's stage_timesteps (curriculum file), which the
 # LR/ent_coef schedules decay over. A run with no stage falls back to train_ppo.py's
 # 1,000,000-step default.
-seed: 42  # Master RNG seed. The ablation runs multiple seeds via --seed / the Makefile, not a list here.
 eval_freq: 10000  # Evaluate every N steps (reserved, eval_env currently disabled).
 n_eval_episodes: 10  # Episodes per evaluation (reserved, eval_env currently disabled).
 success_rate_window: 50  # Episodes the logged terminal rates are averaged over (a per-rollout rate is too noisy).

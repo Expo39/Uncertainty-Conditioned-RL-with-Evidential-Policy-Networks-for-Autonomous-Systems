@@ -6,17 +6,17 @@
 # parameters, and deployment flags.
 
 # ---------------------------------------------------------------------------
+# Master RNG seed
+# ---------------------------------------------------------------------------
+# Single source of truth for the whole experiment: seeds training and the
+# separate-process GNSS/IMU noise relays. Nothing else carries a seed.
+seed: 42  # Change this one line to run a new seed.
+
+# ---------------------------------------------------------------------------
 # Policy safety parameters
 # ---------------------------------------------------------------------------
 # Hard speed governor (throttle is cut at or above this speed, brake unaffected).
-# Sized for the manoeuvre, not the road: at the 5 Hz decision rate with the
-# steering slew below, the turn-in window must span several policy decisions
-# (~1.2 m per decision here, a ~4 m steering ramp). The cap is the CEILING, not
-# the target - it is set high enough to leave headroom for the policy to CHOOSE
-# a lower speed, so cautious driving under high localisation uncertainty is a
-# measurable behaviour rather than something the governor flattens out. Below
-# the 1-2-decision corridor turn at 8 m/s, above the near-no-headroom regime
-# where caution is unobservable.
+
 max_ego_speed_ms: 6.0  # Speed limit (m/s).
 
 # ---------------------------------------------------------------------------
@@ -34,7 +34,7 @@ actuator_model:
 
 # SafetyWrapper: full-stop handoff when TOTAL uncertainty (epistemic+aleatoric) reaches
 # the threshold. Calibrate per checkpoint to the calm-condition total upper tail.
-safety_handoff_threshold: 1.903  # clean p95 (honest, OU stage6)
+safety_handoff_threshold: 1.2
 
 # ---------------------------------------------------------------------------
 # Deployed baseline (real vehicle)

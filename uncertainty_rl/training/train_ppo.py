@@ -889,10 +889,15 @@ def train(
 
     # Per-bay success accounting. Cumulative attempts/successes per target bay
     # over the whole run, dumped to
-    # outputs/bay_successes/training/<baseline>/<leaf>/ so a random-bay run can
-    # be inspected for which bays the policy can park.
+    # outputs/bay_successes/training/seed_<N>/<baseline>/<leaf>/ so a random-bay
+    # run can be inspected for which bays the policy can park, and so a second
+    # seed's successes never overwrite the first's (seed_<N> mirrors the eval and
+    # analysis trees).
     _bay_output_dir = (
-        Path("./outputs/bay_successes/training") / baseline_name / run_leaf
+        Path("./outputs/bay_successes/training")
+        / f"seed_{seed}"
+        / baseline_name
+        / run_leaf
     )
     _bay_run_info: Dict[str, Any] = {
         "run_name": run_name,

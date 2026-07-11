@@ -704,12 +704,17 @@ class LiveVisualiser:
             right = (int(s1[0] - ux * 8 - uy * 5), int(s1[1] - uy * 8 + ux * 5))
             pygame.draw.polygon(self._screen, _C_EGO, [s1, left, right])
 
-        # HUD
+        # HUD. The GNSS fix-state tier is the active RTK degradation level for
+        # this step (mid-episode Markov drift varies it), so it sits on the
+        # context line to read the policy's response at each tier.
+        ego = state.get("ego", {})
+        gnss_tier = ego.get("gnss_tier", "")
         hud = (
             f"Floor: {state.get('floor_plan', '?')}  "
             f"Ep: {episode_id}  "
             f"Step: {state.get('episode_step', '?')}  "
-            f"t={state.get('sim_time', 0.0):.2f}s"
+            f"t={state.get('sim_time', 0.0):.2f}s  "
+            f"GNSS: {gnss_tier or '?'}"
         )
         # HUD is drawn in a dedicated band BELOW the map (y >= self._map_h),
         # not overlaid on it. Fill the band with the HUD background colour so
@@ -726,7 +731,6 @@ class LiveVisualiser:
         # the env writes ego.speed and action.* on every frame regardless of
         # the debug flag. Show them by default so the policy's behaviour
         # (is it braking? how fast is it over the bay?) is always visible.
-        ego = state.get("ego", {})
         act = state.get("action", {})
         self._draw_hud(
             f"spd={ego.get('speed', 0.0):.2f}m/s  "
