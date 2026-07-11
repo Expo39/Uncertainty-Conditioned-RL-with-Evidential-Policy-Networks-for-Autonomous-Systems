@@ -11,10 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from uncertainty_rl.utils.actuation_calibration import (
-    ActuationCalibration,
-    ActuatorMap,
-)
+from uncertainty_rl.utils.actuation_calibration import ActuationCalibration, ActuatorMap
 
 # ---------------------------------------------------------------------------
 # TestActuatorMap
