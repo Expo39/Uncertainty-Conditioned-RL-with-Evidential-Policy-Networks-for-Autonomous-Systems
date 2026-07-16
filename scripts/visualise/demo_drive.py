@@ -165,6 +165,14 @@ _TRACE_COLUMNS = [
     "ekf_std_x",
     "ekf_std_y",
     "ekf_std_yaw",
+    # LIVE GNSS fix-state tier for this step (the actual Markov-chain state
+    # driving the injected noise, from info["gnss_tier"], which the env reads
+    # back from the relay each tick) and its noise multiplier vs rtk_fixed.
+    # This is the FAITHFUL tier label: the reported ekf_std saturates and
+    # cannot be used to recover the tier post hoc. Empty string on steps with
+    # no active tier (e.g. CI/test fallback).
+    "gnss_tier",
+    "gnss_multiplier",
 ]
 
 
@@ -446,6 +454,9 @@ def main() -> None:
                             f"{info0.get('ekf_std_x', float('nan')):.4f}",
                             f"{info0.get('ekf_std_y', float('nan')):.4f}",
                             f"{info0.get('ekf_std_yaw', float('nan')):.4f}",
+                            # Live fix-state tier and its noise multiplier.
+                            str(info0.get("gnss_tier", "")),
+                            f"{info0.get('gnss_multiplier', float('nan')):.4f}",
                         ]
                     )
 

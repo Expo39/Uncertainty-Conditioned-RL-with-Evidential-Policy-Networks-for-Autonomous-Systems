@@ -291,6 +291,27 @@ class _CovarianceSubscriber:
                 return cast(np.ndarray, self._latest_pose.copy())
             return None
 
+    def get_active_tier(self) -> Optional[str]:
+        """
+        @brief Read the LIVE GNSS fix-state tier from episode_config.json.
+
+        The gnss_noise_relay walks the fix-state Markov chain at 20 Hz and
+        writes the current tier back into episode_config.json on every
+        transition (GnssNoiseRelayNode._write_active_tier). Reading it here is
+        how the env recovers the true per-tick tier: the env's own
+        _current_gnss_tier only holds the START tier sampled at reset, not the
+        relay's live drift. Read-only; never writes.
+
+        @return The active tier name (e.g. 'rtk_fixed'), or None if the file is
+                absent/unreadable or carries no tier (e.g. CI/tests with no relay).
+        """
+        try:
+            data = json.loads(self._episode_config_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return None
+        tier = data.get("tier_name")
+        return str(tier) if tier else None
+
     # -----------------------------------------------------------------------
     # Episode signal writers
     # -----------------------------------------------------------------------

@@ -2399,6 +2399,33 @@ class CARLAParkingEnv(gym.Env):
         # CI/test GT-fallback path so the CSV never reports GT as if it were EKF.
         ekf = self._last_ekf_world
 
+        # Live GNSS fix-state tier for this step. self._current_gnss_tier holds
+        # only the START tier sampled at reset; the relay walks the Markov chain
+        # at 20 Hz and writes the live tier back to episode_config.json, so read
+        # it back here for the true per-tick tier. Fall back to the start tier
+        # when the subscriber is absent (baselines without covariance, CI/tests)
+        # or the file has no tier yet.
+        _start_tier = (
+            self._current_gnss_tier.get("name", "")
+            if self._current_gnss_tier is not None
+            else ""
+        )
+        _live_tier = _start_tier
+        if self._cov_subscriber is not None:
+            _read = self._cov_subscriber.get_active_tier()
+            if _read:
+                _live_tier = _read
+        # Noise multiplier consistent with the live tier, computed the same way
+        # as _sample_gnss_noise_tier (tier metric stddev / RTK-fixed base 0.02 m).
+        # Falls back to the per-episode multiplier when the live tier is
+        # unavailable/unknown.
+        _live_multiplier = float(self._current_gnss_multiplier)
+        for _t in self._gnss_noise_tiers:
+            if _t.get("name") == _live_tier:
+                _tier_stddev = float(_t.get("metric_stddev_m", 0.02))
+                _live_multiplier = max(1.0, _tier_stddev / 0.02)
+                break
+
         info: Dict[str, Any] = {
             "steps": self.steps,
             "success": success,
@@ -2442,16 +2469,13 @@ class CARLAParkingEnv(gym.Env):
             "ekf_std_x": float(self._last_ekf_std[0]),
             "ekf_std_y": float(self._last_ekf_std[1]),
             "ekf_std_yaw": float(self._last_ekf_std[2]),
-            # Current GNSS fix-state tier (name + noise multiplier vs RTK-fixed).
-            # Lets timing analysis recover the step the Markov drift first reaches
-            # a degraded tier (the onset reference for handover-latency), which
-            # varies per episode under the degrade_one_way drift.
-            "gnss_tier": (
-                self._current_gnss_tier.get("name", "")
-                if self._current_gnss_tier is not None
-                else ""
-            ),
-            "gnss_multiplier": float(self._current_gnss_multiplier),
+            # Live GNSS fix-state tier (name + noise multiplier vs RTK-fixed),
+            # read back from the relay's Markov drift (see above). Lets timing
+            # analysis recover the step the drift first reaches a degraded tier
+            # (the onset reference for handover-latency), which varies per
+            # episode under the degrade_one_way drift.
+            "gnss_tier": _live_tier,
+            "gnss_multiplier": _live_multiplier,
             # Target bay this episode (id, world pose, dimensions). Constant
             # within an episode; surfaced so trace tooling can record which bay
             # the run targeted without reaching into the env internals.
