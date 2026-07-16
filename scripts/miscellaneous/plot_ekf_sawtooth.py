@@ -84,10 +84,10 @@ _TIER_EDGES: List[Tuple[str, float]] = [
 # Ordered severity ramp (fixed -> degraded). Doubles as a status palette; validated
 # colourblind-safe on adjacent pairs. Kept light so the foreground line stays dominant.
 _TIER_COLOUR = {
-    "rtk_fixed": "#2e7d32",   # green   (best)
-    "rtk_float": "#f9a825",   # amber
+    "rtk_fixed": "#2e7d32",  # green   (best)
+    "rtk_float": "#f9a825",  # amber
     "standalone": "#ef6c00",  # orange
-    "degraded": "#c62828",    # red     (worst)
+    "degraded": "#c62828",  # red     (worst)
 }
 _TIER_LABEL = {
     "rtk_fixed": "rtk_fixed",
@@ -155,9 +155,11 @@ def _resolve_tiers(df: pd.DataFrame) -> Tuple[np.ndarray, bool]:
     @return (tier_name_array, is_reconstructed). is_reconstructed is True only
             when gnss_tier is absent and the noisy true-error fallback was used.
     """
-    if "gnss_tier" in df.columns and df["gnss_tier"].notna().any() and (
-        df["gnss_tier"].astype(str).str.len() > 0
-    ).any():
+    if (
+        "gnss_tier" in df.columns
+        and df["gnss_tier"].notna().any()
+        and (df["gnss_tier"].astype(str).str.len() > 0).any()
+    ):
         tiers = df["gnss_tier"].astype(str).to_numpy()
         # Guard against an unexpected tier name so colour/label lookups never KeyError.
         unknown = sorted(set(tiers) - set(_TIER_ORDER))
@@ -290,8 +292,9 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
         color="#333333",
         va="center",
         ha="center",
-        bbox=dict(boxstyle="round,pad=0.35", fc="white", ec="#cccccc", lw=0.6,
-                  alpha=0.9),
+        bbox=dict(
+            boxstyle="round,pad=0.35", fc="white", ec="#cccccc", lw=0.6, alpha=0.9
+        ),
         arrowprops=dict(arrowstyle="-", color="#888888", lw=0.8),
         zorder=5,
     )
@@ -322,9 +325,11 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     fig.savefig(out_pdf)
     plt.close(fig)
     src = "reconstructed from true error" if reconstructed else "logged gnss_tier"
-    print(f"wrote {out_pdf}  ({n} ticks, {n / HZ:.2f} s, "
-          f"sigma_x max {np.nanmax(sigma_x):.3f} m, tier source: {src}, "
-          f"worst tier: {worst})")
+    print(
+        f"wrote {out_pdf}  ({n} ticks, {n / HZ:.2f} s, "
+        f"sigma_x max {np.nanmax(sigma_x):.3f} m, tier source: {src}, "
+        f"worst tier: {worst})"
+    )
 
 
 def _parse_args() -> argparse.Namespace:
@@ -339,10 +344,10 @@ def _parse_args() -> argparse.Namespace:
         repo.parent
         / "Dissertation_WriteUp/content/chapters/3_methodology/figures/f5_ekf_sawtooth.pdf"
     )
-    p.add_argument("--trace", type=Path, default=default_trace,
-                   help="Per-episode demo-trace CSV.")
-    p.add_argument("--out", type=Path, default=default_out,
-                   help="Output PDF path.")
+    p.add_argument(
+        "--trace", type=Path, default=default_trace, help="Per-episode demo-trace CSV."
+    )
+    p.add_argument("--out", type=Path, default=default_out, help="Output PDF path.")
     return p.parse_args()
 
 
