@@ -39,6 +39,7 @@ from scripts.evaluation._discovery import (  # noqa: E402
     arm_leaf_subpath,
     discover_records,
 )
+from scripts.evaluation.ablation_analyser import drop_held_tiers  # noqa: E402
 
 # Std/error axis pairs to analyse: the predicted-std column against its matched
 # actual-error column. Position uses the combined magnitudes.
@@ -232,7 +233,11 @@ def _plot(df: pd.DataFrame, binned: pd.DataFrame, out_dir: Path) -> None:
 
 
 def analyse(
-    results_root: Path, out_dir: Path, arm: Optional[str], leaf: Optional[str]
+    results_root: Path,
+    out_dir: Path,
+    arm: Optional[str],
+    leaf: Optional[str],
+    keep_held_tiers: bool = False,
 ) -> None:
     """
     @brief Run the EKF calibration analysis and write the tables + figure.
@@ -240,6 +245,11 @@ def analyse(
     @param out_dir: Directory for the CSV tables and PNG figure.
     @param arm: Optional baseline name to restrict the source CSV to.
     @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
+    @param keep_held_tiers: Retain the held-tier conditions. Default False drops
+           them, so the per-condition rows and the scatter cover only the five
+           conditions the write-up reports. The pooled "varying" verdict is
+           unaffected either way: _VARYING_CONDITIONS already excludes the held
+           tiers, which is why the headline correlation does not move.
     """
     csv_path = _find_calibration_csv(results_root, arm, leaf)
     # Nest the output under <baseline>/<leaf> (mirroring the eval) so a different
@@ -248,6 +258,8 @@ def analyse(
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Calibration source: {csv_path}")
     df = _add_combined_columns(pd.read_csv(csv_path))
+    if not keep_held_tiers:
+        df = drop_held_tiers(df)
 
     corr = _correlations(df)
     binned = _binned_table(df)
@@ -346,8 +358,20 @@ def main() -> None:
         help="Pin to one checkpoint leaf, e.g. 1_42_19062026-0120 "
         "(default: newest run for the arm).",
     )
+    parser.add_argument(
+        "--keep-held-tiers",
+        action="store_true",
+        help="Keep the held-tier conditions (gnss_fixed, gnss_degraded). Default "
+        "drops them, matching the five conditions the write-up reports.",
+    )
     args = parser.parse_args()
-    analyse(Path(args.results_root), Path(args.output_dir), args.arm, args.checkpoint)
+    analyse(
+        Path(args.results_root),
+        Path(args.output_dir),
+        args.arm,
+        args.checkpoint,
+        keep_held_tiers=args.keep_held_tiers,
+    )
 
 
 if __name__ == "__main__":

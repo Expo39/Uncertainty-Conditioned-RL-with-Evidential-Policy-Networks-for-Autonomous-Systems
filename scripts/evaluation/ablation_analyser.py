@@ -58,6 +58,18 @@ _CONTRAST_PAIRS: List[Tuple[str, str, str]] = [
 _SLOPE_CLEAN_CONDITION = "gnss_fixed"
 _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 
+# Held-tier conditions dropped from every table and figure by default. Each pins
+# one GNSS fix state for the whole episode, so neither degrades WITHIN an episode
+# and the contrast between them is a between-condition difference rather than
+# degradation any arm rides through. The EKF also suppresses a static raw fault,
+# so the two do not separate at the policy's input (reported sigma p50 ~0.016 m in
+# both) and the resulting "slope" is flat by construction - see
+# documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md. The live anchor
+# chain (banded by true error) and the one-way drift carry the genuine
+# graceful-degradation evidence, so the write-up reports five conditions, not
+# seven. Pass --keep-held-tiers to restore the old seven-condition behaviour.
+_HELD_TIER_CONDITIONS: List[str] = ["gnss_fixed", "gnss_degraded"]
+
 # Number of bootstrap resamples for delta confidence intervals.
 _N_BOOTSTRAP = 10000
 
@@ -118,6 +130,29 @@ def _load_records(arm_csvs: Dict[str, Path]) -> pd.DataFrame:
     # success is written as int (0/1); coerce defensively in case of NaN rows.
     records["success"] = pd.to_numeric(records["success"], errors="coerce")
     return records
+
+
+def drop_held_tiers(
+    records: pd.DataFrame, conditions: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """
+    @brief Drop the held-tier conditions from any frame carrying a "condition" column.
+    @param records: Any per-episode / per-step frame with a "condition" column;
+           frames without one (or empty frames) are returned untouched.
+    @param conditions: Condition names to drop; None uses _HELD_TIER_CONDITIONS.
+    @return A copy with those conditions removed, or the input frame unchanged when
+            there is nothing to drop.
+
+    Applied at every load boundary (episode records, gate frame, calibration
+    records) so the held tiers cannot reach a table or figure by any path. Kept as
+    one public helper rather than inline masks so cross_seed.py filters the pooled
+    frames identically.
+    """
+    if conditions is None:
+        conditions = _HELD_TIER_CONDITIONS
+    if not conditions or records.empty or "condition" not in records.columns:
+        return records
+    return records[~records["condition"].isin(conditions)].copy()
 
 
 def _condition_summary(records: pd.DataFrame) -> pd.DataFrame:
@@ -572,6 +607,7 @@ def analyse(
     slope_degraded: str = _SLOPE_DEGRADED_CONDITION,
     leaf: Optional[str] = None,
     stage: Optional[str] = None,
+    keep_held_tiers: bool = False,
 ) -> None:
     """
     @brief Run the full cross-arm analysis and write tables + figures.
@@ -584,6 +620,9 @@ def analyse(
            each arm's newest run win.
     @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
            same stage; None uses each arm's newest leaf (may mix stages).
+    @param keep_held_tiers: Retain the held-tier conditions (_HELD_TIER_CONDITIONS)
+           and the degradation slope they define. Default False drops them, which
+           is what the write-up reports; True restores the old seven-condition run.
     """
     # Nest by stage (or pinned leaf) so STAGE=1 and STAGE=2 runs never overwrite
     # each other; an unpinned mixed-stage run lands in "latest".
@@ -608,9 +647,26 @@ def analyse(
             print(f"  {arm:20s} (MISSING - contrast involving it is skipped)")
 
     records = _load_records(arm_csvs)
+    # Drop the held tiers before ANY statistic is computed, so no table or figure
+    # downstream can reintroduce them.
+    if not keep_held_tiers:
+        n_before = len(records)
+        records = drop_held_tiers(records)
+        print(
+            f"\nDropped held-tier conditions "
+            f"({', '.join(_HELD_TIER_CONDITIONS)}): "
+            f"{n_before - len(records)} of {n_before} episodes removed; "
+            f"{records['condition'].nunique()} conditions retained."
+        )
     summary = _condition_summary(records)
     contrasts = _contrast_table(records, seed)
-    slope = _degradation_slope(summary, slope_clean, slope_degraded)
+    # The slope is defined BY the two held tiers, so it exists only when they are
+    # kept; an empty frame here is the correct result, not missing data.
+    slope = (
+        _degradation_slope(summary, slope_clean, slope_degraded)
+        if keep_held_tiers
+        else pd.DataFrame()
+    )
     behaviour = _behaviour_by_std(records)
     caution_slopes = _caution_slopes(records)
     caution_contrast = _caution_contrast(caution_slopes)
@@ -618,7 +674,8 @@ def analyse(
 
     summary.to_csv(out_dir / "condition_summary.csv", index=False)
     contrasts.to_csv(out_dir / "covariance_contrasts.csv", index=False)
-    slope.to_csv(out_dir / "degradation_slope.csv", index=False)
+    if not slope.empty:
+        slope.to_csv(out_dir / "degradation_slope.csv", index=False)
     if not behaviour.empty:
         behaviour.to_csv(out_dir / "behaviour_by_std.csv", index=False)
     if not caution_slopes.empty:
@@ -629,10 +686,11 @@ def analyse(
         caution_levels.to_csv(out_dir / "caution_levels.csv", index=False)
 
     _plot_condition_bars(summary, out_dir)
-    _plot_degradation_slope(slope, out_dir)
+    if not slope.empty:
+        _plot_degradation_slope(slope, out_dir)
     _plot_behaviour(behaviour, out_dir)
 
-    _print_headline(contrasts, slope, slope_clean, slope_degraded)
+    _print_headline(contrasts, slope, slope_clean, slope_degraded, keep_held_tiers)
     _print_caution(caution_slopes, caution_contrast)
     _print_caution_levels(caution_levels)
     print(f"\nTables and figures written to {out_dir}")
@@ -643,6 +701,7 @@ def _print_headline(
     slope: pd.DataFrame,
     slope_clean: str = _SLOPE_CLEAN_CONDITION,
     slope_degraded: str = _SLOPE_DEGRADED_CONDITION,
+    held_tiers_kept: bool = True,
 ) -> None:
     """
     @brief Console summary of the two claims: covariance contrast + slope.
@@ -650,6 +709,8 @@ def _print_headline(
     @param slope: Slope table from _degradation_slope.
     @param slope_clean: Slope-start condition name (for the missing-data hint).
     @param slope_degraded: Slope-end condition name (for the missing-data hint).
+    @param held_tiers_kept: Whether the held tiers were retained. False makes an
+           empty slope report as deliberately skipped rather than as missing data.
     """
     print("\n=== Covariance contrast (treatment - control), 95% bootstrap CI ===")
     if contrasts.empty:
@@ -664,6 +725,15 @@ def _print_headline(
                 f"pos {r['pos_error_delta_m']:+5.2f}m"
             )
         print("  (* = success CI excludes zero: covariance significantly helped)")
+
+    if slope.empty and not held_tiers_kept:
+        # Deliberately dropped, not missing: say so rather than hinting at absent data.
+        print(
+            "\n=== GNSS degradation slope: SKIPPED (held tiers dropped) ===\n"
+            "  The slope is defined by the held tiers; pass --keep-held-tiers to "
+            "compute it."
+        )
+        return
 
     print("\n=== GNSS degradation slope (clean -> degraded) ===")
     if slope.empty:
@@ -794,6 +864,16 @@ def main() -> None:
         help="Degradation-slope end condition (worst held GNSS tier).",
     )
     parser.add_argument(
+        "--keep-held-tiers",
+        action="store_true",
+        help=(
+            "Keep the held-tier conditions ("
+            + ", ".join(_HELD_TIER_CONDITIONS)
+            + ") and the degradation slope they define. Default drops them, "
+            "matching the five conditions the write-up reports."
+        ),
+    )
+    parser.add_argument(
         "--checkpoint",
         type=str,
         default=None,
@@ -816,6 +896,7 @@ def main() -> None:
         args.slope_degraded,
         leaf=args.checkpoint,
         stage=args.stage,
+        keep_held_tiers=args.keep_held_tiers,
     )
 
 

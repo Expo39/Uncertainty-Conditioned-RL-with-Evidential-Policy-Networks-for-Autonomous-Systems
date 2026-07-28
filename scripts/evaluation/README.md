@@ -23,10 +23,23 @@ Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv
 Cross-arm contrast. Globs `outputs/evaluation_results/<baseline>/<leaf>/episode_records.csv` for the four arms, joins on condition, and computes:
 
 - The covariance contrast deltas with 95% bootstrap CIs - `input_uncertainty - vanilla_ppo` (standard heads) and `full_method - output_uncertainty` (evidential heads), the single-variable covariance on/off tests.
-- The GNSS degradation slope per arm (`gnss_fixed -> gnss_degraded` success drop + position-error growth; the graceful-degradation headline).
+- The GNSS degradation slope per arm (`gnss_fixed -> gnss_degraded` success drop + position-error growth). **Only computed with `--keep-held-tiers`** (see below).
 - Behaviour-by-std: final pos-error and approach speed binned by EKF position std per arm (the mechanism - precision / caution under uncertainty).
 
-Writes `condition_summary.csv`, `covariance_contrasts.csv`, `degradation_slope.csv`, `behaviour_by_std.csv`, and the matching PNGs. Run with `make analyse-ablation`.
+**Held tiers are dropped by default.** `gnss_fixed` and `gnss_degraded` each pin one
+fix state for the whole episode, so neither degrades *within* an episode and the
+"slope" between them is a between-condition difference rather than degradation any
+arm rides through; the EKF also suppresses a static raw fault, so the two do not
+separate at the policy's input and the slope is flat by construction (see
+`documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`). Every table and
+figure therefore covers the **five** retained conditions, matching the write-up. The
+graceful-degradation evidence instead comes from the live anchor chain banded by true
+error (`scripts/miscellaneous/plot_degradation_tiers.py`) and the one-way drift. Pass
+`--keep-held-tiers` to restore the old seven-condition behaviour and the slope.
+
+Writes `condition_summary.csv`, `covariance_contrasts.csv`, `behaviour_by_std.csv`
+(plus `degradation_slope.csv` only when the held tiers are kept), and the matching
+PNGs. Run with `make analyse-ablation`.
 
 ### `calibration.py` (host-side)
 
