@@ -488,7 +488,9 @@ def analyse(
         calib_binned = _binned_table(calib)
 
     # --- Pooled handover timing over the with_wrapper frame (EDL arms).
-    handover_pool = _pool_single_csv(results_root, "episode_records.csv", "with_wrapper")
+    handover_pool = _pool_single_csv(
+        results_root, "episode_records.csv", "with_wrapper"
+    )
     if not keep_held_tiers:
         handover_pool = drop_held_tiers(handover_pool)
     handover = _handover_table(handover_pool)
