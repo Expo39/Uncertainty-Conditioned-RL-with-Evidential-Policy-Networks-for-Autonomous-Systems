@@ -11,7 +11,7 @@ seed (pool of one) still produces non-empty pooled tables with a zero range.
 """
 
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
 import pandas as pd
 
@@ -48,6 +48,7 @@ def _write_episode_csv(
     n_per_condition: int,
     success_rate: float,
     variant: str = "without_wrapper",
+    extra_conditions: Tuple[Tuple[str, float], ...] = (),
 ) -> None:
     """
     @brief Write a synthetic episode_records.csv for one seed/arm at stage 6.
@@ -57,6 +58,9 @@ def _write_episode_csv(
     @param n_per_condition: Episodes per GNSS condition.
     @param success_rate: Fraction of episodes marked success (deterministic split).
     @param variant: Wrapper variant directory (without_wrapper or with_wrapper).
+    @param extra_conditions: Additional (condition, ekf_std) pairs to write beyond
+           the two held tiers, for tests that need a condition surviving the
+           default held-tier drop.
 
     Two conditions (clean, degraded) so the degradation slope is computable; the
     success split is deterministic (first ceil(rate*n) succeed) so per-seed and
@@ -67,7 +71,7 @@ def _write_episode_csv(
     out_dir = root / f"seed_{seed}" / arm / leaf / variant
     out_dir.mkdir(parents=True, exist_ok=True)
     rows = []
-    for condition, std in ((_CLEAN, 0.02), (_DEGRADED, 1.0)):
+    for condition, std in ((_CLEAN, 0.02), (_DEGRADED, 1.0), *extra_conditions):
         n_success = round(success_rate * n_per_condition)
         for i in range(n_per_condition):
             is_success = i < n_success
@@ -225,6 +229,9 @@ class TestPoolOfOne:
             _write_episode_csv(root, 42, arm, n_per_condition=10, success_rate=rate)
         out_dir = tmp_path / "cross_seed_analysis"
 
+        # The fixture writes ONLY the two held tiers, which analyse drops by
+        # default; this test is about the pooling mechanics and the slope those
+        # tiers define, so it opts back in.
         cross_seed.analyse(
             results_root=root,
             out_dir=out_dir,
@@ -232,6 +239,7 @@ class TestPoolOfOne:
             stage="6",
             slope_clean=_CLEAN,
             slope_degraded=_DEGRADED,
+            keep_held_tiers=True,
         )
 
         stage_dir = out_dir / "all_seeds" / "stage6"
@@ -245,6 +253,48 @@ class TestPoolOfOne:
         # The headline figure and pooled summary were written too.
         assert (stage_dir / "seed_robustness.png").exists()
         assert (stage_dir / "pooled_condition_summary.csv").exists()
+
+    def test_held_tiers_dropped_by_default(self, tmp_path: Path) -> None:
+        """
+        @brief By default analyse drops the held tiers from every pooled table and
+               writes no degradation slope, keeping only the retained conditions.
+        """
+        root = tmp_path / "evaluation_results"
+        for arm, rate in (
+            ("vanilla_ppo", 0.4),
+            ("input_uncertainty", 0.6),
+            ("output_uncertainty", 0.5),
+            ("full_method", 0.8),
+        ):
+            _write_episode_csv(
+                root,
+                42,
+                arm,
+                n_per_condition=10,
+                success_rate=rate,
+                extra_conditions=(("anchor_deployment", 0.15),),
+            )
+        out_dir = tmp_path / "cross_seed_analysis"
+
+        cross_seed.analyse(
+            results_root=root,
+            out_dir=out_dir,
+            seed=42,
+            stage="6",
+            slope_clean=_CLEAN,
+            slope_degraded=_DEGRADED,
+        )
+
+        stage_dir = out_dir / "all_seeds" / "stage6"
+        summary = pd.read_csv(stage_dir / "pooled_condition_summary.csv")
+        conditions = set(summary["condition"])
+        assert conditions == {"anchor_deployment"}
+        assert _CLEAN not in conditions and _DEGRADED not in conditions
+        # The slope is defined by the dropped tiers, so it is not written at all.
+        assert not (stage_dir / "pooled_degradation_slope.csv").exists()
+        # The per-seed robustness table is filtered by the same pool.
+        robustness = pd.read_csv(stage_dir / "seed_robustness.csv")
+        assert set(robustness["condition"]) == {"anchor_deployment"}
 
     def test_missing_root_raises(self, tmp_path: Path) -> None:
         """

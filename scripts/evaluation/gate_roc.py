@@ -40,6 +40,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
+from scripts.evaluation.ablation_analyser import drop_held_tiers  # noqa: E402
 
 # Outcomes the gate SHOULD pre-empt (a handoff before these is the desired
 # behaviour). success is the only non-failure; "handoff" episodes already
@@ -197,19 +198,28 @@ def _plot_roc(records: pd.DataFrame, out_dir: Path) -> None:
     plt.close(fig)
 
 
-def analyse(results_root: Path, out_dir: Path, stage: Optional[str] = None) -> None:
+def analyse(
+    results_root: Path,
+    out_dir: Path,
+    stage: Optional[str] = None,
+    keep_held_tiers: bool = False,
+) -> None:
     """
     @brief Run the gate comparison and write the AUC table + ROC figure.
     @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV table and PNG figure.
     @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
            same stage; None uses each arm's newest leaf (may mix stages).
+    @param keep_held_tiers: Retain the held-tier conditions. Default False drops
+           them so the ROC is scored over the five conditions the write-up reports.
     """
     # Nest by stage so STAGE=1 and STAGE=2 runs never overwrite; unpinned in "latest".
     out_dir = out_dir / (f"stage{stage}" if stage is not None else "latest")
     out_dir.mkdir(parents=True, exist_ok=True)
     arm_csvs = _discover_arm_csvs(results_root, stage=stage)
     records = _load(arm_csvs)
+    if not keep_held_tiers:
+        records = drop_held_tiers(records)
     auc_table = _evaluate_signals(records)
     auc_table.to_csv(out_dir / "gate_auc.csv", index=False)
     _plot_roc(records, out_dir)
@@ -259,8 +269,19 @@ def main() -> None:
         help="Compare all arms at this curriculum stage (e.g. 1), instead of "
         "each arm's newest leaf which may sit at different stages.",
     )
+    parser.add_argument(
+        "--keep-held-tiers",
+        action="store_true",
+        help="Keep the held-tier conditions (gnss_fixed, gnss_degraded). Default "
+        "drops them, matching the five conditions the write-up reports.",
+    )
     args = parser.parse_args()
-    analyse(Path(args.results_root), Path(args.output_dir), stage=args.stage)
+    analyse(
+        Path(args.results_root),
+        Path(args.output_dir),
+        stage=args.stage,
+        keep_held_tiers=args.keep_held_tiers,
+    )
 
 
 if __name__ == "__main__":

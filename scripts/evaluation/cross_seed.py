@@ -51,6 +51,7 @@ from scripts.evaluation._discovery import discover_records, seed_roots  # noqa: 
 from scripts.evaluation.ablation_analyser import (  # noqa: E402
     _ARM_ORDER,
     _CONTRAST_PAIRS,
+    _HELD_TIER_CONDITIONS,
     _behaviour_by_std,
     _caution_contrast,
     _caution_levels,
@@ -66,6 +67,7 @@ from scripts.evaluation.ablation_analyser import (  # noqa: E402
     _print_caution,
     _print_caution_levels,
     _print_headline,
+    drop_held_tiers,
 )
 from scripts.evaluation.calibration import (  # noqa: E402
     _add_combined_columns,
@@ -406,6 +408,7 @@ def analyse(
     stage: str,
     slope_clean: str,
     slope_degraded: str,
+    keep_held_tiers: bool = False,
 ) -> None:
     """
     @brief Pool every seed, run the existing stats on the pool, write tables + figures.
@@ -417,12 +420,26 @@ def analyse(
     @param stage: Curriculum stage every arm is pinned to (e.g. "6").
     @param slope_clean: Degradation-slope start condition (cleanest GNSS tier).
     @param slope_degraded: Degradation-slope end condition (worst GNSS tier).
+    @param keep_held_tiers: Retain the held-tier conditions and the degradation
+           slope they define. Default False drops them from EVERY pool (episodes,
+           gate, calibration), matching the five conditions the write-up reports.
     """
     out_dir = out_dir / "all_seeds" / f"stage{stage}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # --- Pool the per-episode records ONCE; every ablation table + figure reads it.
     pooled = _pool_episodes(results_root, stage)
+    # Drop the held tiers from the episode pool BEFORE any statistic is computed;
+    # the gate and calibration pools are filtered at their own load points below,
+    # so no figure can reintroduce them by a different path.
+    if not keep_held_tiers:
+        n_before = len(pooled)
+        pooled = drop_held_tiers(pooled)
+        print(
+            f"Dropped held-tier conditions ({', '.join(_HELD_TIER_CONDITIONS)}): "
+            f"{n_before - len(pooled)} of {n_before} episodes removed; "
+            f"{pooled['condition'].nunique()} conditions retained."
+        )
     n_seeds = int(pooled["seed"].nunique())
     seeds_present = sorted(int(s) for s in pooled["seed"].unique())
     print(f"Pooled {len(pooled)} episodes across {n_seeds} seed(s): {seeds_present}")
@@ -436,7 +453,12 @@ def analyse(
     # --- Pooled headline statistics (the EXISTING functions, on the larger pool).
     summary = _condition_summary(pooled)
     contrasts = _contrast_table(pooled, seed)
-    slope = _degradation_slope(summary, slope_clean, slope_degraded)
+    # Defined BY the held tiers, so it exists only when they are kept.
+    slope = (
+        _degradation_slope(summary, slope_clean, slope_degraded)
+        if keep_held_tiers
+        else pd.DataFrame()
+    )
     behaviour = _behaviour_by_std(pooled)
     caution_slopes = _caution_slopes(pooled)
     caution_contrast = _caution_contrast(caution_slopes)
@@ -450,10 +472,14 @@ def analyse(
 
     # --- Pooled gate ROC AUC over every seed's episodes.
     gate_frame = _pool_gate(results_root, stage)
+    if not keep_held_tiers:
+        gate_frame = drop_held_tiers(gate_frame)
     gate_auc = _evaluate_signals(gate_frame) if not gate_frame.empty else pd.DataFrame()
 
     # --- Pooled calibration (EKF identical across seeds; pooling tightens n only).
     calib = _pool_single_csv(results_root, "calibration_records.csv", "without_wrapper")
+    if not keep_held_tiers:
+        calib = drop_held_tiers(calib)
     calib_corr = pd.DataFrame()
     calib_binned = pd.DataFrame()
     if not calib.empty:
@@ -462,14 +488,16 @@ def analyse(
         calib_binned = _binned_table(calib)
 
     # --- Pooled handover timing over the with_wrapper frame (EDL arms).
-    handover = _handover_table(
-        _pool_single_csv(results_root, "episode_records.csv", "with_wrapper")
-    )
+    handover_pool = _pool_single_csv(results_root, "episode_records.csv", "with_wrapper")
+    if not keep_held_tiers:
+        handover_pool = drop_held_tiers(handover_pool)
+    handover = _handover_table(handover_pool)
 
     # --- Write the pooled CSVs (cross_seed names them; prefixed "pooled_").
     summary.to_csv(out_dir / "pooled_condition_summary.csv", index=False)
     contrasts.to_csv(out_dir / "pooled_covariance_contrasts.csv", index=False)
-    slope.to_csv(out_dir / "pooled_degradation_slope.csv", index=False)
+    if not slope.empty:
+        slope.to_csv(out_dir / "pooled_degradation_slope.csv", index=False)
     if not behaviour.empty:
         behaviour.to_csv(out_dir / "pooled_behaviour_by_std.csv", index=False)
     if not caution_slopes.empty:
@@ -497,14 +525,15 @@ def analyse(
 
     # --- Figures: reuse the helpers (native filenames; the dir marks them pooled).
     _plot_condition_bars(summary, out_dir)
-    _plot_degradation_slope(slope, out_dir)
+    if not slope.empty:
+        _plot_degradation_slope(slope, out_dir)
     _plot_behaviour(behaviour, out_dir)
     if not gate_frame.empty:
         _plot_roc(gate_frame, out_dir)
     _plot_seed_robustness(robustness, out_dir)
 
     # --- Console: the pooled headline, then the seed-robustness range + caveat.
-    _print_headline(contrasts, slope, slope_clean, slope_degraded)
+    _print_headline(contrasts, slope, slope_clean, slope_degraded, keep_held_tiers)
     _print_caution(caution_slopes, caution_contrast)
     _print_caution_levels(caution_levels)
     _print_robustness(robustness, n_seeds)
@@ -555,6 +584,16 @@ def main() -> None:
         default="gnss_degraded",
         help="Degradation-slope end condition (worst held GNSS tier).",
     )
+    parser.add_argument(
+        "--keep-held-tiers",
+        action="store_true",
+        help=(
+            "Keep the held-tier conditions ("
+            + ", ".join(_HELD_TIER_CONDITIONS)
+            + ") and the degradation slope they define. Default drops them, "
+            "matching the five conditions the write-up reports."
+        ),
+    )
     args = parser.parse_args()
     analyse(
         Path(args.results_root),
@@ -563,6 +602,7 @@ def main() -> None:
         args.stage,
         args.slope_clean,
         args.slope_degraded,
+        keep_held_tiers=args.keep_held_tiers,
     )
 
 
