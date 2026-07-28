@@ -46,20 +46,40 @@ _SEEDS = ["seed_42", "seed_123", "seed_7"]
 # clearly separated hue + marker + linestyle so they never blur together.
 _ARM_STYLE: Dict[str, Dict[str, object]] = {
     "full_method": dict(
-        color="#0353a4", marker="o", lw=2.4, ms=6.5, ls="-",
-        label="full method", zorder=6,
+        color="#0353a4",
+        marker="o",
+        lw=2.4,
+        ms=6.5,
+        ls="-",
+        label="full method",
+        zorder=6,
     ),
     "output_uncertainty": dict(
-        color="#d55e00", marker="s", lw=1.6, ms=5, ls="--",
-        label="output uncertainty", zorder=4,
+        color="#d55e00",
+        marker="s",
+        lw=1.6,
+        ms=5,
+        ls="--",
+        label="output uncertainty",
+        zorder=4,
     ),
     "input_uncertainty": dict(
-        color="#009e73", marker="^", lw=1.6, ms=5.5, ls="-.",
-        label="input uncertainty", zorder=4,
+        color="#009e73",
+        marker="^",
+        lw=1.6,
+        ms=5.5,
+        ls="-.",
+        label="input uncertainty",
+        zorder=4,
     ),
     "vanilla_ppo": dict(
-        color="#7d3ac1", marker="D", lw=1.6, ms=4.5, ls=":",
-        label="vanilla PPO", zorder=3,
+        color="#7d3ac1",
+        marker="D",
+        lw=1.6,
+        ms=4.5,
+        ls=":",
+        label="vanilla PPO",
+        zorder=3,
     ),
 }
 
@@ -111,8 +131,11 @@ def _collect(base: Path) -> pd.DataFrame:
                 if e not in mean_err.index:
                     continue
                 rows.append(
-                    dict(arm=arm, mean_err=float(mean_err.loc[e]),
-                         success=int(float(r["success"])))
+                    dict(
+                        arm=arm,
+                        mean_err=float(mean_err.loc[e]),
+                        success=int(float(r["success"])),
+                    )
                 )
     return pd.DataFrame(rows)
 
@@ -164,8 +187,13 @@ def plot(base: Path, out_pdf: Path) -> None:
         style = dict(_ARM_STYLE[arm])
         label = style.pop("label")
         ax.errorbar(
-            x, ys, yerr=[lo, hi], capsize=2.5, elinewidth=0.9,
-            **style, label=label,
+            x,
+            ys,
+            yerr=[lo, hi],
+            capsize=2.5,
+            elinewidth=0.9,
+            **style,
+            label=label,
         )
 
     ax.set_xticks(x)
@@ -176,9 +204,7 @@ def plot(base: Path, out_pdf: Path) -> None:
             f"high\n(>{e2:.2f} m)",
         ]
     )
-    ax.set_xlabel(
-        "mean true localisation error over the episode (anchor chain)"
-    )
+    ax.set_xlabel("mean true localisation error over the episode (anchor chain)")
     ax.set_ylabel("success rate (\\%)")
     ax.set_ylim(0, 65)
     ax.set_xlim(-0.35, len(_BAND_LABELS) - 0.65)
