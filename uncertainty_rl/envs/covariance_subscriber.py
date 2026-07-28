@@ -359,6 +359,7 @@ class _CovarianceSubscriber:
         datum_lon: Optional[float] = None,
         hold_tier: bool = False,
         degrade_one_way: bool = False,
+        degrade_rate_scale: float = 1.0,
     ) -> None:
         """
         @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
@@ -374,6 +375,12 @@ class _CovarianceSubscriber:
                           degrade (never recover) - the monotone-degradation eval
                           condition. Mutually exclusive with hold_tier (a held tier
                           has no drift). Training leaves it False.
+        @param degrade_rate_scale: Multiplier on the one-way chain's downward
+                          transition mass. 1.0 (the default everywhere else) is
+                          the datasheet-anchored schedule; the drift condition
+                          raises it so the walk to the worst tier completes
+                          inside the episode horizon. Ignored unless
+                          degrade_one_way is set.
         """
         self._episode_config_seq += 1
         data: Dict[str, Any] = {
@@ -381,6 +388,7 @@ class _CovarianceSubscriber:
             "tier_name": tier_name,
             "hold_tier": bool(hold_tier),
             "degrade_one_way": bool(degrade_one_way),
+            "degrade_rate_scale": float(degrade_rate_scale),
         }
         if datum_lat is not None:
             data["datum_lat"] = datum_lat
@@ -391,10 +399,12 @@ class _CovarianceSubscriber:
                 json.dump(data, f)
             os.replace(self._episode_config_tmp, self._episode_config_path)
             logger.info(
-                "GNSS noise config written: tier=%s hold=%s degrade_one_way=%s (seq=%d)",
+                "GNSS noise config written: tier=%s hold=%s degrade_one_way=%s "
+                "degrade_rate_scale=%.2f (seq=%d)",
                 tier_name,
                 hold_tier,
                 degrade_one_way,
+                degrade_rate_scale,
                 self._episode_config_seq,
             )
         except OSError as exc:

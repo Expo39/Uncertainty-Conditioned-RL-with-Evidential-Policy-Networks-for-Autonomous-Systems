@@ -132,6 +132,7 @@ class CARLAParkingEnv(gym.Env):
         gnss_noise_profiles_path: Optional[str] = None,
         held_gnss_tier_override: Optional[str] = None,
         degrade_one_way_override: bool = False,
+        degrade_rate_scale: float = 1.0,
         success_dwell_steps: int = SUCCESS_DWELL_STEPS,
         bay_margin: float = 0.0,
         actuator_model: Optional[Dict[str, float]] = None,
@@ -188,6 +189,13 @@ class CARLAParkingEnv(gym.Env):
                the monotone-degradation eval condition (starts good, drifts to
                degraded, stays there). Mutually exclusive with a held tier (a held
                tier suppresses drift entirely). Training leaves it False.
+        @param degrade_rate_scale: Multiplier on the one-way chain's downward
+               transition mass, compressing the drift so the walk to the worst
+               tier completes inside the episode horizon (at the native rate it
+               takes ~27 s in expectation against a ~17 s episode). 1.0 is the
+               datasheet-anchored schedule and the default; only the drift
+               evaluation condition raises it. Ignored unless
+               degrade_one_way_override is active.
         @param success_dwell_steps: Number of consecutive steps all success
                criteria (position, orientation, velocity) must be satisfied
                before the episode terminates as a success. Prevents a fast
@@ -242,6 +250,9 @@ class CARLAParkingEnv(gym.Env):
         self._degrade_one_way_override = bool(degrade_one_way_override) and (
             held_gnss_tier_override is None
         )
+        # Drift-schedule compression, forwarded to the relay with the one-way
+        # flag. Floored at 1.0 so a stray config value cannot slow the chain.
+        self._degrade_rate_scale: float = max(1.0, float(degrade_rate_scale))
 
         self._bay_margin: float = float(bay_margin)
 
@@ -2000,6 +2011,7 @@ class CARLAParkingEnv(gym.Env):
                     datum_lon=datum_lon,
                     hold_tier=self._hold_gnss_tier,
                     degrade_one_way=self._degrade_one_way_override,
+                    degrade_rate_scale=self._degrade_rate_scale,
                 )
 
         if reuse_vehicle:

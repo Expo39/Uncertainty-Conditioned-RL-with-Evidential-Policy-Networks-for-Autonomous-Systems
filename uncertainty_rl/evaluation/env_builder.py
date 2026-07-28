@@ -163,6 +163,13 @@ def build_eval_env_factory(
     # Ignored downstream when a held tier is set (a held tier suppresses drift).
     degrade_one_way: bool = bool(condition.get("degrade_one_way", False))
 
+    # Compression factor on the one-way drift schedule. The native chain reaches
+    # the worst tier after ~27 s in expectation while an episode runs ~17 s, so
+    # at 1.0 most episodes end before the crossing and the handover-latency
+    # sample is small. Raising it shortens the walk without altering the tier
+    # ladder or the one-way ratchet. Ignored unless degrade_one_way is set.
+    degrade_rate_scale: float = float(condition.get("degrade_rate_scale", 1.0))
+
     # SafetyWrapper threshold from agent_config.yaml (merged into env_config).
     handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 1.2))
 
@@ -186,6 +193,7 @@ def build_eval_env_factory(
         carla_sensors_override=scaled_sensors,
         held_gnss_tier_override=held_tier,
         degrade_one_way_override=degrade_one_way,
+        degrade_rate_scale=degrade_rate_scale,
         host_override=host_override,
         port_override=port_override,
     )
