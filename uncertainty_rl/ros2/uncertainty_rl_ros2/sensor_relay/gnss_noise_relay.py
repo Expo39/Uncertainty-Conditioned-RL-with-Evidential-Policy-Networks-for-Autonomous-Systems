@@ -105,11 +105,21 @@ _TIER_STATUS: Dict[str, int] = {
 def mask_recovery_transitions(
     row: np.ndarray,
     active_idx: int,
+    degrade_rate_scale: float = 1.0,
 ) -> Optional[np.ndarray]:
     """
     @brief Mask out recovery (upward) transitions for the monotone-degradation mode.
     @param row: The active tier's row of the per-step transition matrix.
     @param active_idx: Index of the current tier in _TIER_ORDER (0 = best fix).
+    @param degrade_rate_scale: Multiplier on the downward (worse-tier) transition
+            mass before renormalisation. 1.0 leaves the datasheet-anchored chain
+            of gnss_noise_profiles.yaml untouched and is the default everywhere.
+            Values above 1.0 shorten the expected walk to the worst tier, which
+            the handover-latency measurement needs: at the native rate the chain
+            takes ~27 s in expectation to reach 'degraded' while an episode runs
+            ~17 s, so most episodes end before the crossing and the latency
+            sample is small. Scaling only compresses the schedule; the ladder,
+            its ordering and the one-way ratchet are unchanged.
     @return A renormalised copy of the row with all transitions to a BETTER tier
             (lower index) zeroed, so the chain can only stay put or degrade. The
             mass on the forbidden upward rungs folds onto the remaining same-or-
@@ -122,6 +132,18 @@ def mask_recovery_transitions(
     """
     masked = np.asarray(row, dtype=np.float64).copy()
     masked[:active_idx] = 0.0
+    if degrade_rate_scale != 1.0 and masked.size > active_idx + 1:
+        # Scale the strictly-worse-tier mass, capping the total so the self-loop
+        # cannot go negative, then let the self-loop absorb whatever remains.
+        down = masked[active_idx + 1 :] * float(degrade_rate_scale)
+        down_total = down.sum()
+        if down_total > 0.0:
+            budget = masked[active_idx:].sum()
+            if down_total > budget:
+                down *= budget / down_total
+                down_total = budget
+            masked[active_idx + 1 :] = down
+            masked[active_idx] = max(0.0, budget - down_total)
     total = masked.sum()
     if total <= 0.0:
         return None
@@ -282,6 +304,11 @@ class GnssNoiseRelayNode(Node):
         # Implemented by zeroing the upward transitions in _step_markov. Training
         # leaves it False so the chain recovers normally.
         self._degrade_one_way: bool = False
+        # Compression factor on the one-way chain's downward transition mass.
+        # 1.0 is the datasheet-anchored schedule; the evaluation condition that
+        # measures handover latency raises it so the drift completes inside the
+        # episode horizon. Only read when _degrade_one_way is set.
+        self._degrade_rate_scale: float = 1.0
 
         self._extra_alt_stddev_m: float = 0.0
         # Current tier's NavSatStatus code, updated by _apply_tier and stamped
@@ -517,6 +544,9 @@ class GnssNoiseRelayNode(Node):
             # conditions). Absent/false in training, where the chain wanders.
             self._hold_tier = bool(data.get("hold_tier", False))
             self._degrade_one_way = bool(data.get("degrade_one_way", False))
+            self._degrade_rate_scale = max(
+                1.0, float(data.get("degrade_rate_scale", 1.0))
+            )
 
             tier_name: Optional[str] = data.get("tier_name")
             if tier_name and tier_name in _TIER_ORDER:
@@ -592,7 +622,9 @@ class GnssNoiseRelayNode(Node):
         """@brief Advance the Markov chain by one step."""
         row = self._transition_matrix[self._active_tier_idx]
         if self._degrade_one_way:
-            row = mask_recovery_transitions(row, self._active_tier_idx)
+            row = mask_recovery_transitions(
+                row, self._active_tier_idx, self._degrade_rate_scale
+            )
             if row is None:
                 return  # Already at the worst tier with no self-loop mass; hold.
         next_idx = int(self._rng.choice(len(_TIER_ORDER), p=row))

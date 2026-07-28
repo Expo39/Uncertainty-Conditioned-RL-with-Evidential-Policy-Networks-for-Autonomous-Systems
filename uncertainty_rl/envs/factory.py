@@ -25,6 +25,7 @@ def make_env(
     port_override: Optional[int] = None,
     held_gnss_tier_override: Optional[str] = None,
     degrade_one_way_override: bool = False,
+    degrade_rate_scale: float = 1.0,
 ) -> Callable[[], gym.Env]:
     """
     @brief Create a callable that returns a new environment instance.
@@ -50,6 +51,11 @@ def make_env(
            the Markov chain may only degrade (never recover) - the monotone-
            degradation eval condition. Ignored when held_gnss_tier_override is set
            (a held tier has no drift). None/False runs the normal recovering chain.
+    @param degrade_rate_scale: Multiplier on the one-way chain's downward
+           transition mass, compressing the drift schedule so the walk to the
+           worst tier completes inside the episode horizon. 1.0 is the
+           datasheet-anchored rate and the default everywhere; only the drift
+           condition raises it. Ignored unless degrade_one_way_override is set.
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
@@ -98,6 +104,7 @@ def make_env(
             gnss_noise_profiles_path=config.get("gnss_noise_profiles", None),
             held_gnss_tier_override=held_gnss_tier_override,
             degrade_one_way_override=degrade_one_way_override,
+            degrade_rate_scale=degrade_rate_scale,
             vis_output_path=vis_path,
             bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),
