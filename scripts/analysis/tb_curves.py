@@ -15,8 +15,9 @@ seeds at matched steps, and applies one exponential smoothing pass.
 Writes `training_curves.csv` (arm, metric, decisions_m, value) plus
 `training_stage_bounds.csv` (stage, decisions_m) for the stage boundaries.
 
-@note Needs `tensorboard`, which lives in the training container, so this runs
-via `make docker-training-curves` rather than on the host.
+@note Host-side and dependency-free: the event files are parsed directly by
+diagnostics/tb_read.py, so neither the tensorboard package nor its dashboard
+container is involved. Run via `make training-curves`.
 """
 
 from __future__ import annotations

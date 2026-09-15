@@ -48,7 +48,7 @@ def render(data_dir: Optional[Path], out: Path) -> None:
     curves_path = root / CURVES_CSV
     if not curves_path.exists():
         raise FileNotFoundError(
-            f"{curves_path} not found - run `make docker-training-curves` first"
+            f"{curves_path} not found - run `make training-curves` first"
         )
     curves = pd.read_csv(curves_path)
 

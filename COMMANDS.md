@@ -148,7 +148,7 @@ baseline and tunes structural PPO parameters only.
 
 | Command | Purpose | GPU? |
 |---------|---------|------|
-| `make docker-eval [BASELINE=vanilla_ppo] [CHECKPOINT=<leaf>] [LAYOUT=rectangle]` | Run the full 9-condition sweep; writes metrics + plots to `evaluation_results/` | Yes |
+| `make docker-eval [BASELINE=vanilla_ppo] [CHECKPOINT=<leaf>] [LAYOUT=rectangle]` | Run the full condition sweep; writes raw CSVs to `outputs/raw/evaluation_results/` | Yes |
 | `make docker-eval-visualise-3d [BASELINE=...] [CHECKPOINT=<leaf>]` | Load a checkpoint with a live CARLA 3D spectator view (needs a display) | Yes |
 | `make eval-visualise-2d [BASELINE=...] [CHECKPOINT=<leaf>] [LAYOUT=rectangle] [STAGE=N] [REALTIME=false]` | Start a checkpoint demo drive and open the 2D bird's-eye viewer | No (viewer); Yes (CARLA) |
 
@@ -225,7 +225,7 @@ raw CSVs and write derived ones; none of them needs a GPU or the simulator.
 | `make analyse-calibration [ARM=full_method] [SEED=42]` | Is the EKF covariance honest? | No |
 | `make handover-timing [ARM=full_method]` | Handover latency vs degradation onset | No |
 | `make uncertainty-verdict EVAL_DIR=...` | Epistemic-vs-aleatoric separation | No |
-| `make docker-training-curves` | TensorBoard scalars -> CSV (`tensorboard` is container-only) | No |
+| `make training-curves` | TensorBoard scalars -> CSV | No |
 | `make figures [FIG=gate_roc]` | Render the figures into `outputs/main_analysis/figures/` | No |
 | `make run-figures [RUN_DIR=...]` | Per-run diagnostic panels | No |
 | `make analysis-bundle [STAGE=6]` | Assemble summaries, values and MANIFEST | No |
@@ -234,7 +234,7 @@ Typical order after a completed evaluation:
 
 ```bash
 make analyse-cross-seed STAGE=6   # pooled CSVs -> raw_derived/cross_seed_analysis/
-make docker-training-curves       # TB scalars  -> raw_derived/training/
+make training-curves              # TB scalars  -> raw_derived/training/
 make figures                      # figures     -> main_analysis/figures/
 make analysis-bundle              # summaries + values + MANIFEST
 ```

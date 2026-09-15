@@ -142,6 +142,8 @@ Two categories of command run on the host rather than inside Docker:
 |---------|------------------------|
 | `make visualise`, `make eval-visualise-2d` | Opens a Pygame window - Docker containers are headless |
 | `make generate-layouts` | Writes layout PNGs via Matplotlib - no CARLA or GPU needed |
+| `make analyse-*`, `make figures`, `make analysis-bundle` | Read the eval CSVs with pandas - no CARLA or GPU needed |
+| `make training-curves`, `make tb-scalars` | Parse TensorBoard event files - the reader library only, not the dashboard container |
 
 All of these use the project's `.venv/` virtual environment, which the Makefile manages automatically:
 
@@ -415,7 +417,7 @@ outputs/
 |   |-- cross_seed_analysis/    Pooled + per-seed robustness (make analyse-cross-seed)
 |   |-- ablation_analysis/      Single-seed contrasts (make analyse-ablation)
 |   |-- gate_analysis/          Single-seed gate ROC (make analyse-gate)
-|   |-- training/               Seed-averaged curves (make docker-training-curves)
+|   |-- training/               Seed-averaged curves (make training-curves)
 |   |-- layouts/                Lot PNGs (make generate-layouts)
 |   +-- per_run_figures/        Per-run diagnostic panels (make run-figures)
 |
@@ -434,7 +436,7 @@ To rebuild everything downstream of a completed evaluation:
 
 ```bash
 make analyse-cross-seed STAGE=6   # pooled CSVs
-make docker-training-curves       # TensorBoard scalars -> CSV (needs the container)
+make training-curves              # TensorBoard scalars -> CSV
 make figures                      # the figures, into main_analysis/figures/
 make analysis-bundle              # summaries + values + MANIFEST
 ```
@@ -456,7 +458,7 @@ make analysis-bundle              # summaries + values + MANIFEST
 | `make docker-verify` | All checks in container | No |
 | `make generate-layouts` | Regenerate lot YAMLs + PNGs | No |
 | `make analyse-cross-seed` | Pool every seed into the headline CSVs | No |
-| `make docker-training-curves` | TensorBoard scalars -> CSV (needs `tensorboard`) | No |
+| `make training-curves` | TensorBoard scalars -> CSV | No |
 | `make figures` | Render the figures into `main_analysis/figures/` | No |
 | `make run-figures` | Per-run diagnostic panels | No |
 | `make analysis-bundle` | Assemble summaries + values + MANIFEST | No |
