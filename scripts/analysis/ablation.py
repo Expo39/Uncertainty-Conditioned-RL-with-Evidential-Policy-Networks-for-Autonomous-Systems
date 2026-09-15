@@ -3,9 +3,9 @@
 @brief Cross-arm analysis of the input-covariance ablation from eval CSVs.
 
 Host-side, read-only diagnostic that loads every ablation arm's per-episode
-records (outputs/evaluation_results/<baseline>/<leaf>/episode_records.csv),
+records (outputs/raw/evaluation_results/<baseline>/<leaf>/episode_records.csv),
 attaches the arm name from the directory tree, joins on condition, and computes
-the contrasts actually reported:
+the contrasts in the headline set:
 
   - Per-condition success rate and final position error for each arm.
   - The covariance contrast deltas with bootstrap confidence intervals:
@@ -28,13 +28,9 @@ from typing import Dict, List, Optional, Tuple
 # file is run directly (python scripts/analysis/ablation.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import matplotlib  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
-import seaborn as sns  # noqa: E402
 
 from scripts.analysis._discovery import discover_arm_csvs  # noqa: E402
 
@@ -58,7 +54,7 @@ _CONTRAST_PAIRS: List[Tuple[str, str, str]] = [
 _SLOPE_CLEAN_CONDITION = "gnss_fixed"
 _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 
-# Held-tier conditions dropped from every table and figure by default. Each pins
+# Held-tier conditions dropped from every summary and figure by default. Each pins
 # one GNSS fix state for the whole episode, so neither degrades WITHIN an episode
 # and the contrast between them is a between-condition difference rather than
 # degradation any arm rides through. The EKF also suppresses a static raw fault,
@@ -66,14 +62,14 @@ _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 # both) and the resulting "slope" is flat by construction - see
 # documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md. The live anchor
 # chain (banded by true error) and the one-way drift carry the genuine
-# graceful-degradation evidence, so the analysis reports five conditions, not
+# graceful-degradation evidence, so the analysis keeps five conditions, not
 # seven. Pass --keep-held-tiers to restore the old seven-condition behaviour.
 _HELD_TIER_CONDITIONS: List[str] = ["gnss_fixed", "gnss_degraded"]
 
-# Computed and kept in the raw CSVs, but outside the reported condition set.
+# Computed and kept in the raw CSVs, but outside the headline condition set.
 # lidar_degraded corrupts only the obstacle channel: the EKF never consumes
 # LiDAR, so the localisation std stays pinned at its RTK-fixed floor and the
-# condition carries no localisation-uncertainty signal for the reported
+# condition carries no localisation-uncertainty signal for the headline
 # figures to read. drop_unreported() applies this at the figure boundary; the
 # analysis CSVs keep the column so the condition remains inspectable.
 _UNREPORTED_CONDITIONS: List[str] = ["lidar_degraded"]
@@ -100,7 +96,7 @@ def _discover_arm_csvs(
 ) -> Dict[str, Path]:
     """
     @brief Find each ablation arm's episode_records.csv under the nested tree.
-    @param results_root: outputs/evaluation_results (the <baseline>/<leaf> root).
+    @param results_root: outputs/raw/evaluation_results (the <baseline>/<leaf> root).
     @param leaf: Optional checkpoint leaf to pin to (single-arm runs); None lets
            each arm's newest run win.
     @param stage: Optional curriculum stage (e.g. "1") so the cross-arm contrast
@@ -162,7 +158,7 @@ def drop_held_tiers(
             there is nothing to drop.
 
     Applied at every load boundary (episode records, gate frame, calibration
-    records) so the held tiers cannot reach a table or figure by any path. Kept as
+    records) so the held tiers cannot reach a summary or figure by any path. Kept as
     one public helper rather than inline masks so cross_seed.py filters the pooled
     frames identically.
     """
@@ -177,7 +173,7 @@ def drop_unreported(
     records: pd.DataFrame, conditions: Optional[List[str]] = None
 ) -> pd.DataFrame:
     """
-    @brief Drop conditions outside the reported set from any "condition" frame.
+    @brief Drop conditions outside the headline set from any "condition" frame.
     @param records: Any frame with a "condition" column; frames without one
            (or empty frames) are returned untouched.
     @param conditions: Condition names to drop; None uses _UNREPORTED_CONDITIONS.
@@ -185,7 +181,7 @@ def drop_unreported(
 
     Sibling of drop_held_tiers(), applied at the FIGURE boundary rather than
     the analysis boundary: the pooled CSVs keep every condition so each stays
-    inspectable, while the figures show only the reported set.
+    inspectable, while the figures show only the headline set.
     """
     if conditions is None:
         conditions = _UNREPORTED_CONDITIONS
@@ -373,66 +369,6 @@ def _degradation_slope(
     return pd.DataFrame(rows)
 
 
-def _plot_condition_bars(summary: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Side-by-side success and position-error bars, arms grouped per condition.
-    @param summary: Per-condition aggregate.
-    @param out_dir: Directory for the saved figure.
-    """
-    sns.set_style("whitegrid")
-    fig, axes = plt.subplots(
-        2, 1, figsize=(max(10, 1.1 * summary["condition"].nunique()), 9)
-    )
-    for ax, metric, label in (
-        (axes[0], "success_rate", "Success rate (%)"),
-        (axes[1], "mean_pos_error_m", "Mean final position error (m)"),
-    ):
-        sns.barplot(
-            data=summary,
-            x="condition",
-            y=metric,
-            hue="arm",
-            hue_order=_ARM_ORDER,
-            ax=ax,
-        )
-        ax.set_ylabel(label)
-        ax.set_xlabel("")
-        ax.tick_params(axis="x", rotation=45)
-        ax.legend(title="arm", fontsize=8)
-    for tick in axes[1].get_xticklabels():
-        tick.set_ha("right")
-    fig.tight_layout()
-    fig.savefig(out_dir / "ablation_by_condition.png", dpi=150)
-    plt.close(fig)
-
-
-def _plot_degradation_slope(slope: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Clean-vs-degraded success per arm - the graceful-degradation headline.
-    @param slope: Per-arm slope table from _degradation_slope.
-    @param out_dir: Directory for the saved figure.
-    """
-    if slope.empty:
-        return
-    sns.set_style("whitegrid")
-    fig, ax = plt.subplots(figsize=(7, 5))
-    for _, row in slope.iterrows():
-        ax.plot(
-            [0, 1],
-            [row["success_clean_pct"], row["success_degraded_pct"]],
-            marker="o",
-            label=str(row["arm"]),
-        )
-    ax.set_xticks([0, 1])
-    ax.set_xticklabels(["RTK fixed (clean)", "Degraded (~5 m)"])
-    ax.set_ylabel("Success rate (%)")
-    ax.set_title("GNSS degradation slope by ablation arm")
-    ax.legend(title="arm")
-    fig.tight_layout()
-    fig.savefig(out_dir / "degradation_slope.png", dpi=150)
-    plt.close(fig)
-
-
 def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Final pos-error and approach speed per EKF-std bin, per arm.
@@ -482,49 +418,6 @@ def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
     out = grouped.agg(**agg_spec).reset_index()
     out["std_mid"] = (out["std_low"] + out["std_high"]) / 2.0
     return out
-
-
-def _plot_behaviour(behaviour: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Final pos-error and approach speed vs EKF-std bin, arms overlaid.
-    @param behaviour: Per (arm, std_bin) table from _behaviour_by_std.
-    @param out_dir: Directory for the saved figure.
-    """
-    if behaviour.empty:
-        return
-    sns.set_style("whitegrid")
-    # Plot every caution metric present (precision outcome first, then the
-    # drive-carefully signals). Expected directions as std rises: pos-error flat
-    # for the covariance arm; speed/jerk/vyaw DOWN; brake UP.
-    panels = [
-        ("mean_final_pos_error_m", "Mean final position error (m)"),
-        ("mean_mean_speed_moving_ms", "Mean approach speed (m/s)"),
-        ("mean_mean_brake_cmd", "Mean brake command"),
-        ("mean_mean_abs_vyaw_rads", "Mean |yaw rate| (rad/s)"),
-        ("mean_mean_action_jerk", "Mean action jerk"),
-    ]
-    panels = [(c, lbl) for c, lbl in panels if c in behaviour.columns]
-    if not panels:
-        return
-    ncols = min(3, len(panels))
-    nrows = (len(panels) + ncols - 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols, figsize=(6 * ncols, 4.5 * nrows))
-    axes = np.atleast_1d(axes).ravel()
-    for ax, (metric, label) in zip(axes, panels):
-        for arm in _ARM_ORDER:
-            a = behaviour[behaviour["arm"] == arm]
-            if a.empty:
-                continue
-            ax.plot(a["std_mid"], a[metric], "o-", label=arm)
-        ax.set_xlabel("EKF position std bin midpoint (m)")
-        ax.set_ylabel(label)
-        ax.legend(title="arm", fontsize=8)
-    for ax in axes[len(panels) :]:
-        ax.axis("off")
-    fig.suptitle("Behaviour vs localisation uncertainty (caution mechanism)")
-    fig.tight_layout()
-    fig.savefig(out_dir / "behaviour_by_std.png", dpi=150)
-    plt.close(fig)
 
 
 # Caution metrics and the direction that means "more conservative as std rises".
@@ -591,7 +484,7 @@ def _caution_levels(records: pd.DataFrame) -> pd.DataFrame:
     The slope (_caution_slopes) measures how behaviour CHANGES with std; this
     measures the baseline LEVEL. A covariance arm that drives slower overall is
     only "cautious" rather than "undertrained" if the slowness buys accuracy -
-    higher success and lower final pos error - so those are reported alongside.
+    higher success and lower final pos error - so those are analysed alongside.
     """
     if "mean_speed_moving_ms" not in records.columns:
         return pd.DataFrame()
@@ -671,7 +564,7 @@ def analyse(
 ) -> None:
     """
     @brief Run the full cross-arm analysis and write tables + figures.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory to write the CSV tables and PNG figures into.
     @param seed: Bootstrap RNG seed (reproducibility).
     @param slope_clean: Degradation-slope start condition (cleanest GNSS tier).
@@ -682,7 +575,7 @@ def analyse(
            same stage; None uses each arm's newest leaf (may mix stages).
     @param keep_held_tiers: Retain the held-tier conditions (_HELD_TIER_CONDITIONS)
            and the degradation slope they define. Default False drops them, which
-           is what is reported; True restores the old seven-condition run.
+           is what is analysed; True restores the old seven-condition run.
     """
     # Nest by stage (or pinned leaf) so STAGE=1 and STAGE=2 runs never overwrite
     # each other; an unpinned mixed-stage run lands in "latest".
@@ -745,15 +638,10 @@ def analyse(
     if not caution_levels.empty:
         caution_levels.to_csv(out_dir / "caution_levels.csv", index=False)
 
-    _plot_condition_bars(summary, out_dir)
-    if not slope.empty:
-        _plot_degradation_slope(slope, out_dir)
-    _plot_behaviour(behaviour, out_dir)
-
     _print_headline(contrasts, slope, slope_clean, slope_degraded, keep_held_tiers)
     _print_caution(caution_slopes, caution_contrast)
     _print_caution_levels(caution_levels)
-    print(f"\nTables and figures written to {out_dir}")
+    print(f"\nCSVs written to {out_dir}")
 
 
 def _print_headline(
@@ -896,13 +784,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="Root holding <baseline>/<leaf>/episode_records.csv for each arm.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/ablation_analysis",
+        default="outputs/raw_derived/ablation_analysis",
         help="Directory for the analysis tables and figures.",
     )
     parser.add_argument(
@@ -930,7 +818,7 @@ def main() -> None:
             "Keep the held-tier conditions ("
             + ", ".join(_HELD_TIER_CONDITIONS)
             + ") and the degradation slope they define. Default drops them, "
-            "matching the five reported conditions."
+            "matching the five headline conditions."
         ),
     )
     parser.add_argument(

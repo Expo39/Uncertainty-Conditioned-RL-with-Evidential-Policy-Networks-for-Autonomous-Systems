@@ -275,7 +275,7 @@ make generate-layouts LAYOUT=rectangle     # single layout
 ```
 
 Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
-`outputs/layouts/*.png`. Inspect the PNGs to confirm bay placement.
+`outputs/raw_derived/layouts/*.png`. Inspect the PNGs to confirm bay placement.
 
 ### Three Floor Plans
 

@@ -1,6 +1,6 @@
 # scripts/analysis/
 
-Analysis tooling that turns an evaluation run into the reported input-covariance and uncertainty results. None of these scripts are imported by the training pipeline - they consume the CSVs that `uncertainty_rl/evaluation/evaluate.py` writes and are invoked exclusively via `make` targets. Run them **after** an eval run has produced results under `outputs/evaluation_results/<baseline>/<leaf>/`.
+Analysis tooling that turns an evaluation run into the reported input-covariance and uncertainty results. None of these scripts are imported by the training pipeline - they consume the CSVs that `uncertainty_rl/evaluation/evaluate.py` writes and are invoked exclusively via `make` targets. Run them **after** an eval run has produced results under `outputs/raw/evaluation_results/<baseline>/<leaf>/`.
 
 Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv/`); only the covariance probe needs torch and runs inside the training container.
 
@@ -12,7 +12,7 @@ Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv
 | Is the EKF covariance honest (std vs error)? | `make analyse-calibration [ARM=full_method]` |
 | EKF-std vs evidential-epistemic safety-gate ROC | `make analyse-gate` |
 | Causal "does the policy use covariance?" probe | `make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628` |
-| Epistemic-vs-aleatoric separation verdict | `make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper` |
+| Epistemic-vs-aleatoric separation verdict | `make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/<baseline>/<leaf>/without_wrapper` |
 | Handover timing vs degradation onset | `make handover-timing [ARM=full_method]` |
 | Pool all seeds into headline + per-seed robustness | `make analyse-cross-seed [STAGE=6]` |
 
@@ -20,7 +20,7 @@ Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv
 
 ### `ablation.py` (host-side)
 
-Cross-arm contrast. Globs `outputs/evaluation_results/<baseline>/<leaf>/episode_records.csv` for the four arms, joins on condition, and computes:
+Cross-arm contrast. Globs `outputs/raw/evaluation_results/<baseline>/<leaf>/episode_records.csv` for the four arms, joins on condition, and computes:
 
 - The covariance contrast deltas with 95% bootstrap CIs - `input_uncertainty - vanilla_ppo` (standard heads) and `full_method - output_uncertainty` (evidential heads), the single-variable covariance on/off tests.
 - The GNSS degradation slope per arm (`gnss_fixed -> gnss_degraded` success drop + position-error growth). **Only computed with `--keep-held-tiers`** (see below).
@@ -55,7 +55,7 @@ Causal probe. Holds an observation fixed and sweeps ONLY the covariance block, r
 
 ```bash
 make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf> \
-    [REAL_OBS=outputs/evaluation_results/<baseline>/<leaf>/real_observations.npy]
+    [REAL_OBS=outputs/raw/evaluation_results/<baseline>/<leaf>/real_observations.npy]
 ```
 
 ### `uncertainty_verdict.py` (host-side)
@@ -63,7 +63,7 @@ make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf> \
 Reads an eval run's `per_step_records.csv` and reports, per condition, epistemic / aleatoric / epi-over-ale ratio / implied nu / frac(epi>ale), then a CLEAN-vs-HARD separation verdict (does epistemic rise RELATIVELY on novel / degraded conditions). On the single-head NIG actor the ratio is flat (the two channels are one signal); this confirms it from data. Unlike the other scripts it takes an explicit dir, not arm discovery:
 
 ```bash
-make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper
+make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/<baseline>/<leaf>/without_wrapper
 ```
 
 ### `handover_timing.py` (host-side)
@@ -78,7 +78,7 @@ Run with `make handover-timing [ARM=<name>]`.
 
 ### `cross_seed.py` (host-side)
 
-Pools EVERY seed's stage-`STAGE` eval into the seed-robust headline. The per-seed analyses each read one `outputs/<analysis>/seed_<N>/` tree; a cross-arm difference on a single seed is indistinguishable from seed luck (Henderson et al. 2017), so this aggregator produces two reads side by side: (a) POOLED - concatenate every seed's per-episode records into one sample and run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC AUC, the calibration rank correlation) on the ~3x larger pool, the precision-of-effect headline; (b) PER-SEED ROBUSTNESS - per arm, the mean and `[min, max]` of each metric across seeds, the honest cross-seed-stability check the curriculum plan mandates (a bootstrap on a fixed pool of three runs under-represents between-seed variance). It re-implements no statistics: the per-analysis modules expose pure DataFrame functions, so a pooled frame with an added `seed` column flows through them untouched. Reads `--results-root outputs/evaluation_results` (the PARENT of the `seed_<N>/` trees) and writes the pooled `pooled_*.csv` + per-seed `seed_robustness*.csv` and the figures under `outputs/cross_seed_analysis/all_seeds/stage<S>/` (the cross-seed sibling of the per-seed `seed_<N>/stage<S>/`). Run with `make analyse-cross-seed [STAGE=6]`.
+Pools EVERY seed's stage-`STAGE` eval into the seed-robust headline. The per-seed analyses each read one `outputs/<analysis>/seed_<N>/` tree; a cross-arm difference on a single seed is indistinguishable from seed luck (Henderson et al. 2017), so this aggregator produces two reads side by side: (a) POOLED - concatenate every seed's per-episode records into one sample and run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC AUC, the calibration rank correlation) on the ~3x larger pool, the precision-of-effect headline; (b) PER-SEED ROBUSTNESS - per arm, the mean and `[min, max]` of each metric across seeds, the honest cross-seed-stability check the curriculum plan mandates (a bootstrap on a fixed pool of three runs under-represents between-seed variance). It re-implements no statistics: the per-analysis modules expose pure DataFrame functions, so a pooled frame with an added `seed` column flows through them untouched. Reads `--results-root outputs/raw/evaluation_results` (the PARENT of the `seed_<N>/` trees) and writes the pooled `pooled_*.csv` + per-seed `seed_robustness*.csv` and the figures under `outputs/raw_derived/cross_seed_analysis/all_seeds/stage<S>/` (the cross-seed sibling of the per-seed `seed_<N>/stage<S>/`). Run with `make analyse-cross-seed [STAGE=6]`.
 
 ### `_discovery.py` (shared helper, not a Make target)
 

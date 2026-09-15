@@ -39,7 +39,7 @@ from uncertainty_rl.utils.constants import OOB_INFLATION_MARGIN  # noqa: E402
 from uncertainty_rl.utils.geometry import inflate_polygon  # noqa: E402
 
 CONFIGS = Path("configs/layouts")
-OUT = Path("outputs/figures")
+OUT = Path("outputs/raw_derived/figures")
 
 LAYOUTS = ("rectangle", "irregular_a")
 PANEL_TITLES = {"rectangle": "(a) rectangle", "irregular_a": "(b) irregular_a"}

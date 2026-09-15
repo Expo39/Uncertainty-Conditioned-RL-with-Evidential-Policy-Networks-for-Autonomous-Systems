@@ -114,7 +114,7 @@ def _parse_args() -> argparse.Namespace:
         action="store_false",
         help="Disable per-step CSV trace logging. By default each policy "
         "decision is traced to "
-        "outputs/demo_traces/<baseline>/<checkpoint_leaf>/<demo_stamp>/episode_<N>.csv "
+        "outputs/raw/demo_traces/<baseline>/<checkpoint_leaf>/<demo_stamp>/episode_<N>.csv "
         "(step, speed, pos / orientation error, delivered commands, reward, "
         "success, and the evidential policy uncertainty) for offline "
         "behaviour and calibration analysis.",

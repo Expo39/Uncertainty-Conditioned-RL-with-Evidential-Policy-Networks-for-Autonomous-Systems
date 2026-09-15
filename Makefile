@@ -3,7 +3,7 @@
 .PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs
-.PHONY: figures run-figures generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
+.PHONY: figures run-figures analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval docker-covariance-probe docker-training-curves
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
@@ -38,11 +38,11 @@ SEED         ?=
 # eval-related tree nests a seed_<N>/ layer so a second seed never overwrites the
 # first.
 EVAL_SEED = $(or $(word 2,$(subst _, ,$(CHECKPOINT))),$(SEED),42)
-EVAL_RESULTS_ROOT = outputs/evaluation_results/seed_$(EVAL_SEED)
-ABLATION_ROOT     = outputs/ablation_analysis/seed_$(EVAL_SEED)
-GATE_ROOT         = outputs/gate_analysis/seed_$(EVAL_SEED)
-CALIBRATION_ROOT  = outputs/calibration_analysis/seed_$(EVAL_SEED)
-HANDOVER_ROOT     = outputs/handover_timing/seed_$(EVAL_SEED)
+EVAL_RESULTS_ROOT = outputs/raw/evaluation_results/seed_$(EVAL_SEED)
+ABLATION_ROOT     = outputs/raw_derived/ablation_analysis/seed_$(EVAL_SEED)
+GATE_ROOT         = outputs/raw_derived/gate_analysis/seed_$(EVAL_SEED)
+CALIBRATION_ROOT  = outputs/raw_derived/calibration_analysis/seed_$(EVAL_SEED)
+HANDOVER_ROOT     = outputs/raw_derived/handover_timing/seed_$(EVAL_SEED)
 # Leading steps per episode logged to per_step_records.csv in docker-eval
 # (evidential only). 0 disables.
 PER_STEP_CAP ?= 0
@@ -108,7 +108,7 @@ install: ## Create .venv and install package + dev dependencies
 # Pre-create host-side bind-mount targets so the Docker daemon (root) does not
 # create them as root-owned. Must run before any `docker compose up` call.
 ensure-dirs: ## Pre-create host directories for bind mounts (avoids root-owned logs/)
-	@mkdir -p logs/ros2 outputs checkpoints
+	@mkdir -p logs/ros2 outputs/raw checkpoints
 
 SERVICE ?=
 docker-build: ## Build all Docker images (core + env-workers + inspect stacks).
@@ -202,7 +202,7 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		$(if $(filter command line,$(origin SCENARIO)),--conditions $(SCENARIO),) \
 		--output-dir $(EVAL_RESULTS_ROOT)
 
-docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/evaluation_results/seed_42/full_method/<leaf>/real_observations.npy]
+docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/real_observations.npy]
 	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)$(if $(REAL_OBS), (on-manifold),)"
 	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/analysis/covariance_probe.py \
 		--model-path $(CHECKPOINT_MODEL) \
@@ -211,7 +211,7 @@ docker-covariance-probe: ## Causal probe - does the policy USE the covariance in
 docker-training-curves: ## Export seed-averaged training curves from the TB logs to CSV (tensorboard lives in the container). Usage: make docker-training-curves
 	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/analysis/tb_curves.py \
 		--logs-root logs \
-		--output-dir outputs/training
+		--output-dir outputs/raw_derived/training
 
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
@@ -393,23 +393,25 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. Usage: make docker-i
 # Layout Generation
 # ----------------------------------------------------------------------
 
-figures: ## Regenerate the analysed-data figures into outputs/figures. Usage: make figures [FIG=gate_roc]
+figures: ## Regenerate the analysed-data figures into outputs/main_analysis/figures. Usage: make figures [FIG=gate_roc]
 	$(call ensure-venv)
-	mkdir -p outputs/figures
+	mkdir -p outputs/main_analysis/figures
 	$(PYTHON) scripts/analysis/figures/build.py \
 		$(if $(filter command line,$(origin FIG)),--only $(FIG),--all)
 
-run-figures: ## Redraw the per-run eval panels from each run's CSV. Usage: make run-figures [RUN_DIR=outputs/evaluation_results/seed_42/full_method/<leaf>/without_wrapper]
+run-figures: ## Redraw the per-run eval panels into outputs/raw_derived/figures/per_run. Usage: make run-figures [RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/without_wrapper]
 	$(call ensure-venv)
-	$(PYTHON) scripts/analysis/figures/run_figures.py \
-		$(if $(filter command line,$(origin RUN_DIR)),--run-dir $(RUN_DIR),--root outputs)
+	$(PYTHON) $(SCRIPTS_DIR)/analysis/figures/run_figures.py \
+		--root $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/raw_derived/per_run_figures) \
+		$(if $(filter command line,$(origin RUN_DIR)),--run-dir $(RUN_DIR),)
 
 generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make generate-layouts [LAYOUT=trapezoid]
 	$(call ensure-venv)
-	mkdir -p configs/layouts outputs/layouts
+	mkdir -p configs/layouts outputs/raw_derived/layouts
 	$(PYTHON) scripts/layouts/generate_layouts.py \
 		--output-dir configs/layouts \
-		--plot-dir outputs/layouts \
+		--plot-dir outputs/raw_derived/layouts \
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
 
 # ----------------------------------------------------------------------
@@ -422,9 +424,9 @@ analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
 
-trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (collapse vs hard-task). Usage: make trace-tier-breakdown TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>
+trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (collapse vs hard-task). Usage: make trace-tier-breakdown TRACE_DIR=outputs/raw/demo_traces/<baseline>/<leaf>/<timestamp>
 	$(call ensure-venv)
-	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
+	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/raw/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
 	$(PYTHON) scripts/analysis/trace_tiers.py --trace-dir $(TRACE_DIR)
 
 analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [STAGE=1] [SEED=42] [CHECKPOINT=1_42_19062026-0120] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
@@ -464,11 +466,18 @@ analyse-cross-seed: ## Pool all seeds into headline tables + per-seed robustness
 	$(call ensure-venv)
 	# Cross-seed spans seeds: parent root, NEVER EVAL_RESULTS_ROOT (which is seed_<N>/).
 	$(PYTHON) scripts/analysis/cross_seed.py \
-		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/cross_seed_analysis) \
+		--results-root $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/raw_derived/cross_seed_analysis) \
 		--stage $(or $(STAGE),6) \
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
 		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
+
+analysis-bundle: ## Assemble the summaries and values into outputs/main_analysis. Run after `make figures`. Usage: make analysis-bundle [STAGE=6]
+	$(call ensure-venv)
+	$(PYTHON) $(SCRIPTS_DIR)/analysis/bundle.py \
+		--frozen $(or $(FROZEN),outputs/raw_derived/cross_seed_analysis/all_seeds/stage$(or $(STAGE),6)) \
+		--raw $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/main_analysis)
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
@@ -500,7 +509,7 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 	@# Clear stale viewer history (may be root-owned, hence sudo).
 	sudo rm -f $(_VIS_FILE) outputs/.vis_active
 	@# Training writes bay_successes/ as root; pre-own eval/ or the demo CSV dump fails.
-	sudo mkdir -p outputs/bay_successes/eval && sudo chown $$(id -u):$$(id -g) outputs/bay_successes/eval
+	sudo mkdir -p outputs/raw/bay_successes/eval && sudo chown $$(id -u):$$(id -g) outputs/raw/bay_successes/eval
 	$(DOCKER_COMPOSE) up -d --wait
 	bash scripts/multi_workers/workers_up.sh 1
 	@# Demo + log stream + viewer + graceful teardown live in the helper script.
@@ -587,7 +596,7 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/miscellaneous/tb_read.py $(LOG) $(ARGS)
 
-uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
+uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
 	$(call ensure-venv)
 	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/analysis/uncertainty_verdict.py $(EVAL_DIR)

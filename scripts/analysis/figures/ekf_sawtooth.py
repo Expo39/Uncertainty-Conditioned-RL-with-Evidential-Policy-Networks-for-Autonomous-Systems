@@ -14,13 +14,6 @@ which is the true Markov-chain state driving the injected noise (added to the tr
 writer for exactly this figure). That is the faithful signal and is drawn as-is (no
 smoothing): every state, including a genuine single-tick one, is real.
 
-Fallback: for OLD traces written before `gnss_tier` existed, the tier is
-reconstructed from the true localisation error ||ekf_xy - gt_xy|| banded at the tier
-edges, and despeckled for legibility. This is NOISY near tier boundaries (true error
-jitters across a threshold between corrections) and prints a warning; re-run
-demo_drive.py to get a faithful figure. See trace_tiers.py for why the
-reported std itself cannot label the tier (it saturates ~1.1 m).
-
 The saturation annotation compares the peak reported sigma_x to the DESIGN noise
 floor (Table T-7 / gnss_noise_profiles.yaml) of the worst tier the episode reached,
 a stable per-tier constant, not a per-tick error sample.
@@ -34,8 +27,8 @@ sole channel.
 
 Usage:
     python scripts/analysis/figures/plot_ekf_sawtooth.py \
-        --trace outputs/demo_traces/<baseline>/<leaf>/<stamp>/episode_<N>.csv \
-        --out   outputs/figures/ekf_sawtooth
+        --trace outputs/raw/demo_traces/<baseline>/<leaf>/<stamp>/episode_<N>.csv \
+        --out   outputs/raw_derived/figures/ekf_sawtooth
 """
 
 from __future__ import annotations
@@ -300,10 +293,10 @@ def _parse_args() -> argparse.Namespace:
     repo = Path(__file__).resolve().parents[3]
     default_trace = (
         repo
-        / "outputs/demo_traces/full_method/6_42_22062026-1502"
+        / "outputs/raw/demo_traces/full_method/6_42_22062026-1502"
         / "15-07-2026-143405/episode_107.csv"
     )
-    default_out = repo / "outputs/figures/ekf_sawtooth"
+    default_out = repo / "outputs/raw_derived/figures/ekf_sawtooth"
     p.add_argument(
         "--trace", type=Path, default=default_trace, help="Per-episode demo-trace CSV."
     )

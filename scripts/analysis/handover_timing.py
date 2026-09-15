@@ -84,7 +84,7 @@ def analyse(
 ) -> None:
     """
     @brief Build the per-condition handover-timing table and write it.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV table.
     @param arm: Optional baseline name to restrict to; None = most recent any-arm.
     @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
@@ -176,13 +176,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="Root holding <baseline>/<leaf>/episode_records.csv.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/handover_timing",
+        default="outputs/raw_derived/handover_timing",
         help="Directory for the handover-timing table.",
     )
     parser.add_argument(

@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from scripts import figure_style as fs  # noqa: E402
 
 # Where scripts/analysis/tb_curves.py writes its export.
-DATA_DIR = Path("outputs/training")
+DATA_DIR = Path("outputs/raw_derived/training")
 CURVES_CSV = "training_curves.csv"
 BOUNDS_CSV = "training_stage_bounds.csv"
 

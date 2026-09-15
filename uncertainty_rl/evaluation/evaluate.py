@@ -451,7 +451,7 @@ def evaluate_across_conditions(
     env_config_path: str,
     train_config_path: str,
     n_episodes: int = 0,
-    output_dir: str = "./evaluation_results",
+    output_dir: str = "./outputs/raw/evaluation_results",
     baseline_path: Optional[str] = None,
     condition_names: Optional[List[str]] = None,
 ) -> Tuple[pd.DataFrame, str]:
@@ -551,7 +551,7 @@ def evaluate_across_conditions(
     deterministic: bool = eval_config.get("deterministic", True)
 
     # Per-bay success accounting. Each condition gets its own tracker dumped to
-    # outputs/bay_successes/eval/seed_<N>/<baseline>/<leaf>/<condition>/, mirroring
+    # outputs/raw/bay_successes/eval/seed_<N>/<baseline>/<leaf>/<condition>/, mirroring
     # the training tree, because a bay's success at RTK-fixed and RTK-degraded are
     # distinct questions and must not be conflated. The leaf is the checkpoint's
     # parent directory name (<stage>_<seed>_<timestamp>); the baseline comes from
@@ -570,7 +570,7 @@ def evaluate_across_conditions(
     _leaf_fields = _eval_leaf.split("_")
     _eval_seed = _leaf_fields[1] if len(_leaf_fields) >= 2 else "unknown"
     _bay_eval_root = (
-        Path("./outputs/bay_successes/eval")
+        Path("./outputs/raw/bay_successes/eval")
         / f"seed_{_eval_seed}"
         / _eval_baseline
         / _eval_leaf
@@ -783,8 +783,8 @@ def main() -> None:
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="./evaluation_results",
-        help="Directory for output files",
+        default="./outputs/raw/evaluation_results",
+        help="Directory for the raw per-run CSVs",
     )
     parser.add_argument(
         "--conditions",

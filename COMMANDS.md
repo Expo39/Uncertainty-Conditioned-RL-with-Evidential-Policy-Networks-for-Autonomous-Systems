@@ -217,7 +217,7 @@ floor plan geometry in `scripts/layouts/floor_plans/*.py`.
 | Command | Purpose |
 |---------|---------|
 | `make clean-cache` | Remove build caches and `.pyc` files (preserves checkpoints, logs, outputs, maps) |
-| `make clean` | Remove build artefacts, caches, and generated outputs/layouts (preserves checkpoints, logs, `.xodr`, `.venv`) |
+| `make clean` | Remove build artefacts, caches, and generated outputs/raw_derived/layouts (preserves checkpoints, logs, `.xodr`, `.venv`) |
 | `make clean-all` | Remove everything including checkpoints and logs (preserves `.xodr` and `.venv`) |
 | `make clean-venv` | Delete `.venv/` (re-create with `make install`) |
 | `make docker-clean [STACK=all]` | Stop containers and remove volumes |

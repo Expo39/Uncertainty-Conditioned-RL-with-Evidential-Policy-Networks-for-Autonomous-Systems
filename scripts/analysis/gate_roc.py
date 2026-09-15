@@ -17,7 +17,7 @@ For each signal we sweep the abort threshold and trace the trade-off between
 correctly aborting before a failure (collision / out_of_bounds / near_miss /
 stuck) and needlessly aborting an episode that would have succeeded. The area
 under that curve (AUC) is the single comparison number: a higher-AUC signal is
-the better safety gate. Pure pandas / numpy / matplotlib on the host .venv.
+the better safety gate. Writes CSVs only. Pure pandas / numpy on the host .venv.
 Run via `make analyse-gate` (never python directly).
 """
 
@@ -32,10 +32,7 @@ from typing import Dict, List, Optional, Tuple
 # file is run directly (python scripts/analysis/gate_roc.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import matplotlib  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
@@ -60,7 +57,7 @@ def _discover_arm_csvs(
 ) -> Dict[str, Path]:
     """
     @brief Find each arm's episode_records.csv (without_wrapper preferred).
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param stage: Optional curriculum stage (e.g. "1") so the gate comparison uses
            arms at the SAME stage rather than each arm's newest leaf (which may sit
            at different stages); None = any stage.
@@ -166,38 +163,6 @@ def _evaluate_signals(records: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _plot_roc(records: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Overlay the gate ROC curves for each (arm, signal) on one axis.
-    @param records: Tidy per-episode frame.
-    @param out_dir: Directory for the saved figure.
-    """
-    fig, ax = plt.subplots(figsize=(7, 6))
-    for arm in sorted(records["arm"].unique()):
-        arm_df = records[records["arm"] == arm]
-        labels = arm_df["is_failure"].to_numpy()
-        for signal, allowed in _SIGNALS.items():
-            if allowed is not None and arm not in allowed:
-                continue
-            if signal not in arm_df.columns:
-                continue
-            scores = arm_df[signal].to_numpy(dtype=float)
-            if np.isnan(scores).all():
-                continue
-            fpr, tpr, auc = _roc_curve(scores, labels)
-            if np.isnan(auc):
-                continue
-            ax.plot(fpr, tpr, label=f"{arm} / {signal} (AUC {auc:.2f})")
-    ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="chance")
-    ax.set_xlabel("False abort rate (successes needlessly aborted)")
-    ax.set_ylabel("Failure catch rate (failures pre-empted)")
-    ax.set_title("Safety-gate ROC: EKF std vs evidential epistemic")
-    ax.legend(fontsize=8, loc="lower right")
-    fig.tight_layout()
-    fig.savefig(out_dir / "gate_roc.png", dpi=150)
-    plt.close(fig)
-
-
 def analyse(
     results_root: Path,
     out_dir: Path,
@@ -206,7 +171,7 @@ def analyse(
 ) -> None:
     """
     @brief Run the gate comparison and write the AUC table + ROC figure.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV table and PNG figure.
     @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
            same stage; None uses each arm's newest leaf (may mix stages).
@@ -222,7 +187,6 @@ def analyse(
         records = drop_held_tiers(records)
     auc_table = _evaluate_signals(records)
     auc_table.to_csv(out_dir / "gate_auc.csv", index=False)
-    _plot_roc(records, out_dir)
 
     print("=== Safety-gate AUC (higher = better failure/success separation) ===")
     if auc_table.empty:
@@ -253,13 +217,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="Root holding <baseline>/<leaf>/episode_records.csv for each arm.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/gate_analysis",
+        default="outputs/raw_derived/gate_analysis",
         help="Directory for the AUC table and ROC figure.",
     )
     parser.add_argument(

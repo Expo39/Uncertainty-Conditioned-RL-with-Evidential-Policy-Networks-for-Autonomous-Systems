@@ -48,7 +48,7 @@ PER_STEP_CAP=440
 
 LAYOUT=rectangle
 AGENT_CONFIG=configs/deployment/agent_config.yaml
-EVAL_ROOT=outputs/evaluation_results
+EVAL_ROOT=outputs/raw/evaluation_results
 
 # ---------------------------------------------------------------------------
 # Helpers

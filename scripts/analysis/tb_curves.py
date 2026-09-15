@@ -5,7 +5,7 @@
 The training-curve figure is the one reading that does not come from the
 evaluation CSVs: its source is the per-stage TensorBoard scalars written during
 training. This module turns those logs into one tidy CSV so the figure has the
-same provenance as every other - a generated table, not a literal.
+same provenance as every other - generated data, not a literal.
 
 Reads `env/success_rate` and `env/collision_rate` from every
 `logs/<arm>/<stage>_<seed>_<stamp>/` run, concatenates the six curriculum
@@ -46,7 +46,7 @@ _LEAF = re.compile(r"^(?P<stage>\d+)_(?P<seed>\d+)_")
 # obscure the trend across a stage; 0.9 is the TensorBoard UI default.
 SMOOTHING = 0.9
 
-# A decision is one policy step. The x axis is reported in millions.
+# A decision is one policy step. The x axis is analysed in millions.
 DECISIONS_PER_M = 1_000_000.0
 
 # Points kept per curve after smoothing. The raw logs carry a few thousand
@@ -199,7 +199,9 @@ def main() -> None:
         description="Export seed-averaged training curves from TensorBoard logs."
     )
     parser.add_argument("--logs-root", type=Path, default=Path("logs"))
-    parser.add_argument("--output-dir", type=Path, default=Path("outputs/training"))
+    parser.add_argument(
+        "--output-dir", type=Path, default=Path("outputs/raw_derived/training")
+    )
     parser.add_argument(
         "--arms",
         nargs="+",
