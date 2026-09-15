@@ -342,7 +342,9 @@ def main() -> None:
     # Per-step trace logging (one CSV per episode), enabled by default.
     trace_dir: Optional[Path] = None
     if args.trace:
-        trace_dir = Path("outputs") / "demo_traces" / _run_subtree
+        # Under outputs/raw/: traces are a raw artefact, and every consumer
+        # (make trace-tier-breakdown, the ekf_sawtooth figure) reads them there.
+        trace_dir = Path("outputs") / "raw" / "demo_traces" / _run_subtree
         trace_dir.mkdir(parents=True, exist_ok=True)
         print(f"Trace logging enabled: {trace_dir}/episode_<N>.csv")
 
@@ -352,7 +354,7 @@ def main() -> None:
     # split - one tracker for the whole run, dumped in the finally block (the
     # demo loops until Ctrl+C, so the dump must survive interruption).
     bay_tracker = BaySuccessTracker()
-    bay_dir = Path("outputs") / "bay_successes" / "eval" / _run_subtree
+    bay_dir = Path("outputs") / "raw" / "bay_successes" / "eval" / _run_subtree
 
     # Installed only once the trackers exist, so a stop during setup (where
     # there is nothing to flush) keeps the daemon's plain kill behaviour.
