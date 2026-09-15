@@ -176,7 +176,9 @@ Success and collision rate for all four arms across the six curriculum stages, w
 stage boundaries marked. `full_method` holds a clear success margin from stage 1 onward,
 and the step changes at each boundary are the difficulty ramping, not instability.
 
-<img src="../../docs/media/training_curves.png" alt="Success and collision rate per arm across the six curriculum stages" width="620">
+<p align="center">
+  <img src="../../docs/media/training_curves.png" alt="Success and collision rate per arm across the six curriculum stages" width="620">
+</p>
 
 The two panels are the only tags exported by `METRIC_TAGS` in
 `scripts/analysis/tb_curves.py`. Episode reward and the evidential uncertainty scalars are

@@ -46,8 +46,13 @@ Two things are needed, and **both** matter:
    the rendered size, and it is the step that gets forgotten:
 
    ```html
-   <img src="../../docs/media/<short_name>.png" alt="<what it shows>" width="620">
+   <p align="center">
+     <img src="../../docs/media/<short_name>.png" alt="<what it shows>" width="620">
+   </p>
    ```
+
+   The `<p align="center">` wrapper centres the figure in the column; a constrained
+   image left-aligned against the text reads as a stray screenshot.
 
    620 px sits comfortably inside a GitHub README column. Near-square figures (the
    two-panel plots here are about 1:1) need the narrower end of that range, since width
