@@ -76,8 +76,16 @@ flowchart TB
 <!-- gif:placeholder name="carla_3d" caption="3D CARLA spectator view - evidential policy navigating the rectangular lot" -->
 ![CARLA 3D placeholder](docs/media/carla_3d.gif)
 
-<!-- gif:placeholder name="gnss_degradation" caption="Same bay attempted under RTK fixed vs degraded GNSS - EKF covariance growth side by side" -->
+<!-- gif:placeholder name="gnss_degradation" caption="Same bay attempted under RTK fixed vs degraded GNSS - driving behaviour side by side" -->
 ![GNSS degradation placeholder](docs/media/gnss_degradation.gif)
+
+> Captured with `GNSS_TIER=fixed` and `GNSS_TIER=degraded` (see
+> [scripts/visualise/README.md](scripts/visualise/README.md)). The clip shows the
+> **behaviour** difference - the ring is the tier's configured 1-sigma GNSS noise, which is
+> what changes between the two runs. It is not a claim about the EKF posterior: degraded
+> injects zero-mean 5 m noise, but the fused estimate stays sub-metre most of the time, so
+> the covariance separation between the tiers is mild by design.
+> @see `documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`.
 
 ---
 
