@@ -195,7 +195,7 @@ condition. `full_method` leads on success in every condition that any arm solves
 arms score 0% on `ood_irregular_rtk_fixed`, which is why that group is empty in the top
 panel and appears only in the position-error panel below.
 
-![Success rate and mean final position error per arm across the reported evaluation conditions](../../docs/media/eval_degradation.png)
+<img src="../../docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the reported evaluation conditions" width="620">
 
 `configs/eval_config.yaml` defines seven conditions. The analyses drop the two held tiers
 (`gnss_fixed`, `gnss_degraded` - each pins one fix state for a whole episode, so the slope
@@ -209,9 +209,6 @@ make analyse-ablation STAGE=6
 make figures FIG=ablation_by_condition
 cp outputs/main_analysis/figures/ablation_by_condition.png docs/media/eval_degradation.png
 ```
-
-As with the training curves, downscale before committing
-(`ffmpeg -i <src> -vf scale=1100:-1 <dst>`): the pipeline writes at 400 DPI for print.
 
 <!-- gif:placeholder name="baseline_comparison" caption="Vanilla PPO vs full method side by side under degraded GNSS" -->
 ![Baseline comparison placeholder](../../docs/media/baseline_comparison.gif)
