@@ -6,7 +6,7 @@ Accumulates terminal-episode outcomes keyed by target bay id and writes a CSV
 (one row per bay: attempts, successes, success rate) plus a run_info.txt header.
 Used by both the training callback (uncertainty_rl.training.train_ppo) and the
 evaluation loop (uncertainty_rl.evaluation.evaluate) so the on-disk format is
-identical for the training and eval sinks under outputs/bay_successes/.
+identical for the training and eval sinks under outputs/raw/bay_successes/.
 
 Pure-Python: no torch, CARLA, or ROS 2 imports, so it is unit-testable on the
 host without the Docker stack.

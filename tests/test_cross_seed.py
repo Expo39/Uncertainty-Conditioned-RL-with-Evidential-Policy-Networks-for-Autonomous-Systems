@@ -250,9 +250,11 @@ class TestPoolOfOne:
         assert (robustness["n_seeds"] == 1).all()
         # A pool of one has zero cross-seed range everywhere.
         assert (robustness["success_range_pp"] == 0.0).all()
-        # The headline figure and pooled summary were written too.
-        assert (stage_dir / "seed_robustness.png").exists()
+        # The pooled summary was written too.
         assert (stage_dir / "pooled_condition_summary.csv").exists()
+        # The aggregator writes CSVs only; figures are drawn separately from
+        # them by scripts/analysis/figures/, so nothing here renders.
+        assert not list(stage_dir.glob("*.png"))
 
     def test_held_tiers_dropped_by_default(self, tmp_path: Path) -> None:
         """

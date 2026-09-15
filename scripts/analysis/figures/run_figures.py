@@ -188,12 +188,18 @@ def _draw_failure_modes(
     return fs.save(fig, out)
 
 
-def render(run_dir: Path) -> List[Path]:
+def render(run_dir: Path, out_root: Path, raw_root: Path) -> List[Path]:
     """
     @brief Render both per-run panels for one evaluation run directory.
     @param run_dir: Directory holding the run's evaluation_results.csv.
+    @param out_root: Figure tree root; the run's path under raw_root is
+           mirrored beneath it.
+    @param raw_root: Root the run path is relative to, for that mirroring.
     @return Paths of the figures written.
     @throws FileNotFoundError If the run directory has no aggregate CSV.
+
+    Figures never land beside the CSVs: the evaluation tree holds raw data
+    only, so the panels mirror the run's path under the figure root instead.
     """
     csv_path = run_dir / RESULTS_CSV
     if not csv_path.exists():
@@ -204,9 +210,15 @@ def render(run_dir: Path) -> List[Path]:
         raise ValueError(f"{csv_path} has no rows")
     conditions = df["condition"].astype(str).tolist()
 
+    try:
+        stem = run_dir.resolve().relative_to(raw_root.resolve())
+    except ValueError:
+        stem = Path(run_dir.name)
+    target = out_root / stem
+
     fs.apply()
-    written = [_draw_summary(df, conditions, run_dir / "evaluation_plots")]
-    failure_modes = _draw_failure_modes(df, conditions, run_dir / "failure_modes")
+    written = [_draw_summary(df, conditions, target / "evaluation_plots")]
+    failure_modes = _draw_failure_modes(df, conditions, target / "failure_modes")
     if failure_modes is not None:
         written.append(failure_modes)
     return written
@@ -235,8 +247,14 @@ def main() -> None:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path("outputs"),
-        help="Tree to search when --run-dir is not given.",
+        default=Path("outputs/raw/evaluation_results"),
+        help="Evaluation tree to search when --run-dir is not given.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("outputs/raw_derived/figures/per_run"),
+        help="Figure root; each run's path under --root is mirrored beneath it.",
     )
     args = parser.parse_args()
 
@@ -247,7 +265,7 @@ def main() -> None:
     failed: List[Path] = []
     for run_dir in run_dirs:
         try:
-            render(run_dir)
+            render(run_dir, args.output_dir, args.root)
         except (OSError, ValueError, KeyError) as exc:
             print(f"  !! {run_dir} skipped: {type(exc).__name__}: {exc}")
             failed.append(run_dir)

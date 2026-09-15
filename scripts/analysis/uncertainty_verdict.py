@@ -23,7 +23,7 @@ from typing import Dict, List, Tuple
 # Conditions grouped by whether they leave the training data manifold. CLEAN are
 # in-distribution (clean GNSS / deployment anchor); HARD are the novelty / degradation
 # conditions where epistemic SHOULD be relatively higher if the signal is state-dependent.
-# Names match configs/eval_config.yaml; unlisted conditions are reported but not grouped.
+# Names match configs/eval_config.yaml; unlisted conditions are kept but not grouped.
 _CLEAN = {"gnss_fixed", "anchor_empty", "anchor_deployment"}
 _HARD = {
     "gnss_degraded",
@@ -95,7 +95,7 @@ def main() -> int:
         "eval_dir",
         type=str,
         help="Eval run output dir containing per_step_records.csv "
-        "(e.g. outputs/evaluation_results/<baseline>/<leaf>/without_wrapper).",
+        "(e.g. outputs/raw/evaluation_results/<baseline>/<leaf>/without_wrapper).",
     )
     args = parser.parse_args()
 

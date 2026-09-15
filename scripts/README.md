@@ -73,7 +73,7 @@ make generate-layouts                   # All three layouts
 make generate-layouts LAYOUT=rectangle  # Single layout
 ```
 
-Writes `configs/layouts/<name>.yaml` and `outputs/layouts/<name>.png` for each layout. Never edit the YAML files by hand - regenerate from the floor plan Python modules. See [layouts/README.md](layouts/README.md) for the layout module reference and [layouts/BUILDER.md](layouts/BUILDER.md) for the `LotBuilder` DSL.
+Writes `configs/layouts/<name>.yaml` and `outputs/raw_derived/layouts/<name>.png` for each layout. Never edit the YAML files by hand - regenerate from the floor plan Python modules. See [layouts/README.md](layouts/README.md) for the layout module reference and [layouts/BUILDER.md](layouts/BUILDER.md) for the `LotBuilder` DSL.
 
 ### `inspect/`
 
@@ -147,14 +147,14 @@ make tb-scalars LOG=logs/<baseline>/<leaf> ARGS="--match success --last 10"
 
 ### `analysis/`
 
-Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the reported input-covariance and uncertainty results. Run only after an eval has written results under `outputs/evaluation_results/<baseline>/<leaf>/`.
+Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the reported input-covariance and uncertainty results. Run only after an eval has written results under `outputs/raw/evaluation_results/<baseline>/<leaf>/`.
 
 ```bash
 make analyse-ablation                                                  # Cross-arm covariance contrast + degradation slope
 make analyse-calibration ARM=full_method                              # Is the EKF covariance an honest signal?
 make analyse-gate                                                      # EKF-std vs evidential-epistemic safety-gate ROC
 make docker-covariance-probe BASELINE=full_method CHECKPOINT=<leaf>   # Causal "does the policy use covariance?" probe
-make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/without_wrapper  # Epistemic-vs-aleatoric separation
+make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/<baseline>/<leaf>/without_wrapper  # Epistemic-vs-aleatoric separation
 make handover-timing ARM=full_method                                  # Handover timing vs degradation onset
 ```
 
@@ -169,10 +169,10 @@ Every rendered figure. Presentation only: these modules read CSVs and draw them,
 - [`../figure_style.py`](figure_style.py) - the one house style. Every figure imports it; nothing sets rcParams, picks a colour, or builds a legend by hand.
 
 ```bash
-make figures                 # All figures into outputs/figures
+make figures                 # All figures into outputs/raw_derived/figures
 make figures FIG=gate_roc    # A single figure, by id
 make run-figures             # Per-run panels for every run under outputs/
-make run-figures RUN_DIR=outputs/evaluation_results/seed_42/full_method/<leaf>/without_wrapper
+make run-figures RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/without_wrapper
 ```
 
 ## See also

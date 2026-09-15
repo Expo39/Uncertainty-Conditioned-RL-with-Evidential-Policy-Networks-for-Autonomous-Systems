@@ -1,6 +1,6 @@
 # scripts/layouts/
 
-Floor plan modules live in `floor_plans/`. Each module defines one lot geometry in **local frame** (origin at lot corner (0,0)). The orchestrator `generate_layouts.py` applies a world-frame transform and writes `configs/layouts/<name>.yaml` + `outputs/layouts/<name>.png`.
+Floor plan modules live in `floor_plans/`. Each module defines one lot geometry in **local frame** (origin at lot corner (0,0)). The orchestrator `generate_layouts.py` applies a world-frame transform and writes `configs/layouts/<name>.yaml` + `outputs/raw_derived/layouts/<name>.png`.
 
 Never write world-frame coordinates in a layout module - always work in local frame.
 
@@ -166,7 +166,7 @@ Low-level engine: bay-dimension constants, world-frame transform, YAML writer, P
 
 ### `generate_layouts.py`
 
-Orchestrator script. Imports each floor plan module's `generate()` function, calls `to_world_frame()`, writes YAML to `configs/layouts/`, and writes PNG to `outputs/layouts/`. Invoked via `make generate-layouts`.
+Orchestrator script. Imports each floor plan module's `generate()` function, calls `to_world_frame()`, writes YAML to `configs/layouts/`, and writes PNG to `outputs/raw_derived/layouts/`. Invoked via `make generate-layouts`.
 
 ---
 
@@ -185,7 +185,7 @@ make generate-layouts LAYOUT=irregular_a       # Single layout
 make docker-inspect INSPECT_LAYOUT=rectangle   # Verify in CARLA after regenerating
 ```
 
-After any change to a floor plan module, re-run `make generate-layouts LAYOUT=<name>` and inspect the PNG in `outputs/layouts/<name>.png` before committing.
+After any change to a floor plan module, re-run `make generate-layouts LAYOUT=<name>` and inspect the PNG in `outputs/raw_derived/layouts/<name>.png` before committing.
 
 ## See also
 

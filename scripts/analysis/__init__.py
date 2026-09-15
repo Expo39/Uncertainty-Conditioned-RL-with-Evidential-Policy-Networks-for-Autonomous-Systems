@@ -2,7 +2,7 @@
 @file __init__.py
 @brief Evaluation analysis tooling (run via make targets, not imported by the pipeline).
 
-Three tools that turn an evaluation run into the reported input-covariance
+Tools that turn an evaluation run into the headline input-covariance
 claims:
 
   - covariance_probe.py: in-container (torch) causal probe - does the trained

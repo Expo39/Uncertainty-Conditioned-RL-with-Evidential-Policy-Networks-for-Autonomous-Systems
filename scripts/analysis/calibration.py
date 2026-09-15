@@ -13,7 +13,7 @@ Reads calibration_records.csv (per-step predicted std vs actual GT-EKF error,
 written by uncertainty_rl/evaluation/evaluate.py for every arm - ground truth is
 reward-only and never observed). Reports the std-vs-error correlation overall and
 per GNSS condition, a binned error-vs-std table (does mean error rise across std
-bins?), and a scatter + binned-mean figure. Pure pandas / numpy / matplotlib on
+bins?). Writes CSVs only - the figure is drawn by analysis/figures/. Pure pandas / numpy on
 the host .venv. Run via `make analyse-calibration` (never python directly).
 """
 
@@ -29,10 +29,7 @@ from typing import List, Optional, Tuple
 # script's own directory on sys.path rather than the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import matplotlib  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from scripts.analysis._discovery import arm_leaf_subpath, discover_records  # noqa: E402
@@ -72,7 +69,7 @@ def _find_calibration_csv(
 ) -> Path:
     """
     @brief Locate a calibration_records.csv under the nested results tree.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param arm: Optional baseline name to restrict to; None = any arm.
     @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
     @return Path to the most recently modified matching calibration_records.csv.
@@ -194,41 +191,6 @@ def _binned_table(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _plot(df: pd.DataFrame, binned: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Scatter of error vs std with the binned-mean overlay, per axis.
-    @param df: Calibration records with combined columns.
-    @param binned: The binned monotonicity table from _binned_table.
-    @param out_dir: Directory for the saved figure.
-    """
-    fig, axes = plt.subplots(1, len(_AXES), figsize=(6 * len(_AXES), 5))
-    if len(_AXES) == 1:
-        axes = [axes]
-    for ax, (axis, std_col, err_col) in zip(axes, _AXES):
-        pair = df[[std_col, err_col]].dropna()
-        # Subsample the scatter so dense per-step data stays legible.
-        if len(pair) > 5000:
-            pair = pair.sample(5000, random_state=0)
-        ax.scatter(pair[std_col], pair[err_col], s=4, alpha=0.15, color="#1f77b4")
-        b = binned[binned["axis"] == axis]
-        if not b.empty:
-            centres = (b["std_low"] + b["std_high"]) / 2.0
-            ax.plot(
-                centres,
-                b["mean_abs_error"],
-                "o-",
-                color="#d62728",
-                label="binned mean error",
-            )
-            ax.legend()
-        ax.set_xlabel(f"predicted {axis} std ({std_col})")
-        ax.set_ylabel(f"actual {axis} error ({err_col})")
-        ax.set_title(f"EKF {axis} calibration")
-    fig.tight_layout()
-    fig.savefig(out_dir / "ekf_calibration.png", dpi=150)
-    plt.close(fig)
-
-
 def analyse(
     results_root: Path,
     out_dir: Path,
@@ -238,7 +200,7 @@ def analyse(
 ) -> None:
     """
     @brief Run the EKF calibration analysis and write the tables + figure.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV tables and PNG figure.
     @param arm: Optional baseline name to restrict the source CSV to.
     @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
@@ -262,7 +224,6 @@ def analyse(
     binned = _binned_table(df)
     corr.to_csv(out_dir / "calibration_correlations.csv", index=False)
     binned.to_csv(out_dir / "calibration_binned.csv", index=False)
-    _plot(df, binned, out_dir)
 
     print("\n=== Predicted std vs actual error correlation (Spearman is headline) ===")
     if corr.empty:
@@ -333,13 +294,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="Root holding <baseline>/<leaf>/calibration_records.csv.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/calibration_analysis",
+        default="outputs/raw_derived/calibration_analysis",
         help="Directory for the calibration tables and figure.",
     )
     parser.add_argument(

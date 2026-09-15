@@ -76,8 +76,8 @@ def seed_roots(results_root: Path) -> List[Path]:
     """
     @brief The per-seed sub-roots under an output root, for cross-seed pooling.
     @param results_root: A root that may CONTAIN seed_<N>/ children, e.g.
-           outputs/evaluation_results (whose per-seed trees are
-           outputs/evaluation_results/seed_42/<baseline>/<leaf>/...).
+           outputs/raw/evaluation_results (whose per-seed trees are
+           outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/...).
     @return Sorted list of the seed_<N> child directories. If the root has no
             seed_*/ children (a single tree with no seed nesting, or a root
             already pinned to one seed), the singleton [results_root] is returned
@@ -136,7 +136,7 @@ def discover_records(
 ) -> List[Path]:
     """
     @brief Find per-run CSVs of a given name, preferred variant then newest first.
-    @param results_root: outputs/evaluation_results.
+    @param results_root: outputs/raw/evaluation_results.
     @param name: CSV file name to match (e.g. "calibration_records.csv").
     @param arm: Optional baseline name to restrict to; None = any arm.
     @param prefer_variant: Wrapper variant to return first. Default
@@ -185,7 +185,7 @@ def discover_arm_csvs(
 ) -> Dict[str, Path]:
     """
     @brief Map each arm to its best per-run CSV of the given name.
-    @param results_root: outputs/evaluation_results.
+    @param results_root: outputs/raw/evaluation_results.
     @param name: CSV file name to match (e.g. "episode_records.csv").
     @param prefer_variant: Wrapper variant to prefer per arm (see discover_records).
     @param leaf: Optional checkpoint leaf to pin to. Cross-arm callers (ablation)
@@ -220,7 +220,7 @@ def stage_leaf(
 ) -> Path:
     """
     @brief The run directory for one seed/arm at a given curriculum stage.
-    @param results_root: outputs/evaluation_results (the seed-nested parent).
+    @param results_root: outputs/raw/evaluation_results (the seed-nested parent).
     @param seed: Seed sub-root name, e.g. "seed_42".
     @param arm: Baseline name, e.g. "full_method".
     @param stage: Curriculum stage the leaf name starts with.
@@ -251,7 +251,7 @@ def pooled_frame(
 ) -> "pd.DataFrame":
     """
     @brief Concatenate one CSV across every seed and arm into a single frame.
-    @param results_root: outputs/evaluation_results.
+    @param results_root: outputs/raw/evaluation_results.
     @param seeds: Seed sub-root names to pool.
     @param arms: Baseline names to pool.
     @param name: CSV file name, e.g. "episode_records.csv".

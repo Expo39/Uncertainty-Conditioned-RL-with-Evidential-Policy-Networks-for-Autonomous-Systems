@@ -429,7 +429,7 @@ class BaySuccessCallback(BaseCallback):
     cumulative attempts and successes per target bay across the whole run, so a
     run on the random-bay curriculum (Stage 2 onwards) can be inspected for
     which specific bays the policy can and cannot park in. Output goes to
-    outputs/bay_successes/training/<run_name>/ as bay_successes.csv plus a
+    outputs/raw/bay_successes/training/<run_name>/ as bay_successes.csv plus a
     run_info.txt header. This is a logging change only - it does not touch
     training dynamics.
     """
@@ -889,12 +889,12 @@ def train(
 
     # Per-bay success accounting. Cumulative attempts/successes per target bay
     # over the whole run, dumped to
-    # outputs/bay_successes/training/seed_<N>/<baseline>/<leaf>/ so a random-bay
+    # outputs/raw/bay_successes/training/seed_<N>/<baseline>/<leaf>/ so a random-bay
     # run can be inspected for which bays the policy can park, and so a second
     # seed's successes never overwrite the first's (seed_<N> mirrors the eval and
     # analysis trees).
     _bay_output_dir = (
-        Path("./outputs/bay_successes/training")
+        Path("./outputs/raw/bay_successes/training")
         / f"seed_{seed}"
         / baseline_name
         / run_leaf

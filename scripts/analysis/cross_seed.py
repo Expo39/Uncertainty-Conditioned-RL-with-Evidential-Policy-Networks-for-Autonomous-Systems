@@ -3,7 +3,7 @@
 @brief Pool every seed's eval into one headline + a per-seed robustness table.
 
 Host-side, read-only aggregator that turns the SEPARATE per-seed result trees
-(outputs/evaluation_results/seed_42/..., seed_123/..., seed_7/...) into the
+(outputs/raw/evaluation_results/seed_42/..., seed_123/..., seed_7/...) into the
 seed-robust statements the analysis needs. A cross-arm difference on a single
 seed is "indistinguishable from seed luck" (Henderson et al. 2017), so this script
 produces two complementary reads side by side:
@@ -22,7 +22,7 @@ The statistics are NOT re-implemented: the four per-analysis modules expose pure
 DataFrame functions (they take a frame, never re-glob), so a pooled frame carrying
 an extra "seed" column flows through them untouched. This file only adds the
 pooling seam (read each CSV once, concat, label the seed) and the robustness
-groupby. Pure pandas / numpy / matplotlib on the host .venv - no scipy, matching
+groupby. Writes CSVs only. Pure pandas / numpy on the host .venv - no scipy, matching
 the sibling scripts. Run via `make analyse-cross-seed` (never python directly).
 
 @see scripts/analysis/ablation.py (the pooled contrast / caution stats).
@@ -34,17 +34,13 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 # Make the repo root importable so the shared helpers resolve when this file is run
 # directly (the sibling analysers do the same; importing them mutates sys.path and
-# pulls in matplotlib/seaborn at import time, so the Agg backend is set below first).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import matplotlib  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from scripts.analysis._discovery import discover_records, seed_roots  # noqa: E402
@@ -61,9 +57,6 @@ from scripts.analysis.ablation import (  # noqa: E402
     _degradation_slope,
     _discover_arm_csvs,
     _load_records,
-    _plot_behaviour,
-    _plot_condition_bars,
-    _plot_degradation_slope,
     _print_caution,
     _print_caution_levels,
     _print_headline,
@@ -75,9 +68,14 @@ from scripts.analysis.calibration import (  # noqa: E402
     _correlations,
 )
 from scripts.analysis.gate_roc import _evaluate_signals  # noqa: E402
-from scripts.analysis.gate_roc import _plot_roc  # noqa: E402
 from scripts.analysis.gate_roc import _load as _gate_load  # noqa: E402
 from scripts.analysis.handover_timing import _REGIME, _latency  # noqa: E402
+
+# Arms pinned for the single-CSV pools. The EKF is identical across arms, so
+# any one characterises calibration; the handover wrapper only fires on an
+# evidential head. Pinning keeps both reads reproducible.
+CALIBRATION_ARM = "vanilla_ppo"
+HANDOVER_ARM = "full_method"
 
 
 def _seed_label(seed_root: Path) -> int:
@@ -157,22 +155,37 @@ def _pool_gate(results_root: Path, stage: str) -> pd.DataFrame:
 
 
 def _pool_single_csv(
-    results_root: Path, name: str, prefer_variant: str
+    results_root: Path,
+    name: str,
+    prefer_variant: str,
+    arm: Optional[str] = None,
+    stage: Optional[str] = None,
 ) -> pd.DataFrame:
     """
     @brief Pool a per-run single CSV (not arm-mapped) across seeds, tagged by seed.
     @param results_root: Root holding seed_<N>/... (or a single tree).
     @param name: CSV file name (e.g. "calibration_records.csv").
     @param prefer_variant: Wrapper variant to prefer per seed (see _discovery).
+    @param arm: Baseline to pin to.
+    @param stage: Curriculum stage to pin to. Both MUST be given for any quoted
+           quantity - see below.
     @return Concatenated frame with an added "seed" column; empty if none found.
 
     Used for the calibration (without_wrapper) and handover (with_wrapper) pools,
-    which read one CSV per arm/leaf rather than an arm map. Each seed contributes
-    its newest matching CSV (preferred variant first), read once.
+    which read one CSV per arm/leaf rather than an arm map.
+
+    The arm and stage MUST both be pinned for any quantity that is quoted.
+    discover_records orders by mtime within a variant, so an unpinned read
+    silently follows whichever file was written last - re-running an analysis,
+    or merely copying the tree, can change which run the pooled statistic
+    describes. A seed may hold several stages of the same arm, and the arms
+    differ from each other, so either omission moves the value.
     """
     frames: List[pd.DataFrame] = []
     for seed_root in seed_roots(results_root):
-        candidates = discover_records(seed_root, name, prefer_variant=prefer_variant)
+        candidates = discover_records(
+            seed_root, name, arm=arm, prefer_variant=prefer_variant, stage=stage
+        )
         if not candidates:
             continue
         df = pd.read_csv(candidates[0])
@@ -329,48 +342,6 @@ def _handover_table(pooled_wrapper: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _plot_seed_robustness(robustness: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Per-arm success with min-max whiskers across seeds - the seed-luck plot.
-    @param robustness: The per (arm, condition) robustness table from _seed_robustness.
-    @param out_dir: Directory for the saved figure.
-
-    One panel: each condition on the x-axis, each arm a coloured marker at its
-    cross-seed mean success with an error bar spanning [min, max] over seeds. An
-    arm whose whiskers overlap a rival's means the ranking is within seed noise.
-    """
-    if robustness.empty:
-        return
-    conditions = sorted(robustness["condition"].unique())
-    x_index = {c: i for i, c in enumerate(conditions)}
-    arms = [a for a in _ARM_ORDER if a in set(robustness["arm"].astype(str))]
-    fig, ax = plt.subplots(figsize=(max(8, 1.2 * len(conditions)), 5))
-    n_arms = max(len(arms), 1)
-    width = 0.8 / n_arms
-    for j, arm in enumerate(arms):
-        a = robustness[robustness["arm"].astype(str) == arm]
-        xs = [x_index[c] + (j - (n_arms - 1) / 2.0) * width for c in a["condition"]]
-        mean = a["success_mean_pct"].to_numpy()
-        lower = mean - a["success_min_pct"].to_numpy()
-        upper = a["success_max_pct"].to_numpy() - mean
-        ax.errorbar(
-            xs,
-            mean,
-            yerr=[lower, upper],
-            fmt="o",
-            capsize=4,
-            label=arm,
-        )
-    ax.set_xticks(range(len(conditions)))
-    ax.set_xticklabels(conditions, rotation=45, ha="right")
-    ax.set_ylabel("Success rate (%) - mean with [min, max] over seeds")
-    ax.set_title("Cross-seed robustness (whiskers span the seed range)")
-    ax.legend(title="arm", fontsize=8)
-    fig.tight_layout()
-    fig.savefig(out_dir / "seed_robustness.png", dpi=150)
-    plt.close(fig)
-
-
 def _print_robustness(robustness: pd.DataFrame, n_seeds: int) -> None:
     """
     @brief Console summary of the cross-seed success range and the seed-luck caveat.
@@ -413,7 +384,7 @@ def analyse(
     """
     @brief Pool every seed, run the existing stats on the pool, write tables + figures.
     @param results_root: Root holding seed_<N>/<baseline>/<leaf>/... (the PARENT of
-           the per-seed trees, e.g. outputs/evaluation_results - NOT a seed_<N> dir).
+           the per-seed trees, e.g. outputs/raw/evaluation_results - NOT a seed_<N> dir).
     @param out_dir: Output root; results nest under all_seeds/stage<S>/.
     @param seed: Bootstrap RNG seed for the pooled contrast CIs (reproducibility,
            NOT an experiment seed - the experiment seeds are the pooled trees).
@@ -476,8 +447,16 @@ def analyse(
         gate_frame = drop_held_tiers(gate_frame)
     gate_auc = _evaluate_signals(gate_frame) if not gate_frame.empty else pd.DataFrame()
 
-    # --- Pooled calibration (EKF identical across seeds; pooling tightens n only).
-    calib = _pool_single_csv(results_root, "calibration_records.csv", "without_wrapper")
+    # --- Pooled calibration. The EKF is identical across arms, so one arm
+    # characterises the filter; it is PINNED so the statistic cannot follow
+    # whichever arm's file happens to be newest.
+    calib = _pool_single_csv(
+        results_root,
+        "calibration_records.csv",
+        "without_wrapper",
+        arm=CALIBRATION_ARM,
+        stage=stage,
+    )
     if not keep_held_tiers:
         calib = drop_held_tiers(calib)
     calib_corr = pd.DataFrame()
@@ -489,7 +468,11 @@ def analyse(
 
     # --- Pooled handover timing over the with_wrapper frame (EDL arms).
     handover_pool = _pool_single_csv(
-        results_root, "episode_records.csv", "with_wrapper"
+        results_root,
+        "episode_records.csv",
+        "with_wrapper",
+        arm=HANDOVER_ARM,
+        stage=stage,
     )
     if not keep_held_tiers:
         handover_pool = drop_held_tiers(handover_pool)
@@ -525,21 +508,12 @@ def analyse(
             out_dir / "seed_robustness_contrasts.csv", index=False
         )
 
-    # --- Figures: reuse the helpers (native filenames; the dir marks them pooled).
-    _plot_condition_bars(summary, out_dir)
-    if not slope.empty:
-        _plot_degradation_slope(slope, out_dir)
-    _plot_behaviour(behaviour, out_dir)
-    if not gate_frame.empty:
-        _plot_roc(gate_frame, out_dir)
-    _plot_seed_robustness(robustness, out_dir)
-
     # --- Console: the pooled headline, then the seed-robustness range + caveat.
     _print_headline(contrasts, slope, slope_clean, slope_degraded, keep_held_tiers)
     _print_caution(caution_slopes, caution_contrast)
     _print_caution_levels(caution_levels)
     _print_robustness(robustness, n_seeds)
-    print(f"\nPooled tables and figures written to {out_dir}")
+    print(f"\nPooled CSVs written to {out_dir}")
 
 
 def main() -> None:
@@ -552,13 +526,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="PARENT root holding seed_<N>/<baseline>/<leaf>/... (not a seed_<N> dir).",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/cross_seed_analysis",
+        default="outputs/raw_derived/cross_seed_analysis",
         help="Output root; results nest under all_seeds/stage<S>/.",
     )
     parser.add_argument(

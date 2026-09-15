@@ -11,8 +11,8 @@ scripts/figure_style.py holds the one house style. Computing a number and
 drawing it change for different reasons, so they stay apart.
 
 Everything here is presentation. No figure recomputes a statistic, re-bins,
-re-sorts or filters beyond the reported scope, so any figure can be redrawn at
-any time without moving a reported value.
+re-sorts or filters beyond the headline scope, so any figure can be redrawn at
+any time without moving a headline metric.
 
 Figure inventory, id -> source:
 
@@ -22,7 +22,6 @@ Figure inventory, id -> source:
   ablation_by_condition pooled_condition_summary.csv
   degradation_tiers     raw per-episode + per-step records
   behaviour_by_std      raw per-episode records, three varying conditions
-  covariance_probe      probe output (not part of the reported set)
   ekf_calibration       raw calibration records, vanilla arm
   seed_robustness       seed_robustness.csv
   gate_roc              raw episode + per-step records
@@ -48,14 +47,14 @@ from scripts.analysis._discovery import pooled_frame  # noqa: E402
 from scripts.analysis.ablation import drop_unreported, keep_varying  # noqa: E402
 
 # Default locations. Override on the command line if a tree moves.
-FROZEN = Path("outputs/cross_seed_analysis/all_seeds/stage6")
-RAW = Path("outputs/evaluation_results")
-OUT = Path("outputs/figures")
+FROZEN = Path("outputs/raw_derived/cross_seed_analysis/all_seeds/stage6")
+RAW = Path("outputs/raw/evaluation_results")
+OUT = Path("outputs/main_analysis/figures")
 
 # Demo trace behind the sawtooth. One logged episode under the live chain; any
 # trace carrying a gnss_tier column works, this one is simply the committed one.
 DEFAULT_TRACE = Path(
-    "outputs/demo_traces/full_method/6_42_22062026-1502"
+    "outputs/raw/demo_traces/full_method/6_42_22062026-1502"
     "/15-07-2026-143405/episode_107.csv"
 )
 
@@ -247,7 +246,7 @@ _N_CAL_BINS = 5
 
 def _calibration_records(args) -> Optional[pd.DataFrame]:
     """
-    @brief Per-step calibration pairs for the reported scope.
+    @brief Per-step calibration pairs for the headline scope.
     @param args: Parsed CLI namespace; --scatter-src overrides discovery.
     @return Frame with std_pos added, or None when no records are found.
 
@@ -532,13 +531,6 @@ def degradation_tiers(args) -> None:
     _plot(args.raw, args.out / "degradation_tiers.png")
 
 
-def covariance_probe(args) -> None:
-    """Causal covariance probe: action response to a swept covariance."""
-    from scripts.analysis.figures.covariance_probe import render
-
-    render(args.out / "covariance_probe")
-
-
 def lot_layouts(args) -> None:
     """Both parking lot layouts, drawn from the generated layout YAMLs."""
     from scripts.analysis.figures.lot_layouts import render
@@ -550,7 +542,6 @@ def lot_layouts(args) -> None:
 FIGURES: Dict[str, Callable] = {
     "ablation_by_condition": ablation_by_condition,
     "behaviour_by_std": behaviour_by_std,
-    "covariance_probe": covariance_probe,
     "degradation_tiers": degradation_tiers,
     "ekf_calibration": ekf_calibration,
     "ekf_sawtooth": ekf_sawtooth,

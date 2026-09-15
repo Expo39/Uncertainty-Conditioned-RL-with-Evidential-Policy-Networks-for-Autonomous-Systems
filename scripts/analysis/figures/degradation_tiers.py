@@ -189,7 +189,7 @@ def plot(base: Path, out_pdf: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", type=Path, default=Path("outputs/evaluation_results"))
+    ap.add_argument("--base", type=Path, default=Path("outputs/raw/evaluation_results"))
     ap.add_argument("--out", type=Path, default=Path("degradation_tiers"))
     args = ap.parse_args()
     plot(args.base, args.out)
