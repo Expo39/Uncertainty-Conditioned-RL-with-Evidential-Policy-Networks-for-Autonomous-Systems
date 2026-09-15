@@ -37,8 +37,8 @@ try:
 except ImportError:
     EvidentialPPO = None  # type: ignore[assignment,misc]
 
-# The metric schema, condition -> env contract, and plotting now live in
-# dedicated modules; re-exported here so existing import paths
+# The metric schema and the condition -> env contract live in dedicated
+# modules; re-exported here so existing import paths
 # (uncertainty_rl.evaluation.evaluate.*) keep working unchanged.
 from uncertainty_rl.evaluation.env_builder import (  # noqa: F401
     _scale_sensor_noise,
@@ -49,7 +49,6 @@ from uncertainty_rl.evaluation.metrics import (  # noqa: F401
     EvaluationMetrics,
     _classify_outcome,
 )
-from uncertainty_rl.evaluation.plots import plot_evaluation_results  # noqa: F401
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
 from uncertainty_rl.utils.constants import SUCCESS_THRESHOLD_VELOCITY
 
@@ -811,8 +810,10 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
 
-    # Run evaluation. Results land in <output-dir>/<baseline>/<leaf>/.
-    df, run_output_dir = evaluate_across_conditions(
+    # Run evaluation. The CSVs land in <output-dir>/<baseline>/<leaf>/; figures
+    # are rendered separately from them by scripts/figures/run_figures.py, so
+    # this entry point stays free of any plotting dependency.
+    evaluate_across_conditions(
         model_path=args.model_path,
         eval_config_path=args.eval_config,
         env_config_path=args.env_config,
@@ -822,9 +823,6 @@ def main() -> None:
         baseline_path=args.baseline,
         condition_names=args.conditions,
     )
-
-    # Create plots alongside the CSVs.
-    plot_evaluation_results(df, output_dir=run_output_dir)
 
     logger.info("Evaluation complete.")
 

@@ -18,8 +18,12 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 | `evaluate.py` | Orchestration: `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (returns `(DataFrame, run_output_dir)`); `main()` - CLI. Re-exports the moved symbols below so `...evaluation.evaluate.*` import paths stay stable |
 | `metrics.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records); `_classify_outcome()` - failure-mode taxonomy. No torch / stable-baselines3 dependency |
 | `env_builder.py` | The condition -> env contract: `_scale_sensor_noise()` - `base * multiplier`; `build_eval_env_factory()` - single source of truth, returns the BARE env factory + SafetyWrapper params; `make_eval_env()` - wraps it in SafetyWrapper + DummyVecEnv for the sweep |
-| `plots.py` | `plot_evaluation_results()` - seaborn bar charts + stacked failure-mode figure (the only module pulling in matplotlib/seaborn) |
-| `__init__.py` | Lazily re-exports `EvaluationMetrics`, `evaluate_agent`, `evaluate_across_conditions`, `plot_evaluation_results` |
+| `__init__.py` | Lazily re-exports `EvaluationMetrics`, `evaluate_agent`, `evaluate_across_conditions` |
+
+This package writes **CSVs only** and imports no plotting library. The per-run
+panels (`evaluation_plots.png`, `failure_modes.png`) are rendered from
+`evaluation_results.csv` by `scripts/figures/run_figures.py` (`make run-figures`),
+so a run's figures can be redrawn without re-running the sweep.
 
 ## Internal data flow
 
@@ -44,7 +48,6 @@ flowchart TB
 
     subgraph out["evaluation_results/baseline/leaf/{with,without}_wrapper/"]
         CSV["evaluation_results.csv\nepisode_records.csv\ncalibration_records.csv"]
-        PNG["evaluation_plots.png\nfailure_modes.png"]
     end
 
     EC --> LOOP
@@ -57,7 +60,6 @@ flowchart TB
     ENV -->|obs + reward| AGENT
     AGENT -->|EvaluationMetrics| LOOP
     LOOP --> CSV
-    LOOP --> PNG
 ```
 
 ## Evaluation conditions
@@ -156,7 +158,6 @@ from uncertainty_rl.evaluation import (
     EvaluationMetrics,
     evaluate_agent,
     evaluate_across_conditions,
-    plot_evaluation_results,
 )
 
 df, run_output_dir = evaluate_across_conditions(
@@ -168,13 +169,13 @@ df, run_output_dir = evaluate_across_conditions(
 # df: one row per condition; run_output_dir:
 # evaluation_results/<baseline>/<leaf>/<with|without>_wrapper
 # (the wrapper variant is set by EVAL_DISABLE_SAFETY_WRAPPER / NO_SAFETY=1)
-plot_evaluation_results(df, output_dir=run_output_dir)
 ```
 
 Run via Make:
 
 ```bash
 make docker-eval          # Full 7-condition sweep (n_episodes per condition; 200+ for headlines)
+make run-figures          # Redraw the per-run panels from the CSVs (no sweep needed)
 make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 ```
 

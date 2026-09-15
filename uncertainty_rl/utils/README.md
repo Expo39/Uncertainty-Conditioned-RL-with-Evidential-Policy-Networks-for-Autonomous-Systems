@@ -118,7 +118,7 @@ Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime r
 
 The output path is set at construction time. The visualiser ([scripts/visualise/](../../scripts/visualise/)) reads this file every frame.
 
-**Plot standards** (for `evaluation/plot_evaluation_results()` and any future Matplotlib code added here): seaborn `whitegrid`, 300 DPI, `bbox_inches='tight'`, title 14pt, axis labels 12pt, legend 10pt. Colours: blue = epistemic, red = aleatoric. Uncertainty ellipses: 95% confidence ($\chi^2 = 5.991$ for 2 DOF).
+**Plot standards**: this package renders nothing. Every figure is drawn under [scripts/](../../scripts/) through the shared house style in [scripts/figure_style.py](../../scripts/figure_style.py), which is the single source of rcParams, palette and legend treatment - import it rather than setting any of them by hand. Colours: blue = epistemic, red = aleatoric. Uncertainty ellipses: 95% confidence ($\chi^2 = 5.991$ for 2 DOF).
 
 ## actuation_calibration.py
 

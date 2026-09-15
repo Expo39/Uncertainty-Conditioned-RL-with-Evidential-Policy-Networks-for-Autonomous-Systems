@@ -86,6 +86,11 @@ CONDITION_LABEL: dict[str, str] = {
     "gnss_degrade_one_way": "GNSS degraded\n(one way)",
     "lidar_degraded": "lidar\ndegraded",
     "ood_irregular_rtk_fixed": "OOD irregular\n(RTK fixed)",
+    # The held-tier pair. Pooled figures drop them (each pins one fix state all
+    # episode, so nothing degrades within an episode), but a per-run sweep
+    # covers every eval_config condition and still needs to name them.
+    "gnss_fixed": "GNSS held\n(RTK fixed)",
+    "gnss_degraded": "GNSS held\n(degraded)",
 }
 
 # GNSS fix-state tiers, for the sawtooth trace and the covariance probe.
