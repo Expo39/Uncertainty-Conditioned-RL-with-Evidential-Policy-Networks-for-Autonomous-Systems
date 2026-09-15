@@ -3,7 +3,7 @@
 .PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs backup-results restore-results list-results-archive
-.PHONY: figures run-figures training-curves analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d clip check-host-deps
+.PHONY: figures run-figures training-curves analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d clip record-screen check-host-deps
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval docker-covariance-probe
 .PHONY: docker-test docker-test-unit docker-test-integration
@@ -67,6 +67,13 @@ END    ?=
 FORMAT ?= gif
 WIDTH  ?= 800
 FPS    ?= 15
+# record-screen parameters. The CARLA server window is launched at 800x600
+# (docker-compose.inspect.yml), so that is the default capture region; OFFSET is
+# its top-left corner on the X display (xwininfo -name CarlaUE4).
+DURATION ?= 30
+REGION   ?= 800x600
+OFFSET   ?= 0,0
+OUT      ?=
 
 # BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
 # layout <root>/<baseline>/<leaf>/. You type only the names:
@@ -575,6 +582,25 @@ clip: ## Cut a GIF/MP4 from a recording. Usage: make clip VIDEO=outputs/recordin
 			"$(_CLIP_OUT)"; \
 	fi
 	@echo "Wrote $(_CLIP_OUT) ($$(du -h '$(_CLIP_OUT)' | cut -f1))"
+
+record-screen: ## Screen-record a window region to MP4 (for the CARLA 3D / inspector views). Usage: make record-screen [DURATION=30] [REGION=800x600] [OFFSET=0,0] [OUT=...]
+	@$(MAKE) --no-print-directory check-host-deps
+	@# The CARLA 3D window and every inspector overlay are drawn by the CARLA
+	@# server itself (server-side debug API), not by a pygame surface we own -
+	@# so unlike the 2D viewer they cannot record themselves. x11grab captures
+	@# them from the host X display instead. Find the window offset with:
+	@#   xwininfo -name CarlaUE4   (reads "Absolute upper-left X/Y")
+	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
+	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
+	@mkdir -p $(RECORD_DIR)
+	$(eval _SCREEN_OUT := $(if $(OUT),$(OUT),$(RECORD_DIR)/screen-$(shell date +%d-%m-%Y-%H%M%S).mp4))
+	@echo "Recording $(REGION) at +$(OFFSET) on $(_DISPLAY) for $(DURATION)s -> $(_SCREEN_OUT)"
+	@ffmpeg -hide_banner -loglevel error -y -f x11grab \
+		-video_size $(REGION) -framerate $(REC_FPS) -i "$(_DISPLAY)+$(OFFSET)" \
+		-t $(DURATION) -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
+		"$(_SCREEN_OUT)"
+	@echo "Wrote $(_SCREEN_OUT) ($$(du -h '$(_SCREEN_OUT)' | cut -f1))"
+	@echo "Cut a GIF with: make clip VIDEO=$(_SCREEN_OUT) START=00:02 END=00:12"
 
 check-host-deps: ## Verify host-side tools the recording targets need (ffmpeg)
 	@if command -v ffmpeg >/dev/null 2>&1; then \

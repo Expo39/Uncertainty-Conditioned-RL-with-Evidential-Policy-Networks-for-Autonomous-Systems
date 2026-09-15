@@ -25,23 +25,44 @@ To replace a placeholder: record the session (or export the plot), name the file
 `<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
 resolves automatically. Each asset is shown in exactly one README.
 
-### Capturing the 2D visualiser GIFs
+### How each asset is produced
 
-`visualiser_2d` and `gnss_degradation` come straight out of the 2D viewer's recorder -
-no external screen-capture tool needed. Record the drive, then cut the segment:
+Assets fall into three groups. Run `make check-host-deps` first - every route needs the
+host `ffmpeg` binary.
+
+**Group A - the 2D viewer records itself.** `visualiser_2d`, `gnss_degradation`,
+`parking_episode`, `baseline_comparison`, `safety_handoff`. The viewer owns its Pygame
+surface, so `RECORD=true` (or the `R` key) captures it directly:
 
 ```bash
 make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
   CHECKPOINT=6_42_22062026-1502 STAGE=6 REALTIME=true RECORD=true TRACE=false
-
-make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 \
-  FORMAT=gif WIDTH=800 FPS=15
+make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
 ```
 
-`R` toggles recording mid-session, so the CARLA start-up wait need not be captured. For
-`gnss_degradation`, record two drives with `GNSS_TIER=fixed` and `GNSS_TIER=degraded`
-(everything else identical) and place the clips side by side. Recording needs the host
-`ffmpeg` binary - `make check-host-deps`. See `scripts/visualise/README.md`.
+`GNSS_TIER=fixed|float|standalone|degraded` pins one fix state for a whole drive, which is
+what makes a controlled side-by-side possible; leave it empty for the live Markov drift.
+`BASELINE=vanilla_ppo` vs `full_method` gives the arm comparison.
+
+**Group B - screen capture.** `carla_3d`, `inspect_layout`, `inspect_sensors`,
+`inspect_live`, `inspect_dryrun`. These are drawn by the CARLA server into its own Unreal
+window (the inspectors use CARLA's server-side debug API), so nothing in this repo can
+record them from the inside. `make record-screen` grabs the window off the X display:
+
+```bash
+xhost +local:docker
+make docker-inspect INSPECT_LAYOUT=rectangle          # or the target for the asset
+xwininfo -name CarlaUE4                               # read "Absolute upper-left X/Y"
+make record-screen DURATION=30 REGION=800x600 OFFSET=<X>,<Y>
+make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:02 END=00:14
+```
+
+The CARLA window is launched at 800x600, which is the default `REGION`.
+
+**Group C - static plots, already generated.** `training_curves`, `eval_degradation`,
+`uncertainty_evolution`. These come from the figure pipeline, not a recording; copy the
+PNG out of `outputs/main_analysis/figures/`. See the per-asset table below for which
+exist today.
 
 ---
 
@@ -69,6 +90,41 @@ make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 \
 | `training_curves` | PPO training convergence - episode reward, success rate, and evidential uncertainty metrics | `uncertainty_rl/training/README.md` |
 | `uncertainty_evolution` | Epistemic and aleatoric uncertainty during a parking episode | `uncertainty_rl/networks/README.md` |
 | `eval_degradation` | Success rate and epistemic uncertainty across the 9 evaluation conditions | `uncertainty_rl/evaluation/README.md` |
+
+---
+
+## Status: what can be generated today
+
+| Asset | Route | Status |
+|-------|-------|--------|
+| `visualiser_2d` | A: `make eval-visualise-2d RECORD=true` | Ready |
+| `gnss_degradation` | A: two runs, `GNSS_TIER=fixed` and `=degraded` | Ready |
+| `parking_episode` | A: `GNSS_TIER=float` | Ready |
+| `baseline_comparison` | A: `BASELINE=vanilla_ppo` vs `full_method`, both `GNSS_TIER=degraded` | Ready |
+| `safety_handoff` | A, but the caption describes the SafetyWrapper, which runs in `docker-eval`, **not** in the demo driver. The 2D viewer shows neither the handoff threshold nor the uncertainty; capturing this faithfully needs a wrapper-aware demo path | Needs code |
+| `carla_3d` | B: `make docker-eval-visualise-3d` + `make record-screen` | Ready (spectator aimed by hand - `--render` auto-follow is dead, see below) |
+| `inspect_layout` | B: `make docker-inspect INSPECT_LAYOUT=rectangle` | Ready |
+| `inspect_sensors` | B: `make docker-inspect-sensors SENSORS_VIEW=birds_eye INSPECT_ZOOM=close` | Ready |
+| `inspect_live` | B: `make docker-inspect-live` | Ready |
+| `inspect_dryrun` | B: `make docker-inspect-dryrun MANUAL=true` - capture the terminal too, the EKF output prints there | Ready |
+| `training_curves` | C: `make training-curves` then `make figures FIG=training_curves` | Ready, but it plots success + collision rate. The caption's "episode reward and evidential uncertainty" panels do not exist - rewrite the caption or extend `METRIC_TAGS` in `scripts/analysis/tb_curves.py` |
+| `eval_degradation` | C: `make figures FIG=ablation_by_condition` | Ready, but it plots success rate + final position error, not epistemic, and over the 4 reported conditions. The "9 conditions" caption is stale - `configs/eval_config.yaml` defines 7, and the analyses drop the two held tiers plus `lidar_degraded` |
+| `uncertainty_evolution` | C | **Missing.** No figure module plots per-episode epistemic/aleatoric over time. The data exists (`epistemic`/`aleatoric` columns in the demo traces) and `scripts/analysis/figures/ekf_sawtooth.py` is a direct template - it already reads those CSVs and shades GNSS tier bands |
+
+### Known gaps in the capture path
+
+- `demo_drive.py --render` is a **no-op**: it calls `env.render()`, which only acts when
+  `render_mode == "human"`, and `make_env` never passes `render_mode`
+  (`uncertainty_rl/envs/factory.py`). So the CARLA spectator does not auto-follow the ego
+  and must be aimed by hand. Passing `render_mode` through the factory would revive the
+  birds-eye follow at `carla_parking.py:2514`.
+- `make docker-demo MODEL=...` silently ignores `MODEL`: the recipe exports `MODEL` but the
+  compose service reads `${CHECKPOINT}`. Use `make docker-eval-visualise-3d` instead, which
+  sets `CHECKPOINT` correctly.
+- `INSPECT_SENSOR` is dead - `lot_inspector.py` has no `--sensor` argument and live mode is
+  always the 2D LiDAR.
+- No RGB camera sensor is ever spawned, so CARLA's native `save_to_disk()` frame dump is not
+  available; screen capture is the only route for Group B.
 
 ---
 
