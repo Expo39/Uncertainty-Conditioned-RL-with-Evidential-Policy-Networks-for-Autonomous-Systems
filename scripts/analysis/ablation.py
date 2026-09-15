@@ -70,6 +70,24 @@ _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 # seven. Pass --keep-held-tiers to restore the old seven-condition behaviour.
 _HELD_TIER_CONDITIONS: List[str] = ["gnss_fixed", "gnss_degraded"]
 
+# Computed and kept in the raw CSVs, but outside the reported condition set.
+# lidar_degraded corrupts only the obstacle channel: the EKF never consumes
+# LiDAR, so the localisation std stays pinned at its RTK-fixed floor and the
+# condition carries no localisation-uncertainty signal for the reported
+# figures to read. drop_unreported() applies this at the figure boundary; the
+# analysis CSVs keep the column so the condition remains inspectable.
+_UNREPORTED_CONDITIONS: List[str] = ["lidar_degraded"]
+
+# Conditions whose GNSS tier varies WITHIN an episode. The behaviour and
+# calibration readings need uncertainty that moves while the vehicle drives,
+# which excludes the held tiers (pinned all episode) and the OOD layout (held
+# at RTK fixed, and zero successes on every arm).
+_VARYING_CONDITIONS: List[str] = [
+    "anchor_deployment",
+    "anchor_empty",
+    "gnss_degrade_one_way",
+]
+
 # Number of bootstrap resamples for delta confidence intervals.
 _N_BOOTSTRAP = 10000
 
@@ -153,6 +171,48 @@ def drop_held_tiers(
     if not conditions or records.empty or "condition" not in records.columns:
         return records
     return records[~records["condition"].isin(conditions)].copy()
+
+
+def drop_unreported(
+    records: pd.DataFrame, conditions: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """
+    @brief Drop conditions outside the reported set from any "condition" frame.
+    @param records: Any frame with a "condition" column; frames without one
+           (or empty frames) are returned untouched.
+    @param conditions: Condition names to drop; None uses _UNREPORTED_CONDITIONS.
+    @return A copy with those conditions removed, or the input unchanged.
+
+    Sibling of drop_held_tiers(), applied at the FIGURE boundary rather than
+    the analysis boundary: the pooled CSVs keep every condition so each stays
+    inspectable, while the figures show only the reported set.
+    """
+    if conditions is None:
+        conditions = _UNREPORTED_CONDITIONS
+    if not conditions or records.empty or "condition" not in records.columns:
+        return records
+    return records[~records["condition"].isin(conditions)].copy()
+
+
+def keep_varying(
+    records: pd.DataFrame, conditions: Optional[List[str]] = None
+) -> pd.DataFrame:
+    """
+    @brief Restrict a frame to the conditions whose GNSS tier varies in-episode.
+    @param records: Any frame with a "condition" column; frames without one
+           (or empty frames) are returned untouched.
+    @param conditions: Conditions to keep; None uses _VARYING_CONDITIONS.
+    @return A copy holding only those conditions.
+
+    The behaviour-vs-std and calibration readings both need uncertainty that
+    moves while the vehicle drives; a pinned tier gives no within-episode
+    variation to correlate against.
+    """
+    if conditions is None:
+        conditions = _VARYING_CONDITIONS
+    if not conditions or records.empty or "condition" not in records.columns:
+        return records
+    return records[records["condition"].isin(conditions)].copy()
 
 
 def _condition_summary(records: pd.DataFrame) -> pd.DataFrame:

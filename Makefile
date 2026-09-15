@@ -5,7 +5,7 @@
 .PHONY: backup-configs restore-configs
 .PHONY: figures run-figures generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
-.PHONY: docker-eval
+.PHONY: docker-eval docker-covariance-probe docker-training-curves
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-eval-dryrun
@@ -204,9 +204,14 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 
 docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/evaluation_results/seed_42/full_method/<leaf>/real_observations.npy]
 	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)$(if $(REAL_OBS), (on-manifold),)"
-	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/evaluation/covariance_probe.py \
+	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/analysis/covariance_probe.py \
 		--model-path $(CHECKPOINT_MODEL) \
 		$(if $(REAL_OBS),--real-obs $(REAL_OBS),)
+
+docker-training-curves: ## Export seed-averaged training curves from the TB logs to CSV (tensorboard lives in the container). Usage: make docker-training-curves
+	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/analysis/tb_curves.py \
+		--logs-root logs \
+		--output-dir outputs/training
 
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
@@ -585,7 +590,7 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
 	$(call ensure-venv)
 	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
-	$(PYTHON) $(SCRIPTS_DIR)/evaluation/uncertainty_verdict.py $(EVAL_DIR)
+	$(PYTHON) $(SCRIPTS_DIR)/analysis/uncertainty_verdict.py $(EVAL_DIR)
 
 backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
