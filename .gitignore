@@ -56,9 +56,10 @@ tmp/
 temp/
 *.tmp
 
-# AI assistant instructions (local only)
+# AI assistant instructions and local session state (local only)
 CLAUDE.md
 **/CLAUDE.md
+.claude/
 
 # Testing & linting artefacts
 htmlcov/
