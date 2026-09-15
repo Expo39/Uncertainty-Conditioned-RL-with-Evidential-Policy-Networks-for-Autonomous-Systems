@@ -1,17 +1,11 @@
 """
-@file plot_f11_training_curves.py
-@brief Generate F-11: training success and collision rate across the curriculum.
+@file training_curves.py
+@brief Training success and collision rate across the curriculum.
 
-Replaces the hand-maintained pgfplots version of this figure, so every data
-plot in the document comes from one matplotlib style rather than two toolchains
-with separate fonts and palettes.
-
-The coordinates are ported verbatim from the pgfplots source (f11_training_
-curves.tex), which was itself generated from the TensorBoard env/success_rate
-and env/collision_rate scalars (four arms, six stages, seeds 7/42/123,
-seed-averaged and lightly smoothed). Nothing is recomputed or re-smoothed here:
-the series are exactly the ones the committed figure plotted, so the quoted
-end-of-curriculum values in the prose still hold.
+The series come from the TensorBoard env/success_rate and env/collision_rate
+scalars (four arms, six stages, seeds 7/42/123, seed-averaged and lightly
+smoothed), carried in a ported JSON payload. Nothing is recomputed or
+re-smoothed here, so the plotted values never drift from the reported ones.
 
 x-axis is cumulative policy decisions across the whole curriculum; dashed
 verticals mark the stage boundaries.
@@ -26,7 +20,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts import figure_style as fs  # noqa: E402
 

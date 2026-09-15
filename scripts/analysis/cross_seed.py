@@ -4,7 +4,7 @@
 
 Host-side, read-only aggregator that turns the SEPARATE per-seed result trees
 (outputs/evaluation_results/seed_42/..., seed_123/..., seed_7/...) into the
-seed-robust statements the dissertation needs. A cross-arm difference on a single
+seed-robust statements the analysis needs. A cross-arm difference on a single
 seed is "indistinguishable from seed luck" (Henderson et al. 2017), so this script
 produces two complementary reads side by side:
 
@@ -25,8 +25,8 @@ pooling seam (read each CSV once, concat, label the seed) and the robustness
 groupby. Pure pandas / numpy / matplotlib on the host .venv - no scipy, matching
 the sibling scripts. Run via `make analyse-cross-seed` (never python directly).
 
-@see scripts/evaluation/ablation_analyser.py (the pooled contrast / caution stats).
-@see scripts/evaluation/_discovery.py (seed_roots - the per-seed sub-root locator).
+@see scripts/analysis/ablation.py (the pooled contrast / caution stats).
+@see scripts/analysis/_discovery.py (seed_roots - the per-seed sub-root locator).
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import discover_records, seed_roots  # noqa: E402
-from scripts.evaluation.ablation_analyser import (  # noqa: E402
+from scripts.analysis._discovery import discover_records, seed_roots  # noqa: E402
+from scripts.analysis.ablation import (  # noqa: E402
     _ARM_ORDER,
     _CONTRAST_PAIRS,
     _HELD_TIER_CONDITIONS,
@@ -69,15 +69,15 @@ from scripts.evaluation.ablation_analyser import (  # noqa: E402
     _print_headline,
     drop_held_tiers,
 )
-from scripts.evaluation.calibration import (  # noqa: E402
+from scripts.analysis.calibration import (  # noqa: E402
     _add_combined_columns,
     _binned_table,
     _correlations,
 )
-from scripts.evaluation.gate_roc import _evaluate_signals  # noqa: E402
-from scripts.evaluation.gate_roc import _plot_roc  # noqa: E402
-from scripts.evaluation.gate_roc import _load as _gate_load  # noqa: E402
-from scripts.evaluation.handover_timing import _REGIME, _latency  # noqa: E402
+from scripts.analysis.gate_roc import _evaluate_signals  # noqa: E402
+from scripts.analysis.gate_roc import _plot_roc  # noqa: E402
+from scripts.analysis.gate_roc import _load as _gate_load  # noqa: E402
+from scripts.analysis.handover_timing import _REGIME, _latency  # noqa: E402
 
 
 def _seed_label(seed_root: Path) -> int:
@@ -422,7 +422,7 @@ def analyse(
     @param slope_degraded: Degradation-slope end condition (worst GNSS tier).
     @param keep_held_tiers: Retain the held-tier conditions and the degradation
            slope they define. Default False drops them from EVERY pool (episodes,
-           gate, calibration), matching the five conditions the write-up reports.
+           gate, calibration), matching the five reported conditions.
     """
     out_dir = out_dir / "all_seeds" / f"stage{stage}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -593,7 +593,7 @@ def main() -> None:
             "Keep the held-tier conditions ("
             + ", ".join(_HELD_TIER_CONDITIONS)
             + ") and the degradation slope they define. Default drops them, "
-            "matching the five conditions the write-up reports."
+            "matching the five reported conditions."
         ),
     )
     args = parser.parse_args()

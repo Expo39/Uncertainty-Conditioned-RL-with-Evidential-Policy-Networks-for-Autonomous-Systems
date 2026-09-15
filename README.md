@@ -442,14 +442,6 @@ Each subpackage and script directory has its own README with deeper detail.
 | Technical notes index (NIG init, obs space, EKF, layouts) | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/BUILDER.md](scripts/layouts/BUILDER.md) |
 | All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
-<!-- 
----
-
-## Publications
-
-- Dissertation thesis (2026, in preparation).
-- Conference paper (TBC). -->
-
 ---
 
 ## Citation
@@ -457,11 +449,10 @@ Each subpackage and script directory has its own README with deeper detail.
 If you use this work, please cite:
 
 ```bibtex
-@mastersthesis{Galdes2026UncertaintyRL,
+@software{Galdes2026UncertaintyRL,
   author  = {Galdes, Antonio},
   title   = {Uncertainty-Conditioned Reinforcement Learning with Evidential Policy
              Networks for Autonomous Systems},
-  school  = {University of Malta, Faculty of ICT},
   year    = {2026},
 }
 ```

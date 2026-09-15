@@ -107,7 +107,7 @@ def evaluate_agent(
     # so it can fall below the training-time sampling-std floor.
     ep_action_std: List[float] = []
     # Optional capture of real (normalised) observations for the on-manifold
-    # covariance probe (scripts/evaluation/covariance_probe.py --real-obs).
+    # covariance probe (scripts/analysis/covariance_probe.py --real-obs).
     # Off by default; enabled by the EVAL_DUMP_OBS env var (a positive integer
     # cap on how many observations to keep). Captured across all conditions so
     # the probe sees the full eval-state distribution.
@@ -703,7 +703,7 @@ def evaluate_across_conditions(
     logger.info("Per-episode records saved to %s", episodes_csv_path)
 
     # EKF calibration records (predicted std vs actual error) for the
-    # honesty-of-the-covariance analysis (scripts/evaluation/calibration.py).
+    # honesty-of-the-covariance analysis (scripts/analysis/calibration.py).
     if calibration_rows:
         calib_df = pd.DataFrame(calibration_rows)
         calib_csv_path = os.path.join(run_output_dir, "calibration_records.csv")
@@ -811,7 +811,7 @@ def main() -> None:
     )
 
     # Run evaluation. The CSVs land in <output-dir>/<baseline>/<leaf>/; figures
-    # are rendered separately from them by scripts/figures/run_figures.py, so
+    # are rendered separately from them by scripts/analysis/figures/run_figures.py, so
     # this entry point stays free of any plotting dependency.
     evaluate_across_conditions(
         model_path=args.model_path,

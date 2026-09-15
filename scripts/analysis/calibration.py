@@ -3,7 +3,7 @@
 @brief Is the EKF covariance fed to the policy an HONEST uncertainty signal?
 
 Host-side, read-only diagnostic that answers the precondition for the whole
-input-covariance thesis: does the EKF's PREDICTED uncertainty (the std the policy
+input-covariance hypothesis: does the EKF's PREDICTED uncertainty (the std the policy
 observes) actually track its ACTUAL error (ground truth minus EKF estimate)? If
 high std coincides with large error, the covariance carries real, actionable
 information and conditioning on it is justified; if std and error are
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 # Make the repo root importable so the shared discovery helper resolves when this
-# file is run directly (python scripts/evaluation/calibration.py), which puts the
+# file is run directly (python scripts/analysis/calibration.py), which puts the
 # script's own directory on sys.path rather than the repo root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -35,11 +35,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import (  # noqa: E402
-    arm_leaf_subpath,
-    discover_records,
-)
-from scripts.evaluation.ablation_analyser import drop_held_tiers  # noqa: E402
+from scripts.analysis._discovery import arm_leaf_subpath, discover_records  # noqa: E402
+from scripts.analysis.ablation import drop_held_tiers  # noqa: E402
 
 # Std/error axis pairs to analyse: the predicted-std column against its matched
 # actual-error column. Position uses the combined magnitudes.
@@ -247,7 +244,7 @@ def analyse(
     @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
     @param keep_held_tiers: Retain the held-tier conditions. Default False drops
            them, so the per-condition rows and the scatter cover only the five
-           conditions the write-up reports. The pooled "varying" verdict is
+           reported conditions. The pooled "varying" verdict is
            unaffected either way: _VARYING_CONDITIONS already excludes the held
            tiers, which is why the headline correlation does not move.
     """
@@ -362,7 +359,7 @@ def main() -> None:
         "--keep-held-tiers",
         action="store_true",
         help="Keep the held-tier conditions (gnss_fixed, gnss_degraded). Default "
-        "drops them, matching the five conditions the write-up reports.",
+        "drops them, matching the five reported conditions.",
     )
     args = parser.parse_args()
     analyse(

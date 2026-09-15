@@ -32,15 +32,12 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # Make the repo root importable so the shared discovery helper resolves when this
-# file is run directly (python scripts/evaluation/handover_timing.py).
+# file is run directly (python scripts/analysis/handover_timing.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import (  # noqa: E402
-    arm_leaf_subpath,
-    discover_records,
-)
+from scripts.analysis._discovery import arm_leaf_subpath, discover_records  # noqa: E402
 
 # Per-condition onset regime. switch = degradation arrives mid-episode (latency is
 # measured after the drift crossing); spawn = degraded/novel from step 0 (latency

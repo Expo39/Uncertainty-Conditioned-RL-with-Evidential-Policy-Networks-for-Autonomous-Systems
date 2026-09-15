@@ -1,111 +1,84 @@
 """
 @file figure_style.py
-@brief Single source of truth for how every dissertation data plot looks.
+@brief House style for every rendered figure: rcParams, palette and legends.
 
-Every figure that ends up in the write-up imports this module. Nothing else
-sets rcParams, picks a colour, or builds a legend by hand. That is the whole
-point: the figures previously carried four different palettes and two
-different fonts between them, which is what made the chapter look inconsistent.
+Single source of truth for figure appearance across scripts/. Nothing else sets
+rcParams, picks a colour, or builds a legend by hand, so every figure shares one
+font, palette and legend treatment.
 
-This module governs APPEARANCE ONLY. It never touches the data: no
-re-binning, no re-ordering, no filtering, no unit conversion. A figure
-restyled through here plots exactly the numbers it plotted before, so the
-prose and tables that quote those numbers stay correct.
+Appearance only - this module never re-bins, re-orders, filters or converts
+units, so a restyled figure plots exactly the numbers it plotted before.
 
-Usage:
-
-    from figure_style import style as fs
+    from scripts import figure_style as fs
 
     fs.apply()
     fig, ax = plt.subplots(figsize=fs.WIDE)
-    for arm in fs.ARM_ORDER:
-        ax.plot(x, y[arm], label=fs.arm_label(arm), **fs.arm_kw(arm))
+    ax.plot(x, y, label=fs.arm_label(arm), **fs.arm_kw(arm))
     fs.grid(ax)
     fs.legend_strip(fig, ax, side="below")
-    fs.save(fig, out_dir / "f13_ablation_by_condition")
-
-Legend rule. There are exactly TWO legend formats and both sit OUTSIDE the
-plotting area. No figure puts a legend inside its axes.
-
-    STRIP (legend_strip) -- one horizontal row spanning the figure width,
-                            placed above or below the plot.
-    BLOCK (legend_block) -- one vertical column beside the plot, placed at
-                            any of the four corners.
-
-Placement may vary to avoid colliding with the traces; nothing else about the
-two may vary. Both draw their frame, font, padding and handle length from the
-one _LEGEND_KW dict below, so they cannot drift apart. Do not pass styling
-overrides at the call site.
-
-Output is PNG for every figure, at print-grade dpi.
+    fs.save(fig, out_dir / "ablation_by_condition")
 """
 
-from __future__ import annotations
-
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# --- Output ----------------------------------------------------------------
-# Every data figure is a PNG. DPI is well above screen resolution so the raster
-# still holds up when an examiner zooms into the printed page.
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
+
+# PNG everywhere, well above screen resolution so the raster survives printing.
 EXT = ".png"
 DPI = 400
 
-# --- Arm identity ----------------------------------------------------------
-# (key, display label, colour, marker, linestyle). The key is the raw string
-# used in the CSVs and dataframes; the display label is what a reader sees. No
-# raw key may ever reach a rendered legend, axis or tick.
-#
-# Colours are the seaborn-deep set. Marker and linestyle vary alongside colour
-# so the figures stay readable in greyscale.
-ARMS: tuple[tuple[str, str, str, str, str], ...] = (
+# ---------------------------------------------------------------------------
+# Identity: arms, conditions, tiers
+# ---------------------------------------------------------------------------
+
+# (key, label, colour, marker, linestyle). The key is the raw string in the
+# CSVs; the label is what a reader sees. No raw key may reach a rendered
+# legend, axis or tick. Marker and linestyle vary with colour so the figures
+# stay readable in greyscale.
+ARMS: Tuple[Tuple[str, str, str, str, str], ...] = (
     ("vanilla_ppo", "vanilla", "#4c72b0", "o", "-"),
     ("input_uncertainty", "input", "#dd8452", "s", "--"),
     ("output_uncertainty", "output", "#55a868", "^", "-."),
     ("full_method", "full", "#c44e52", "D", "-"),
 )
 
-ARM_ORDER: list[str] = [a[0] for a in ARMS]
-ARM_LABEL: dict[str, str] = {a[0]: a[1] for a in ARMS}
-ARM_COLOUR: dict[str, str] = {a[0]: a[2] for a in ARMS}
-ARM_MARKER: dict[str, str] = {a[0]: a[3] for a in ARMS}
-ARM_LINESTYLE: dict[str, str] = {a[0]: a[4] for a in ARMS}
+ARM_ORDER: List[str] = [a[0] for a in ARMS]
+ARM_LABEL: Dict[str, str] = {a[0]: a[1] for a in ARMS}
+ARM_COLOUR: Dict[str, str] = {a[0]: a[2] for a in ARMS}
+ARM_MARKER: Dict[str, str] = {a[0]: a[3] for a in ARMS}
+ARM_LINESTYLE: Dict[str, str] = {a[0]: a[4] for a in ARMS}
 
-# --- Condition and tier identity -------------------------------------------
-# Raw scenario keys mapped to the prose wording used in the chapter. The
-# two-line forms keep x tick labels horizontal at full text width instead of
-# rotating them 45 degrees, which was making several figures hard to read.
-CONDITION_LABEL: dict[str, str] = {
+# Two-line forms keep tick labels horizontal at the four-to-five categories the
+# pooled figures carry. The held-tier pair appears only in per-run sweeps.
+CONDITION_LABEL: Dict[str, str] = {
     "anchor_deployment": "anchor\ndeployment",
     "anchor_empty": "anchor\nempty",
     "gnss_degrade_one_way": "GNSS degraded\n(one way)",
     "lidar_degraded": "lidar\ndegraded",
     "ood_irregular_rtk_fixed": "OOD irregular\n(RTK fixed)",
-    # The held-tier pair. Pooled figures drop them (each pins one fix state all
-    # episode, so nothing degrades within an episode), but a per-run sweep
-    # covers every eval_config condition and still needs to name them.
     "gnss_fixed": "GNSS held\n(RTK fixed)",
     "gnss_degraded": "GNSS held\n(degraded)",
 }
 
-# GNSS fix-state tiers, for the sawtooth trace and the covariance probe.
-TIER_LABEL: dict[str, str] = {
+TIER_LABEL: Dict[str, str] = {
     "rtk_fixed": "RTK fixed",
     "rtk_float": "RTK float",
     "standalone": "standalone",
     "degraded": "degraded",
 }
 
-# Background shading for fix-state tiers, ordered clean to degraded. These form
-# a green -> amber -> orange -> red severity ramp: adjacent tiers must stay
+# Green -> amber -> orange -> red severity ramp. Adjacent tiers must stay
 # distinguishable at TIER_ALPHA, so rtk_float is amber rather than a second
-# green, which washed out against rtk_fixed at band weight.
-TIER_BAND: dict[str, str] = {
+# green, which washes out against rtk_fixed at band weight.
+TIER_BAND: Dict[str, str] = {
     "rtk_fixed": "#2e7d32",
     "rtk_float": "#f9a825",
     "standalone": "#ef6c00",
@@ -113,21 +86,23 @@ TIER_BAND: dict[str, str] = {
 }
 TIER_ALPHA = 0.18
 
-# Signals compared in the gate ROC, and the axis quantities elsewhere.
-SIGNAL_LABEL: dict[str, str] = {
+SIGNAL_LABEL: Dict[str, str] = {
     "ekf_std_pos_max_m": "max EKF position std",
     "max_epistemic": "max epistemic",
     "max_total": "max total predictive",
 }
 
-AXIS_LABEL: dict[str, str] = {
+AXIS_LABEL: Dict[str, str] = {
     "std_pos": "predicted position std (m)",
     "std_yaw": "predicted heading std (rad)",
     "abs_err_pos": "absolute position error (m)",
     "abs_err_yaw": "absolute heading error (rad)",
 }
 
-# --- Non-arm accents -------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Palette and geometry
+# ---------------------------------------------------------------------------
+
 ACCENT = "#c44e52"  # single highlighted series (binned mean, trend line)
 ACCENT_ALT = "#4c72b0"  # second series on a twin axis
 SCATTER = "#4c72b0"  # dense scatter clouds
@@ -135,15 +110,14 @@ TRACE = "#222222"  # a logged trace drawn over shaded bands
 MUTED = "#666666"  # annotations, chance diagonals
 RULE = "#cccccc"  # legend frames, reference rules
 
-# --- Geometry --------------------------------------------------------------
-# Widths in inches, chosen so text renders at the document's body size for the
-# \includegraphics width each figure is used at. Pick the one that matches.
-SINGLE = (5.4, 3.2)  # one panel at 0.85\textwidth
-WIDE = (7.2, 3.6)  # one panel at \textwidth
-WIDE_TALL = (7.2, 4.4)  # one panel at \textwidth needing vertical room
-GRID_2X2 = (7.2, 5.0)  # 2x2 panel grid at \textwidth
-STACK_2 = (7.2, 6.0)  # 2 stacked panels at \textwidth
-SIDE_2 = (7.2, 3.2)  # 2 side-by-side panels at \textwidth
+# Inches. Sized so text renders at body size for the width the figure is placed
+# at; pick the one matching the intended placement.
+SINGLE = (5.4, 3.2)  # one panel at 0.85 text width
+WIDE = (7.2, 3.6)  # one panel at full text width
+WIDE_TALL = (7.2, 4.4)  # one panel needing vertical room
+GRID_2X2 = (7.2, 5.0)  # 2x2 panel grid
+STACK_2 = (7.2, 6.0)  # 2 stacked panels
+SIDE_2 = (7.2, 3.2)  # 2 side-by-side panels
 
 LW = 1.3  # data line width
 MS = 4.2  # marker size
@@ -157,10 +131,10 @@ FS_NOTE = 7.0
 
 
 def apply() -> None:
-    """Install the shared rcParams. Call once, before creating any figure.
+    """
+    @brief Install the shared rcParams. Call once, before creating any figure.
 
-    Serif throughout, matching the document body font. This is the only place
-    a font is chosen; no script may override it.
+    The only place a font is chosen; no figure module may override it.
     """
     plt.rcParams.update(
         {
@@ -181,39 +155,55 @@ def apply() -> None:
     )
 
 
-# --- Label helpers ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Label helpers - raw CSV key to reader-facing text
+# ---------------------------------------------------------------------------
+
+
+def _label(table: Dict[str, str], key: str) -> str:
+    """
+    @brief Look up a display label, falling back to the key itself.
+    @param table: One of the *_LABEL maps.
+    @param key: Raw key as it appears in the CSVs.
+    @return The mapped label, or str(key) when unmapped.
+    """
+    return table.get(str(key), str(key))
+
+
 def arm_label(arm: str) -> str:
-    """Display label for an arm key. Falls back to the key if unmapped."""
-    return ARM_LABEL.get(str(arm), str(arm))
+    """@brief Display label for an arm key."""
+    return _label(ARM_LABEL, arm)
 
 
 def condition_label(condition: str) -> str:
-    """Prose label for a condition key."""
-    return CONDITION_LABEL.get(str(condition), str(condition))
+    """@brief Display label for a condition key."""
+    return _label(CONDITION_LABEL, condition)
 
 
 def tier_label(tier: str) -> str:
-    """Prose label for a GNSS fix-state tier key."""
-    return TIER_LABEL.get(str(tier), str(tier))
+    """@brief Display label for a GNSS fix-state tier key."""
+    return _label(TIER_LABEL, tier)
 
 
 def signal_label(signal: str) -> str:
-    """Prose label for a gate signal key."""
-    return SIGNAL_LABEL.get(str(signal), str(signal))
+    """@brief Display label for a safety-gate signal key."""
+    return _label(SIGNAL_LABEL, signal)
 
 
 def axis_label(column: str) -> str:
-    """Prose axis label for a raw dataframe column."""
-    return AXIS_LABEL.get(str(column), str(column))
+    """@brief Axis label for a raw dataframe column."""
+    return _label(AXIS_LABEL, column)
 
 
-def arm_kw(arm: str, *, marker: bool = True) -> dict:
-    """Plot kwargs for an arm: colour, marker, linestyle and weights.
-
-    Pass marker=False for dense traces where markers would smear into a band.
+def arm_kw(arm: str, *, marker: bool = True) -> Dict[str, Any]:
+    """
+    @brief Plot kwargs for an arm: colour, linestyle, marker and weights.
+    @param arm: Raw arm key.
+    @param marker: False for dense traces, where markers smear into a band.
+    @return Keyword dict to splat into a Matplotlib plotting call.
     """
     key = str(arm)
-    kw = {
+    kw: Dict[str, Any] = {
         "color": ARM_COLOUR.get(key, MUTED),
         "linestyle": ARM_LINESTYLE.get(key, "-"),
         "lw": LW,
@@ -224,24 +214,36 @@ def arm_kw(arm: str, *, marker: bool = True) -> dict:
     return kw
 
 
-def arm_palette(arms: Iterable[str] | None = None) -> dict[str, str]:
-    """Colour mapping for seaborn's `palette=` argument."""
+def arm_palette(arms: Optional[Iterable[str]] = None) -> Dict[str, str]:
+    """
+    @brief Colour mapping for a seaborn `palette=` argument.
+    @param arms: Arm keys to map; None uses ARM_ORDER.
+    @return Mapping of arm key to hex colour.
+    """
     keys = list(arms) if arms is not None else ARM_ORDER
     return {k: ARM_COLOUR.get(str(k), MUTED) for k in keys}
 
 
-# --- Axes furniture --------------------------------------------------------
-def grid(ax, axis: str = "both") -> None:
-    """Apply the house grid, drawn behind the data."""
+# ---------------------------------------------------------------------------
+# Axes furniture
+# ---------------------------------------------------------------------------
+
+
+def grid(ax: Any, axis: str = "both") -> None:
+    """
+    @brief Apply the house grid, drawn behind the data.
+    @param ax: Axes to grid.
+    @param axis: "both", "x" or "y".
+    """
     ax.grid(True, axis=axis, alpha=GRID_ALPHA, lw=GRID_LW, which="major")
     ax.set_axisbelow(True)
 
 
-def condition_ticks(ax, conditions: Sequence[str]) -> None:
-    """Relabel x ticks from raw condition keys to prose, unrotated.
-
-    Order is preserved exactly as given: this is presentation only and never
-    re-sorts the underlying categories.
+def condition_ticks(ax: Any, conditions: Sequence[str]) -> None:
+    """
+    @brief Relabel x ticks from condition keys to display labels, unrotated.
+    @param ax: Axes to relabel.
+    @param conditions: Condition keys; plotted order is preserved, never sorted.
     """
     ax.set_xticks(range(len(conditions)))
     ax.set_xticklabels(
@@ -249,11 +251,13 @@ def condition_ticks(ax, conditions: Sequence[str]) -> None:
     )
 
 
-def relabel_arm_legend(ax) -> None:
-    """Strip a seaborn legend title and map raw arm keys to display labels.
+def relabel_arm_legend(ax: Any) -> None:
+    """
+    @brief Strip a seaborn legend title and map raw arm keys to display labels.
+    @param ax: Axes carrying the seaborn-generated legend.
 
-    Seaborn writes the dataframe column name ("arm") as a legend heading and
-    the raw keys as entries; both are wrong for the write-up.
+    Seaborn writes the column name ("arm") as a heading and the raw keys as
+    entries; neither is reader-facing.
     """
     legend = ax.get_legend()
     if legend is None:
@@ -263,8 +267,15 @@ def relabel_arm_legend(ax) -> None:
         text.set_text(arm_label(text.get_text()))
 
 
-def note(ax, text: str, corner: str = "right", y: float = 0.94):
-    """Small grey in-axes annotation, e.g. a panel's expected direction."""
+def note(ax: Any, text: str, corner: str = "right", y: float = 0.94) -> Any:
+    """
+    @brief Small grey in-axes annotation, e.g. a panel's expected direction.
+    @param ax: Axes to annotate.
+    @param text: Annotation text.
+    @param corner: "left" or "right".
+    @param y: Vertical position in axes fraction.
+    @return The created annotation.
+    """
     x = 0.03 if corner == "left" else 0.97
     return ax.annotate(
         text,
@@ -277,8 +288,16 @@ def note(ax, text: str, corner: str = "right", y: float = 0.94):
     )
 
 
-# --- Legends: exactly two formats, both outside the plot area --------------
-_LEGEND_KW = dict(
+# ---------------------------------------------------------------------------
+# Legends
+#
+# Exactly two formats, both OUTSIDE the plotting area, at most one per figure.
+# Placement may vary to dodge the traces; nothing else may. Both read frame,
+# font, padding and handle length from _LEGEND_KW so they cannot drift apart -
+# do not pass styling overrides at the call site.
+# ---------------------------------------------------------------------------
+
+_LEGEND_KW: Dict[str, Any] = dict(
     fontsize=FS_LEGEND,
     frameon=True,
     framealpha=0.9,
@@ -289,16 +308,31 @@ _LEGEND_KW = dict(
     borderaxespad=0.0,
 )
 
+# corner -> (axes-fraction anchor, legend alignment).
+_BLOCK_ANCHORS: Dict[str, Tuple[Tuple[float, float], str]] = {
+    "upper right": ((1.0, 1.0), "upper left"),
+    "lower right": ((1.0, 0.0), "lower left"),
+    "upper left": ((0.0, 1.0), "upper right"),
+    "lower left": ((0.0, 0.0), "lower right"),
+}
 
-def _handles(source):
-    """Accept an axes to harvest handles from, or an explicit (handles, labels)."""
+
+def _handles(source: Any) -> Tuple[List[Any], List[str]]:
+    """
+    @brief Normalise a legend source to explicit handles and labels.
+    @param source: An Axes to harvest from, or an explicit (handles, labels).
+    @return Tuple of (handles, labels).
+    """
     if isinstance(source, tuple):
         return source
     return source.get_legend_handles_labels()
 
 
-def _drop_axes_legends(fig) -> None:
-    """Remove any per-axes legend, so a figure never carries more than one."""
+def _drop_axes_legends(fig: Any) -> None:
+    """
+    @brief Remove any per-axes legend, so a figure never carries more than one.
+    @param fig: Figure to strip.
+    """
     for ax in fig.axes:
         legend = ax.get_legend()
         if legend is not None:
@@ -306,13 +340,22 @@ def _drop_axes_legends(fig) -> None:
 
 
 def legend_strip(
-    fig, source, side: str = "below", ncol: int | None = None, offset: float = 0.02
-):
-    """Format 1: one horizontal strip spanning the figure, outside the plot.
-
-    `side` is "above" or "below". `ncol` defaults to a single row holding
-    every entry, which is what makes it read as a strip; pass a value only
-    when one row would overrun the figure width.
+    fig: Any,
+    source: Any,
+    side: str = "below",
+    ncol: Optional[int] = None,
+    offset: float = 0.02,
+) -> Any:
+    """
+    @brief One horizontal strip spanning the figure, outside the plot.
+    @param fig: Figure to attach the legend to.
+    @param source: An Axes to harvest handles from, or (handles, labels).
+    @param side: "above" or "below" the plotting area.
+    @param ncol: Column count; None puts every entry on one row, which is what
+           makes it read as a strip. Set it only when one row would overrun.
+    @param offset: Gap from the axes, in figure fraction.
+    @return The created legend.
+    @throws ValueError If side is not "above" or "below".
     """
     handles, labels = _handles(source)
     _drop_axes_legends(fig)
@@ -335,33 +378,49 @@ def legend_strip(
     )
 
 
-def legend_block(fig, source, corner: str = "upper right", offset: float = 0.015):
-    """Format 2: one vertical block beside the plot, outside the axes.
-
-    `corner` is "upper right", "lower right", "upper left" or "lower left".
+def legend_block(
+    fig: Any, source: Any, corner: str = "upper right", offset: float = 0.015
+) -> Any:
+    """
+    @brief One vertical block beside the plot, outside the axes.
+    @param fig: Figure to attach the legend to.
+    @param source: An Axes to harvest handles from, or (handles, labels).
+    @param corner: A key of _BLOCK_ANCHORS.
+    @param offset: Gap from the axes, in figure fraction.
+    @return The created legend.
+    @throws ValueError If corner is not one of the four supported names.
     """
     handles, labels = _handles(source)
     _drop_axes_legends(fig)
-    anchors = {
-        "upper right": ((1.0 + offset, 1.0), "upper left"),
-        "lower right": ((1.0 + offset, 0.0), "lower left"),
-        "upper left": ((0.0 - offset, 1.0), "upper right"),
-        "lower left": ((0.0 - offset, 0.0), "lower right"),
-    }
-    if corner not in anchors:
-        raise ValueError(f"corner must be one of {sorted(anchors)}, got {corner!r}")
-    anchor, loc = anchors[corner]
+    if corner not in _BLOCK_ANCHORS:
+        raise ValueError(
+            f"corner must be one of {sorted(_BLOCK_ANCHORS)}, got {corner!r}"
+        )
+    (ax_x, ax_y), loc = _BLOCK_ANCHORS[corner]
+    # Push outward along x from whichever side the block sits on.
+    anchor = (ax_x + offset if ax_x >= 1.0 else ax_x - offset, ax_y)
     return fig.legend(
         handles, labels, loc=loc, ncol=1, bbox_to_anchor=anchor, **_LEGEND_KW
     )
 
 
-# --- Output ----------------------------------------------------------------
-def save(fig, out, *, pad: float = 0.4, rect=None, close: bool = True) -> Path:
-    """Tight-layout and write the figure as PNG.
-
-    `out` may carry any extension or none; it is normalised to PNG so no
-    caller can emit a stray PDF or a stale second format.
+def save(
+    fig: Any,
+    out: Any,
+    *,
+    pad: float = 0.4,
+    rect: Optional[Tuple[float, float, float, float]] = None,
+    close: bool = True,
+) -> Path:
+    """
+    @brief Tight-layout and write the figure as PNG.
+    @param fig: Figure to write.
+    @param out: Destination path; any extension (or none) is normalised to PNG,
+           so no caller can emit a stray PDF or a stale second format.
+    @param pad: Tight-layout padding.
+    @param rect: Optional tight-layout rect, reserving room for an outside legend.
+    @param close: Close the figure after writing, freeing its memory.
+    @return The path written.
     """
     path = Path(out).with_suffix(EXT)
     path.parent.mkdir(parents=True, exist_ok=True)

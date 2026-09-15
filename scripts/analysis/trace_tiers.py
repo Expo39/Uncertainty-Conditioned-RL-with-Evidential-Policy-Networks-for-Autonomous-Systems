@@ -1,5 +1,5 @@
 """
-@file trace_tier_breakdown.py
+@file trace_tiers.py
 @brief Offline diagnostic: resolve demo-trace outcomes by GNSS localisation tier.
 
 Reads a directory of per-episode demo-trace CSVs (written by CARLAParkingEnv during

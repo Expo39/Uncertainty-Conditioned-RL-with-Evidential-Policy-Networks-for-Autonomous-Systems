@@ -1,6 +1,6 @@
-# scripts/evaluation/
+# scripts/analysis/
 
-Analysis tooling that turns an evaluation run into the dissertation's input-covariance and uncertainty claims. None of these scripts are imported by the training pipeline - they consume the CSVs that `uncertainty_rl/evaluation/evaluate.py` writes and are invoked exclusively via `make` targets. Run them **after** an eval run has produced results under `outputs/evaluation_results/<baseline>/<leaf>/`.
+Analysis tooling that turns an evaluation run into the reported input-covariance and uncertainty results. None of these scripts are imported by the training pipeline - they consume the CSVs that `uncertainty_rl/evaluation/evaluate.py` writes and are invoked exclusively via `make` targets. Run them **after** an eval run has produced results under `outputs/evaluation_results/<baseline>/<leaf>/`.
 
 Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv/`); only the covariance probe needs torch and runs inside the training container.
 
@@ -18,7 +18,7 @@ Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv
 
 ## Modules
 
-### `ablation_analyser.py` (host-side)
+### `ablation.py` (host-side)
 
 Cross-arm contrast. Globs `outputs/evaluation_results/<baseline>/<leaf>/episode_records.csv` for the four arms, joins on condition, and computes:
 
@@ -32,9 +32,9 @@ fix state for the whole episode, so neither degrades *within* an episode and the
 arm rides through; the EKF also suppresses a static raw fault, so the two do not
 separate at the policy's input and the slope is flat by construction (see
 `documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`). Every table and
-figure therefore covers the **five** retained conditions, matching the write-up. The
+figure therefore covers the **five** retained conditions, matching the reported scope. The
 graceful-degradation evidence instead comes from the live anchor chain banded by true
-error (`scripts/miscellaneous/plot_degradation_tiers.py`) and the one-way drift. Pass
+error (`scripts/diagnostics/plot_degradation_tiers.py`) and the one-way drift. Pass
 `--keep-held-tiers` to restore the old seven-condition behaviour and the slope.
 
 Writes `condition_summary.csv`, `covariance_contrasts.csv`, `behaviour_by_std.csv`
@@ -43,7 +43,7 @@ PNGs. Run with `make analyse-ablation`.
 
 ### `calibration.py` (host-side)
 
-Is the covariance HONEST? Reads `calibration_records.csv` (per-step predicted std vs actual GT-EKF error, written for every arm; the EKF is identical across arms so any one suffices) and reports the std-vs-error rank correlation (overall + per condition) and a binned mean-error-per-std-bin table. A monotone rise means high std really does mean high error, so conditioning on it is justified - the precondition for the whole thesis. Spearman is computed via ranks (no scipy dependency). Writes `calibration_correlations.csv`, `calibration_binned.csv`, and `ekf_calibration.png`. Run with `make analyse-calibration [ARM=<name>]`.
+Is the covariance HONEST? Reads `calibration_records.csv` (per-step predicted std vs actual GT-EKF error, written for every arm; the EKF is identical across arms so any one suffices) and reports the std-vs-error rank correlation (overall + per condition) and a binned mean-error-per-std-bin table. A monotone rise means high std really does mean high error, so conditioning on it is justified - the precondition for the whole approach. Spearman is computed via ranks (no scipy dependency). Writes `calibration_correlations.csv`, `calibration_binned.csv`, and `ekf_calibration.png`. Run with `make analyse-calibration [ARM=<name>]`.
 
 ### `gate_roc.py` (host-side)
 
@@ -94,7 +94,7 @@ Single source of truth for locating per-run CSVs under the nested `<baseline>/<l
 ## See also
 
 - [scripts/README.md](../README.md) - all Make targets overview
-- [scripts/evaluation/CLAUDE.md](CLAUDE.md) - the local working contract for this directory
+- [scripts/analysis/CLAUDE.md](CLAUDE.md) - the local working contract for this directory
 - [uncertainty_rl/evaluation/](../../uncertainty_rl/evaluation/) - `evaluate.py`, the condition sweep that writes the CSVs these scripts consume
 - [configs/eval_config.yaml](../../configs/eval_config.yaml) - the eval conditions
-- [scripts/miscellaneous/CLAUDE.md](../miscellaneous/CLAUDE.md) - TensorBoard + Markov diagnostics (the other host-side analysis tools)
+- [scripts/diagnostics/CLAUDE.md](../diagnostics/CLAUDE.md) - TensorBoard + Markov diagnostics (the other host-side analysis tools)

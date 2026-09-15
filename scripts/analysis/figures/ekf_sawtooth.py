@@ -1,6 +1,6 @@
 """
 @file plot_ekf_sawtooth.py
-@brief Generate methodology figure F-5: the reported EKF sigma_x sawtooth over one
+@brief The reported EKF sigma_x sawtooth over one
        episode, with GNSS fix-state tiers shown as shaded background bands.
 
 Reads one per-episode demo-trace CSV (written by demo_drive.py) and plots the
@@ -18,7 +18,7 @@ Fallback: for OLD traces written before `gnss_tier` existed, the tier is
 reconstructed from the true localisation error ||ekf_xy - gt_xy|| banded at the tier
 edges, and despeckled for legibility. This is NOISY near tier boundaries (true error
 jitters across a threshold between corrections) and prints a warning; re-run
-demo_drive.py to get a faithful figure. See trace_tier_breakdown.py for why the
+demo_drive.py to get a faithful figure. See trace_tiers.py for why the
 reported std itself cannot label the tier (it saturates ~1.1 m).
 
 The saturation annotation compares the peak reported sigma_x to the DESIGN noise
@@ -30,13 +30,12 @@ validated colourblind-safe on adjacent pairs (OKLab dE >= 8 for normal/deutan/pr
 tier is additionally encoded by ladder position and a legend, so colour is never the
 sole channel.
 
-@note Read-only w.r.t. the trace. Writes a single PDF. Pure CPU, no torch/CARLA.
-Default output path targets the dissertation figures directory.
+@note Read-only w.r.t. the trace. Pure CPU, no torch/CARLA.
 
 Usage:
-    python scripts/figures/plot_ekf_sawtooth.py \
+    python scripts/analysis/figures/plot_ekf_sawtooth.py \
         --trace outputs/demo_traces/<baseline>/<leaf>/<stamp>/episode_<N>.csv \
-        --out   ../Dissertation_WriteUp/content/chapters/3_methodology/figures/f5_ekf_sawtooth.pdf
+        --out   outputs/figures/ekf_sawtooth
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 # Repo root, so the shared figure style resolves when run directly.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts import figure_style as fs  # noqa: E402
 
@@ -179,7 +178,7 @@ def _style() -> None:
 
 
 def plot(trace_csv: Path, out_pdf: Path) -> None:
-    """@brief Render F-5 from one episode trace to a vector PDF."""
+    """@brief Render the sawtooth from one episode trace."""
     df = pd.read_csv(trace_csv)
     required = {"ekf_std_x", "ekf_x", "ekf_y", "gt_x", "gt_y"}
     missing = required - set(df.columns)
@@ -298,20 +297,17 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
-    repo = Path(__file__).resolve().parents[2]
+    repo = Path(__file__).resolve().parents[3]
     default_trace = (
         repo
         / "outputs/demo_traces/full_method/6_42_22062026-1502"
         / "15-07-2026-143405/episode_107.csv"
     )
-    default_out = (
-        repo.parent
-        / "Dissertation_WriteUp/content/chapters/3_methodology/figures/f5_ekf_sawtooth.pdf"
-    )
+    default_out = repo / "outputs/figures/ekf_sawtooth"
     p.add_argument(
         "--trace", type=Path, default=default_trace, help="Per-episode demo-trace CSV."
     )
-    p.add_argument("--out", type=Path, default=default_out, help="Output PDF path.")
+    p.add_argument("--out", type=Path, default=default_out, help="Output path.")
     return p.parse_args()
 
 

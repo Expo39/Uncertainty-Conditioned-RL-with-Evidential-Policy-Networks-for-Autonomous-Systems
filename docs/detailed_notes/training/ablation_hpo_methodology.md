@@ -110,10 +110,10 @@ distinct parts - keep them separate and do not let the citation carry the second
    Patrol vehicles and pedestrians are off in BOTH (out of scope). So the
    optimisation landscape differs between A and B only in input-signal QUALITY,
    which makes the clean phase a high-fidelity, low-cost proxy for tuning. This
-   claim is evidenced by the config table, which the dissertation should SHOW, not
+   claim is evidenced by the config table, which the report should SHOW, not
    by any cited paper.
 
-Defensible sentence for the write-up: "Tuning is performed on the clean phase,
+Defensible sentence for the report: "Tuning is performed on the clean phase,
 which differs from the noisy phase only by sensor-noise injection (Table X); the
 geometry, obstacles, reward and architecture are identical, so the clean phase is
 a low-cost, high-fidelity proxy for the noisy optimisation landscape. Multi-fidelity

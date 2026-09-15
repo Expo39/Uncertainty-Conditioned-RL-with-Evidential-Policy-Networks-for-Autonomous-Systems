@@ -1,6 +1,6 @@
 """
-@file f7_lot_layouts.py
-@brief Lot layout figure for the write-up: both lots, one shared legend.
+@file lot_layouts.py
+@brief Lot layout figure: both lots, one shared legend.
 
 Reads the generated layout YAMLs (already world-frame) and draws them as two
 panels of a single figure. Presentation only: no geometry is recomputed, so
@@ -24,7 +24,7 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import matplotlib.patches as mpatches  # noqa: E402
 import matplotlib.pyplot as plt  # noqa: E402
@@ -112,7 +112,7 @@ def _draw_panel(ax, layout: dict, oob_margin: float, span: tuple[float, float]) 
         ]
         # Bay indices are deliberately not drawn: 47 two-digit labels across
         # rows roughly 2.5 m wide cannot print legibly at this scale, and no
-        # passage in the write-up refers to a bay by number. The bay-type
+        # reported passage refers to a bay by number. The bay-type
         # colours in the legend carry everything a reader needs here.
         ax.add_patch(
             MPoly(
@@ -217,4 +217,4 @@ def render(out) -> Path:
 
 
 if __name__ == "__main__":
-    render(OUT / "f7_lot_layouts")
+    render(OUT / "lot_layouts")

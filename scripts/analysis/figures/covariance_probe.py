@@ -1,12 +1,12 @@
 """
-@file plot_f16_covariance_probe.py
-@brief Generate F-16: causal covariance probe (action response to swept covariance).
+@file covariance_probe.py
+@brief Causal covariance probe: action response to a swept covariance.
 
 Plots the deterministic-action delta and the head's epistemic estimate as the
 covariance block alone is swept from the RTK-fixed level to the degraded level,
 every other observation feature held fixed, for all three training seeds.
 
-Data source: `scripts/evaluation/covariance_probe.py` (synthetic single-state
+Data source: `scripts/analysis/covariance_probe.py` (synthetic single-state
 mode) run per seed on the stage-6 full_method checkpoints, 31-07-2026:
   seed 42  6_42_22062026-1502
   seed 123 6_123_01072026-0404
@@ -26,7 +26,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts import figure_style as fs  # noqa: E402
 
@@ -102,7 +102,7 @@ def render(out) -> None:
 
 if __name__ == "__main__":
     render(
-        Path(sys.argv[1]) / "f16_covariance_probe"
+        Path(sys.argv[1]) / "covariance_probe"
         if len(sys.argv) > 1
-        else "f16_covariance_probe"
+        else "covariance_probe"
     )
