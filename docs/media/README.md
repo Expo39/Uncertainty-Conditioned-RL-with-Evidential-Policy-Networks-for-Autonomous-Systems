@@ -27,25 +27,60 @@ resolves automatically. Each asset is shown in exactly one README.
 
 ### Sizing (do not skip)
 
-READMEs render images at their native pixel width, so a print-resolution figure swamps the
-page. The figure pipeline writes at **400 DPI** (`DPI` in `scripts/figure_style.py`), which
-is around 2900 px wide - roughly three times too large.
+Markdown image syntax renders at the file's native pixel width, so a print-resolution
+figure swamps the page. The figure pipeline writes at **400 DPI**
+(`DPI` in `scripts/figure_style.py`), around 2900 px wide - several times the width of a
+README's text column.
 
-**Target ~1100 px wide** for anything committed here, and check the result renders legibly
-before committing:
+Two things are needed, and **both** matter:
 
-```bash
-ffmpeg -i outputs/main_analysis/figures/<fig>.png -vf "scale=1100:-1:flags=lanczos" \
-  docs/media/<short_name>.png
-```
+1. **Scale the file** to about 900 px wide, so the repo is not carrying megabytes of
+   pixels no one sees:
+
+   ```bash
+   ffmpeg -i outputs/main_analysis/figures/<fig>.png \
+     -vf "scale=900:-1:flags=lanczos" docs/media/<short_name>.png
+   ```
+
+2. **Embed with an explicit width**, not `![...](...)`. This is what actually constrains
+   the rendered size, and it is the step that gets forgotten:
+
+   ```html
+   <img src="../../docs/media/<short_name>.png" alt="<what it shows>" width="620">
+   ```
+
+   620 px sits comfortably inside a GitHub README column. Near-square figures (the
+   two-panel plots here are about 1:1) need the narrower end of that range, since width
+   drives height too; a wide, short figure can take 700-760.
 
 Keep the full-resolution original in `outputs/` - that is the one to cite in the
 dissertation, where a fixed `\includegraphics` width makes the DPI an asset rather than a
-problem. The same applies to GIFs: `make clip` takes `WIDTH=800`, which is already sized
-for a README.
+problem. GIFs from `make clip` take `WIDTH=800`, which is already sized for a README, but
+still give them an explicit `width` when embedding.
 
-Give the image a lead-in sentence saying what it shows, and write real alt text rather than
-"placeholder", so the page reads as prose with a figure in it.
+Give every image a lead-in sentence saying what it shows, and write real alt text rather
+than "placeholder", so the page reads as prose with a figure in it.
+
+---
+
+## Placeholder Convention
+
+Every visual asset is declared with a two-line block. Animated recordings use
+`gif:placeholder` with a `.gif` path; static plots use `img:placeholder` with a `.png`
+path:
+
+```markdown
+<!-- gif:placeholder name="<short_name>" caption="<one-line caption>" -->
+![<alt text> placeholder](docs/media/<short_name>.gif)
+```
+
+The comment line records the intended content. The image line is the path that will
+resolve once the asset is added. Paths from nested READMEs use relative
+`../../docs/media/` notation.
+
+To replace a placeholder: record the session (or export the plot), name the file
+`<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
+resolves automatically. Each asset is shown in exactly one README.
 
 ### How each asset is produced
 
