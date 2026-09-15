@@ -58,6 +58,9 @@ NO_SAFETY    ?=
 RECORD     ?= false
 UI_SCALE   ?= 1.5
 TRACE      ?= true
+# SHOW_EPISODE=true adds the episode number to the viewer's context line. Off by
+# default: the number is internal bookkeeping that means nothing to an audience.
+SHOW_EPISODE ?= false
 RECORD_DIR ?= outputs/recordings
 REC_FPS    ?= 30
 # clip parameters (see the clip target).
@@ -519,7 +522,8 @@ _VIS_FILE = $(if $(filter 0,$(WORKER)),outputs/vis_history.jsonl,outputs/vis_his
 # Recording flags shared by the two viewer targets. RECORD=true adds --record;
 # the viewer's R key works either way.
 _VIS_FLAGS = --ui-scale $(UI_SCALE) --record-dir $(RECORD_DIR) --fps $(REC_FPS) \
-	$(if $(filter true,$(RECORD)),--record,)
+	$(if $(filter true,$(RECORD)),--record,) \
+	$(if $(filter true,$(SHOW_EPISODE)),--show-episode,)
 
 visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0] [RECORD=false] [UI_SCALE=1.5]
 	$(call ensure-venv)
