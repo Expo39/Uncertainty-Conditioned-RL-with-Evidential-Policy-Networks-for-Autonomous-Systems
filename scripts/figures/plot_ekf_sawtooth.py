@@ -34,7 +34,7 @@ sole channel.
 Default output path targets the dissertation figures directory.
 
 Usage:
-    python scripts/miscellaneous/plot_ekf_sawtooth.py \
+    python scripts/figures/plot_ekf_sawtooth.py \
         --trace outputs/demo_traces/<baseline>/<leaf>/<stamp>/episode_<N>.csv \
         --out   ../Dissertation_WriteUp/content/chapters/3_methodology/figures/f5_ekf_sawtooth.pdf
 """
@@ -42,15 +42,21 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
 import matplotlib
 
-matplotlib.use("Agg")  # headless: no display needed to write a PDF
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+matplotlib.use("Agg")  # headless: no display needed to render
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+# Repo root, so the shared figure style resolves when run directly.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts import figure_style as fs  # noqa: E402
 
 # GNSS callback / EKF rate. Step index -> seconds.
 HZ = 20.0
@@ -83,19 +89,6 @@ _TIER_EDGES: List[Tuple[str, float]] = [
 
 # Ordered severity ramp (fixed -> degraded). Doubles as a status palette; validated
 # colourblind-safe on adjacent pairs. Kept light so the foreground line stays dominant.
-_TIER_COLOUR = {
-    "rtk_fixed": "#2e7d32",  # green   (best)
-    "rtk_float": "#f9a825",  # amber
-    "standalone": "#ef6c00",  # orange
-    "degraded": "#c62828",  # red     (worst)
-}
-_TIER_LABEL = {
-    "rtk_fixed": "rtk_fixed",
-    "rtk_float": "rtk_float",
-    "standalone": "standalone",
-    "degraded": "degraded",
-}
-
 # Bands shorter than this are merged into the preceding tier (legibility of the
 # background only; the sigma_x curve is never smoothed).
 MIN_RUN_TICKS = 2
@@ -182,23 +175,7 @@ def _resolve_tiers(df: pd.DataFrame) -> Tuple[np.ndarray, bool]:
 
 def _style() -> None:
     """@brief Restrained, print-friendly rcParams; serif to sit beside LaTeX body text."""
-    plt.rcParams.update(
-        {
-            "font.family": "serif",
-            "font.size": 10,
-            "axes.titlesize": 11,
-            "axes.labelsize": 10,
-            "legend.fontsize": 8.5,
-            "xtick.labelsize": 9,
-            "ytick.labelsize": 9,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "axes.grid": True,
-            "grid.alpha": 0.25,
-            "grid.linewidth": 0.6,
-            "figure.dpi": 150,
-        }
-    )
+    fs.apply()
 
 
 def plot(trace_csv: Path, out_pdf: Path) -> None:
@@ -227,7 +204,7 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     )
 
     _style()
-    fig, ax = plt.subplots(figsize=(7.2, 3.4))
+    fig, ax = plt.subplots(figsize=fs.WIDE)
 
     # Shaded tier bands behind the curve. Half-tick padding closes seams.
     half = 0.5 / HZ
@@ -238,11 +215,11 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
         ax.axvspan(
             x0,
             x1,
-            color=_TIER_COLOUR[name],
+            color=fs.TIER_BAND[name],
             alpha=0.16,
             linewidth=0,
             zorder=0,
-            label=_TIER_LABEL[name] if name not in seen else None,
+            label=fs.tier_label(name) if name not in seen else None,
         )
         seen.add(name)
 
@@ -250,8 +227,8 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     ax.plot(
         t,
         sigma_x,
-        color="#1a1a1a",
-        linewidth=1.3,
+        color=fs.TRACE,
+        linewidth=fs.LW,
         zorder=3,
         solid_capstyle="round",
         label="reported $\\sigma_x$",
@@ -284,7 +261,7 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     text_t = anchor_t
     text_y = peak_sigma * 0.55
     ax.annotate(
-        f"reported $\\sigma_x$ stays near 1 m in {_TIER_LABEL[worst]},\n"
+        f"reported $\\sigma_x$ stays near 1 m in {fs.tier_label(worst)},\n"
         "below the true error it experiences",
         xy=(anchor_t, anchor_sigma),
         xytext=(text_t, text_y),
@@ -305,25 +282,12 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     handles, labels = ax.get_legend_handles_labels()
     order_key = {"reported $\\sigma_x$": -1}
     for i, name in enumerate(_TIER_ORDER):
-        order_key[_TIER_LABEL[name]] = i
+        order_key[fs.tier_label(name)] = i
     pairs = sorted(zip(handles, labels), key=lambda hl: order_key.get(hl[1], 99))
     handles, labels = zip(*pairs)
-    leg = ax.legend(
-        handles,
-        labels,
-        ncol=len(labels),
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.18),
-        frameon=False,
-        handlelength=1.4,
-        columnspacing=1.4,
-        handletextpad=0.5,
-    )
+    fs.legend_strip(fig, (list(handles), list(labels)), side="below")
 
-    fig.tight_layout()
-    out_pdf.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_pdf)
-    plt.close(fig)
+    fs.save(fig, out_pdf)
     src = "reconstructed from true error" if reconstructed else "logged gnss_tier"
     print(
         f"wrote {out_pdf}  ({n} ticks, {n / HZ:.2f} s, "

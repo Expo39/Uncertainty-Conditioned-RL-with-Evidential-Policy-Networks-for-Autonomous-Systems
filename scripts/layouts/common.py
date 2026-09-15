@@ -260,6 +260,8 @@ def plot_layout(
         from matplotlib.lines import Line2D
         from matplotlib.patches import Polygon as MPoly
         from matplotlib.patheffects import withStroke
+
+        from scripts import figure_style as fs
     except ImportError:
         print("  WARNING: matplotlib not available, skipping plot.")
         return
@@ -273,11 +275,13 @@ def plot_layout(
     )
     from uncertainty_rl.utils.geometry import inflate_polygon
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fs.apply()
+    fig, ax = plt.subplots(figsize=fs.WIDE_TALL)
     ax.set_aspect("equal")
-    ax.set_title(f"Floor plan: {shape}", fontsize=14)
-    ax.set_xlabel("x (m)", fontsize=12)
-    ax.set_ylabel("y (m)", fontsize=12)
+    # No internal title: the LaTeX caption names the floor plan.
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_aspect("equal", adjustable="datalim")
     # Layout YAMLs are in CARLA's left-handed frame (Y increases rightward).
     # Invert Y so the PNG matches an intuitive bird's-eye view (north = up).
     ax.invert_yaxis()
@@ -344,7 +348,7 @@ def plot_layout(
             bay_id,
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=fs.FS_NOTE,
             color="black",
             weight="bold",
             path_effects=[withStroke(linewidth=1, foreground="white")],
@@ -416,7 +420,7 @@ def plot_layout(
             sp["x"] + cos_y * 0.2 - sin_y * label_offset_perp,
             sp["y"] + sin_y * 0.2 + cos_y * label_offset_perp + label_y_nudge,
             f"SPAWN {idx + 1}",
-            fontsize=10,
+            fontsize=fs.FS_NOTE,
             color="cyan",
             fontweight="bold",
             zorder=7,
@@ -485,8 +489,10 @@ def plot_layout(
                 label="Pedestrian zones",
             )
         )
-    ax.legend(handles=handles, loc=legend_loc, fontsize=9)
-    ax.grid(True, alpha=0.3)
+    fs.legend_strip(
+        fig, (handles, [h.get_label() for h in handles]), side="below", ncol=2
+    )
+    fs.grid(ax)
 
     # Pin the data limits to the lot extent (plus a fixed margin) so the saved
     # canvas is well-defined. Legend handles such as the pedestrian-zone
@@ -506,7 +512,5 @@ def plot_layout(
     ax.set_xlim(min(xs) - pad, max(xs) + pad)
     ax.set_ylim(max(ys) + pad, min(ys) - pad)
 
-    plot_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(plot_path, dpi=150)
-    plt.close()
+    fs.save(fig, plot_path)
     print(f"  Plot:    {plot_path}")

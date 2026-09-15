@@ -3,7 +3,7 @@
 .PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs
-.PHONY: generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
+.PHONY: figures generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval
 .PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
@@ -387,6 +387,12 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. Usage: make docker-i
 # ----------------------------------------------------------------------
 # Layout Generation
 # ----------------------------------------------------------------------
+
+figures: ## Regenerate dissertation figures into outputs/figures. Usage: make figures [FIG=f7]
+	$(call ensure-venv)
+	mkdir -p outputs/figures
+	$(PYTHON) scripts/figures/thesis_figures.py \
+		$(if $(filter command line,$(origin FIG)),--only $(FIG),--all)
 
 generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make generate-layouts [LAYOUT=trapezoid]
 	$(call ensure-venv)
