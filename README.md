@@ -455,7 +455,7 @@ make analysis-bundle              # summaries + values + MANIFEST
 | `make docker-eval` | Evaluation sweep | Yes |
 | `make docker-shell` | Interactive shell in training container | Yes |
 | `make docker-test-unit` | Run Unit tests | No |
-| `make docker-verify` | All checks in container | No |
+| `make docker-test-unit` | Unit tests in container (they need torch) | No |
 | `make generate-layouts` | Regenerate lot YAMLs + PNGs | No |
 | `make analyse-cross-seed` | Pool every seed into the headline CSVs | No |
 | `make training-curves` | TensorBoard scalars -> CSV | No |

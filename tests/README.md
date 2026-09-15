@@ -21,7 +21,7 @@ flowchart TB
         DU["make docker-test-unit\n(unit tests in container)"]
         DI["make docker-test-integration\n(integration tests in container)"]
         DF["make docker-test\n(full suite in container)"]
-        DV["make docker-verify\n(all checks in container)"]
+        DV["make docker-test-unit\n(unit tests in container)"]
     end
 
     UNIT --> DU
@@ -37,7 +37,7 @@ make verify            # Unit tests + lint + typecheck + import sanity
 
 # Inside Docker (no GPU required for unit tests)
 make docker-test-unit          # Unit tests in container
-make docker-verify             # All checks in container
+make docker-test-unit          # Unit tests in container
 
 # Full stack (Docker + GPU machine)
 make docker-test-integration   # Integration tests (needs CARLA + ROS 2)
