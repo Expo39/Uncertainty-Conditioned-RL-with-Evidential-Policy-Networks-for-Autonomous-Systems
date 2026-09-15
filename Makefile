@@ -2,7 +2,7 @@
 
 .PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
-.PHONY: backup-configs restore-configs
+.PHONY: backup-configs restore-configs backup-results restore-results list-results-archive
 .PHONY: figures run-figures training-curves analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval docker-covariance-probe
@@ -608,3 +608,46 @@ backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world d
 restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-world datum from project_configs.tar.gz
 	tar -xzf project_configs.tar.gz
 	@echo "Restored configs from project_configs.tar.gz"
+
+# ----------------------------------------------------------------------
+# Results Backup
+#
+# checkpoints/, logs/ and outputs/ are gitignored and represent GPU time that
+# cannot be regenerated on a fresh clone. The archive lands in the repo root,
+# which `make clean` and `make clean-all` never touch - so a backup survives
+# the very targets that delete what it holds.
+# ----------------------------------------------------------------------
+
+# Trees holding irreplaceable run output. outputs/ goes in whole: its raw/
+# tier costs simulation time, and the derived tiers are small enough to carry.
+RESULTS_TREES = checkpoints logs outputs
+RESULTS_ARCHIVE ?= project_results.tar.gz
+
+backup-results: ## Archive checkpoints/, logs/ and outputs/ (multi-GB). Usage: make backup-results [RESULTS_ARCHIVE=project_results.tar.gz]
+	@present="$$(for d in $(RESULTS_TREES); do [ -d "$$d" ] && echo $$d; done)"; \
+	if [ -z "$$present" ]; then echo "Nothing to back up - none of $(RESULTS_TREES) exist."; exit 1; fi; \
+	echo "Archiving: $$(echo $$present | tr '\n' ' ')"; \
+	echo "On disk: $$(du -csh $$present | tail -1 | cut -f1) (model .zip files are already compressed, so gzip gains little)"; \
+	tar -czf $(RESULTS_ARCHIVE) $$present
+	@echo "Wrote $(RESULTS_ARCHIVE) ($$(du -h $(RESULTS_ARCHIVE) | cut -f1))"
+
+restore-results: ## Restore checkpoints/, logs/ and outputs/ from the archive. Usage: make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]
+	@[ -f $(RESULTS_ARCHIVE) ] || { echo "$(RESULTS_ARCHIVE) not found."; exit 1; }
+	@# Refuse to overwrite existing trees unless asked: restoring over a newer
+	@# run would silently mix two sets of results.
+	@if [ -z "$(FORCE)" ]; then \
+		for d in $(RESULTS_TREES); do \
+			if [ -d "$$d" ]; then \
+				echo "$$d/ already exists. Move it aside, or pass FORCE=1 to overwrite."; exit 1; \
+			fi; \
+		done; \
+	fi
+	tar -xzf $(RESULTS_ARCHIVE)
+	@echo "Restored from $(RESULTS_ARCHIVE):"
+	@for d in $(RESULTS_TREES); do [ -d "$$d" ] && printf "  %-14s %s\n" "$$d" "$$(du -sh $$d | cut -f1)"; done || true
+
+list-results-archive: ## Show what is inside the results archive without extracting. Usage: make list-results-archive [RESULTS_ARCHIVE=...]
+	@[ -f $(RESULTS_ARCHIVE) ] || { echo "$(RESULTS_ARCHIVE) not found."; exit 1; }
+	@echo "$(RESULTS_ARCHIVE) ($$(du -h $(RESULTS_ARCHIVE) | cut -f1)), top-level entries:"
+	@tar -tzf $(RESULTS_ARCHIVE) | awk -F/ '{print $$1"/"$$2}' | sort -u | head -30
+	@echo "total entries: $$(tar -tzf $(RESULTS_ARCHIVE) | wc -l)"

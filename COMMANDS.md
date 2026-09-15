@@ -255,7 +255,38 @@ statistics over the pooled sample and is what the headline set reads.
 | `make docker-clean-all [STACK=all]` | Remove containers, images, and volumes |
 | `make backup-configs` | Pack all `CLAUDE.md`, `TODO.md`, and `documentation/` into `project_configs.tar.gz` |
 | `make restore-configs` | Restore those files from `project_configs.tar.gz` |
+| `make backup-results [RESULTS_ARCHIVE=...]` | Archive `checkpoints/`, `logs/` and `outputs/` into `project_results.tar.gz` (multi-GB) |
+| `make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]` | Restore those trees; refuses to overwrite unless `FORCE=1` |
+| `make list-results-archive [RESULTS_ARCHIVE=...]` | List the archive contents without extracting |
 | `make help` | Print a one-line summary of every target |
+
+### Backing up run output
+
+`checkpoints/`, `logs/` and `outputs/` are gitignored: a fresh clone has none of them,
+and they represent GPU time that cannot be regenerated. `backup-results` packs all three.
+
+```bash
+make backup-results                              # -> project_results.tar.gz (~5 GB here)
+make list-results-archive                        # check it without extracting
+make backup-results RESULTS_ARCHIVE=/mnt/usb/run.tar.gz   # somewhere else
+```
+
+The archive is written to the repo root, which neither `make clean` nor `make clean-all`
+touches - so a backup survives the very targets that delete what it holds. It is
+gitignored (`project_results*.tar.gz`), so it will never be committed.
+
+Restoring refuses to clobber existing trees; move them aside or pass `FORCE=1`:
+
+```bash
+make restore-results          # fails if checkpoints/ logs/ outputs/ already exist
+make restore-results FORCE=1  # overwrite them deliberately
+```
+
+Model files are already-compressed `.zip`, so gzip gains little - expect the archive to
+be roughly the on-disk size, and the run to take a few minutes.
+
+> **Note:** this is distinct from `backup-configs`, which packs the small gitignored
+> *text* files (`CLAUDE.md`, `TODO.md`, `documentation/`) rather than run output.
 
 ---
 
