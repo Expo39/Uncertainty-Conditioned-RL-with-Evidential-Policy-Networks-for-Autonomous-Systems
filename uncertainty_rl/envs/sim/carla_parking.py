@@ -809,6 +809,29 @@ class CARLAParkingEnv(gym.Env):
         """
         return self._current_gnss_tier
 
+    def _get_live_gnss_tier_name(self) -> str:
+        """
+        @brief Return the GNSS fix-state tier name in force at this instant.
+
+        self._current_gnss_tier holds only the START tier sampled at reset, while
+        the relay walks the Markov chain at 20 Hz and writes the live tier back
+        for the subscriber to read. Falls back to the start tier when the
+        subscriber is absent (baselines without covariance, CI/tests) or no live
+        tier has been published yet.
+
+        @return Tier name as in gnss_noise_profiles.yaml, or "" if unknown.
+        """
+        tier_name = (
+            str(self._current_gnss_tier.get("name", ""))
+            if self._current_gnss_tier is not None
+            else ""
+        )
+        if self._cov_subscriber is not None:
+            live = self._cov_subscriber.get_active_tier()
+            if live:
+                tier_name = live
+        return tier_name
+
     # -----------------------------------------------------------------------
     # Floor plan loading and bay sampling
     # -----------------------------------------------------------------------
@@ -1440,8 +1463,9 @@ class CARLAParkingEnv(gym.Env):
         ekf_speed = float(self._obs_buffer[0])
         ekf_vyaw = float(self._obs_buffer[1])
 
-        tier_info = self._get_current_gnss_tier()
-        gnss_tier_name = str(tier_info.get("name", "")) if tier_info else ""
+        # Live tier, not the reset-time one: the visualiser shows this as the
+        # headline field, so it must track the mid-episode Markov drift.
+        gnss_tier_name = self._get_live_gnss_tier_name()
 
         patrol_npcs = self._npc_controller.patrol_npcs
         # Build an id-set for O(1) membership test in the actor loop.
@@ -2411,22 +2435,8 @@ class CARLAParkingEnv(gym.Env):
         # CI/test GT-fallback path so the CSV never reports GT as if it were EKF.
         ekf = self._last_ekf_world
 
-        # Live GNSS fix-state tier for this step. self._current_gnss_tier holds
-        # only the START tier sampled at reset; the relay walks the Markov chain
-        # at 20 Hz and writes the live tier back to episode_config.json, so read
-        # it back here for the true per-tick tier. Fall back to the start tier
-        # when the subscriber is absent (baselines without covariance, CI/tests)
-        # or the file has no tier yet.
-        _start_tier = (
-            self._current_gnss_tier.get("name", "")
-            if self._current_gnss_tier is not None
-            else ""
-        )
-        _live_tier = _start_tier
-        if self._cov_subscriber is not None:
-            _read = self._cov_subscriber.get_active_tier()
-            if _read:
-                _live_tier = _read
+        # Live GNSS fix-state tier for this step. @see _get_live_gnss_tier_name.
+        _live_tier = self._get_live_gnss_tier_name()
         # Noise multiplier consistent with the live tier, computed the same way
         # as _sample_gnss_noise_tier (tier metric stddev / RTK-fixed base 0.02 m).
         # Falls back to the per-episode multiplier when the live tier is
