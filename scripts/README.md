@@ -1,6 +1,8 @@
 # scripts/
 
-Offline tooling for layout generation, CARLA inspection, live visualisation, and multi-worker orchestration. None of these scripts are imported by the training pipeline - they are invoked exclusively via `make` targets.
+Offline tooling for results analysis, figure rendering, layout generation, CARLA inspection, live visualisation, and multi-worker orchestration. None of these scripts are imported by the training pipeline - they are invoked exclusively via `make` targets.
+
+**Where the boundary sits.** `uncertainty_rl/evaluation/` is the *producer*: it runs the episode sweep in the container and writes raw CSVs, importing no plotting library. `scripts/analysis/` is the *consumer*: everything that reads those CSVs - statistics, tables and every figure - lives here and runs host-side on pandas alone.
 
 ## Quick reference
 
@@ -35,8 +37,9 @@ flowchart TB
         TRN["training/\ntrain.sh"]
         MLT["multi_workers/\nWorker stack scripts"]
         CLN["cleanup/\nstack_clean.sh"]
-        MSC["miscellaneous/\nmarkov_analyser.py\ntb_read.py"]
-        EVL["evaluation/\nablation_analyser.py\ncalibration.py\ngate_roc.py\ncovariance_probe.py"]
+        DIA["diagnostics/\nmarkov_analyser.py\ntb_read.py"]
+        EVL["analysis/\nablation.py\ncalibration.py\ngate_roc.py\ncross_seed.py\ncovariance_probe.py"]
+        FIG["analysis/figures/\nbuild + run_figures\nfigure_style.py"]
     end
 
     subgraph make["make targets"]
@@ -46,13 +49,17 @@ flowchart TB
         DT["docker-train\ndocker-train-short"]
     end
 
-    AN["analyse-ablation\nanalyse-calibration\nanalyse-gate\ndocker-covariance-probe"]
+    AN["analyse-ablation\nanalyse-calibration\nanalyse-gate\nanalyse-cross-seed\ndocker-covariance-probe"]
+    FG["figures\nrun-figures"]
+    DG["analyse-markov\ntb-scalars"]
 
     LAY --> GL
     INS --> DI
     VIS --> EV
     TRN --> DT
     EVL --> AN
+    FIG --> FG
+    DIA --> DG
 ```
 
 ## Subdirectories
@@ -123,20 +130,24 @@ Multi-worker stack orchestration for parallel CARLA training (`workers_up.sh`, `
 
 Stack teardown helper (`stack_clean.sh`). Removes dangling containers and volumes after interrupted runs.
 
-### `miscellaneous/`
+### `diagnostics/`
 
 Standalone CPU-only diagnostics with no CARLA or ROS 2 dependency.
 
+Nothing here reads a results tree - that is `analysis/`.
+
 - `markov_analyser.py` - offline diagnostic for the GNSS tier Markov chain (stationary distribution, mean dwell per tier, time to first contiguous good window).
+- `tb_read.py` - TensorBoard scalar trajectories (tag selection, smoothing, tails, CSV export, multi-run comparison).
 
 ```bash
 make analyse-markov                              # Defaults from gnss_noise_profiles.yaml
 make analyse-markov N_EPISODES=10000 N_STEPS=1750
+make tb-scalars LOG=logs/<baseline>/<leaf> ARGS="--match success --last 10"
 ```
 
-### `evaluation/`
+### `analysis/`
 
-Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the dissertation's input-covariance and uncertainty claims. Run only after an eval has written results under `outputs/evaluation_results/<baseline>/<leaf>/`.
+Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the reported input-covariance and uncertainty results. Run only after an eval has written results under `outputs/evaluation_results/<baseline>/<leaf>/`.
 
 ```bash
 make analyse-ablation                                                  # Cross-arm covariance contrast + degradation slope
@@ -147,12 +158,27 @@ make uncertainty-verdict EVAL_DIR=outputs/evaluation_results/<baseline>/<leaf>/w
 make handover-timing ARM=full_method                                  # Handover timing vs degradation onset
 ```
 
-Host-side scripts are read-only - they consume the eval CSVs and write report files/figures only. See [evaluation/README.md](evaluation/README.md) for the per-script reference and CSV schema.
+Host-side scripts are read-only - they consume the eval CSVs and write report files/figures only. See [analysis/README.md](analysis/README.md) for the per-script reference and CSV schema.
+
+### `analysis/figures/`
+
+Every rendered figure. Presentation only: these modules read CSVs and draw them, and never recompute a statistic, so a figure can be redrawn at any time without moving a reported number.
+
+- `build.py` - the pooled figure set (`f5`-`f19`), one entry point for all of them.
+- `run_figures.py` - the per-run panels (`evaluation_plots.png`, `failure_modes.png`), rebuilt from a run's `evaluation_results.csv`.
+- [`../figure_style.py`](figure_style.py) - the one house style. Every figure imports it; nothing sets rcParams, picks a colour, or builds a legend by hand.
+
+```bash
+make figures                 # All figures into outputs/figures
+make figures FIG=gate_roc    # A single figure, by id
+make run-figures             # Per-run panels for every run under outputs/
+make run-figures RUN_DIR=outputs/evaluation_results/seed_42/full_method/<leaf>/without_wrapper
+```
 
 ## See also
 
 - [scripts/layouts/README.md](layouts/README.md) - layout module reference and regeneration
-- [scripts/evaluation/README.md](evaluation/README.md) - eval analysis tooling and CSV schema
+- [scripts/analysis/README.md](analysis/README.md) - eval analysis tooling and CSV schema
 - [scripts/inspect/README.md](inspect/README.md) - inspector argument reference
 - [scripts/visualise/README.md](visualise/README.md) - visualiser protocol and JSONL schema
 - `scripts/colours/__init__.py` - palette constants

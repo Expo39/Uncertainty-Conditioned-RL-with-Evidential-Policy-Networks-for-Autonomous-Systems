@@ -388,15 +388,15 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. Usage: make docker-i
 # Layout Generation
 # ----------------------------------------------------------------------
 
-figures: ## Regenerate the analysed-data figures into outputs/figures. Usage: make figures [FIG=f7]
+figures: ## Regenerate the analysed-data figures into outputs/figures. Usage: make figures [FIG=gate_roc]
 	$(call ensure-venv)
 	mkdir -p outputs/figures
-	$(PYTHON) scripts/figures/thesis_figures.py \
+	$(PYTHON) scripts/analysis/figures/build.py \
 		$(if $(filter command line,$(origin FIG)),--only $(FIG),--all)
 
 run-figures: ## Redraw the per-run eval panels from each run's CSV. Usage: make run-figures [RUN_DIR=outputs/evaluation_results/seed_42/full_method/<leaf>/without_wrapper]
 	$(call ensure-venv)
-	$(PYTHON) scripts/figures/run_figures.py \
+	$(PYTHON) scripts/analysis/figures/run_figures.py \
 		$(if $(filter command line,$(origin RUN_DIR)),--run-dir $(RUN_DIR),--root outputs)
 
 generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make generate-layouts [LAYOUT=trapezoid]
@@ -413,18 +413,18 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make ge
 
 analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml. Usage: make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]
 	$(call ensure-venv)
-	$(PYTHON) scripts/miscellaneous/markov_analyser.py \
+	$(PYTHON) scripts/diagnostics/markov_analyser.py \
 		$(if $(filter command line,$(origin N_EPISODES)),--n-episodes $(N_EPISODES),) \
 		$(if $(filter command line,$(origin N_STEPS)),--n-steps $(N_STEPS),)
 
 trace-tier-breakdown: ## Resolve demo-trace success/pos-error by GNSS tier (collapse vs hard-task). Usage: make trace-tier-breakdown TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>
 	$(call ensure-venv)
 	@if [ -z "$(TRACE_DIR)" ]; then echo "Set TRACE_DIR=outputs/demo_traces/<baseline>/<leaf>/<timestamp>"; exit 1; fi
-	$(PYTHON) scripts/miscellaneous/trace_tier_breakdown.py --trace-dir $(TRACE_DIR)
+	$(PYTHON) scripts/analysis/trace_tiers.py --trace-dir $(TRACE_DIR)
 
 analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval CSVs. Usage: make analyse-ablation [STAGE=1] [SEED=42] [CHECKPOINT=1_42_19062026-0120] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
 	$(call ensure-venv)
-	$(PYTHON) scripts/evaluation/ablation_analyser.py \
+	$(PYTHON) scripts/analysis/ablation.py \
 		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
 		--output-dir $(or $(OUTPUT_DIR),$(ABLATION_ROOT)) \
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
@@ -434,14 +434,14 @@ analyse-ablation: ## Cross-arm covariance contrast + degradation slope from eval
 
 analyse-gate: ## EKF-std vs evidential-epistemic safety-gate ROC from eval CSVs. Usage: make analyse-gate [STAGE=1] [SEED=42]
 	$(call ensure-venv)
-	$(PYTHON) scripts/evaluation/gate_roc.py \
+	$(PYTHON) scripts/analysis/gate_roc.py \
 		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
 		--output-dir $(or $(OUTPUT_DIR),$(GATE_ROOT)) \
 		$(if $(STAGE),--stage $(STAGE),)
 
 analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual error)? Usage: make analyse-calibration [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
-	$(PYTHON) scripts/evaluation/calibration.py \
+	$(PYTHON) scripts/analysis/calibration.py \
 		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
 		--output-dir $(or $(OUTPUT_DIR),$(CALIBRATION_ROOT)) \
 		$(if $(ARM),--arm $(ARM),) \
@@ -449,7 +449,7 @@ analyse-calibration: ## Is the EKF covariance an honest signal (std vs actual er
 
 handover-timing: ## When does the wrapper hand over vs degradation onset? Usage: make handover-timing [ARM=full_method] [CHECKPOINT=1_42_19062026-0120]
 	$(call ensure-venv)
-	$(PYTHON) scripts/evaluation/handover_timing.py \
+	$(PYTHON) scripts/analysis/handover_timing.py \
 		--results-root $(or $(RESULTS_ROOT),$(EVAL_RESULTS_ROOT)) \
 		--output-dir $(or $(OUTPUT_DIR),$(HANDOVER_ROOT)) \
 		$(if $(ARM),--arm $(ARM),) \
@@ -458,7 +458,7 @@ handover-timing: ## When does the wrapper hand over vs degradation onset? Usage:
 analyse-cross-seed: ## Pool all seeds into headline tables + per-seed robustness. Usage: make analyse-cross-seed [STAGE=6] [SLOPE_CLEAN=gnss_fixed SLOPE_DEGRADED=gnss_degraded]
 	$(call ensure-venv)
 	# Cross-seed spans seeds: parent root, NEVER EVAL_RESULTS_ROOT (which is seed_<N>/).
-	$(PYTHON) scripts/evaluation/cross_seed.py \
+	$(PYTHON) scripts/analysis/cross_seed.py \
 		--results-root $(or $(RESULTS_ROOT),outputs/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/cross_seed_analysis) \
 		--stage $(or $(STAGE),6) \

@@ -1,11 +1,11 @@
 """
-@file ablation_analyser.py
+@file ablation.py
 @brief Cross-arm analysis of the input-covariance ablation from eval CSVs.
 
 Host-side, read-only diagnostic that loads every ablation arm's per-episode
 records (outputs/evaluation_results/<baseline>/<leaf>/episode_records.csv),
 attaches the arm name from the directory tree, joins on condition, and computes
-the contrasts the dissertation actually claims:
+the contrasts actually reported:
 
   - Per-condition success rate and final position error for each arm.
   - The covariance contrast deltas with bootstrap confidence intervals:
@@ -13,7 +13,7 @@ the contrasts the dissertation actually claims:
     full_method - output_uncertainty (evidential heads, covariance on/off).
   - A single "degradation slope" per arm: how far success falls and position
     error grows from the cleanest GNSS tier (rtk_fixed) to the worst (degraded).
-    The thesis is that the covariance arms degrade more gracefully (shallower
+    The hypothesis is that the covariance arms degrade more gracefully (shallower
     slope), so this is the headline number.
 """
 
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Make the repo root importable so the shared discovery helper resolves when this
-# file is run directly (python scripts/evaluation/ablation_analyser.py).
+# file is run directly (python scripts/analysis/ablation.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import matplotlib  # noqa: E402
@@ -36,7 +36,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 import seaborn as sns  # noqa: E402
 
-from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
+from scripts.analysis._discovery import discover_arm_csvs  # noqa: E402
 
 # The four ablation arms in plot order: covariance-off then covariance-on,
 # standard heads then evidential heads. The contrast pairs are adjacent.
@@ -66,7 +66,7 @@ _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 # both) and the resulting "slope" is flat by construction - see
 # documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md. The live anchor
 # chain (banded by true error) and the one-way drift carry the genuine
-# graceful-degradation evidence, so the write-up reports five conditions, not
+# graceful-degradation evidence, so the analysis reports five conditions, not
 # seven. Pass --keep-held-tiers to restore the old seven-condition behaviour.
 _HELD_TIER_CONDITIONS: List[str] = ["gnss_fixed", "gnss_degraded"]
 
@@ -622,7 +622,7 @@ def analyse(
            same stage; None uses each arm's newest leaf (may mix stages).
     @param keep_held_tiers: Retain the held-tier conditions (_HELD_TIER_CONDITIONS)
            and the degradation slope they define. Default False drops them, which
-           is what the write-up reports; True restores the old seven-condition run.
+           is what is reported; True restores the old seven-condition run.
     """
     # Nest by stage (or pinned leaf) so STAGE=1 and STAGE=2 runs never overwrite
     # each other; an unpinned mixed-stage run lands in "latest".
@@ -870,7 +870,7 @@ def main() -> None:
             "Keep the held-tier conditions ("
             + ", ".join(_HELD_TIER_CONDITIONS)
             + ") and the degradation slope they define. Default drops them, "
-            "matching the five conditions the write-up reports."
+            "matching the five reported conditions."
         ),
     )
     parser.add_argument(

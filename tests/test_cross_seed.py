@@ -1,6 +1,6 @@
 """
 @file test_cross_seed.py
-@brief Tests for the cross-seed pooled aggregator (scripts/evaluation/cross_seed.py).
+@brief Tests for the cross-seed pooled aggregator (scripts/analysis/cross_seed.py).
 
 Builds tiny synthetic episode_records.csv files under the nested
 seed_<N>/<arm>/<leaf>/<variant>/ layout and checks that cross_seed pools every
@@ -15,8 +15,8 @@ from typing import List, Tuple
 
 import pandas as pd
 
-from scripts.evaluation import cross_seed
-from scripts.evaluation.ablation_analyser import _ARM_ORDER
+from scripts.analysis import cross_seed
+from scripts.analysis.ablation import _ARM_ORDER
 
 # The two GNSS-tier endpoints the degradation slope and many tests key on.
 _CLEAN = "gnss_fixed"
@@ -154,7 +154,7 @@ class TestCrossSeedPooling:
         """
         root = _build_three_seed_tree(tmp_path)
         pooled = cross_seed._pool_episodes(root, stage="6")
-        from scripts.evaluation.ablation_analyser import _contrast_table
+        from scripts.analysis.ablation import _contrast_table
 
         contrasts = _contrast_table(pooled, seed=42)
         expected = {

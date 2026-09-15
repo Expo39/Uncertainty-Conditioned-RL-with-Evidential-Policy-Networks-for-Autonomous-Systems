@@ -1,6 +1,6 @@
 """
 @file plot_degradation_tiers.py
-@brief F-14 replacement: per-arm success across the TRUE-localisation GNSS tiers
+@brief Per-arm success across the TRUE-localisation GNSS tiers
        under the live anchor Markov chain, pooled over seeds.
 
 The held gnss_fixed/gnss_degraded contrast is a weak stressor: the EKF suppresses
@@ -10,7 +10,7 @@ anchor_deployment condition, where the fix state transitions mid-episode and the
 TRUE localisation error sweeps the full tier range. This figure bands each anchor
 episode by its WORST true localisation error ||ekf_xy - gt_xy|| (the faithful tier
 proxy: the reported EKF std saturates ~1.3 m and understates the tier by up to 8x,
-per trace_tier_breakdown.py), then plots per-arm success rate across the bands,
+per trace_tiers.py), then plots per-arm success rate across the bands,
 pooled over seeds 42/123/7.
 
 Read-only over the frozen eval CSVs. Pure CPU.
@@ -31,8 +31,8 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 # Make the repo root importable so the shared figure style resolves when this
-# file is run directly (python scripts/figures/plot_degradation_tiers.py).
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# file is run directly (python scripts/analysis/figures/plot_degradation_tiers.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts import figure_style as fs  # noqa: E402
 
@@ -190,7 +190,7 @@ def plot(base: Path, out_pdf: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", type=Path, default=Path("outputs/evaluation_results"))
-    ap.add_argument("--out", type=Path, default=Path("f14_degradation_tiers.pdf"))
+    ap.add_argument("--out", type=Path, default=Path("degradation_tiers"))
     args = ap.parse_args()
     plot(args.base, args.out)
 

@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Make the repo root importable so the shared discovery helper resolves when this
-# file is run directly (python scripts/evaluation/gate_roc.py).
+# file is run directly (python scripts/analysis/gate_roc.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import matplotlib  # noqa: E402
@@ -39,8 +39,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
-from scripts.evaluation.ablation_analyser import drop_held_tiers  # noqa: E402
+from scripts.analysis._discovery import discover_arm_csvs  # noqa: E402
+from scripts.analysis.ablation import drop_held_tiers  # noqa: E402
 
 # Outcomes the gate SHOULD pre-empt (a handoff before these is the desired
 # behaviour). success is the only non-failure; "handoff" episodes already
@@ -211,7 +211,7 @@ def analyse(
     @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
            same stage; None uses each arm's newest leaf (may mix stages).
     @param keep_held_tiers: Retain the held-tier conditions. Default False drops
-           them so the ROC is scored over the five conditions the write-up reports.
+           them so the ROC is scored over the five reported conditions.
     """
     # Nest by stage so STAGE=1 and STAGE=2 runs never overwrite; unpinned in "latest".
     out_dir = out_dir / (f"stage{stage}" if stage is not None else "latest")
@@ -273,7 +273,7 @@ def main() -> None:
         "--keep-held-tiers",
         action="store_true",
         help="Keep the held-tier conditions (gnss_fixed, gnss_degraded). Default "
-        "drops them, matching the five conditions the write-up reports.",
+        "drops them, matching the five reported conditions.",
     )
     args = parser.parse_args()
     analyse(

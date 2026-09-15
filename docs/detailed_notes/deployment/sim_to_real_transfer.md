@@ -6,7 +6,7 @@ Extracted from the real-world deployment pipeline (`envs/real/inference_loop.py`
 
 ## Known Limitations
 
-These are acknowledged gaps that do not invalidate the thesis contribution
+These are acknowledged gaps that do not invalidate the contribution
 but should be discussed in the limitations section.
 
 ### Isotropic GNSS noise model
@@ -20,7 +20,7 @@ geometry (DOP), baseline length to the reference station, and multipath from
 nearby structures. The error ellipse is spatially correlated and changes as
 the vehicle moves.
 
-**Why it does not invalidate the thesis:** The policy observes EKF covariance
+**Why it does not invalidate the contribution:** The policy observes EKF covariance
 (not raw GNSS accuracy). The EKF covariance magnitude is driven by the
 NavSatFix covariance, so as long as the magnitude varies correctly across
 tiers, the policy receives the right signal. The observation carries only the

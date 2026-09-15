@@ -22,7 +22,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 This package writes **CSVs only** and imports no plotting library. The per-run
 panels (`evaluation_plots.png`, `failure_modes.png`) are rendered from
-`evaluation_results.csv` by `scripts/figures/run_figures.py` (`make run-figures`),
+`evaluation_results.csv` by `scripts/analysis/figures/run_figures.py` (`make run-figures`),
 so a run's figures can be redrawn without re-running the sweep.
 
 ## Internal data flow
@@ -129,7 +129,7 @@ Unlike the held-tier conditions, this one starts clean and drifts one-way into t
 degraded tier mid-episode (`degrade_one_way`, never recovering). It is the causal
 test for handover TIMING: does the controller hand over soon AFTER the localisation
 crosses into the degraded regime, rather than from the spawn? See
-`scripts/evaluation/handover_timing.py` (switch regime).
+`scripts/analysis/handover_timing.py` (switch regime).
 
 | Condition | GNSS | Bay occ. | Notes |
 |-----------|------|----------|-------|

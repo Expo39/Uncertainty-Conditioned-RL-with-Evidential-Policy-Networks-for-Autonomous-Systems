@@ -30,7 +30,7 @@ import pandas as pd
 
 # Repo root on the path (NOT scripts/, whose `inspect` package would shadow the
 # stdlib module that matplotlib imports).
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts import figure_style as fs  # noqa: E402
 

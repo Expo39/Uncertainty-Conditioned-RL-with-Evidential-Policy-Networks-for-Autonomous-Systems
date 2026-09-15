@@ -7,7 +7,7 @@ evaluate.py writes each run to
 wrapper_variant is "without_wrapper" or "with_wrapper" (see
 uncertainty_rl/evaluation/evaluate.py). Older runs wrote one level shallower
 (<baseline>/<leaf>/<name>.csv). The analysis scripts (calibration, gate_roc,
-ablation_analyser) all need to find these CSVs, map each back to its arm
+ablation) all need to find these CSVs, map each back to its arm
 (baseline) name, and - for any uncertainty/behaviour reading - prefer the
 without_wrapper variant, since the wrapper caps throttle and forces stops,
 corrupting the free-running signal. This module is the single source of truth

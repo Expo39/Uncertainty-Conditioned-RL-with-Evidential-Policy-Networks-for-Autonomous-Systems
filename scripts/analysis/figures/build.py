@@ -1,47 +1,31 @@
 """
-@file thesis_figures.py
-@brief Single entry point for every figure that appears in the dissertation.
+@file build.py
+@brief Single entry point for every pooled figure.
 
-One command regenerates the lot:
+    python scripts/analysis/figures/build.py --all
+    python scripts/analysis/figures/build.py --only gate_roc ekf_calibration
 
-    python scripts/figures/thesis_figures.py --all
+The split this file sits on: the analysis modules (scripts/analysis/*.py)
+compute statistics and write CSVs; this file reads those CSVs and draws them;
+scripts/figure_style.py holds the one house style. Computing a number and
+drawing it change for different reasons, so they stay apart.
 
-or a subset, by figure id:
+Everything here is presentation. No figure recomputes a statistic, re-bins,
+re-sorts or filters beyond the reported scope, so any figure can be redrawn at
+any time without moving a reported value.
 
-    python scripts/figures/thesis_figures.py --only f14 f19
+Figure inventory, id -> source:
 
-Why this file exists. Figure code used to live across seven modules in three
-directories, each with its own invocation style, and drawing a figure meant
-re-running the analysis that computed it. That coupled two jobs that change for
-different reasons: computing statistics, and drawing them for print. When the
-raw evaluation tree moved on, a figure could not be redrawn without also
-changing published numbers.
-
-So the split is:
-
-  * the analysis scripts (scripts/evaluation/*.py) compute and write CSVs;
-  * this file reads those CSVs and draws the figures;
-  * scripts/figure_style.py holds the one house style both obey.
-
-Everything here is presentation. No figure in this file recomputes a statistic,
-re-bins, re-sorts or filters: each reads a frame and plots it. That is what
-lets the figures be regenerated at any time without touching a reported number.
-
-Figure inventory (methodology first, then results):
-
-  f5   EKF covariance sawtooth        <- a logged demo trace
-  f11  training curves                <- TensorBoard scalars, ported
-  f13  ablation by condition          <- pooled_condition_summary.csv
-  f14  degradation tiers              <- raw per-episode records (needs
-                                         per_step + episode from one run)
-  f15  behaviour by EKF std           <- pooled_behaviour_by_std.csv
-  f16  covariance probe               <- probe output (constants)
-  f17  EKF calibration                <- pooled_calibration_binned.csv
-                                         (+ per-step records, all seeds)
-  f18  cross-seed robustness          <- seed_robustness.csv
-  f19  safety-gate ROC                <- raw episode records (needs per-episode
-                                         scores; AUCs cross-checked against
-                                         pooled_gate_auc.csv)
+  ekf_sawtooth          a logged demo trace
+  lot_layouts           the generated layout YAMLs
+  training_curves       ported TensorBoard scalars
+  ablation_by_condition pooled_condition_summary.csv
+  degradation_tiers     raw per-episode + per-step records
+  behaviour_by_std      raw per-episode records, three varying conditions
+  covariance_probe      probe output (not part of the reported set)
+  ekf_calibration       raw calibration records, vanilla arm
+  seed_robustness       seed_robustness.csv
+  gate_roc              raw episode + per-step records
 """
 
 from __future__ import annotations
@@ -53,7 +37,7 @@ from typing import Callable, Dict, List
 
 # Repo root on the path (NOT scripts/, which contains an `inspect` package
 # that would shadow the stdlib module matplotlib imports).
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
@@ -66,7 +50,7 @@ FROZEN = Path("outputs/cross_seed_analysis/all_seeds/stage6")
 RAW = Path("outputs/evaluation_results")
 OUT = Path("outputs/figures")
 
-# Conditions held out of the pooled ROC, matching the five the write-up reports.
+# Conditions held out of the pooled ROC, matching the five reported conditions.
 _HELD_TIER = ["gnss_fixed", "gnss_degraded"]
 
 
@@ -120,8 +104,8 @@ def _pooled_episodes(raw: Path, seeds: List[str], arms: List[str]) -> pd.DataFra
     return pd.concat(frames, ignore_index=True)
 
 
-# --- f13: ablation by condition -------------------------------------------
-def f13(args) -> None:
+# --- Success and error per condition ----------------------------------------
+def ablation_by_condition(args) -> None:
     """Success and final position error per condition, grouped by arm."""
     summary = pd.read_csv(args.frozen / "pooled_condition_summary.csv")
     conditions = list(pd.unique(summary["condition"]))
@@ -151,11 +135,11 @@ def f13(args) -> None:
             handles, labels = ax.get_legend_handles_labels()
     fs.condition_ticks(axes[1], conditions)
     fs.legend_strip(fig, (handles, labels), side="above")
-    fs.save(fig, args.out / "f13_ablation_by_condition")
+    fs.save(fig, args.out / "ablation_by_condition")
 
 
-# --- f15: behaviour against EKF std ---------------------------------------
-def f15(args) -> None:
+# --- Caution proxies against EKF std -----------------------------------------
+def behaviour_by_std(args) -> None:
     """Four caution proxies against binned EKF position std, on a log axis."""
     from matplotlib.ticker import FixedLocator, FuncFormatter
 
@@ -198,10 +182,10 @@ def f15(args) -> None:
             "EKF position std bin midpoint (m, log scale)", fontsize=fs.FS_LABEL
         )
     fs.legend_strip(fig, axes[0], side="above")
-    fs.save(fig, args.out / "f15_behaviour_by_std", pad=0.5, rect=(0, 0, 1, 0.94))
+    fs.save(fig, args.out / "behaviour_by_std", pad=0.5, rect=(0, 0, 1, 0.94))
 
 
-# --- f17: EKF calibration --------------------------------------------------
+# --- EKF calibration ---------------------------------------------------------
 # The scatter backdrop is pooled over the three seeds, matching the pooled
 # curve drawn over it. An earlier version paired a pooled curve with a
 # single-seed cloud, which the caption then described as one seed.
@@ -213,7 +197,7 @@ _CAL_HELD = ["gnss_fixed", "gnss_degraded"]
 
 
 def _calibration_scatter(args) -> "pd.DataFrame | None":
-    """Per-step records pooled across seeds, for the F-17 backdrop.
+    """Per-step records pooled across seeds, for the calibration backdrop.
 
     Scope matches the frozen binned CSV: one arm (the EKF is identical across
     arms, so the arm is immaterial to calibration) over every seed, with the
@@ -238,7 +222,7 @@ def _calibration_scatter(args) -> "pd.DataFrame | None":
     return scatter
 
 
-def f17(args) -> None:
+def ekf_calibration(args) -> None:
     """Binned mean error against predicted std, over a per-step scatter.
 
     The position x-axis is logarithmic: half the steps sit on the RTK-fixed
@@ -353,11 +337,11 @@ def f17(args) -> None:
         fs.grid(ax)
     if handles:
         fs.legend_strip(fig, (handles, labels), side="below")
-    fs.save(fig, args.out / "f17_ekf_calibration")
+    fs.save(fig, args.out / "ekf_calibration")
 
 
-# --- f18: cross-seed robustness -------------------------------------------
-def f18(args) -> None:
+# --- Cross-seed robustness ---------------------------------------------------
+def seed_robustness(args) -> None:
     """Per-arm mean success with whiskers spanning the seed range."""
     rob = pd.read_csv(args.frozen / "seed_robustness.csv")
     conditions = sorted(rob["condition"].unique())
@@ -391,13 +375,13 @@ def f18(args) -> None:
     ax.set_ylabel("success rate (%)")
     fs.grid(ax, axis="y")
     fs.legend_strip(fig, ax, side="above")
-    fs.save(fig, args.out / "f18_seed_robustness")
+    fs.save(fig, args.out / "seed_robustness")
 
 
-# --- f19: safety-gate ROC --------------------------------------------------
-def f19(args) -> None:
+# --- Safety-gate ROC ---------------------------------------------------------
+def gate_roc(args) -> None:
     """ROC of each candidate gate signal for predicting episode failure."""
-    from scripts.evaluation.gate_roc import _roc_curve
+    from scripts.analysis.gate_roc import _roc_curve
 
     records = _pooled_episodes(args.raw, args.seeds, fs.ARM_ORDER)
     records = records[~records["condition"].isin(_HELD_TIER)]
@@ -459,62 +443,63 @@ def f19(args) -> None:
     ax.set_aspect("equal", adjustable="box")
     fs.grid(ax)
     fs.legend_strip(fig, ax, side="below", ncol=2)
-    fs.save(fig, args.out / "f19_gate_roc")
+    fs.save(fig, args.out / "gate_roc")
 
 
-# --- figures delegating to their existing generators ------------------------
-def f5(args) -> None:
+# --- Figures delegating to their own modules ---------------------------------
+def ekf_sawtooth(args) -> None:
     """EKF sawtooth: a single logged demo trace with fix-state bands."""
-    from scripts.figures.plot_ekf_sawtooth import plot as _plot
+    from scripts.analysis.figures.ekf_sawtooth import plot as _plot
 
-    _plot(args.trace, args.out / "f5_ekf_sawtooth.png")
+    _plot(args.trace, args.out / "ekf_sawtooth.png")
 
 
-def f11(args) -> None:
+def training_curves(args) -> None:
     """Training curves across the curriculum, four arms, two panels."""
-    from scripts.figures.plot_f11_training_curves import render
+    from scripts.analysis.figures.training_curves import render
 
-    render(args.f11_data, args.out / "f11_training_curves")
+    render(args.training_data, args.out / "training_curves")
 
 
-def f14(args) -> None:
+def degradation_tiers(args) -> None:
     """Success against realised localisation difficulty, in terciles."""
-    from scripts.figures.plot_degradation_tiers import plot as _plot
+    from scripts.analysis.figures.degradation_tiers import plot as _plot
 
-    _plot(args.raw, args.out / "f14_degradation_tiers.png")
+    _plot(args.raw, args.out / "degradation_tiers.png")
 
 
-def f16(args) -> None:
+def covariance_probe(args) -> None:
     """Causal covariance probe: action response to a swept covariance."""
-    from scripts.figures.plot_f16_covariance_probe import render
+    from scripts.analysis.figures.covariance_probe import render
 
-    render(args.out / "f16_covariance_probe")
+    render(args.out / "covariance_probe")
 
 
-def f7(args) -> None:
+def lot_layouts(args) -> None:
     """Both parking lot layouts, drawn from the generated layout YAMLs."""
-    from scripts.figures.f7_lot_layouts import render
+    from scripts.analysis.figures.lot_layouts import render
 
-    render(args.out / "f7_lot_layouts")
+    render(args.out / "lot_layouts")
 
 
+# Figure id -> renderer. The id is also the output filename stem.
 FIGURES: Dict[str, Callable] = {
-    "f5": f5,
-    "f7": f7,
-    "f11": f11,
-    "f13": f13,
-    "f14": f14,
-    "f15": f15,
-    "f16": f16,
-    "f17": f17,
-    "f18": f18,
-    "f19": f19,
+    "ablation_by_condition": ablation_by_condition,
+    "behaviour_by_std": behaviour_by_std,
+    "covariance_probe": covariance_probe,
+    "degradation_tiers": degradation_tiers,
+    "ekf_calibration": ekf_calibration,
+    "ekf_sawtooth": ekf_sawtooth,
+    "gate_roc": gate_roc,
+    "lot_layouts": lot_layouts,
+    "seed_robustness": seed_robustness,
+    "training_curves": training_curves,
 }
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(
-        description="Regenerate the dissertation figures in the house style."
+        description="Regenerate the analysed-data figures in the house style."
     )
     ap.add_argument("--all", action="store_true", help="Draw every figure.")
     ap.add_argument(
@@ -535,14 +520,16 @@ def main() -> None:
         "--scatter-src",
         type=Path,
         default=None,
-        help="calibration_records.csv for the F-17 backdrop.",
+        help="calibration_records.csv for the calibration backdrop.",
     )
-    ap.add_argument("--trace", type=Path, default=None, help="Demo-trace CSV for F-5.")
     ap.add_argument(
-        "--f11-data",
+        "--trace", type=Path, default=None, help="Demo-trace CSV for the EKF sawtooth."
+    )
+    ap.add_argument(
+        "--training-data",
         type=Path,
         default=None,
-        help="Ported TensorBoard series for F-11.",
+        help="Ported TensorBoard series for the training curves.",
     )
     args = ap.parse_args()
 

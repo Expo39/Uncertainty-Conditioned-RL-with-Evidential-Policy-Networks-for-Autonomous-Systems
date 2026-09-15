@@ -113,5 +113,5 @@ Pygame and numpy only. Both are installed in the project `.venv/` (via `make ins
 
 - [scripts/README.md](../README.md) - all Make targets overview
 - `scripts/colours/__init__.py` - colour palette reference
-- [scripts/evaluation/README.md](../evaluation/README.md) - eval analysis tooling that consumes the demo/eval CSVs
+- [scripts/analysis/README.md](../evaluation/README.md) - eval analysis tooling that consumes the demo/eval CSVs
 - [uncertainty_rl/envs/README.md](../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that writes the JSONL frames
