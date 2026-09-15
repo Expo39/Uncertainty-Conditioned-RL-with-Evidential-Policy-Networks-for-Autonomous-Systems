@@ -114,5 +114,5 @@ eval_conditions:
     # latency is estimated from a small subsample. A factor of 3 shortens the
     # expected walk to ~9 s (~93% of episodes reach degraded) without altering
     # the tier ladder, the noise levels or the one-way ratchet.
-    degrade_rate_scale: 1.0
+    degrade_rate_scale: 3.0
     bay_occupancy_rate: 0.5
