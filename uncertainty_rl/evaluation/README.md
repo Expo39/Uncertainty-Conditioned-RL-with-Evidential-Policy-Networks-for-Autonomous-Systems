@@ -195,7 +195,9 @@ condition. `full_method` leads on success in every condition that any arm solves
 arms score 0% on `ood_irregular_rtk_fixed`, which is why that group is empty in the top
 panel and appears only in the position-error panel below.
 
-<img src="../../docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the reported evaluation conditions" width="620">
+<p align="center">
+  <img src="../../docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the reported evaluation conditions" width="620">
+</p>
 
 `configs/eval_config.yaml` defines seven conditions. The analyses drop the two held tiers
 (`gnss_fixed`, `gnss_degraded` - each pins one fix state for a whole episode, so the slope
