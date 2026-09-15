@@ -25,14 +25,36 @@ To replace a placeholder: record the session (or export the plot), name the file
 `<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
 resolves automatically. Each asset is shown in exactly one README.
 
+### Sizing (do not skip)
+
+READMEs render images at their native pixel width, so a print-resolution figure swamps the
+page. The figure pipeline writes at **400 DPI** (`DPI` in `scripts/figure_style.py`), which
+is around 2900 px wide - roughly three times too large.
+
+**Target ~1100 px wide** for anything committed here, and check the result renders legibly
+before committing:
+
+```bash
+ffmpeg -i outputs/main_analysis/figures/<fig>.png -vf "scale=1100:-1:flags=lanczos" \
+  docs/media/<short_name>.png
+```
+
+Keep the full-resolution original in `outputs/` - that is the one to cite in the
+dissertation, where a fixed `\includegraphics` width makes the DPI an asset rather than a
+problem. The same applies to GIFs: `make clip` takes `WIDTH=800`, which is already sized
+for a README.
+
+Give the image a lead-in sentence saying what it shows, and write real alt text rather than
+"placeholder", so the page reads as prose with a figure in it.
+
 ### How each asset is produced
 
 Assets fall into three groups. Run `make check-host-deps` first - every route needs the
 host `ffmpeg` binary.
 
 **Group A - the 2D viewer records itself.** `visualiser_2d`, `gnss_degradation`,
-`parking_episode`, `baseline_comparison`, `safety_handoff`. The viewer owns its Pygame
-surface, so `RECORD=true` (or the `R` key) captures it directly:
+`parking_episode`, `baseline_comparison`. The viewer owns its Pygame surface, so
+`RECORD=true` (or the `R` key) captures it directly:
 
 ```bash
 make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
@@ -59,10 +81,13 @@ make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:02 END=00:14
 
 The CARLA window is launched at 800x600, which is the default `REGION`.
 
-**Group C - static plots, already generated.** `training_curves`, `eval_degradation`,
-`uncertainty_evolution`. These come from the figure pipeline, not a recording; copy the
-PNG out of `outputs/main_analysis/figures/`. See the per-asset table below for which
-exist today.
+**Group C - static plots, already generated.** `training_curves`, `eval_degradation`.
+These come from the figure pipeline, not a recording; copy the PNG out of
+`outputs/main_analysis/figures/`. Both are already in place.
+
+**Retired.** `uncertainty_evolution` and `safety_handoff` were removed rather than filled -
+each captioned a positive claim this project reports as negative. See the note below the
+tables.
 
 ---
 
@@ -73,11 +98,10 @@ exist today.
 | Name | Caption | Shown in |
 |------|---------|----------|
 | `carla_3d` | 3D CARLA spectator view - evidential policy navigating the rectangular lot | `README.md` |
-| `gnss_degradation` | Same bay attempted under RTK fixed vs degraded GNSS - EKF covariance growth side by side | `README.md` |
+| `gnss_degradation` | Same bay attempted under RTK fixed vs degraded GNSS - driving behaviour side by side | `README.md` |
 | `visualiser_2d` | Detachable 2D bird's-eye visualiser during a parking episode | `scripts/visualise/README.md` |
 | `parking_episode` | Bird's-eye view of a parking episode under RTK float conditions | `uncertainty_rl/envs/README.md` |
 | `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
-| `safety_handoff` | SafetyWrapper under rtk_lost conditions - aleatoric throttle cap slows the approach, then epistemic crosses the handoff threshold and the vehicle brakes to a stop | `uncertainty_rl/evaluation/README.md` |
 | `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |
 | `inspect_sensors` | Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye | `scripts/inspect/README.md` |
 | `inspect_live` | Live LiDAR inspector - red scan return dots in the CARLA world from birds-eye | `scripts/inspect/README.md` |
@@ -97,6 +121,14 @@ against aleatoric would imply a separation the project documents as absent
 `uncertainty_rl/networks/README.md` now points at `gate_roc` instead.
 @see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md`.
 
+`safety_handoff` was retired for the same reason: the handoff gate scores at chance
+(AUC 0.55 / 0.52 vs the EKF std's 0.57 / 0.63, `outputs/main_analysis/summaries/gate_auc.csv`),
+so a clip of it firing would assert a working mechanism the evaluation contradicts.
+
+**Before filling any placeholder, check the caption against the result it implies.** Three of
+the original thirteen asserted positive findings this project reports as negative or mild;
+an asset is not neutral illustration when its caption makes a claim.
+
 ---
 
 ## Status: what can be generated today
@@ -107,7 +139,7 @@ against aleatoric would imply a separation the project documents as absent
 | `gnss_degradation` | A: two runs, `GNSS_TIER=fixed` and `=degraded` | Ready |
 | `parking_episode` | A: `GNSS_TIER=float` | Ready |
 | `baseline_comparison` | A: `BASELINE=vanilla_ppo` vs `full_method`, both `GNSS_TIER=degraded` | Ready |
-| `safety_handoff` | A, but the caption describes the SafetyWrapper, which runs in `docker-eval`, **not** in the demo driver. The 2D viewer shows neither the handoff threshold nor the uncertainty; capturing this faithfully needs a wrapper-aware demo path | Needs code |
+| `safety_handoff` | - | **Retired, do not create.** The gate is a negative result: total predictive uncertainty scores ROC AUC 0.55 / 0.52 over 1800 episodes (chance), below the EKF position std at 0.57 / 0.63. A clip of a handoff firing would present a mechanism the data says does not beat the covariance baseline. `gate_roc` is the defensible figure |
 | `carla_3d` | B: `make docker-eval-visualise-3d` + `make record-screen` | Ready (spectator aimed by hand - `--render` auto-follow is dead, see below) |
 | `inspect_layout` | B: `make docker-inspect INSPECT_LAYOUT=rectangle` | Ready |
 | `inspect_sensors` | B: `make docker-inspect-sensors SENSORS_VIEW=birds_eye INSPECT_ZOOM=close` | Ready |
