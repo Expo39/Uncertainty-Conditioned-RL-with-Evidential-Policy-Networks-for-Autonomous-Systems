@@ -211,8 +211,30 @@ for the full wiring.
 | [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.aleatoric_floor`, `evidential.use_uncertainty_conditioning` |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM`, `ACTION_DIM` |
 
-<!-- img:placeholder name="uncertainty_evolution" caption="Epistemic and aleatoric uncertainty during a parking episode" -->
-![Uncertainty evolution placeholder](../../docs/media/uncertainty_evolution.png)
+### On plotting epistemic against aleatoric
+
+There is deliberately no "epistemic vs aleatoric over an episode" figure. The two are tied
+by construction:
+
+```
+epistemic = beta / (nu * (alpha - 1)) = aleatoric / nu
+```
+
+so they are one scalar under two names, separating only as far as `nu` varies across
+states. RL supplies no ground-truth action target, so `nu` has no well-posed training
+signal and collapses to a state-independent constant; `corr(epistemic, aleatoric)` stays
+around 0.9 in every run. Plotting the two channels side by side would imply a separation
+that is documented as absent, which is the overclaim an examiner would refute. This is a
+finished negative result, not a missing figure.
+@see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md`.
+
+The defensible figure is `gate_roc` - the evidential epistemic scored as a safety gate
+against the EKF position std, which is the comparison the contribution actually rests on:
+
+```bash
+make analyse-gate STAGE=6
+make figures FIG=gate_roc      # -> outputs/main_analysis/figures/gate_roc.png
+```
 
 ## See also
 
