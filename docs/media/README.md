@@ -25,6 +25,24 @@ To replace a placeholder: record the session (or export the plot), name the file
 `<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
 resolves automatically. Each asset is shown in exactly one README.
 
+### Capturing the 2D visualiser GIFs
+
+`visualiser_2d` and `gnss_degradation` come straight out of the 2D viewer's recorder -
+no external screen-capture tool needed. Record the drive, then cut the segment:
+
+```bash
+make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
+  CHECKPOINT=6_42_22062026-1502 STAGE=6 REALTIME=true RECORD=true TRACE=false
+
+make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 \
+  FORMAT=gif WIDTH=800 FPS=15
+```
+
+`R` toggles recording mid-session, so the CARLA start-up wait need not be captured. For
+`gnss_degradation`, record two drives with `GNSS_TIER=fixed` and `GNSS_TIER=degraded`
+(everything else identical) and place the clips side by side. Recording needs the host
+`ffmpeg` binary - `make check-host-deps`. See `scripts/visualise/README.md`.
+
 ---
 
 ## Registered Placeholders

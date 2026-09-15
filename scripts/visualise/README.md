@@ -9,7 +9,16 @@ Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evalua
 | Open 2D viewer (training already running) | `make visualise` |
 | Load checkpoint + headless CARLA + 2D viewer | `make eval-visualise-2d` |
 | Load checkpoint + CARLA 3D spectator | `make docker-eval-visualise-3d` |
-| Custom checkpoint | `make eval-visualise-2d BASELINE=full_method CHECKPOINT=seed42_11062026-0628` |
+| Custom checkpoint | `make eval-visualise-2d BASELINE=full_method CHECKPOINT=6_42_22062026-1502` |
+| Record the drive to MP4 | `make eval-visualise-2d RECORD=true ...` |
+| Watch without writing trace CSVs | `make eval-visualise-2d TRACE=false ...` |
+| Cut a GIF from a recording | `make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20` |
+| Check the host ffmpeg dependency | `make check-host-deps` |
+
+> `make eval-visualise-2d` tears the whole Docker stack down before it starts
+> (workers and compose, orphans included), so it **will stop a training run in
+> progress**. `TRACE=false` only suppresses the demo's own CSVs; it does not make
+> the target read-only.
 
 ## How it works
 
@@ -54,7 +63,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | `carla_fixed_dt` | float | Configured simulation fixed timestep (s) |
 | `carla_timestep` | float | Effective CARLA timestep used for `sim_time` |
 | `floor_plan` | str | Layout name (`rectangle`, `trapezoid`, `irregular_a`) |
-| `ego` | dict | `{x, y, yaw, vx, vy, speed}` - ego pose and velocity |
+| `ego` | dict | `{x, y, yaw, vx, vy, speed, gt_vyaw, ekf_speed, ekf_vyaw, gnss_tier}` - ground-truth pose/velocity, the EKF speed and yaw rate, and the **live** GNSS fix-state tier (it tracks the mid-episode Markov drift, not just the tier sampled at reset) |
 | `action` | dict | `{steer, throttle, brake}` - last clamped action applied to the vehicle |
 | `trajectory` | list | `[[x, y], ...]` ego trail (last N steps) |
 | `actors` | list | NPC/static vehicles: `[{x, y, yaw, type}]` where `type` is `"npc"` or `"static"` |
@@ -62,28 +71,60 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | `target_bay` | dict | `{x, y, yaw, width, depth, bay_type, bay_id}` |
 | `bays` | list | All bay dicts in the current layout |
 | `corners` | list | Lot perimeter polygon vertices `[{x, y}, ...]` |
-| `end_reason` | str | Last frame only: `"collision"`, `"success"`, or `"timeout"` |
+| `end_reason` | str | Last frame only: `"success"`, `"collision"`, `"out_of_bounds"`, or `"timeout"`. The viewer latches it until the next episode so it is not missed |
 | `debug` | dict | Optional: per-step diagnostics from `DebugLogger.step_debug_dict()` |
 
 ## Layers drawn (back to front)
 
 1. Lot boundary polygon (light grey fill)
-2. Bay outlines by type: perpendicular=blue, angled=yellow, parallel=violet
+2. Bay outlines (blue). The angled/parallel styles are retained for a future layout but never fire: every layout in this project is perpendicular-only
 3. Target bay (bright green, thick outline + heading arrows for nose-in and nose-out)
-4. Static parked vehicles (orange rectangles)
-5. Patrol NPC vehicles (red rectangles)
-6. Pedestrians (teal circles)
-7. Ego trajectory trail (faded cyan, capped at 500 points)
-8. Ego vehicle (cyan rectangle + heading arrow)
-9. HUD bar (floor plan, episode, step, sim time)
-10. State HUD bar (speed, action vector `[steer, throttle, brake]`) - always shown; read from the `ego` and `action` keys the env writes every frame
-11. Debug HUD bar (position error, yaw error, reward, covariance, EKF drift) - only when the `debug` key is present (env `debug: true`)
-12. Legend panel (right-hand side, static)
+4. Ego trajectory trail (faded cyan, capped at 500 points)
+5. GNSS uncertainty ring - a translucent disc around the ego car whose radius is the current tier's `metric_stddev_m` in world metres. This is the tier's **configured 1-sigma GNSS noise**, not the EKF's live covariance estimate
+6. Static parked vehicles (orange rectangles)
+7. Patrol NPC vehicles (red rectangles)
+8. Pedestrians (teal circles)
+9. Ego vehicle (cyan rectangle + heading arrow)
+10. Episode outcome banner - latched from `end_reason` and held until the next episode (green for success, red otherwise)
+11. HUD band, below the map: the GNSS tier panel (tier name, 1-sigma, and the tier's description from the profiles YAML; highlighted briefly on a transition), the context line (floor plan, episode, step, sim time), the speed/action line, the debug line (only when `debug: true`), and the tier timeline strip
+12. Legend panel (right-hand side), including the GNSS tier colour key
+
+## GNSS tier presentation
+
+The panel, ring and timeline are all driven by `configs/deployment/sim/gnss_noise_profiles.yaml` via `gnss_tiers.py` - nothing about the tiers is hardcoded in the viewer. Each tier contributes its `metric_stddev_m` (the sigma shown and the ring radius) and its `description` (the plain-English line). Severity follows declaration order in the YAML, best fix first, and drives the green-amber-orange-red ramp. Adding a tier to the YAML is enough to make it render.
+
+The timeline strip is a scrolling history of the last few hundred frames of tier values, stretched across the full strip width with the newest sample at the right-hand cursor. Because the Markov chain sits at `rtk_fixed` roughly 80% of the time and excursions last only a few seconds, the strip is what makes a transition legible - a static label change is easy to miss on video.
+
+## Recording
+
+`RECORD=true` starts recording on launch; the `R` key toggles it at any time, which is the easier route when you want to skip the 30-60 s CARLA start-up and capture only the interesting part of a drive. A red `REC` indicator with elapsed time shows while active (drawn after each frame is captured, so it never appears in the video itself). Files land in `outputs/recordings/<DD-MM-YYYY-HHMMSS>.mp4` and are finalised on Ctrl+C or window close.
+
+`make clip` cuts a segment out of a recording, using ffmpeg's two-pass palette pipeline for GIFs (markedly better than a naive conversion on flat vector-style graphics):
+
+```
+make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
+make clip VIDEO=outputs/recordings/<stamp>.mp4 START=12 END=28 FORMAT=mp4 WIDTH=1280
+```
+
+`START`/`END` accept `MM:SS` or plain seconds. This is how the `docs/media/` GIF placeholders get filled.
+
+### Capturing a tier comparison
+
+To show what the policy does at each fix state, pin the tier so a whole drive runs at one level, then record each in turn:
+
+```
+make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
+  CHECKPOINT=6_42_22062026-1502 STAGE=6 REALTIME=true \
+  GNSS_TIER=fixed RECORD=true TRACE=false
+```
+
+Repeat with `GNSS_TIER=float`, `standalone`, `degraded` - identical layout, checkpoint and policy, with only the fix state changing. Leave `GNSS_TIER=` empty for the live Markov chain, which is what shows the transitions and the recovery; use the `R` key there to record only when the timeline strip shows the tier stepping down.
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
+| R | Start/stop MP4 recording |
 | F | Toggle fullscreen |
 | ESC / Q | Exit (removes signal file) |
 
@@ -92,7 +133,9 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | File | Purpose |
 |------|---------|
 | `visualiser.py` | `LiveVisualiser` class + CLI entry point (`python scripts/visualise/visualiser.py`) |
-| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection. Per-decision trace logging is on by default: each episode is written to `outputs/raw/demo_traces/<DD-MM-YYYY-HHMMSS>/episode_<N>.csv` with one row per policy decision (intermediate `action_repeat` ticks are skipped, so no all-zero filler rows). Columns: `step, speed_ms, pos_error_m, orientation_error_rad, steer_cmd, throttle_cmd, brake_cmd, reward, success, epistemic, aleatoric`. `*_cmd` are the post-clamp commands actually delivered to CARLA; `epistemic` / `aleatoric` are the evidential policy uncertainty (mean over action axes, `NaN` for a non-evidential policy). Written under `outputs/` because that is the directory bind-mounted into the demo container. Pass `--no-trace` to disable. |
+| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection. Per-decision trace logging is on by default: each episode is written to `outputs/demo_traces/<baseline>/<checkpoint_leaf>/<DD-MM-YYYY-HHMMSS>/episode_<N>.csv` with one row per policy decision (intermediate `action_repeat` ticks are skipped, so no all-zero filler rows). Alongside the step/reward/success columns it carries the delivered `*_cmd` commands (post-clamp, as actually applied to CARLA), the ground-truth and EKF pose columns, the live `gnss_tier` / `gnss_multiplier`, and `epistemic` / `aleatoric` (the evidential policy uncertainty, mean over action axes; `NaN` for a non-evidential policy). See `_TRACE_COLUMNS` for the authoritative list. Written under `outputs/` because that is the directory bind-mounted into the demo container. Pass `--no-trace` (or `TRACE=false`) to disable. |
+| `gnss_tiers.py` | Loads GNSS tier presentation data (sigma, description, severity colour) from the profiles YAML, so no tier detail is hardcoded in the viewer |
+| `recorder.py` | `FrameRecorder` - pipes rendered frames to `ffmpeg` as raw RGB to produce an MP4. Emits on a wall-clock accumulator at a fixed rate, so playback speed is truthful even though the viewer's loop is uncapped |
 | `eval_visualise_2d.sh` | Orchestration for `make eval-visualise-2d`: starts the demo container detached, streams its logs with a `[demo]` prefix, runs the viewer in the foreground, and stops the demo with SIGTERM on exit so it flushes its eval `bay_successes.csv` before the container is removed. |
 | `__init__.py` | Package marker - sets non-interactive Matplotlib backend |
 
@@ -100,14 +143,18 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 
 | Component | Size |
 |-----------|------|
-| Map viewport | 900 x 900 px |
-| Legend panel | 180 px wide (right-hand side) |
-| Total window | 1080 x 900 px |
+| Map viewport | 900 px wide; height is fitted to the lot's aspect ratio, clamped to 300-900 px |
+| Legend panel | `160 x UI_SCALE` px wide (240 px at the default scale) |
+| HUD band | Below the map, sized from the font metrics |
 | FPS cap | 120 Hz |
+
+Font sizes, the legend width and stroke widths are all multiplied by `--ui-scale` (`UI_SCALE`, default 1.5), so the whole interface can be enlarged for a projector or a recording with one value.
 
 ## Dependencies
 
-Pygame and numpy only. Both are installed in the project `.venv/` (via `make install`). Colours are imported from `scripts/colours/` - the single source of truth for the full visualisation palette.
+Pygame, numpy and PyYAML, all installed in the project `.venv/` (via `make install`). Colours are imported from `scripts/colours/` - the single source of truth for the full visualisation palette.
+
+Recording and `make clip` additionally need the **host** `ffmpeg` binary. The viewer runs on the host (only `demo_drive.py` runs in a container), so ffmpeg is not installed in any image - `make check-host-deps` verifies it, and the recording targets call that check for you. Install with `sudo apt-get install ffmpeg`. Everything except recording works without it.
 
 ## See also
 
