@@ -30,7 +30,7 @@ automatically on first use (`make install`).
 
 > **Note:** `torch`, `stable_baselines3`, and `gymnasium` are **not** installed in the
 > local `.venv/`. Anything that imports them must run inside the training container via
-> `make docker-test-unit` or `make docker-verify`. The local targets below cover only
+> `make docker-test-unit`. The local targets below cover only
 > linting, type checking, and import sanity - `make test-unit` and `make verify` fail on
 > the host with `ModuleNotFoundError: No module named 'torch'`.
 
@@ -42,7 +42,7 @@ automatically on first use (`make install`).
 | `make typecheck` | Run mypy type checking |
 | `make sanity` | Quick import check - `python -c "import uncertainty_rl"` |
 | `make test-unit` | Unit tests only (fails on host - use `docker-test-unit`) |
-| `make verify` | Local CPU-only checks: lint + typecheck + sanity |
+| `make verify` | The CI checks: lint + typecheck + import. Tests need `docker-test-unit` |
 
 ---
 
@@ -187,10 +187,6 @@ and then run inside the training container - that is the only place `torch` is i
 | `make docker-test` | Full suite in the container (unit + integration) | Yes |
 | `make docker-test-unit` | Unit tests only (no CARLA, no ROS 2) | No |
 | `make docker-test-integration` | Integration tests (requires the full stack) | Yes |
-| `make docker-verify` | All checks in the container: unit tests + lint + typecheck + sanity | No |
-| `make docker-lint` | flake8 + isort + black in the container | No |
-| `make docker-format` | Auto-format in the container | No |
-| `make docker-typecheck` | mypy in the container | No |
 
 Use `make docker-test-unit` (not `make test-unit`) to verify code on the host - `torch`
 is not installed outside Docker.

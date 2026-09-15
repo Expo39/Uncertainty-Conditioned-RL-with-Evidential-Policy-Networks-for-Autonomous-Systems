@@ -6,7 +6,7 @@
 .PHONY: figures run-figures training-curves analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval docker-covariance-probe
-.PHONY: docker-test docker-test-unit docker-test-integration docker-verify docker-lint docker-format docker-typecheck
+.PHONY: docker-test docker-test-unit docker-test-integration
 .PHONY: docker-shell docker-shell-ros2 docker-shell-ros2-inspect docker-logs docker-logs-training docker-logs-carla docker-logs-ros2 docker-inspect-dryrun-logs docker-logs-ros2-inspect
 .PHONY: docker-clean docker-clean-all docker-dev docker-demo docker-inspect docker-inspect-down docker-inspect-sensors docker-inspect-live docker-inspect-dryrun docker-inspect-eval-dryrun
 .PHONY: docker-train docker-train-short docker-tune run-seed-leg
@@ -229,22 +229,6 @@ docker-test-unit: ## Run unit tests inside container
 docker-test-integration: ## Run integration tests inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
-
-docker-verify: ## Run all checks inside container 
-	@bash scripts/multi_workers/ensure_stack.sh
-	$(DOCKER_COMPOSE) exec training bash -c "pytest $(TESTS_DIR) -v --tb=short -m 'not integration' && flake8 $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) --max-line-length 88 --extend-ignore E203,W503,E501 && isort --check-only --diff $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && black --check $(SRC_DIR) $(TESTS_DIR) $(SCRIPTS_DIR) && mypy $(SRC_DIR) --ignore-missing-imports && python -c 'import uncertainty_rl; print(\"All checks passed.\")'"
-
-docker-lint: ## Run linters inside container 
-	@bash scripts/multi_workers/ensure_stack.sh
-	$(DOCKER_COMPOSE) exec training make lint
-
-docker-format: ## Format code inside container 
-	@bash scripts/multi_workers/ensure_stack.sh
-	$(DOCKER_COMPOSE) exec training make format
-
-docker-typecheck: ## Run mypy inside container 
-	@bash scripts/multi_workers/ensure_stack.sh
-	$(DOCKER_COMPOSE) exec training make typecheck
 
 # ----------------------------------------------------------------------
 # Docker: Shells & Logs
@@ -559,7 +543,10 @@ sanity: ## Quick import check
 	$(call ensure-venv)
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
 
-verify: lint typecheck sanity ## Run all local checks (lint + typecheck + sanity).
+# Mirrors the CI job exactly: CI installs only .[dev] (no torch), so it runs
+# lint + typecheck + import and no tests. The tests need torch and live in
+# docker-test-unit.
+verify: lint typecheck sanity ## Run the CI checks locally (lint + typecheck + import). Tests: docker-test-unit.
 
 # ----------------------------------------------------------------------
 # Cleanup

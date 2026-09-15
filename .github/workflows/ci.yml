@@ -22,7 +22,7 @@ concurrency:
 #   make verify    # Lint + typecheck + sanity (no torch needed, same as CI)
 #
 # For full testing with torch:
-#   make docker-verify   # Full suite in Docker (tests + checks + training deps)
+#   make docker-test-unit   # The unit tests (need torch, so CI cannot run them)
 
 jobs:
   lint:
