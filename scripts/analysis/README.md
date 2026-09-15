@@ -1,8 +1,12 @@
 # scripts/analysis/
 
-Analysis tooling that turns an evaluation run into the reported input-covariance and uncertainty results. None of these scripts are imported by the training pipeline - they consume the CSVs that `uncertainty_rl/evaluation/evaluate.py` writes and are invoked exclusively via `make` targets. Run them **after** an eval run has produced results under `outputs/raw/evaluation_results/<baseline>/<leaf>/`.
+Analysis tooling that turns an evaluation run into the headline input-covariance and uncertainty results. None of these scripts are imported by the training pipeline - they consume the CSVs that `uncertainty_rl/evaluation/evaluate.py` writes and are invoked exclusively via `make` targets. Run them **after** an eval run has produced results under `outputs/raw/evaluation_results/<baseline>/<leaf>/`.
 
 Most scripts are host-side (CPU-only, read the eval CSVs from the project `.venv/`); only the covariance probe needs torch and runs inside the training container.
+
+**These modules write CSVs only** - none imports matplotlib or seaborn. Figures are rendered separately by [`figures/`](figures/), which reads the CSVs written here. That split is what lets a figure be redrawn without recomputing a statistic, and a statistic be recomputed without redrawing.
+
+Output tiers: raw eval CSVs in `outputs/raw/`, everything written here in `outputs/raw_derived/`, and the curated set assembled into `outputs/main_analysis/` by `bundle.py`.
 
 ## Quick reference
 
@@ -32,22 +36,22 @@ fix state for the whole episode, so neither degrades *within* an episode and the
 arm rides through; the EKF also suppresses a static raw fault, so the two do not
 separate at the policy's input and the slope is flat by construction (see
 `documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`). Every table and
-figure therefore covers the **five** retained conditions, matching the reported scope. The
+analysis therefore covers the **five** retained conditions. The
 graceful-degradation evidence instead comes from the live anchor chain banded by true
-error (`scripts/diagnostics/plot_degradation_tiers.py`) and the one-way drift. Pass
+error (`scripts/analysis/figures/degradation_tiers.py`) and the one-way drift. Pass
 `--keep-held-tiers` to restore the old seven-condition behaviour and the slope.
 
 Writes `condition_summary.csv`, `covariance_contrasts.csv`, `behaviour_by_std.csv`
-(plus `degradation_slope.csv` only when the held tiers are kept), and the matching
-PNGs. Run with `make analyse-ablation`.
+(plus `degradation_slope.csv` only when the held tiers are kept). Run with
+`make analyse-ablation`.
 
 ### `calibration.py` (host-side)
 
-Is the covariance HONEST? Reads `calibration_records.csv` (per-step predicted std vs actual GT-EKF error, written for every arm; the EKF is identical across arms so any one suffices) and reports the std-vs-error rank correlation (overall + per condition) and a binned mean-error-per-std-bin table. A monotone rise means high std really does mean high error, so conditioning on it is justified - the precondition for the whole approach. Spearman is computed via ranks (no scipy dependency). Writes `calibration_correlations.csv`, `calibration_binned.csv`, and `ekf_calibration.png`. Run with `make analyse-calibration [ARM=<name>]`.
+Is the covariance HONEST? Reads `calibration_records.csv` (per-step predicted std vs actual GT-EKF error, written for every arm; the EKF is identical across arms so any one suffices) and reports the std-vs-error rank correlation (overall + per condition) and a binned mean-error-per-std-bin table. A monotone rise means high std really does mean high error, so conditioning on it is justified - the precondition for the whole approach. Spearman is computed via ranks (no scipy dependency). Writes `calibration_correlations.csv` and `calibration_binned.csv`. Run with `make analyse-calibration [ARM=<name>]`.
 
 ### `gate_roc.py` (host-side)
 
-Safety-gate comparison. From the same CSVs, sweeps an abort threshold over two signals and scores failure-catch vs false-abort (ROC AUC): the EKF position std (`ekf_std_pos_max_m`, available to EVERY arm since the EKF always runs) versus the evidential epistemic (`max_epistemic`, evidential arms only). A higher epistemic AUC on the same arm means the policy's own confidence beats the EKF-std gate a covariance-blind system could build. `handoff` episodes are excluded (already aborted). Writes `gate_auc.csv` + `gate_roc.png`. Run with `make analyse-gate`.
+Safety-gate comparison. From the same CSVs, sweeps an abort threshold over two signals and scores failure-catch vs false-abort (ROC AUC): the EKF position std (`ekf_std_pos_max_m`, available to EVERY arm since the EKF always runs) versus the evidential epistemic (`max_epistemic`, evidential arms only). A higher epistemic AUC on the same arm means the policy's own confidence beats the EKF-std gate a covariance-blind system could build. `handoff` episodes are excluded (already aborted). Writes `gate_auc.csv`. Run with `make analyse-gate`.
 
 ### `covariance_probe.py` (in-container, torch)
 
@@ -78,7 +82,15 @@ Run with `make handover-timing [ARM=<name>]`.
 
 ### `cross_seed.py` (host-side)
 
-Pools EVERY seed's stage-`STAGE` eval into the seed-robust headline. The per-seed analyses each read one `outputs/<analysis>/seed_<N>/` tree; a cross-arm difference on a single seed is indistinguishable from seed luck (Henderson et al. 2017), so this aggregator produces two reads side by side: (a) POOLED - concatenate every seed's per-episode records into one sample and run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC AUC, the calibration rank correlation) on the ~3x larger pool, the precision-of-effect headline; (b) PER-SEED ROBUSTNESS - per arm, the mean and `[min, max]` of each metric across seeds, the honest cross-seed-stability check the curriculum plan mandates (a bootstrap on a fixed pool of three runs under-represents between-seed variance). It re-implements no statistics: the per-analysis modules expose pure DataFrame functions, so a pooled frame with an added `seed` column flows through them untouched. Reads `--results-root outputs/raw/evaluation_results` (the PARENT of the `seed_<N>/` trees) and writes the pooled `pooled_*.csv` + per-seed `seed_robustness*.csv` and the figures under `outputs/raw_derived/cross_seed_analysis/all_seeds/stage<S>/` (the cross-seed sibling of the per-seed `seed_<N>/stage<S>/`). Run with `make analyse-cross-seed [STAGE=6]`.
+Pools EVERY seed's stage-`STAGE` eval into the seed-robust headline. The per-seed analyses each read one `outputs/<analysis>/seed_<N>/` tree; a cross-arm difference on a single seed is indistinguishable from seed luck (Henderson et al. 2017), so this aggregator produces two reads side by side: (a) POOLED - concatenate every seed's per-episode records into one sample and run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC AUC, the calibration rank correlation) on the ~3x larger pool, the precision-of-effect headline; (b) PER-SEED ROBUSTNESS - per arm, the mean and `[min, max]` of each metric across seeds, the honest cross-seed-stability check the curriculum plan mandates (a bootstrap on a fixed pool of three runs under-represents between-seed variance). It re-implements no statistics: the per-analysis modules expose pure DataFrame functions, so a pooled frame with an added `seed` column flows through them untouched. Reads `--results-root outputs/raw/evaluation_results` (the PARENT of the `seed_<N>/` trees) and writes the pooled `pooled_*.csv` + per-seed `seed_robustness*.csv` under `outputs/raw_derived/cross_seed_analysis/all_seeds/stage<S>/` (the cross-seed sibling of the per-seed `seed_<N>/stage<S>/`). Run with `make analyse-cross-seed [STAGE=6]`.
+
+### `bundle.py` (host-side)
+
+Assembles `outputs/main_analysis/` - the curated set. Recomputes each summary from the per-episode records through the shared scope filters (`drop_unreported`, `keep_varying`) rather than copying, so every cell traces back to raw data; copies the pooled CSVs into `values/`; and writes a `MANIFEST.md` naming the source of each artefact. Figures are not copied - `make figures` writes them straight into `main_analysis/figures/`. Run with `make analysis-bundle [STAGE=6]`.
+
+### `figures/` (host-side)
+
+Every rendered figure. `build.py` draws the headline set into `outputs/main_analysis/figures/` (`make figures [FIG=gate_roc]`); `run_figures.py` draws the per-run diagnostic panels into `outputs/raw_derived/per_run_figures/` (`make run-figures`); `tb_curves.py` (one level up) exports the TensorBoard scalars the training-curve figure reads. All of them import `scripts/figure_style.py`, the single source of rcParams, palette and legend treatment.
 
 ### `_discovery.py` (shared helper, not a Make target)
 

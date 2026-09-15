@@ -399,6 +399,48 @@ for the structural dims and the
 
 ---
 
+## Results Layout
+
+`outputs/` is gitignored and splits into three tiers by how each artefact is produced.
+Only `raw/` costs simulation time; everything else regenerates from it in minutes.
+
+```
+outputs/
+|-- raw/                      Written ONLY by training and evaluation. CSVs, no figures.
+|   |-- evaluation_results/     Per-run condition sweeps (make docker-eval)
+|   |-- bay_successes/          Per-bay success tallies (training + eval)
+|   +-- demo_traces/            Per-episode traces (make eval-visualise-2d)
+|
+|-- raw_derived/              Intermediate, regenerated from raw/ by scripts/analysis/
+|   |-- cross_seed_analysis/    Pooled + per-seed robustness (make analyse-cross-seed)
+|   |-- ablation_analysis/      Single-seed contrasts (make analyse-ablation)
+|   |-- gate_analysis/          Single-seed gate ROC (make analyse-gate)
+|   |-- training/               Seed-averaged curves (make docker-training-curves)
+|   |-- layouts/                Lot PNGs (make generate-layouts)
+|   +-- per_run_figures/        Per-run diagnostic panels (make run-figures)
+|
++-- main_analysis/            The deliverable. No duplicates of anything above.
+    |-- figures/                Written directly by make figures
+    |-- summaries/              Derived CSVs, recomputed from raw/ (make analysis-bundle)
+    |-- values/                 The pooled CSVs those summaries are read from
+    +-- MANIFEST.md             What each artefact is and where it came from
+```
+
+The boundary is enforced in code: `uncertainty_rl/evaluation/` imports no plotting
+library, and the analysis modules under `scripts/analysis/` write CSVs only. Every
+figure comes from `scripts/analysis/figures/`, which is the single place that renders.
+
+To rebuild everything downstream of a completed evaluation:
+
+```bash
+make analyse-cross-seed STAGE=6   # pooled CSVs
+make docker-training-curves       # TensorBoard scalars -> CSV (needs the container)
+make figures                      # the figures, into main_analysis/figures/
+make analysis-bundle              # summaries + values + MANIFEST
+```
+
+---
+
 ## Useful Commands Reference
 
 | Command | Purpose | GPU? |
@@ -413,6 +455,11 @@ for the structural dims and the
 | `make docker-test-unit` | Run Unit tests | No |
 | `make docker-verify` | All checks in container | No |
 | `make generate-layouts` | Regenerate lot YAMLs + PNGs | No |
+| `make analyse-cross-seed` | Pool every seed into the headline CSVs | No |
+| `make docker-training-curves` | TensorBoard scalars -> CSV (needs `tensorboard`) | No |
+| `make figures` | Render the figures into `main_analysis/figures/` | No |
+| `make run-figures` | Per-run diagnostic panels | No |
+| `make analysis-bundle` | Assemble summaries + values + MANIFEST | No |
 | `make visualise` | Live 2D bird's-eye viewer | No |
 | `make verify` | Local lint + typecheck + sanity | No |
 

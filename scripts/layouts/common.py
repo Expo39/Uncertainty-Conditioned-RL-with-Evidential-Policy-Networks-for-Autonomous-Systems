@@ -278,7 +278,6 @@ def plot_layout(
     fs.apply()
     fig, ax = plt.subplots(figsize=fs.WIDE_TALL)
     ax.set_aspect("equal")
-    # No internal title: the LaTeX caption names the floor plan.
     ax.set_xlabel("x (m)")
     ax.set_ylabel("y (m)")
     ax.set_aspect("equal", adjustable="datalim")

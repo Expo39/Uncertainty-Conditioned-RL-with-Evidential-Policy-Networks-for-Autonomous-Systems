@@ -1,5 +1,5 @@
 """
-@file plot_degradation_tiers.py
+@file degradation_tiers.py
 @brief Per-arm success across the TRUE-localisation GNSS tiers
        under the live anchor Markov chain, pooled over seeds.
 
@@ -31,7 +31,7 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 # Make the repo root importable so the shared figure style resolves when this
-# file is run directly (python scripts/analysis/figures/plot_degradation_tiers.py).
+# file is run directly (python scripts/analysis/figures/degradation_tiers.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from scripts import figure_style as fs  # noqa: E402
