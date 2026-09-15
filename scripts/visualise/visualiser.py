@@ -5,21 +5,27 @@
 Tails outputs/vis_history.jsonl and renders each frame as it arrives using
 Pygame. Creates outputs/.vis_active so the environment starts writing frames;
 removing it (on window close) stops the env writing.
+
+The display is built for demonstration as well as debugging: the GNSS fix-state
+tier drives a colour-coded panel, an uncertainty ring around the ego vehicle
+scaled to that tier's 1-sigma position noise, and a scrolling timeline so the
+mid-episode transitions between tiers are visible rather than easily missed.
+Optional MP4 recording (@see recorder.FrameRecorder) captures the window.
 """
 
 import json
 import math
 import signal
 import time
+from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 
 import numpy as np
 import pygame
 
 from scripts.colours import (
     BAY_HEX,
-    HEX_CONE,
     HEX_EGO,
     HEX_LOT,
     HEX_PATROL_VEHICLE,
@@ -28,6 +34,14 @@ from scripts.colours import (
     HEX_TARGET_BAY,
     hex_to_rgb,
 )
+from scripts.visualise.gnss_tiers import (
+    GnssTier,
+    display_label,
+    load_gnss_tiers,
+    resolve_tier,
+    unknown_colour,
+)
+from scripts.visualise.recorder import FrameRecorder
 
 # ---------------------------------------------------------------------------
 # Colour palette (converted once at import time)
@@ -43,32 +57,55 @@ _C_STATIC_VEHICLE = hex_to_rgb(HEX_STATIC_VEHICLE)
 _C_PATROL_VEHICLE = hex_to_rgb(HEX_PATROL_VEHICLE)
 _C_PEDESTRIAN = hex_to_rgb(HEX_PEDESTRIAN_ZONE)
 _C_EGO = hex_to_rgb(HEX_EGO)
-_C_TRAIL = (*hex_to_rgb(HEX_EGO), 100)
+_C_TRAIL = (*hex_to_rgb(HEX_EGO), 120)
 _C_BG = (248, 248, 248)
-_C_HUD_BG = (30, 30, 30, 180)
-_C_HUD_TEXT = (212, 212, 212)
-_C_CONE = hex_to_rgb(HEX_CONE)
+_C_HUD_BG = (24, 24, 24)
+_C_HUD_TEXT = (245, 245, 245)
+_C_HUD_DIM = (170, 170, 170)
+_C_LEGEND_BG = (235, 235, 235)
+_C_LEGEND_TEXT = (50, 50, 50)
+_C_RECORD = (229, 57, 53)
+_C_SUCCESS = (0, 200, 83)
+_C_FAILURE = (229, 57, 53)
+
+# Alpha applied to the ego uncertainty ring. Low enough that bays and the lot
+# stay readable underneath a 5 m degraded-tier ring, which can span the width of
+# several bays.
+_RING_ALPHA = 55
+_RING_EDGE_ALPHA = 170
 
 # ---------------------------------------------------------------------------
 # Bay colour/linewidth lookup
 # ---------------------------------------------------------------------------
-
+#
+# Every layout in this project is perpendicular-only, so the angled/parallel
+# entries never fire in practice; they are kept so a future layout renders
+# correctly rather than falling back to the perpendicular style.
 _BAY_STYLE: Dict[str, Tuple[Any, int]] = {
-    "angled": (_C_ANGLED_BAY, 1),
-    "parallel": (_C_PARALLEL_BAY, 1),
-    "perpendicular": (_C_PERP_BAY, 1),
+    "angled": (_C_ANGLED_BAY, 2),
+    "parallel": (_C_PARALLEL_BAY, 2),
+    "perpendicular": (_C_PERP_BAY, 2),
 }
-_BAY_STYLE_DEFAULT: Tuple[Any, int] = (_C_PERP_BAY, 1)
+_BAY_STYLE_DEFAULT: Tuple[Any, int] = (_C_PERP_BAY, 2)
 
 # ---------------------------------------------------------------------------
 # Layout constants
 # ---------------------------------------------------------------------------
+#
+# Font sizes and the legend width are multiplied by the UI scale at startup
+# (see _Layout), so the whole interface can be enlarged for a projector or a
+# recording with a single --ui-scale value.
 
-_LEGEND_W = 180
+_UI_SCALE_DEFAULT = 1.5
+
 _MAP_W = 900
-_WINDOW_W = _MAP_W + _LEGEND_W
-# Map area height. The HUD is drawn in a separate band BELOW the map, not
-# overlaid on it, so the window is taller than the map by _HUD_BAND_H.
+_BASE_LEGEND_W = 160
+_BASE_HUD_FONT = 13
+_BASE_LABEL_FONT = 12
+_BASE_TIER_FONT = 21
+_BASE_BANNER_FONT = 34
+
+# Map area height. The HUD is drawn in a band BELOW the map, not overlaid on it.
 #
 # _MAP_H is only the INITIAL height (used for the waiting splash). Once the
 # first frame arrives, _compute_viewport() resizes the map area to the lot's
@@ -77,17 +114,9 @@ _WINDOW_W = _MAP_W + _LEGEND_W
 _MAP_H = 600
 _MAP_H_MIN = 300
 _MAP_H_MAX = 900
-# HUD band: up to four stacked bars at y-offsets 2 / 24 / 46 / 68 (see
-# _draw_frame). Bars 0-2 are always drawn (floor info; action+spd;
-# EKF-vs-GT kinematic comparison); bar 3 is the debug line, only shown when
-# debug=True in env_config.yaml. Each bar is ~22 px tall.
-_HUD_BAR_PITCH = 22
-_HUD_BAND_H = 92
-_WINDOW_H = _MAP_H + _HUD_BAND_H
+
 _FPS_CAP = 120
 _MARGIN_PX = 40
-_HUD_FONT_SIZE = 14
-_LABEL_FONT_SIZE = 13
 _EGO_HALF_L = 2.25
 _EGO_HALF_W = 1.0
 _NPC_HALF_L = 2.35
@@ -95,13 +124,65 @@ _NPC_HALF_W = 1.05
 _TRAIL_MAX_POINTS = 500
 _POLL_SLEEP = 0.02
 
+# Tier timeline: how many recent frames of tier history the strip holds. The
+# samples are stretched across the full strip width, so a short run reads as
+# clearly as a saturated buffer; past this many frames the oldest scroll off.
+_TIMELINE_SLOTS = 320
+_TIMELINE_H = 14
+# How long the "tier changed" highlight stays lit, in seconds.
+_TIER_FLASH_SECONDS = 1.5
+
 _DEFAULT_HISTORY_FILE = Path("outputs/vis_history.jsonl")
 _SIGNAL_FILE = Path("outputs/.vis_active")
+_DEFAULT_RECORD_DIR = Path("outputs/recordings")
 
-# Legend fonts are initialised lazily on first _draw_legend call (requires
-# pygame.font.init() to have run first).
-_legend_font: Optional[pygame.font.Font] = None
-_legend_title_font: Optional[pygame.font.Font] = None
+
+class _Layout:
+    """
+    @class _Layout
+    @brief Scale-dependent font sizes and panel geometry.
+
+    Centralises every pixel size that depends on --ui-scale so the drawing code
+    never multiplies by the scale itself.
+    """
+
+    def __init__(self, ui_scale: float) -> None:
+        """
+        @brief Derive sizes from the UI scale.
+        @param ui_scale: Multiplier applied to fonts and the legend width.
+        """
+        self.scale = max(0.5, ui_scale)
+        self.hud_font = self.scaled(_BASE_HUD_FONT)
+        self.label_font = self.scaled(_BASE_LABEL_FONT)
+        self.tier_font = self.scaled(_BASE_TIER_FONT)
+        self.banner_font = self.scaled(_BASE_BANNER_FONT)
+        self.legend_w = self.scaled(_BASE_LEGEND_W)
+        self.window_w = _MAP_W + self.legend_w
+
+        # HUD band, top to bottom: the tier block (label + description), three
+        # status bars (context, speed/action, and the debug line written only
+        # when debug=True in env_config.yaml), then the timeline strip with its
+        # caption. Sized from font metrics, and always reserving the debug bar,
+        # so nothing is clipped at any scale or in either debug mode.
+        self.bar_pitch = self.hud_font + 8
+        self.tier_block_h = self.tier_font + self.hud_font + 12
+        self.timeline_block_h = _TIMELINE_H + self.label_font + self.scaled(8)
+        self.hud_band_h = (
+            self.tier_block_h
+            + 3 * self.bar_pitch
+            + self.timeline_block_h
+            + self.scaled(12)
+        )
+        # Stroke widths, so shapes survive being scaled down into a GIF.
+        self.thick_line = max(2, int(round(3 * self.scale / 1.5)))
+
+    def scaled(self, base: int) -> int:
+        """
+        @brief Scale a base pixel size.
+        @param base: Unscaled size in pixels.
+        @return Scaled size, at least 1.
+        """
+        return max(1, int(round(base * self.scale)))
 
 
 # ---------------------------------------------------------------------------
@@ -131,8 +212,8 @@ def _rot_corners(
             [half_l, -half_w],
         ]
     )
-    R = np.array([[cos_y, -sin_y], [sin_y, cos_y]])
-    return (R @ local.T).T + np.array([cx, cy])
+    rotation = np.array([[cos_y, -sin_y], [sin_y, cos_y]])
+    return (rotation @ local.T).T + np.array([cx, cy])
 
 
 def _world_to_screen(
@@ -162,6 +243,30 @@ def _w2s(x: float, y: float, origin: np.ndarray, scale: float) -> Tuple[int, int
     return (int((x - ox) * scale + _MARGIN_PX), int((y - oy) * scale + _MARGIN_PX))
 
 
+def _draw_arrow_head(
+    surface: pygame.Surface,
+    colour: Any,
+    start: Tuple[int, int],
+    end: Tuple[int, int],
+    size: int,
+) -> None:
+    """
+    @brief Draw a filled triangular head at the end of a line.
+    @param surface: Target surface.
+    @param colour: Fill colour.
+    @param start: Line start pixel (sets the direction).
+    @param end: Line end pixel (where the head is drawn).
+    @param size: Head length in pixels.
+    """
+    dx, dy = end[0] - start[0], end[1] - start[1]
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    half = size * 0.6
+    left = (int(end[0] - ux * size + uy * half), int(end[1] - uy * size - ux * half))
+    right = (int(end[0] - ux * size - uy * half), int(end[1] - uy * size + ux * half))
+    pygame.draw.polygon(surface, colour, [end, left, right])
+
+
 # ---------------------------------------------------------------------------
 # Static scene surface
 # ---------------------------------------------------------------------------
@@ -172,6 +277,7 @@ def _build_static_surface(
     origin: np.ndarray,
     scale: float,
     map_h: int,
+    layout: _Layout,
 ) -> pygame.Surface:
     """
     @brief Render the static scene elements into a surface (rebuilt once per episode).
@@ -182,6 +288,7 @@ def _build_static_surface(
     @param origin: World origin for the viewport.
     @param scale: Pixels per metre.
     @param map_h: Current map-area height in pixels.
+    @param layout: Scale-dependent sizes.
     @return Opaque Surface with static scene painted on it.
     """
     surf = pygame.Surface((_MAP_W, map_h))
@@ -204,9 +311,9 @@ def _build_static_surface(
 
         if is_target:
             colour: Any = _C_TARGET_BAY
-            lw = 3
+            line_w = layout.thick_line + 1
         else:
-            colour, lw = _BAY_STYLE.get(
+            colour, line_w = _BAY_STYLE.get(
                 bay.get("bay_type", "perpendicular"), _BAY_STYLE_DEFAULT
             )
 
@@ -217,7 +324,7 @@ def _build_static_surface(
         spts = _world_to_screen(
             _rot_corners(bx, by, half_d, half_w, yaw_deg), origin, scale
         )
-        pygame.draw.polygon(surf, colour, spts, lw)
+        pygame.draw.polygon(surf, colour, spts, line_w)
 
         # Heading arrows for target bay (nose-in and nose-out)
         if is_target:
@@ -229,13 +336,8 @@ def _build_static_surface(
                 s1 = _w2s(
                     bx + arrow_len * cx_dir, by + arrow_len * cy_dir, origin, scale
                 )
-                pygame.draw.line(surf, _C_TARGET_BAY, s0, s1, 2)
-                dx, dy = s1[0] - s0[0], s1[1] - s0[1]
-                length = math.hypot(dx, dy) or 1.0
-                ux, uy = dx / length, dy / length
-                left = (int(s1[0] - ux * 8 + uy * 5), int(s1[1] - uy * 8 - ux * 5))
-                right = (int(s1[0] - ux * 8 - uy * 5), int(s1[1] - uy * 8 + ux * 5))
-                pygame.draw.polygon(surf, _C_TARGET_BAY, [s1, left, right])
+                pygame.draw.line(surf, _C_TARGET_BAY, s0, s1, layout.thick_line)
+                _draw_arrow_head(surf, _C_TARGET_BAY, s0, s1, 4 + layout.thick_line * 2)
 
     # Static parked vehicles
     for actor in state.get("actors", []):
@@ -256,51 +358,6 @@ def _build_static_surface(
     return surf
 
 
-def _draw_legend(screen: pygame.Surface) -> None:
-    """
-    @brief Draw the colour legend in the right-hand panel.
-    @param screen: Main Pygame surface.
-    """
-    global _legend_font, _legend_title_font
-    if _legend_font is None:
-        _legend_font = pygame.font.SysFont("monospace", _LABEL_FONT_SIZE)
-        _legend_title_font = pygame.font.SysFont(
-            "monospace", _LABEL_FONT_SIZE, bold=True
-        )
-    font = _legend_font
-    title_font = _legend_title_font
-
-    # Height is read from the surface so the legend panel always spans the
-    # full window even after the map area has been resized.
-    win_h = screen.get_height()
-    pygame.draw.rect(
-        screen,
-        (235, 235, 235),
-        pygame.Rect(_MAP_W, 0, _LEGEND_W, win_h),
-    )
-    pygame.draw.line(screen, (180, 180, 180), (_MAP_W, 0), (_MAP_W, win_h), 2)
-
-    entries = [
-        (_C_TARGET_BAY, "Target bay"),
-        (_C_PERP_BAY, "Perpendicular"),
-        (_C_ANGLED_BAY, "Angled"),
-        (_C_PARALLEL_BAY, "Parallel"),
-        (_C_EGO, "Ego"),
-        (_C_PATROL_VEHICLE, "Patrol NPC"),
-        (_C_STATIC_VEHICLE, "Parked"),
-        (_C_PEDESTRIAN, "Pedestrian"),
-    ]
-
-    x0, y0 = _MAP_W + 10, 16
-    screen.blit(title_font.render("Legend", True, (40, 40, 40)), (x0, y0))
-    y0 += _LABEL_FONT_SIZE + 8
-
-    for colour, label in entries:
-        pygame.draw.rect(screen, colour, (x0, y0 + 2, 14, 14))
-        screen.blit(font.render(label, True, (50, 50, 50)), (x0 + 20, y0))
-        y0 += 22
-
-
 # ---------------------------------------------------------------------------
 # Main visualiser class
 # ---------------------------------------------------------------------------
@@ -315,32 +372,45 @@ class LiveVisualiser:
     The static scene (lot, bays, parked vehicles) is rebuilt once per episode.
 
     Controls:
+        R        - start/stop MP4 recording
         F        - toggle fullscreen
         ESC / Q  - exit
     """
 
-    def __init__(self, history_file: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        history_file: Optional[Path] = None,
+        ui_scale: float = _UI_SCALE_DEFAULT,
+        record: bool = False,
+        record_dir: Optional[Path] = None,
+        fps: int = 30,
+    ) -> None:
         """
         @brief Initialise Pygame window and state.
         @param history_file: Path to vis_history.jsonl. Defaults to
                outputs/vis_history.jsonl.
+        @param ui_scale: Font/legend scale multiplier.
+        @param record: Start recording immediately on launch.
+        @param record_dir: Directory for MP4 output.
+        @param fps: Recording frame rate.
         """
         self._history_file = history_file or _DEFAULT_HISTORY_FILE
         self._signal_file = _SIGNAL_FILE
+        self._layout = _Layout(ui_scale)
 
         # Map and window heights start at the defaults and are resized to the
         # lot aspect ratio once the first frame arrives (see _compute_viewport).
         self._map_h: int = _MAP_H
-        self._window_h: int = _WINDOW_H
+        self._window_h: int = _MAP_H + self._layout.hud_band_h
 
         pygame.init()
         pygame.font.init()
-        self._screen = pygame.display.set_mode((_WINDOW_W, self._window_h))
+        self._screen = pygame.display.set_mode((self._layout.window_w, self._window_h))
         pygame.display.set_caption(
-            "CARLA Parking Visualiser  |  F fullscreen  |  ESC quit"
+            "CARLA Parking Visualiser  |  R record  |  F fullscreen  |  ESC quit"
         )
         self._clock = pygame.time.Clock()
-        self._hud_font = pygame.font.SysFont("monospace", _HUD_FONT_SIZE)
+        self._init_fonts()
 
         self._static_surf: Optional[pygame.Surface] = None
         self._static_episode_id: Optional[int] = None
@@ -364,8 +434,39 @@ class LiveVisualiser:
             (_MAP_W, self._map_h), pygame.SRCALPHA
         )
 
+        # GNSS tier presentation, loaded once from the profiles YAML.
+        self._gnss_tiers = load_gnss_tiers()
+        self._tier_history: Deque[str] = deque(maxlen=_TIMELINE_SLOTS)
+        self._current_tier_name: str = ""
+        self._tier_changed_at: float = 0.0
+
+        # end_reason appears on a single frame, so it is latched and held until
+        # the episode id changes - otherwise it flashes past unseen.
+        self._end_reason: Optional[str] = None
+        self._end_reason_episode_id: Optional[int] = None
+
+        self._fps = fps
+        self._record_dir = record_dir or _DEFAULT_RECORD_DIR
+        self._recorder: Optional[FrameRecorder] = None
+        self._record_error: Optional[str] = None
+        self._record_on_start = record
+
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
         self._signal_file.touch()
+
+    def _init_fonts(self) -> None:
+        """@brief Create the fonts for the current UI scale."""
+        self._hud_font = pygame.font.SysFont("monospace", self._layout.hud_font)
+        self._label_font = pygame.font.SysFont("monospace", self._layout.label_font)
+        self._label_bold = pygame.font.SysFont(
+            "monospace", self._layout.label_font, bold=True
+        )
+        self._tier_font = pygame.font.SysFont(
+            "monospace", self._layout.tier_font, bold=True
+        )
+        self._banner_font = pygame.font.SysFont(
+            "monospace", self._layout.banner_font, bold=True
+        )
 
     # -----------------------------------------------------------------------
     # Entry point
@@ -380,16 +481,61 @@ class LiveVisualiser:
 
         signal.signal(signal.SIGINT, _sigint)
 
+        if self._record_on_start:
+            self._toggle_recording()
+
         try:
             self._run_loop()
         except KeyboardInterrupt:
             pass
         finally:
+            self._finish_recording()
             try:
                 self._signal_file.unlink(missing_ok=True)
             except OSError:
                 pass
             pygame.quit()
+
+    # -----------------------------------------------------------------------
+    # Recording
+    # -----------------------------------------------------------------------
+
+    def _toggle_recording(self) -> None:
+        """
+        @brief Start recording, or stop and finalise the current file.
+
+        A missing ffmpeg is surfaced in the HUD rather than raised, so the
+        viewer keeps running on a host without it.
+        """
+        if self._recorder is not None:
+            self._finish_recording()
+            return
+
+        stamp = time.strftime("%d-%m-%Y-%H%M%S")
+        output = self._record_dir / f"{stamp}.mp4"
+        recorder = FrameRecorder(
+            output, self._layout.window_w, self._window_h, fps=self._fps
+        )
+        try:
+            recorder.start()
+        except RuntimeError as exc:
+            self._record_error = str(exc)
+            print(f"Recording unavailable: {exc}")
+            return
+        self._recorder = recorder
+        self._record_error = None
+        print(f"Recording to {output}")
+
+    def _finish_recording(self) -> None:
+        """@brief Stop the recorder and report where the file landed."""
+        if self._recorder is None:
+            return
+        written = self._recorder.stop()
+        if written is not None:
+            print(f"Recording saved: {written}")
+        else:
+            print("Recording stopped before any frame was written.")
+        self._recorder = None
 
     # -----------------------------------------------------------------------
     # Main loop
@@ -423,10 +569,18 @@ class LiveVisualiser:
                 self._draw_waiting()
                 time.sleep(_POLL_SLEEP)
             else:
-                # Data stream temporarily dry - hold last frame, don't flicker
+                # Data stream temporarily dry - hold last frame, don't flicker.
+                # Still offer the surface to the recorder so a paused stream
+                # records as a still rather than compressing video time.
+                self._capture_frame()
                 time.sleep(_POLL_SLEEP)
 
             self._clock.tick(_FPS_CAP)
+
+    def _capture_frame(self) -> None:
+        """@brief Offer the current window to the recorder, if active."""
+        if self._recorder is not None:
+            self._recorder.capture(self._screen)
 
     # -----------------------------------------------------------------------
     # Event handling
@@ -440,11 +594,13 @@ class LiveVisualiser:
             elif event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     self._exit_requested = True
+                elif event.key == pygame.K_r:
+                    self._toggle_recording()
                 elif event.key == pygame.K_f:
                     self._fullscreen = not self._fullscreen
                     flags = pygame.FULLSCREEN if self._fullscreen else 0
                     self._screen = pygame.display.set_mode(
-                        (_WINDOW_W, self._window_h), flags
+                        (self._layout.window_w, self._window_h), flags
                     )
                     self._static_episode_id = None  # Force static surface rebuild
                     self._vis_trail_episode_id = None  # Force trail reset
@@ -479,10 +635,7 @@ class LiveVisualiser:
                 if last_nl == -1:
                     return []
                 self._file_offset += last_nl + 1
-                try:
-                    text = chunk[: last_nl + 1].decode("utf-8")
-                except UnicodeDecodeError:
-                    text = chunk[: last_nl + 1].decode("utf-8", errors="replace")
+                text = chunk[: last_nl + 1].decode("utf-8", errors="replace")
                 for line in text.splitlines():
                     line = line.strip()
                     if not line:
@@ -542,9 +695,11 @@ class LiveVisualiser:
         if new_map_h == self._map_h:
             return
         self._map_h = new_map_h
-        self._window_h = new_map_h + _HUD_BAND_H
+        self._window_h = new_map_h + self._layout.hud_band_h
         flags = pygame.FULLSCREEN if self._fullscreen else 0
-        self._screen = pygame.display.set_mode((_WINDOW_W, self._window_h), flags)
+        self._screen = pygame.display.set_mode(
+            (self._layout.window_w, self._window_h), flags
+        )
         self._trail_surf = pygame.Surface((_MAP_W, self._map_h), pygame.SRCALPHA)
         # The static surface was sized to the old height - force a rebuild.
         self._static_episode_id = None
@@ -562,7 +717,7 @@ class LiveVisualiser:
         so a still-loading viewer is visibly distinct from a stalled one.
         """
         self._screen.fill(_C_BG)
-        _draw_legend(self._screen)
+        self._draw_legend()
 
         elapsed = time.time() - self._start_time
         spinner = "|/-\\"[int(elapsed * 4) % 4]
@@ -588,20 +743,17 @@ class LiveVisualiser:
             "(docker ps / docker logs)."
         )
 
-        title_font = pygame.font.SysFont("monospace", 22, bold=True)
-        body_font = pygame.font.SysFont("monospace", 15)
-
         lines = [
-            (title_font, f"{spinner} Waiting for data...  ({elapsed:4.0f}s)"),
-            (body_font, ""),
-            (body_font, signal_line),
-            (body_font, history_line),
-            (body_font, ""),
-            (body_font, hint),
+            (self._tier_font, f"{spinner} Waiting for data...  ({elapsed:4.0f}s)"),
+            (self._hud_font, ""),
+            (self._hud_font, signal_line),
+            (self._hud_font, history_line),
+            (self._hud_font, ""),
+            (self._hud_font, hint),
         ]
 
         total_h = sum(f.get_height() + 6 for f, _ in lines)
-        y = (_MAP_H - total_h) // 2
+        y = (self._map_h - total_h) // 2
         for font, text in lines:
             if text:
                 surf = font.render(text, True, (70, 70, 70))
@@ -609,6 +761,7 @@ class LiveVisualiser:
             y += font.get_height() + 6
 
         pygame.display.flip()
+        self._capture_frame()
 
     def _draw_frame(self, state: Dict[str, Any]) -> None:
         """
@@ -624,21 +777,27 @@ class LiveVisualiser:
             # rebuilt static surface is not discarded on the next frame.
             self._compute_viewport(state)
             self._static_surf = _build_static_surface(
-                state, self._origin, self._scale, self._map_h
+                state, self._origin, self._scale, self._map_h, self._layout
             )
             self._static_episode_id = episode_id
+            self._tier_history.clear()
 
         assert self._static_surf is not None
         self._screen.blit(self._static_surf, (0, 0))
-        _draw_legend(self._screen)
+        self._draw_legend()
 
         origin, scale = self._origin, self._scale
+        ego = state.get("ego", {})
+
+        # Track the live GNSS tier before drawing anything that depends on it.
+        tier_name = str(ego.get("gnss_tier", ""))
+        tier = resolve_tier(self._gnss_tiers, tier_name)
+        self._update_tier_state(tier_name)
 
         # Accumulated ego trail: clear on episode reset, then append current position.
         if episode_id != self._vis_trail_episode_id:
             self._vis_trail = []
             self._vis_trail_episode_id = episode_id
-        ego = state.get("ego", {})
         if ego:
             self._vis_trail.append((float(ego["x"]), float(ego["y"])))
         trail_len = len(self._vis_trail)
@@ -650,8 +809,14 @@ class LiveVisualiser:
             )
             spts = _world_to_screen(np.array(trail_pts), origin, scale)
             self._trail_surf.fill((0, 0, 0, 0))
-            pygame.draw.lines(self._trail_surf, _C_TRAIL, False, spts, 2)
+            pygame.draw.lines(
+                self._trail_surf, _C_TRAIL, False, spts, self._layout.thick_line
+            )
             self._screen.blit(self._trail_surf, (0, 0))
+
+        # Uncertainty ring, drawn beneath every actor so it never hides one.
+        if ego and tier is not None:
+            self._draw_uncertainty_ring(ego, tier, origin, scale)
 
         # Patrol NPC vehicles
         for actor in state.get("actors", []):
@@ -693,85 +858,433 @@ class LiveVisualiser:
                 ),
             )
             yaw_r = math.radians(eyaw)
-            cos_y, sin_y = math.cos(yaw_r), math.sin(yaw_r)
             s0 = _w2s(ex, ey, origin, scale)
-            s1 = _w2s(ex + 3.5 * cos_y, ey + 3.5 * sin_y, origin, scale)
-            pygame.draw.line(self._screen, _C_EGO, s0, s1, 2)
-            dx, dy = s1[0] - s0[0], s1[1] - s0[1]
-            length = math.hypot(dx, dy) or 1.0
-            ux, uy = dx / length, dy / length
-            left = (int(s1[0] - ux * 8 + uy * 5), int(s1[1] - uy * 8 - ux * 5))
-            right = (int(s1[0] - ux * 8 - uy * 5), int(s1[1] - uy * 8 + ux * 5))
-            pygame.draw.polygon(self._screen, _C_EGO, [s1, left, right])
+            s1 = _w2s(
+                ex + 3.5 * math.cos(yaw_r), ey + 3.5 * math.sin(yaw_r), origin, scale
+            )
+            pygame.draw.line(self._screen, _C_EGO, s0, s1, self._layout.thick_line)
+            _draw_arrow_head(
+                self._screen, _C_EGO, s0, s1, 4 + self._layout.thick_line * 2
+            )
 
-        # HUD. The GNSS fix-state tier is the active RTK degradation level for
-        # this step (mid-episode Markov drift varies it), so it sits on the
-        # context line to read the policy's response at each tier.
-        ego = state.get("ego", {})
-        gnss_tier = ego.get("gnss_tier", "")
-        hud = (
-            f"Floor: {state.get('floor_plan', '?')}  "
-            f"Ep: {episode_id}  "
-            f"Step: {state.get('episode_step', '?')}  "
-            f"t={state.get('sim_time', 0.0):.2f}s  "
-            f"GNSS: {gnss_tier or '?'}"
+        self._latch_end_reason(state, episode_id)
+        self._draw_end_reason_banner()
+        self._draw_hud_band(state, ego, tier, tier_name)
+
+        pygame.display.flip()
+        self._capture_frame()
+        # The REC indicator is drawn after the capture so it is not burned into
+        # the recording, and only becomes visible on the next flip.
+        self._draw_record_indicator()
+
+    def _update_tier_state(self, tier_name: str) -> None:
+        """
+        @brief Record the current tier and flag a transition.
+        @param tier_name: Tier name from the current frame.
+        """
+        if tier_name != self._current_tier_name:
+            # Only flash on a real transition, not on the first frame of a run.
+            if self._current_tier_name:
+                self._tier_changed_at = time.time()
+            self._current_tier_name = tier_name
+        self._tier_history.append(tier_name)
+
+    def _latch_end_reason(
+        self, state: Dict[str, Any], episode_id: Optional[int]
+    ) -> None:
+        """
+        @brief Hold the episode outcome until the next episode begins.
+
+        end_reason is written on a single frame, so without latching it would
+        be visible for one render and missed on video.
+
+        @param state: Current frame.
+        @param episode_id: Current episode id.
+        """
+        if episode_id != self._end_reason_episode_id:
+            self._end_reason = None
+            self._end_reason_episode_id = episode_id
+        reason = state.get("end_reason")
+        if reason:
+            self._end_reason = str(reason)
+
+    def _draw_uncertainty_ring(
+        self,
+        ego: Dict[str, Any],
+        tier: GnssTier,
+        origin: np.ndarray,
+        scale: float,
+    ) -> None:
+        """
+        @brief Draw the GNSS 1-sigma noise ring around the ego vehicle.
+
+        The radius is the tier's CONFIGURED position noise (metric_stddev_m),
+        not the EKF's live covariance estimate - it shows how much positional
+        error the fix state admits, which is what differs between tiers.
+
+        @param ego: Ego block from the frame.
+        @param tier: Resolved tier for this frame.
+        @param origin: World origin for the viewport.
+        @param scale: Pixels per metre.
+        """
+        radius_px = int(tier.stddev_m * scale)
+        if radius_px < 1:
+            return
+        centre = _w2s(float(ego["x"]), float(ego["y"]), origin, scale)
+        diameter = radius_px * 2
+        ring = pygame.Surface((diameter, diameter), pygame.SRCALPHA)
+        pygame.draw.circle(
+            ring, (*tier.colour, _RING_ALPHA), (radius_px, radius_px), radius_px
         )
-        # HUD is drawn in a dedicated band BELOW the map (y >= self._map_h),
-        # not overlaid on it. Fill the band with the HUD background colour so
-        # it reads as a solid strip.
+        pygame.draw.circle(
+            ring,
+            (*tier.colour, _RING_EDGE_ALPHA),
+            (radius_px, radius_px),
+            radius_px,
+            max(1, self._layout.thick_line - 1),
+        )
+        self._screen.blit(ring, (centre[0] - radius_px, centre[1] - radius_px))
+
+    def _draw_end_reason_banner(self) -> None:
+        """@brief Draw the latched episode outcome across the map area."""
+        if not self._end_reason:
+            return
+        success = self._end_reason == "success"
+        colour = _C_SUCCESS if success else _C_FAILURE
+        label = self._end_reason.replace("_", " ").upper()
+
+        text = self._banner_font.render(label, True, (255, 255, 255))
+        pad = self._layout.scaled(14)
+        banner = pygame.Surface(
+            (text.get_width() + pad * 2, text.get_height() + pad), pygame.SRCALPHA
+        )
+        banner.fill((*colour, 225))
+        banner.blit(text, (pad, pad // 2))
+        self._screen.blit(
+            banner,
+            ((_MAP_W - banner.get_width()) // 2, int(self._map_h * 0.12)),
+        )
+
+    # -----------------------------------------------------------------------
+    # HUD
+    # -----------------------------------------------------------------------
+
+    def _draw_hud_band(
+        self,
+        state: Dict[str, Any],
+        ego: Dict[str, Any],
+        tier: Optional[GnssTier],
+        tier_name: str,
+    ) -> None:
+        """
+        @brief Draw the HUD band below the map.
+
+        Layout, top to bottom: the GNSS tier panel (label, sigma, description),
+        the run/step context line, the speed and action line, the optional
+        debug line, and the tier timeline strip.
+
+        @param state: Current frame.
+        @param ego: Ego block from the frame.
+        @param tier: Resolved tier, or None when unknown.
+        @param tier_name: Raw tier name from the frame.
+        """
+        band_top = self._map_h
         pygame.draw.rect(
             self._screen,
-            _C_HUD_BG[:3],
-            (0, self._map_h, _WINDOW_W, _HUD_BAND_H),
+            _C_HUD_BG,
+            (0, band_top, self._layout.window_w, self._layout.hud_band_h),
         )
 
-        self._draw_hud(hud, y_offset=self._map_h + 2)
+        pad = self._layout.scaled(10)
+        y = band_top + pad // 2
+
+        y = self._draw_tier_panel(tier, tier_name, pad, y)
+
+        # Context line: which episode/step this is, in dimmer text since it is
+        # reference information rather than the headline.
+        context = (
+            f"Floor: {state.get('floor_plan', '?')}   "
+            f"Ep: {state.get('episode_id', '?')}   "
+            f"Step: {state.get('episode_step', '?')}   "
+            f"t={state.get('sim_time', 0.0):.1f}s"
+        )
+        self._screen.blit(self._hud_font.render(context, True, _C_HUD_DIM), (pad, y))
+        y += self._layout.bar_pitch
 
         # Speed and the action vector are fundamental state, not debug info -
         # the env writes ego.speed and action.* on every frame regardless of
         # the debug flag. Show them by default so the policy's behaviour
         # (is it braking? how fast is it over the bay?) is always visible.
         act = state.get("action", {})
-        self._draw_hud(
-            f"spd={ego.get('speed', 0.0):.2f}m/s  "
-            f"act=[st {act.get('steer', 0.0):+.2f}  "
-            f"th {act.get('throttle', 0.0):.2f}  "
-            f"br {act.get('brake', 0.0):.2f}]",
-            y_offset=self._map_h + 2 + _HUD_BAR_PITCH,
+        status = (
+            f"spd {ego.get('speed', 0.0):5.2f} m/s   "
+            f"steer {act.get('steer', 0.0):+.2f}   "
+            f"throttle {act.get('throttle', 0.0):.2f}   "
+            f"brake {act.get('brake', 0.0):.2f}"
         )
+        self._screen.blit(self._hud_font.render(status, True, _C_HUD_TEXT), (pad, y))
+        y += self._layout.bar_pitch
 
-        # Diagnostic fields (pos error, reward, covariance, EKF drift) are only
-        # written when debug=True in env_config.yaml.
+        # Diagnostic fields (pos error, reward, covariance) are only written
+        # when debug=True in env_config.yaml.
         dbg = state.get("debug")
         if dbg:
-            self._draw_hud(
-                f"err={dbg.get('pos_err', 0.0):.2f}m "
-                f"yaw={dbg.get('yaw_err_deg', 0.0):.1f}deg "
-                f"rwd={dbg.get('reward', 0.0):.3f} | "
-                f"cov={dbg.get('cov_rms', 0.0):.3f} "
-                f"drift={dbg.get('ekf_drift', 0.0):.2f}m",
-                y_offset=self._map_h + 2 + 2 * _HUD_BAR_PITCH,
+            debug_line = (
+                f"err {dbg.get('pos_err', 0.0):.2f} m   "
+                f"yaw {dbg.get('yaw_err_deg', 0.0):.1f} deg   "
+                f"reward {dbg.get('reward', 0.0):+.3f}   "
+                f"EKF cov {dbg.get('cov_rms', 0.0):.3f}"
+            )
+            self._screen.blit(
+                self._hud_font.render(debug_line, True, _C_HUD_DIM), (pad, y)
             )
 
-        pygame.display.flip()
+        self._draw_tier_timeline(pad)
 
-    def _draw_hud(self, text: str, y_offset: int = 8) -> None:
+    def _draw_tier_panel(
+        self, tier: Optional[GnssTier], tier_name: str, pad: int, y: int
+    ) -> int:
         """
-        @brief Render a HUD text bar at the given vertical position.
-        @param text: Text to display.
-        @param y_offset: Vertical position from the top of the window (pixels).
-               HUD bars are placed in the band below the map (y >= _MAP_H).
+        @brief Draw the GNSS tier label, sigma and description.
+        @param tier: Resolved tier, or None when unknown.
+        @param tier_name: Raw tier name from the frame.
+        @param pad: Left padding in pixels.
+        @param y: Top of the panel in pixels.
+        @return The y coordinate below the panel.
         """
-        txt_surf = self._hud_font.render(text, True, _C_HUD_TEXT)
-        bar = pygame.Surface(
-            (txt_surf.get_width() + 16, txt_surf.get_height() + 8), pygame.SRCALPHA
+        colour = tier.colour if tier is not None else unknown_colour()
+        label = display_label(tier, tier_name)
+
+        # A recent transition lights the panel so a tier change is unmissable
+        # on video, where a static label change is easy to miss.
+        flashing = (time.time() - self._tier_changed_at) < _TIER_FLASH_SECONDS
+        if flashing:
+            text_surf = self._tier_font.render(f"GNSS: {label}", True, (20, 20, 20))
+            highlight = pygame.Surface(
+                (text_surf.get_width() + pad, text_surf.get_height() + 4)
+            )
+            highlight.fill(colour)
+            highlight.blit(text_surf, (pad // 2, 2))
+            self._screen.blit(highlight, (pad, y))
+            width = highlight.get_width()
+        else:
+            text_surf = self._tier_font.render(f"GNSS: {label}", True, colour)
+            self._screen.blit(text_surf, (pad, y))
+            width = text_surf.get_width()
+
+        if tier is not None:
+            sigma = self._tier_font.render(
+                f"1-sigma {tier.stddev_m:.2f} m", True, colour
+            )
+            self._screen.blit(sigma, (pad + width + pad * 2, y))
+
+        y += self._layout.tier_font + 4
+        if tier is not None and tier.description:
+            self._screen.blit(
+                self._hud_font.render(tier.description, True, _C_HUD_TEXT), (pad, y)
+            )
+        return y + self._layout.hud_font + 8
+
+    def _timeline_strip_y(self) -> int:
+        """
+        @brief Top edge of the tier timeline strip in window coordinates.
+        @return Y pixel of the strip, leaving room for its caption above it.
+        """
+        band_bottom = self._map_h + self._layout.hud_band_h
+        return band_bottom - _TIMELINE_H - self._layout.scaled(6)
+
+    def _draw_tier_timeline(self, pad: int) -> None:
+        """
+        @brief Draw the scrolling history of GNSS tiers.
+
+        One column per rendered frame, oldest at the left. The steps between
+        colours make a mid-episode transition legible as a shape, and show how
+        long the current tier has been held and what preceded it.
+
+        @param pad: Left padding in pixels.
+        """
+        if not self._tier_history:
+            return
+
+        strip_w = self._layout.window_w - pad * 2
+        strip_y = self._timeline_strip_y()
+        pygame.draw.rect(
+            self._screen, (45, 45, 45), (pad, strip_y, strip_w, _TIMELINE_H)
         )
-        bar.fill(_C_HUD_BG)
-        bar.blit(txt_surf, (8, 4))
-        self._screen.blit(bar, (8, y_offset))
+
+        # The history stretches across the full strip, so a short run reads as
+        # clearly as a full buffer; once it saturates at _TIMELINE_SLOTS the
+        # oldest samples fall off the left and the strip scrolls.
+        samples = len(self._tier_history)
+        span = float(strip_w) / float(samples)
+
+        # Draw consecutive same-tier frames as a single run: far fewer draw
+        # calls than one rect per frame, and no seams inside a block.
+        run_start = 0
+        history = list(self._tier_history)
+        for i in range(1, samples + 1):
+            if i < samples and history[i] == history[run_start]:
+                continue
+            entry = resolve_tier(self._gnss_tiers, history[run_start])
+            colour = entry.colour if entry is not None else unknown_colour()
+            x0 = pad + int(run_start * span)
+            x1 = pad + int(i * span)
+            pygame.draw.rect(
+                self._screen, colour, (x0, strip_y, max(1, x1 - x0), _TIMELINE_H)
+            )
+            run_start = i
+
+        # Cursor marking "now" at the right-hand edge.
+        pygame.draw.rect(
+            self._screen, _C_HUD_TEXT, (pad + strip_w - 2, strip_y, 2, _TIMELINE_H)
+        )
+
+        caption = self._label_font.render("GNSS tier history", True, _C_HUD_DIM)
+        self._screen.blit(caption, (pad, strip_y - caption.get_height() - 2))
+
+    def _draw_record_indicator(self) -> None:
+        """
+        @brief Draw the recording dot, elapsed time, or a recorder error.
+
+        Called after the frame is captured so the indicator never appears in
+        the recording itself.
+        """
+        pad = self._layout.scaled(10)
+        y = self._timeline_strip_y() - self._layout.label_font - self._layout.scaled(4)
+
+        if self._recorder is not None:
+            radius = max(4, self._layout.label_font // 2)
+            cx = self._layout.window_w - pad * 9
+            pygame.draw.circle(self._screen, _C_RECORD, (cx, y + radius), radius)
+            label = self._label_bold.render(
+                f"REC {self._recorder.elapsed():5.1f}s", True, _C_RECORD
+            )
+            self._screen.blit(label, (cx + radius + 6, y))
+            pygame.display.update(
+                pygame.Rect(cx - radius, y, self._layout.window_w - cx, _TIMELINE_H)
+            )
+        elif self._record_error is not None:
+            label = self._label_font.render("REC unavailable", True, _C_RECORD)
+            pos = (self._layout.window_w - label.get_width() - pad, y)
+            self._screen.blit(label, pos)
+            pygame.display.update(
+                pygame.Rect(pos[0], y, label.get_width(), _TIMELINE_H)
+            )
+
+    # -----------------------------------------------------------------------
+    # Legend
+    # -----------------------------------------------------------------------
+
+    def _draw_legend(self) -> None:
+        """
+        @brief Draw the colour legend in the right-hand panel.
+
+        Swatches mirror how each element is actually drawn - filled squares for
+        filled shapes, outlines for the outline-drawn bays, a line for the
+        trail - so the legend decodes the map rather than merely listing names.
+        """
+        win_h = self._screen.get_height()
+        legend_x = _MAP_W
+        legend_w = self._layout.legend_w
+        pygame.draw.rect(
+            self._screen, _C_LEGEND_BG, pygame.Rect(legend_x, 0, legend_w, win_h)
+        )
+        pygame.draw.line(
+            self._screen, (180, 180, 180), (legend_x, 0), (legend_x, win_h), 2
+        )
+
+        x0 = legend_x + self._layout.scaled(10)
+        y0 = self._layout.scaled(14)
+        swatch = self._layout.label_font
+        row_h = swatch + self._layout.scaled(9)
+
+        self._screen.blit(
+            self._label_bold.render("Legend", True, (40, 40, 40)), (x0, y0)
+        )
+        y0 += row_h
+
+        # Filled shapes.
+        for colour, label in (
+            (_C_EGO, "Ego"),
+            (_C_PATROL_VEHICLE, "Patrol NPC"),
+            (_C_STATIC_VEHICLE, "Parked"),
+            (_C_PEDESTRIAN, "Pedestrian"),
+        ):
+            pygame.draw.rect(self._screen, colour, (x0, y0, swatch, swatch))
+            self._blit_legend_label(label, x0 + swatch + 8, y0)
+            y0 += row_h
+
+        # Outlined shapes, drawn as outlines on the map too.
+        for colour, label in (
+            (_C_TARGET_BAY, "Target bay"),
+            (_C_PERP_BAY, "Parking bay"),
+        ):
+            pygame.draw.rect(self._screen, colour, (x0, y0, swatch, swatch), 2)
+            self._blit_legend_label(label, x0 + swatch + 8, y0)
+            y0 += row_h
+
+        # Ego trail: a line, as drawn.
+        mid = y0 + swatch // 2
+        pygame.draw.line(
+            self._screen,
+            _C_EGO,
+            (x0, mid),
+            (x0 + swatch, mid),
+            self._layout.thick_line,
+        )
+        self._blit_legend_label("Ego trail", x0 + swatch + 8, y0)
+        y0 += row_h
+
+        # Target heading: an arrow, as drawn.
+        mid = y0 + swatch // 2
+        pygame.draw.line(self._screen, _C_TARGET_BAY, (x0, mid), (x0 + swatch, mid), 2)
+        _draw_arrow_head(self._screen, _C_TARGET_BAY, (x0, mid), (x0 + swatch, mid), 6)
+        self._blit_legend_label("Target heading", x0 + swatch + 8, y0)
+        y0 += row_h + self._layout.scaled(8)
+
+        self._draw_tier_legend(x0, y0, swatch, row_h)
+
+    def _draw_tier_legend(self, x0: int, y0: int, swatch: int, row_h: int) -> None:
+        """
+        @brief Draw the GNSS tier colour key and ring explanation.
+        @param x0: Left edge in pixels.
+        @param y0: Top edge in pixels.
+        @param swatch: Swatch size in pixels.
+        @param row_h: Row pitch in pixels.
+        """
+        if not self._gnss_tiers:
+            return
+
+        self._screen.blit(
+            self._label_bold.render("GNSS noise", True, (40, 40, 40)), (x0, y0)
+        )
+        y0 += row_h
+        # The ring shows the tier's configured 1-sigma noise, not the EKF's own
+        # covariance estimate - labelled so the two are not conflated.
+        self._screen.blit(
+            self._label_font.render("ring = 1-sigma", True, _C_LEGEND_TEXT), (x0, y0)
+        )
+        y0 += row_h
+
+        for tier in sorted(self._gnss_tiers.values(), key=lambda t: t.severity):
+            pygame.draw.rect(self._screen, tier.colour, (x0, y0, swatch, swatch))
+            self._blit_legend_label(
+                f"{tier.name} {tier.stddev_m:.2f}m", x0 + swatch + 8, y0
+            )
+            y0 += row_h
+
+    def _blit_legend_label(self, text: str, x: int, y: int) -> None:
+        """
+        @brief Draw a legend row label.
+        @param text: Label text.
+        @param x: Left edge in pixels.
+        @param y: Top edge in pixels.
+        """
+        self._screen.blit(self._label_font.render(text, True, _C_LEGEND_TEXT), (x, y))
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """@brief Parse arguments and run the visualiser."""
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -783,5 +1296,41 @@ if __name__ == "__main__":
         default=None,
         help="Path to vis_history.jsonl (default: outputs/vis_history.jsonl).",
     )
-    _args = parser.parse_args()
-    LiveVisualiser(history_file=_args.history_file).run()
+    parser.add_argument(
+        "--ui-scale",
+        type=float,
+        default=_UI_SCALE_DEFAULT,
+        help="Font and legend scale multiplier. Raise for a projector or a "
+        f"recording (default: {_UI_SCALE_DEFAULT}).",
+    )
+    parser.add_argument(
+        "--record",
+        action="store_true",
+        help="Start recording an MP4 immediately. Recording can also be "
+        "toggled at any time with the R key.",
+    )
+    parser.add_argument(
+        "--record-dir",
+        type=Path,
+        default=_DEFAULT_RECORD_DIR,
+        help=f"Directory for recorded MP4s (default: {_DEFAULT_RECORD_DIR}).",
+    )
+    parser.add_argument(
+        "--fps",
+        type=int,
+        default=30,
+        help="Recording frame rate (default: 30).",
+    )
+    args = parser.parse_args()
+
+    LiveVisualiser(
+        history_file=args.history_file,
+        ui_scale=args.ui_scale,
+        record=args.record,
+        record_dir=args.record_dir,
+        fps=args.fps,
+    ).run()
+
+
+if __name__ == "__main__":
+    main()
