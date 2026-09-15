@@ -395,7 +395,11 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make ge
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
 
 # ----------------------------------------------------------------------
-# Markov Chain Analysis
+# Results Analysis and Diagnostics
+#
+# All host-side and CPU-only: they read the raw CSVs under outputs/raw/ (or
+# the TensorBoard event files under logs/) and write derived CSVs. No CARLA,
+# no ROS 2, no GPU.
 # ----------------------------------------------------------------------
 
 analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml. Usage: make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]
@@ -464,6 +468,16 @@ analysis-bundle: ## Assemble the summaries and values into outputs/main_analysis
 		--frozen $(or $(FROZEN),outputs/raw_derived/cross_seed_analysis/all_seeds/stage$(or $(STAGE),6)) \
 		--raw $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/main_analysis)
+
+uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
+	$(call ensure-venv)
+	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
+	$(PYTHON) $(SCRIPTS_DIR)/analysis/uncertainty_verdict.py $(EVAL_DIR)
+
+tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<run_dir> [ARGS="--match success --points 20 --last 10"]
+	$(call ensure-venv)
+	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
+	$(PYTHON) $(SCRIPTS_DIR)/diagnostics/tb_read.py $(LOG) $(ARGS)
 
 # ----------------------------------------------------------------------
 # Visualisation (host-side viewer + Docker driver)
@@ -579,16 +593,6 @@ clean-venv: ## Remove the local virtual environment (re-create with make install
 # ----------------------------------------------------------------------
 # Config Backup
 # ----------------------------------------------------------------------
-
-tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<run_dir> [ARGS="--match success --points 20 --last 10"]
-	$(call ensure-venv)
-	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
-	$(PYTHON) $(SCRIPTS_DIR)/diagnostics/tb_read.py $(LOG) $(ARGS)
-
-uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
-	$(call ensure-venv)
-	@if [ -z "$(EVAL_DIR)" ]; then echo "Set EVAL_DIR=<eval run dir with per_step_records.csv>"; exit 1; fi
-	$(PYTHON) $(SCRIPTS_DIR)/analysis/uncertainty_verdict.py $(EVAL_DIR)
 
 backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
