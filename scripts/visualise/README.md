@@ -71,7 +71,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | `target_bay` | dict | `{x, y, yaw, width, depth, bay_type, bay_id}` |
 | `bays` | list | All bay dicts in the current layout |
 | `corners` | list | Lot perimeter polygon vertices `[{x, y}, ...]` |
-| `end_reason` | str | Last frame only: `"success"`, `"collision"`, `"out_of_bounds"`, or `"timeout"`. The viewer latches it until the next episode so it is not missed |
+| `end_reason` | str | Last frame only: `"success"`, `"collision"`, `"out_of_bounds"`, or `"timeout"`. Written for downstream consumers; the viewer does not render it |
 | `debug` | dict | Optional: per-step diagnostics from `DebugLogger.step_debug_dict()` |
 
 ## Layers drawn (back to front)
@@ -82,22 +82,19 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 4. Ego trajectory trail (faded cyan, capped at 500 points)
 5. GNSS uncertainty ring - a translucent disc around the ego car whose radius is the current tier's `metric_stddev_m` in world metres. This is the tier's **configured 1-sigma GNSS noise**, not the EKF's live covariance estimate
 6. Static parked vehicles (orange rectangles)
-7. Patrol NPC vehicles (red rectangles)
-8. Pedestrians (teal circles)
-9. Ego vehicle (cyan rectangle + heading arrow)
-10. Episode outcome banner - latched from `end_reason` and held until the next episode (green for success, red otherwise)
-11. HUD band, below the map: the GNSS tier panel (tier name, 1-sigma, and the tier's description from the profiles YAML; highlighted briefly on a transition), the context line (floor plan, episode, step, sim time), the speed/action line, the debug line (only when `debug: true`), and the tier timeline strip
-12. Legend panel (right-hand side), including the GNSS tier colour key
+7. Ego vehicle (cyan rectangle + heading arrow)
+8. HUD band, below the map: the GNSS tier card (tier name on a filled colour card, with the tier's 1-sigma position accuracy beneath it), the context line (floor plan, step, sim time, plus the episode number under `SHOW_EPISODE=true`), the speed/action line, and the debug line (only when `debug: true`)
+9. Legend panel (right-hand side), including the GNSS tier colour key
 
 ## GNSS tier presentation
 
-The panel, ring and timeline are all driven by `configs/deployment/sim/gnss_noise_profiles.yaml` via `gnss_tiers.py` - nothing about the tiers is hardcoded in the viewer. Each tier contributes its `metric_stddev_m` (the sigma shown and the ring radius) and its `description` (the plain-English line). Severity follows declaration order in the YAML, best fix first, and drives the green-amber-orange-red ramp. Adding a tier to the YAML is enough to make it render.
+Both the card and the ring are driven by `configs/deployment/sim/gnss_noise_profiles.yaml` via `gnss_tiers.py` - nothing about the tiers is hardcoded in the viewer. Each tier contributes its `metric_stddev_m`, which sets both the ring radius and the accuracy figure on the card. Severity follows declaration order in the YAML, best fix first, and drives the green-amber-orange-red ramp. Adding a tier to the YAML is enough to make it render.
 
-The timeline strip is a scrolling history of the last few hundred frames of tier values, stretched across the full strip width with the newest sample at the right-hand cursor. Because the Markov chain sits at `rtk_fixed` roughly 80% of the time and excursions last only a few seconds, the strip is what makes a transition legible - a static label change is easy to miss on video.
+The card is always filled, so a tier change reads as a colour change within a fixed shape rather than as a panel appearing and disappearing. The accuracy figure is stated once, as `Position known to +/- X m (1-sigma)`; the tier's YAML `description` is deliberately not drawn, since it restates the same number and changes too fast to read on video.
 
 ## Recording
 
-`RECORD=true` starts recording on launch; the `R` key toggles it at any time, which is the easier route when you want to skip the 30-60 s CARLA start-up and capture only the interesting part of a drive. A red `REC` indicator with elapsed time shows while active (drawn after each frame is captured, so it never appears in the video itself). Files land in `outputs/recordings/<DD-MM-YYYY-HHMMSS>.mp4` and are finalised on Ctrl+C or window close.
+`RECORD=true` starts recording on launch; the `R` key toggles it at any time, which is the easier route when you want to skip the 30-60 s CARLA start-up and capture only the interesting part of a drive. Recording state is reported on the console rather than on screen, so nothing about the capture appears in the window or the video. Files land in `outputs/recordings/<DD-MM-YYYY-HHMMSS>.mp4` and are finalised on Ctrl+C or window close.
 
 `make clip` cuts a segment out of a recording, using ffmpeg's two-pass palette pipeline for GIFs (markedly better than a naive conversion on flat vector-style graphics):
 
@@ -118,7 +115,11 @@ make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
   GNSS_TIER=fixed RECORD=true TRACE=false
 ```
 
-Repeat with `GNSS_TIER=float`, `standalone`, `degraded` - identical layout, checkpoint and policy, with only the fix state changing. Leave `GNSS_TIER=` empty for the live Markov chain, which is what shows the transitions and the recovery; use the `R` key there to record only when the timeline strip shows the tier stepping down.
+Repeat with `GNSS_TIER=float`, `standalone`, `degraded` - identical layout, checkpoint and policy, with only the fix state changing. Leave `GNSS_TIER=` empty for the live Markov chain, which is what shows the transitions and the recovery; use the `R` key there to record only once the tier card changes colour.
+
+### Episode number
+
+The HUD context line omits the episode number by default, since it is run bookkeeping that means nothing to an audience watching a recording. Pass `SHOW_EPISODE=true` to either viewer target (or `--show-episode` when running `visualiser.py` directly) to put `Ep: N` back between the floor plan and the step count.
 
 ## Controls
 

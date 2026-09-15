@@ -17,9 +17,8 @@ import json
 import math
 import signal
 import time
-from collections import deque
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pygame
@@ -64,9 +63,6 @@ _C_HUD_TEXT = (245, 245, 245)
 _C_HUD_DIM = (170, 170, 170)
 _C_LEGEND_BG = (235, 235, 235)
 _C_LEGEND_TEXT = (50, 50, 50)
-_C_RECORD = (229, 57, 53)
-_C_SUCCESS = (0, 200, 83)
-_C_FAILURE = (229, 57, 53)
 
 # Alpha applied to the ego uncertainty ring. Low enough that bays and the lot
 # stay readable underneath a 5 m degraded-tier ring, which can span the width of
@@ -103,7 +99,6 @@ _BASE_LEGEND_W = 160
 _BASE_HUD_FONT = 13
 _BASE_LABEL_FONT = 12
 _BASE_TIER_FONT = 21
-_BASE_BANNER_FONT = 34
 
 # Map area height. The HUD is drawn in a band BELOW the map, not overlaid on it.
 #
@@ -123,14 +118,6 @@ _NPC_HALF_L = 2.35
 _NPC_HALF_W = 1.05
 _TRAIL_MAX_POINTS = 500
 _POLL_SLEEP = 0.02
-
-# Tier timeline: how many recent frames of tier history the strip holds. The
-# samples are stretched across the full strip width, so a short run reads as
-# clearly as a saturated buffer; past this many frames the oldest scroll off.
-_TIMELINE_SLOTS = 320
-_TIMELINE_H = 14
-# How long the "tier changed" highlight stays lit, in seconds.
-_TIER_FLASH_SECONDS = 1.5
 
 _DEFAULT_HISTORY_FILE = Path("outputs/vis_history.jsonl")
 _SIGNAL_FILE = Path("outputs/.vis_active")
@@ -155,24 +142,17 @@ class _Layout:
         self.hud_font = self.scaled(_BASE_HUD_FONT)
         self.label_font = self.scaled(_BASE_LABEL_FONT)
         self.tier_font = self.scaled(_BASE_TIER_FONT)
-        self.banner_font = self.scaled(_BASE_BANNER_FONT)
         self.legend_w = self.scaled(_BASE_LEGEND_W)
         self.window_w = _MAP_W + self.legend_w
 
-        # HUD band, top to bottom: the tier block (label + description), three
-        # status bars (context, speed/action, and the debug line written only
-        # when debug=True in env_config.yaml), then the timeline strip with its
-        # caption. Sized from font metrics, and always reserving the debug bar,
-        # so nothing is clipped at any scale or in either debug mode.
+        # HUD band, top to bottom: the tier block (card + accuracy line) and
+        # three status bars (context, speed/action, and the debug line written
+        # only when debug=True in env_config.yaml). Sized from font metrics, and
+        # always reserving the debug bar, so nothing is clipped at any scale or
+        # in either debug mode.
         self.bar_pitch = self.hud_font + 8
         self.tier_block_h = self.tier_font + self.hud_font + 12
-        self.timeline_block_h = _TIMELINE_H + self.label_font + self.scaled(8)
-        self.hud_band_h = (
-            self.tier_block_h
-            + 3 * self.bar_pitch
-            + self.timeline_block_h
-            + self.scaled(12)
-        )
+        self.hud_band_h = self.tier_block_h + 3 * self.bar_pitch + self.scaled(12)
         # Stroke widths, so shapes survive being scaled down into a GIF.
         self.thick_line = max(2, int(round(3 * self.scale / 1.5)))
 
@@ -384,6 +364,7 @@ class LiveVisualiser:
         record: bool = False,
         record_dir: Optional[Path] = None,
         fps: int = 30,
+        show_episode: bool = False,
     ) -> None:
         """
         @brief Initialise Pygame window and state.
@@ -393,10 +374,12 @@ class LiveVisualiser:
         @param record: Start recording immediately on launch.
         @param record_dir: Directory for MP4 output.
         @param fps: Recording frame rate.
+        @param show_episode: Include the episode number in the context line.
         """
         self._history_file = history_file or _DEFAULT_HISTORY_FILE
         self._signal_file = _SIGNAL_FILE
         self._layout = _Layout(ui_scale)
+        self._show_episode = show_episode
 
         # Map and window heights start at the defaults and are resized to the
         # lot aspect ratio once the first frame arrives (see _compute_viewport).
@@ -436,19 +419,10 @@ class LiveVisualiser:
 
         # GNSS tier presentation, loaded once from the profiles YAML.
         self._gnss_tiers = load_gnss_tiers()
-        self._tier_history: Deque[str] = deque(maxlen=_TIMELINE_SLOTS)
-        self._current_tier_name: str = ""
-        self._tier_changed_at: float = 0.0
-
-        # end_reason appears on a single frame, so it is latched and held until
-        # the episode id changes - otherwise it flashes past unseen.
-        self._end_reason: Optional[str] = None
-        self._end_reason_episode_id: Optional[int] = None
 
         self._fps = fps
         self._record_dir = record_dir or _DEFAULT_RECORD_DIR
         self._recorder: Optional[FrameRecorder] = None
-        self._record_error: Optional[str] = None
         self._record_on_start = record
 
         self._history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -463,9 +437,6 @@ class LiveVisualiser:
         )
         self._tier_font = pygame.font.SysFont(
             "monospace", self._layout.tier_font, bold=True
-        )
-        self._banner_font = pygame.font.SysFont(
-            "monospace", self._layout.banner_font, bold=True
         )
 
     # -----------------------------------------------------------------------
@@ -519,11 +490,9 @@ class LiveVisualiser:
         try:
             recorder.start()
         except RuntimeError as exc:
-            self._record_error = str(exc)
             print(f"Recording unavailable: {exc}")
             return
         self._recorder = recorder
-        self._record_error = None
         print(f"Recording to {output}")
 
     def _finish_recording(self) -> None:
@@ -780,7 +749,6 @@ class LiveVisualiser:
                 state, self._origin, self._scale, self._map_h, self._layout
             )
             self._static_episode_id = episode_id
-            self._tier_history.clear()
 
         assert self._static_surf is not None
         self._screen.blit(self._static_surf, (0, 0))
@@ -792,7 +760,6 @@ class LiveVisualiser:
         # Track the live GNSS tier before drawing anything that depends on it.
         tier_name = str(ego.get("gnss_tier", ""))
         tier = resolve_tier(self._gnss_tiers, tier_name)
-        self._update_tier_state(tier_name)
 
         # Accumulated ego trail: clear on episode reset, then append current position.
         if episode_id != self._vis_trail_episode_id:
@@ -867,46 +834,10 @@ class LiveVisualiser:
                 self._screen, _C_EGO, s0, s1, 4 + self._layout.thick_line * 2
             )
 
-        self._latch_end_reason(state, episode_id)
-        self._draw_end_reason_banner()
         self._draw_hud_band(state, ego, tier, tier_name)
 
         pygame.display.flip()
         self._capture_frame()
-        # The REC indicator is drawn after the capture so it is not burned into
-        # the recording, and only becomes visible on the next flip.
-        self._draw_record_indicator()
-
-    def _update_tier_state(self, tier_name: str) -> None:
-        """
-        @brief Record the current tier and flag a transition.
-        @param tier_name: Tier name from the current frame.
-        """
-        if tier_name != self._current_tier_name:
-            # Only flash on a real transition, not on the first frame of a run.
-            if self._current_tier_name:
-                self._tier_changed_at = time.time()
-            self._current_tier_name = tier_name
-        self._tier_history.append(tier_name)
-
-    def _latch_end_reason(
-        self, state: Dict[str, Any], episode_id: Optional[int]
-    ) -> None:
-        """
-        @brief Hold the episode outcome until the next episode begins.
-
-        end_reason is written on a single frame, so without latching it would
-        be visible for one render and missed on video.
-
-        @param state: Current frame.
-        @param episode_id: Current episode id.
-        """
-        if episode_id != self._end_reason_episode_id:
-            self._end_reason = None
-            self._end_reason_episode_id = episode_id
-        reason = state.get("end_reason")
-        if reason:
-            self._end_reason = str(reason)
 
     def _draw_uncertainty_ring(
         self,
@@ -945,26 +876,6 @@ class LiveVisualiser:
         )
         self._screen.blit(ring, (centre[0] - radius_px, centre[1] - radius_px))
 
-    def _draw_end_reason_banner(self) -> None:
-        """@brief Draw the latched episode outcome across the map area."""
-        if not self._end_reason:
-            return
-        success = self._end_reason == "success"
-        colour = _C_SUCCESS if success else _C_FAILURE
-        label = self._end_reason.replace("_", " ").upper()
-
-        text = self._banner_font.render(label, True, (255, 255, 255))
-        pad = self._layout.scaled(14)
-        banner = pygame.Surface(
-            (text.get_width() + pad * 2, text.get_height() + pad), pygame.SRCALPHA
-        )
-        banner.fill((*colour, 225))
-        banner.blit(text, (pad, pad // 2))
-        self._screen.blit(
-            banner,
-            ((_MAP_W - banner.get_width()) // 2, int(self._map_h * 0.12)),
-        )
-
     # -----------------------------------------------------------------------
     # HUD
     # -----------------------------------------------------------------------
@@ -979,9 +890,9 @@ class LiveVisualiser:
         """
         @brief Draw the HUD band below the map.
 
-        Layout, top to bottom: the GNSS tier panel (label, sigma, description),
-        the run/step context line, the speed and action line, the optional
-        debug line, and the tier timeline strip.
+        Layout, top to bottom: the GNSS tier panel (card and accuracy), the
+        run/step context line, the speed and action line, and the optional
+        debug line.
 
         @param state: Current frame.
         @param ego: Ego block from the frame.
@@ -1001,10 +912,13 @@ class LiveVisualiser:
         y = self._draw_tier_panel(tier, tier_name, pad, y)
 
         # Context line: which episode/step this is, in dimmer text since it is
-        # reference information rather than the headline.
+        # reference information rather than the headline. The episode number is
+        # bookkeeping that only means something to whoever launched the run, so
+        # it is opt-in rather than always shown.
+        episode = f"Ep: {state.get('episode_id', '?')}   " if self._show_episode else ""
         context = (
             f"Floor: {state.get('floor_plan', '?')}   "
-            f"Ep: {state.get('episode_id', '?')}   "
+            f"{episode}"
             f"Step: {state.get('episode_step', '?')}   "
             f"t={state.get('sim_time', 0.0):.1f}s"
         )
@@ -1039,13 +953,11 @@ class LiveVisualiser:
                 self._hud_font.render(debug_line, True, _C_HUD_DIM), (pad, y)
             )
 
-        self._draw_tier_timeline(pad)
-
     def _draw_tier_panel(
         self, tier: Optional[GnssTier], tier_name: str, pad: int, y: int
     ) -> int:
         """
-        @brief Draw the GNSS tier label, sigma and description.
+        @brief Draw the GNSS tier card and its positional accuracy.
         @param tier: Resolved tier, or None when unknown.
         @param tier_name: Raw tier name from the frame.
         @param pad: Left padding in pixels.
@@ -1055,121 +967,25 @@ class LiveVisualiser:
         colour = tier.colour if tier is not None else unknown_colour()
         label = display_label(tier, tier_name)
 
-        # A recent transition lights the panel so a tier change is unmissable
-        # on video, where a static label change is easy to miss.
-        flashing = (time.time() - self._tier_changed_at) < _TIER_FLASH_SECONDS
-        if flashing:
-            text_surf = self._tier_font.render(f"GNSS: {label}", True, (20, 20, 20))
-            highlight = pygame.Surface(
-                (text_surf.get_width() + pad, text_surf.get_height() + 4)
-            )
-            highlight.fill(colour)
-            highlight.blit(text_surf, (pad // 2, 2))
-            self._screen.blit(highlight, (pad, y))
-            width = highlight.get_width()
-        else:
-            text_surf = self._tier_font.render(f"GNSS: {label}", True, colour)
-            self._screen.blit(text_surf, (pad, y))
-            width = text_surf.get_width()
+        # The card is always filled, so a tier change reads as a colour change
+        # in a fixed shape rather than a box that appears and disappears.
+        text_surf = self._tier_font.render(f"GNSS: {label}", True, (20, 20, 20))
+        card = pygame.Surface((text_surf.get_width() + pad, text_surf.get_height() + 4))
+        card.fill(colour)
+        card.blit(text_surf, (pad // 2, 2))
+        self._screen.blit(card, (pad, y))
+
+        y += card.get_height() + self._layout.scaled(6)
 
         if tier is not None:
-            sigma = self._tier_font.render(
-                f"1-sigma {tier.stddev_m:.2f} m", True, colour
-            )
-            self._screen.blit(sigma, (pad + width + pad * 2, y))
-
-        y += self._layout.tier_font + 4
-        if tier is not None and tier.description:
+            # Stated as a tolerance rather than as "1-sigma X m": the viewer
+            # needs to read the number as "how far off the car's idea of its
+            # own position can be", which is what the ring shows.
+            accuracy = f"Position known to +/- {tier.stddev_m:.2f} m (1-sigma)"
             self._screen.blit(
-                self._hud_font.render(tier.description, True, _C_HUD_TEXT), (pad, y)
+                self._hud_font.render(accuracy, True, _C_HUD_TEXT), (pad, y)
             )
         return y + self._layout.hud_font + 8
-
-    def _timeline_strip_y(self) -> int:
-        """
-        @brief Top edge of the tier timeline strip in window coordinates.
-        @return Y pixel of the strip, leaving room for its caption above it.
-        """
-        band_bottom = self._map_h + self._layout.hud_band_h
-        return band_bottom - _TIMELINE_H - self._layout.scaled(6)
-
-    def _draw_tier_timeline(self, pad: int) -> None:
-        """
-        @brief Draw the scrolling history of GNSS tiers.
-
-        One column per rendered frame, oldest at the left. The steps between
-        colours make a mid-episode transition legible as a shape, and show how
-        long the current tier has been held and what preceded it.
-
-        @param pad: Left padding in pixels.
-        """
-        if not self._tier_history:
-            return
-
-        strip_w = self._layout.window_w - pad * 2
-        strip_y = self._timeline_strip_y()
-        pygame.draw.rect(
-            self._screen, (45, 45, 45), (pad, strip_y, strip_w, _TIMELINE_H)
-        )
-
-        # The history stretches across the full strip, so a short run reads as
-        # clearly as a full buffer; once it saturates at _TIMELINE_SLOTS the
-        # oldest samples fall off the left and the strip scrolls.
-        samples = len(self._tier_history)
-        span = float(strip_w) / float(samples)
-
-        # Draw consecutive same-tier frames as a single run: far fewer draw
-        # calls than one rect per frame, and no seams inside a block.
-        run_start = 0
-        history = list(self._tier_history)
-        for i in range(1, samples + 1):
-            if i < samples and history[i] == history[run_start]:
-                continue
-            entry = resolve_tier(self._gnss_tiers, history[run_start])
-            colour = entry.colour if entry is not None else unknown_colour()
-            x0 = pad + int(run_start * span)
-            x1 = pad + int(i * span)
-            pygame.draw.rect(
-                self._screen, colour, (x0, strip_y, max(1, x1 - x0), _TIMELINE_H)
-            )
-            run_start = i
-
-        # Cursor marking "now" at the right-hand edge.
-        pygame.draw.rect(
-            self._screen, _C_HUD_TEXT, (pad + strip_w - 2, strip_y, 2, _TIMELINE_H)
-        )
-
-        caption = self._label_font.render("GNSS tier history", True, _C_HUD_DIM)
-        self._screen.blit(caption, (pad, strip_y - caption.get_height() - 2))
-
-    def _draw_record_indicator(self) -> None:
-        """
-        @brief Draw the recording dot, elapsed time, or a recorder error.
-
-        Called after the frame is captured so the indicator never appears in
-        the recording itself.
-        """
-        pad = self._layout.scaled(10)
-        y = self._timeline_strip_y() - self._layout.label_font - self._layout.scaled(4)
-
-        if self._recorder is not None:
-            radius = max(4, self._layout.label_font // 2)
-            cx = self._layout.window_w - pad * 9
-            pygame.draw.circle(self._screen, _C_RECORD, (cx, y + radius), radius)
-            label = self._label_bold.render(
-                f"REC {self._recorder.elapsed():5.1f}s", True, _C_RECORD
-            )
-            self._screen.blit(label, (cx + radius + 6, y))
-            pygame.display.update(
-                pygame.Rect(cx - radius, y, self._layout.window_w - cx, _TIMELINE_H)
-            )
-        elif self._record_error is not None:
-            label = self._label_font.render("REC unavailable", True, _C_RECORD)
-            pos = (self._layout.window_w - label.get_width() - pad, y)
-            self._screen.blit(label, pos)
-            pygame.display.update(
-                pygame.Rect(pos[0], y, label.get_width(), _TIMELINE_H)
-            )
 
     # -----------------------------------------------------------------------
     # Legend
@@ -1206,9 +1022,7 @@ class LiveVisualiser:
         # Filled shapes.
         for colour, label in (
             (_C_EGO, "Ego"),
-            (_C_PATROL_VEHICLE, "Patrol NPC"),
             (_C_STATIC_VEHICLE, "Parked"),
-            (_C_PEDESTRIAN, "Pedestrian"),
         ):
             pygame.draw.rect(self._screen, colour, (x0, y0, swatch, swatch))
             self._blit_legend_label(label, x0 + swatch + 8, y0)
@@ -1233,13 +1047,6 @@ class LiveVisualiser:
             self._layout.thick_line,
         )
         self._blit_legend_label("Ego trail", x0 + swatch + 8, y0)
-        y0 += row_h
-
-        # Target heading: an arrow, as drawn.
-        mid = y0 + swatch // 2
-        pygame.draw.line(self._screen, _C_TARGET_BAY, (x0, mid), (x0 + swatch, mid), 2)
-        _draw_arrow_head(self._screen, _C_TARGET_BAY, (x0, mid), (x0 + swatch, mid), 6)
-        self._blit_legend_label("Target heading", x0 + swatch + 8, y0)
         y0 += row_h + self._layout.scaled(8)
 
         self._draw_tier_legend(x0, y0, swatch, row_h)
@@ -1256,21 +1063,13 @@ class LiveVisualiser:
             return
 
         self._screen.blit(
-            self._label_bold.render("GNSS noise", True, (40, 40, 40)), (x0, y0)
-        )
-        y0 += row_h
-        # The ring shows the tier's configured 1-sigma noise, not the EKF's own
-        # covariance estimate - labelled so the two are not conflated.
-        self._screen.blit(
-            self._label_font.render("ring = 1-sigma", True, _C_LEGEND_TEXT), (x0, y0)
+            self._label_bold.render("Position accuracy", True, (40, 40, 40)), (x0, y0)
         )
         y0 += row_h
 
         for tier in sorted(self._gnss_tiers.values(), key=lambda t: t.severity):
             pygame.draw.rect(self._screen, tier.colour, (x0, y0, swatch, swatch))
-            self._blit_legend_label(
-                f"{tier.name} {tier.stddev_m:.2f}m", x0 + swatch + 8, y0
-            )
+            self._blit_legend_label(f"+/- {tier.stddev_m:.2f} m", x0 + swatch + 8, y0)
             y0 += row_h
 
     def _blit_legend_label(self, text: str, x: int, y: int) -> None:
@@ -1310,6 +1109,13 @@ def main() -> None:
         "toggled at any time with the R key.",
     )
     parser.add_argument(
+        "--show-episode",
+        action="store_true",
+        help="Show the episode number in the HUD context line. Off by default, "
+        "since the number is run bookkeeping rather than something an "
+        "audience can interpret.",
+    )
+    parser.add_argument(
         "--record-dir",
         type=Path,
         default=_DEFAULT_RECORD_DIR,
@@ -1329,6 +1135,7 @@ def main() -> None:
         record=args.record,
         record_dir=args.record_dir,
         fps=args.fps,
+        show_episode=args.show_episode,
     ).run()
 
 
