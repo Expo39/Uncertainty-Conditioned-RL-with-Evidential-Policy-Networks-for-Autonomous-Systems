@@ -87,9 +87,15 @@ exist today.
 
 | Name | Caption | Shown in |
 |------|---------|----------|
-| `training_curves` | PPO training convergence - episode reward, success rate, and evidential uncertainty metrics | `uncertainty_rl/training/README.md` |
-| `uncertainty_evolution` | Epistemic and aleatoric uncertainty during a parking episode | `uncertainty_rl/networks/README.md` |
-| `eval_degradation` | Success rate and epistemic uncertainty across the 9 evaluation conditions | `uncertainty_rl/evaluation/README.md` |
+| `training_curves` | Success and collision rate per arm across the six curriculum stages | `uncertainty_rl/training/README.md` |
+| `eval_degradation` | Success rate and mean final position error per arm across the reported evaluation conditions | `uncertainty_rl/evaluation/README.md` |
+
+Both are **present** - copied from `outputs/main_analysis/figures/` (see each README for the
+two-command regeneration recipe). `uncertainty_evolution` was **retired**: plotting epistemic
+against aleatoric would imply a separation the project documents as absent
+(`epistemic = aleatoric / nu` with `nu` collapsed to a constant), so
+`uncertainty_rl/networks/README.md` now points at `gate_roc` instead.
+@see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md`.
 
 ---
 
@@ -107,9 +113,9 @@ exist today.
 | `inspect_sensors` | B: `make docker-inspect-sensors SENSORS_VIEW=birds_eye INSPECT_ZOOM=close` | Ready |
 | `inspect_live` | B: `make docker-inspect-live` | Ready |
 | `inspect_dryrun` | B: `make docker-inspect-dryrun MANUAL=true` - capture the terminal too, the EKF output prints there | Ready |
-| `training_curves` | C: `make training-curves` then `make figures FIG=training_curves` | Ready, but it plots success + collision rate. The caption's "episode reward and evidential uncertainty" panels do not exist - rewrite the caption or extend `METRIC_TAGS` in `scripts/analysis/tb_curves.py` |
-| `eval_degradation` | C: `make figures FIG=ablation_by_condition` | Ready, but it plots success rate + final position error, not epistemic, and over the 4 reported conditions. The "9 conditions" caption is stale - `configs/eval_config.yaml` defines 7, and the analyses drop the two held tiers plus `lidar_degraded` |
-| `uncertainty_evolution` | C | **Missing.** No figure module plots per-episode epistemic/aleatoric over time. The data exists (`epistemic`/`aleatoric` columns in the demo traces) and `scripts/analysis/figures/ekf_sawtooth.py` is a direct template - it already reads those CSVs and shades GNSS tier bands |
+| `training_curves` | C: `make training-curves` then `make figures FIG=training_curves` | **Done** - in `docs/media/`. Caption corrected: it plots success + collision rate, not reward/uncertainty |
+| `eval_degradation` | C: `make figures FIG=ablation_by_condition` | **Done** - in `docs/media/`. Caption corrected: success rate + final position error over the 4 reported conditions, not epistemic over 9 |
+| `uncertainty_evolution` | - | **Retired, do not create.** `epistemic = aleatoric / nu`; `nu` has no RL supervision and collapses to a constant, so `corr(epi, ale) ~ 0.9` and the two channels are one signal. A side-by-side plot would assert a separation the project documents as absent. `gate_roc` is the defensible figure |
 
 ### Known gaps in the capture path
 
