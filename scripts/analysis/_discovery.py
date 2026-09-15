@@ -17,7 +17,10 @@ for that matching so a future layout change is a one-file fix.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 # Wrapper-variant directory names written by evaluate.py. Order is preference:
 # without_wrapper first so uncertainty/behaviour analyses read the free-running
@@ -206,3 +209,78 @@ def discover_arm_csvs(
             continue
         chosen[arm] = path
     return chosen
+
+
+def stage_leaf(
+    results_root: Path,
+    seed: str,
+    arm: str,
+    stage: str = "6",
+    variant: str = "without_wrapper",
+) -> Path:
+    """
+    @brief The run directory for one seed/arm at a given curriculum stage.
+    @param results_root: outputs/evaluation_results (the seed-nested parent).
+    @param seed: Seed sub-root name, e.g. "seed_42".
+    @param arm: Baseline name, e.g. "full_method".
+    @param stage: Curriculum stage the leaf name starts with.
+    @param variant: Wrapper variant directory beneath the leaf.
+    @return Path to <results_root>/<seed>/<arm>/<stage>_*/<variant>.
+    @throws FileNotFoundError If no leaf for that stage exists.
+
+    The figures and the pooled tables all read one stage across every arm and
+    seed, so the leaf lookup lives here rather than being rewritten per module.
+    """
+    arm_dir = results_root / seed / arm
+    if not arm_dir.is_dir():
+        raise FileNotFoundError(f"no arm directory {arm_dir}")
+    leaves = sorted(p for p in arm_dir.iterdir() if p.name.startswith(f"{stage}_"))
+    if not leaves:
+        raise FileNotFoundError(f"no stage-{stage} checkpoint under {arm_dir}")
+    return leaves[0] / variant
+
+
+def pooled_frame(
+    results_root: Path,
+    seeds: Sequence[str],
+    arms: Sequence[str],
+    name: str,
+    stage: str = "6",
+    variant: str = "without_wrapper",
+    usecols: Optional[List[str]] = None,
+) -> "pd.DataFrame":
+    """
+    @brief Concatenate one CSV across every seed and arm into a single frame.
+    @param results_root: outputs/evaluation_results.
+    @param seeds: Seed sub-root names to pool.
+    @param arms: Baseline names to pool.
+    @param name: CSV file name, e.g. "episode_records.csv".
+    @param stage: Curriculum stage to read.
+    @param variant: Wrapper variant to read.
+    @param usecols: Optional column subset, for the wide per-step files.
+    @return One frame with "arm" and "seed" columns added. Missing seed/arm
+            combinations are skipped rather than raising, so a partial tree
+            still yields what it has.
+    @throws FileNotFoundError If no combination yielded a file.
+
+    Pooling is the common shape of every cross-seed read; keeping it here means
+    a figure and the table that quotes it cannot pool differently.
+    """
+    import pandas as pd
+
+    frames: List["pd.DataFrame"] = []
+    for arm in arms:
+        for seed in seeds:
+            try:
+                path = stage_leaf(results_root, seed, arm, stage, variant) / name
+            except FileNotFoundError:
+                continue
+            if not path.exists():
+                continue
+            frame = pd.read_csv(path, usecols=usecols)
+            frame["arm"] = arm
+            frame["seed"] = seed
+            frames.append(frame)
+    if not frames:
+        raise FileNotFoundError(f"no {name} under {results_root} at stage {stage}")
+    return pd.concat(frames, ignore_index=True)

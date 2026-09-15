@@ -18,7 +18,7 @@ Figure inventory, id -> source:
 
   ekf_sawtooth          a logged demo trace
   lot_layouts           the generated layout YAMLs
-  training_curves       ported TensorBoard scalars
+  training_curves       exported TensorBoard scalars (make training-curves)
   ablation_by_condition pooled_condition_summary.csv
   degradation_tiers     raw per-episode + per-step records
   behaviour_by_std      raw per-episode records, three varying conditions
@@ -33,7 +33,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Any, Callable, Dict, List, Optional
 
 # Repo root on the path (NOT scripts/, which contains an `inspect` package
 # that would shadow the stdlib module matplotlib imports).
@@ -44,70 +44,116 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from scripts import figure_style as fs  # noqa: E402
+from scripts.analysis._discovery import pooled_frame  # noqa: E402
+from scripts.analysis.ablation import drop_unreported, keep_varying  # noqa: E402
 
 # Default locations. Override on the command line if a tree moves.
 FROZEN = Path("outputs/cross_seed_analysis/all_seeds/stage6")
 RAW = Path("outputs/evaluation_results")
 OUT = Path("outputs/figures")
 
-# Conditions held out of the pooled ROC, matching the five reported conditions.
-_HELD_TIER = ["gnss_fixed", "gnss_degraded"]
+# Demo trace behind the sawtooth. One logged episode under the live chain; any
+# trace carrying a gnss_tier column works, this one is simply the committed one.
+DEFAULT_TRACE = Path(
+    "outputs/demo_traces/full_method/6_42_22062026-1502"
+    "/15-07-2026-143405/episode_107.csv"
+)
+
+# Arms carrying an evidential head, so a total-predictive score exists.
+EVIDENTIAL_ARMS = ["output_uncertainty", "full_method"]
+
+# Behavioural proxies binned against the reported std, and their axis labels.
+_PROXIES = (
+    ("mean_brake_cmd", "Mean brake command"),
+    ("mean_speed_moving_ms", "Mean speed while moving (m/s)"),
+    ("mean_abs_vyaw_rads", r"Mean $|$yaw rate$|$ (rad/s)"),
+    ("mean_action_jerk", "Mean action jerk"),
+)
+
+# Equal-population bands cut within each condition.
+_N_BANDS = 5
 
 
 # --- helpers ---------------------------------------------------------------
-def _stage6_leaf(raw: Path, seed: str, arm: str) -> Path:
-    """The stage-6 leaf for an arm/seed, preferring the no-wrapper variant."""
-    d = raw / seed / arm
-    st6 = sorted(p for p in d.iterdir() if p.name.startswith("6_"))
-    if not st6:
-        raise FileNotFoundError(f"no stage-6 checkpoint under {d}")
-    return st6[0] / "without_wrapper"
-
-
 def _pooled_max_total(raw: Path, seeds: List[str], arm: str) -> pd.DataFrame:
-    """Per-episode max of the per-step total predictive uncertainty.
+    """
+    @brief Per-episode max of the per-step total predictive uncertainty.
+    @param raw: Evaluation results root.
+    @param seeds: Seed sub-roots to pool.
+    @param arm: Baseline name.
+    @return Frame of condition / episode / seed / max_total.
 
     The deployed safety layer thresholds epistemic + aleatoric at each step, so
-    the gate score must be the max of that sum over the episode. Summing the
-    two per-episode maxima instead would not give the same quantity, since the
-    two channels need not peak on the same step.
+    the gate score is the max of that SUM over the episode. Summing the two
+    per-episode maxima is a different quantity: the channels need not peak on
+    the same step.
     """
-    frames = []
-    for seed in seeds:
-        f = _stage6_leaf(raw, seed, arm) / "per_step_records.csv"
-        if not f.exists():
-            continue
-        ps = pd.read_csv(f, usecols=["condition", "episode", "epistemic", "aleatoric"])
-        ps["max_total"] = ps["epistemic"] + ps["aleatoric"]
-        g = ps.groupby(["condition", "episode"])["max_total"].max().reset_index()
-        g["seed"] = seed
-        frames.append(g)
-    if not frames:
+    try:
+        per_step = pooled_frame(
+            raw,
+            seeds,
+            [arm],
+            "per_step_records.csv",
+            usecols=["condition", "episode", "epistemic", "aleatoric"],
+        )
+    except FileNotFoundError:
         return pd.DataFrame(columns=["condition", "episode", "seed", "max_total"])
-    return pd.concat(frames, ignore_index=True)
+    per_step["max_total"] = per_step["epistemic"] + per_step["aleatoric"]
+    return (
+        per_step.groupby(["condition", "episode", "seed"])["max_total"]
+        .max()
+        .reset_index()
+    )
 
 
-def _pooled_episodes(raw: Path, seeds: List[str], arms: List[str]) -> pd.DataFrame:
-    """Concatenate every arm/seed's per-episode records into one frame."""
-    frames = []
-    for arm in arms:
-        for seed in seeds:
-            f = _stage6_leaf(raw, seed, arm) / "episode_records.csv"
-            if not f.exists():
-                continue
-            ep = pd.read_csv(f)
-            ep["arm"] = arm
-            ep["seed"] = seed
-            frames.append(ep)
-    if not frames:
-        raise FileNotFoundError(f"no episode_records.csv under {raw}")
-    return pd.concat(frames, ignore_index=True)
+def _banded_proxies(records: pd.DataFrame) -> pd.DataFrame:
+    """
+    @brief Average each behavioural proxy over equal-population std bands.
+    @param records: Pooled per-episode frame, already restricted to the
+           varying conditions.
+    @return One row per arm and band: band index, std midpoint, proxy means.
+
+    Bands are cut WITHIN each condition and then averaged across them. Cutting
+    the pooled frame instead lets the condition mix swing along the sweep - the
+    obstacle-free condition concentrates in the top band, where the absence of
+    parked vehicles raises the mean speed on its own - which would confound
+    behaviour with composition. The band x position is the arithmetic midpoint
+    of its observed std range.
+    """
+    metrics = [m for m, _ in _PROXIES]
+    per_condition: List[pd.DataFrame] = []
+    for (arm, condition), group in records.groupby(["arm", "condition"]):
+        std = group["ekf_std_pos_mean_m"]
+        # Equal-population cut; duplicates="drop" tolerates a tied std floor.
+        bands = pd.qcut(std.rank(method="first"), _N_BANDS, labels=False)
+        block = group.assign(band=bands)
+        agg = block.groupby("band").agg(
+            **{m: (m, "mean") for m in metrics},
+            std_low=("ekf_std_pos_mean_m", "min"),
+            std_high=("ekf_std_pos_mean_m", "max"),
+        )
+        agg["arm"] = arm
+        agg["condition"] = condition
+        per_condition.append(agg.reset_index())
+    if not per_condition:
+        return pd.DataFrame()
+    stacked = pd.concat(per_condition, ignore_index=True)
+    out = stacked.groupby(["arm", "band"]).agg(
+        **{m: (m, "mean") for m in metrics},
+        std_low=("std_low", "mean"),
+        std_high=("std_high", "mean"),
+    )
+    out["std_mid"] = (out["std_low"] + out["std_high"]) / 2.0
+    return out.reset_index()
 
 
 # --- Success and error per condition ----------------------------------------
 def ablation_by_condition(args) -> None:
-    """Success and final position error per condition, grouped by arm."""
-    summary = pd.read_csv(args.frozen / "pooled_condition_summary.csv")
+    """
+    @brief Success and final position error per condition, grouped by arm.
+    @param args: Parsed CLI namespace.
+    """
+    summary = drop_unreported(pd.read_csv(args.frozen / "pooled_condition_summary.csv"))
     conditions = list(pd.unique(summary["condition"]))
 
     fs.apply()
@@ -140,22 +186,26 @@ def ablation_by_condition(args) -> None:
 
 # --- Caution proxies against EKF std -----------------------------------------
 def behaviour_by_std(args) -> None:
-    """Four caution proxies against binned EKF position std, on a log axis."""
+    """
+    @brief Four caution proxies against banded EKF position std, on a log axis.
+    @param args: Parsed CLI namespace.
+
+    Built from the raw per-episode records rather than the pooled CSV: the
+    pooled file carries no condition column, so it cannot be restricted to the
+    conditions whose tier actually varies in-episode.
+    """
     from matplotlib.ticker import FixedLocator, FuncFormatter
 
-    df = pd.read_csv(args.frozen / "pooled_behaviour_by_std.csv")
-    panels = [
-        ("mean_mean_brake_cmd", "Mean brake command"),
-        ("mean_mean_speed_moving_ms", "Mean speed while moving (m/s)"),
-        ("mean_mean_abs_vyaw_rads", r"Mean $|$yaw rate$|$ (rad/s)"),
-        ("mean_mean_action_jerk", "Mean action jerk"),
-    ]
+    records = keep_varying(
+        pooled_frame(args.raw, args.seeds, fs.ARM_ORDER, "episode_records.csv")
+    )
+    df = _banded_proxies(records)
     xticks = [0.02, 0.05, 0.1, 0.2, 0.5, 1.0]
 
     fs.apply()
     fig, axes = plt.subplots(2, 2, figsize=fs.GRID_2X2, sharex=True)
     axes = axes.ravel()
-    for ax, (metric, label) in zip(axes, panels):
+    for ax, (metric, label) in zip(axes, _PROXIES):
         for arm, disp, colour, marker, ls in fs.ARMS:
             a = df[df["arm"] == arm].sort_values("std_mid")
             if a.empty or metric not in a.columns:
@@ -186,130 +236,145 @@ def behaviour_by_std(args) -> None:
 
 
 # --- EKF calibration ---------------------------------------------------------
-# The scatter backdrop is pooled over the three seeds, matching the pooled
-# curve drawn over it. An earlier version paired a pooled curve with a
-# single-seed cloud, which the caption then described as one seed.
-_OOD_CONDITION = "ood_irregular_rtk_fixed"
+# One arm characterises the filter: the EKF is identical across arms, so the
+# arm is immaterial to calibration. Mixing arms is NOT equivalent - the pooled
+# bin means then dip at bin 2 and lose the monotone rise the reading rests on.
+CALIBRATION_ARM = "vanilla_ppo"
 
-# Held tiers pin one fix state all episode, so their std barely moves; the
-# frozen binned CSV excludes them and the backdrop must match that scope.
-_CAL_HELD = ["gnss_fixed", "gnss_degraded"]
+# Equal-count bins over the reported std.
+_N_CAL_BINS = 5
 
 
-def _calibration_scatter(args) -> "pd.DataFrame | None":
-    """Per-step records pooled across seeds, for the calibration backdrop.
+def _calibration_records(args) -> Optional[pd.DataFrame]:
+    """
+    @brief Per-step calibration pairs for the reported scope.
+    @param args: Parsed CLI namespace; --scatter-src overrides discovery.
+    @return Frame with std_pos added, or None when no records are found.
 
-    Scope matches the frozen binned CSV: one arm (the EKF is identical across
-    arms, so the arm is immaterial to calibration) over every seed, with the
-    held tiers dropped. An explicit --scatter-src still wins.
+    One arm over every seed, restricted to the conditions whose tier varies
+    in-episode: a pinned tier holds the std at its floor, giving nothing to
+    correlate error against.
     """
     if args.scatter_src and Path(args.scatter_src).exists():
-        frames = [pd.read_csv(args.scatter_src)]
+        scatter = pd.read_csv(args.scatter_src)
     else:
-        found = sorted(
-            Path(args.raw).glob(
-                "seed_*/full_method/6_*/without_wrapper/calibration_records.csv"
+        try:
+            scatter = pooled_frame(
+                args.raw, args.seeds, [CALIBRATION_ARM], "calibration_records.csv"
             )
-        )
-        if not found:
+        except FileNotFoundError:
             return None
-        frames = [pd.read_csv(p) for p in found]
-    scatter = pd.concat(frames, ignore_index=True)
-    if "condition" in scatter.columns:
-        scatter = scatter[~scatter["condition"].isin(_CAL_HELD)]
+    scatter = keep_varying(scatter)
     if {"std_x", "std_y"} <= set(scatter.columns):
         scatter["std_pos"] = scatter[["std_x", "std_y"]].mean(axis=1)
     return scatter
 
 
-def ekf_calibration(args) -> None:
-    """Binned mean error against predicted std, over a per-step scatter.
-
-    The position x-axis is logarithmic: half the steps sit on the RTK-fixed
-    floor of the reported std, which a linear axis stacks into one column.
-    The position error is bimodal, the upper mode being the OOD layout's
-    localisation failure, so the points are split by regime and the y-axis is
-    logarithmic to hold both modes. The heading panel keeps linear axes: its
-    errors span no decades and a log axis would stretch near-zero values
-    across empty space.
+def _calibration_bins(
+    scatter: pd.DataFrame, std_col: str, err_col: str
+) -> pd.DataFrame:
     """
-    binned = pd.read_csv(args.frozen / "pooled_calibration_binned.csv")
-    scatter = _calibration_scatter(args)
+    @brief Mean absolute error within equal-count bins of the reported std.
+    @param scatter: Per-step calibration frame.
+    @param std_col: Reported-std column to bin on.
+    @param err_col: Error column to average.
+    @return Frame of std_low / std_high / mean_abs_error, one row per bin.
 
-    corr = None
-    corr_path = args.frozen / "pooled_calibration_correlations.csv"
-    if corr_path.exists():
-        corr = pd.read_csv(corr_path)
-        corr = corr[corr["scope"] == "varying_pooled"].set_index("axis")
+    Equal COUNT, not equal range: roughly half the steps sit on the RTK-fixed
+    floor, so equal-range bins would put nearly everything in the first bin.
+    duplicates="drop" tolerates the ties that floor creates.
+    """
+    pair = scatter[[std_col, err_col]].dropna()
+    if pair.empty:
+        return pd.DataFrame(columns=["std_low", "std_high", "mean_abs_error"])
+    bins = pd.qcut(pair[std_col].rank(method="first"), _N_CAL_BINS, labels=False)
+    grouped = pair.assign(bin=bins).groupby("bin")
+    return pd.DataFrame(
+        {
+            "std_low": grouped[std_col].min(),
+            "std_high": grouped[std_col].max(),
+            "mean_abs_error": grouped[err_col].mean(),
+        }
+    ).reset_index(drop=True)
+
+
+def _spearman(x: pd.Series, y: pd.Series) -> float:
+    """
+    @brief Spearman rank correlation, via ranks so no scipy dependency.
+    @param x: First series.
+    @param y: Second series.
+    @return The rank correlation, or nan when either side is constant.
+    """
+    pair = pd.concat([x, y], axis=1).dropna()
+    if len(pair) < 2:
+        return float("nan")
+    return float(pair.iloc[:, 0].rank().corr(pair.iloc[:, 1].rank()))
+
+
+def ekf_calibration(args) -> None:
+    """
+    @brief Binned mean error against predicted std, over a per-step scatter.
+    @param args: Parsed CLI namespace.
+
+    The position panel is log-log: roughly half the steps sit on the RTK-fixed
+    floor of the reported std, which a linear axis stacks into one column, and
+    the errors span decades. The heading panel stays linear - its errors span
+    no decades, and a log axis would stretch near-zero values across empty
+    space.
+    """
+    scatter = _calibration_records(args)
+    if scatter is None:
+        raise FileNotFoundError("no calibration_records.csv found")
 
     fs.apply()
     fig, axes = plt.subplots(1, 2, figsize=fs.SIDE_2)
     panels = [
-        ("position", "std_pos", "abs_err_pos", True),
-        ("heading", "std_yaw", "abs_err_yaw", False),
+        ("std_pos", "abs_err_pos", True),
+        ("std_yaw", "abs_err_yaw", False),
     ]
-    handles: list = []
-    labels: list[str] = []
-    for ax, (axis, std_col, err_col, log_axes) in zip(axes, panels):
-        if scatter is not None and {std_col, err_col} <= set(scatter.columns):
-            cols = [std_col, err_col]
-            has_cond = "condition" in scatter.columns
-            if has_cond:
-                cols = cols + ["condition"]
-            pair = scatter[cols].dropna()
-            if log_axes:
-                # Positive-only, so a log axis keeps every drawn point.
-                pair = pair[(pair[std_col] > 0) & (pair[err_col] > 0)]
-            groups = [("in-distribution", pair, fs.SCATTER)]
-            if has_cond:
-                is_ood = pair["condition"] == _OOD_CONDITION
-                groups = [
-                    ("in-distribution", pair[~is_ood], fs.SCATTER),
-                    (
-                        fs.condition_label(_OOD_CONDITION).replace("\n", " "),
-                        pair[is_ood],
-                        fs.ARM_COLOUR["input_uncertainty"],
-                    ),
-                ]
-            for label, part, colour in groups:
-                if part.empty:
-                    continue
-                # Equal sample per group, so the sparser one stays visible.
-                if len(part) > 4000:
-                    part = part.sample(4000, random_state=0)
-                ax.scatter(
-                    part[std_col],
-                    part[err_col],
-                    s=3,
-                    alpha=0.18,
-                    color=colour,
-                    edgecolors="none",
-                    zorder=1,
-                )
-                if label not in labels:
-                    handles.append(
-                        plt.Line2D(
-                            [],
-                            [],
-                            linestyle="none",
-                            marker="o",
-                            ms=fs.MS,
-                            color=colour,
-                            alpha=0.9,
-                        )
+    handles: List[Any] = []
+    labels: List[str] = []
+    for ax, (std_col, err_col, log_axes) in zip(axes, panels):
+        pair = scatter[[std_col, err_col]].dropna()
+        if log_axes:
+            # Positive-only, so a log axis keeps every drawn point.
+            pair = pair[(pair[std_col] > 0) & (pair[err_col] > 0)]
+        if not pair.empty:
+            drawn = pair.sample(4000, random_state=0) if len(pair) > 4000 else pair
+            ax.scatter(
+                drawn[std_col],
+                drawn[err_col],
+                s=3,
+                alpha=0.18,
+                color=fs.SCATTER,
+                edgecolors="none",
+                zorder=1,
+            )
+            if "in-distribution" not in labels:
+                handles.append(
+                    plt.Line2D(
+                        [],
+                        [],
+                        linestyle="none",
+                        marker="o",
+                        ms=fs.MS,
+                        color=fs.SCATTER,
+                        alpha=0.9,
                     )
-                    labels.append(label)
-        b = binned[binned["axis"] == axis]
-        if not b.empty:
-            # Geometric bin centres, to sit correctly on a log x-axis.
+                )
+                labels.append("in-distribution")
+
+        binned = _calibration_bins(scatter, std_col, err_col)
+        if not binned.empty:
+            # Geometric centres on a log axis, arithmetic on a linear one.
             centres = (
-                np.sqrt(b["std_low"] * b["std_high"])
+                np.sqrt(binned["std_low"] * binned["std_high"])
                 if log_axes
-                else (b["std_low"] + b["std_high"]) / 2.0
+                else (binned["std_low"] + binned["std_high"]) / 2.0
             )
             (line,) = ax.plot(
                 centres,
-                b["mean_abs_error"],
+                binned["mean_abs_error"],
                 color=fs.ACCENT,
                 marker="o",
                 linestyle="-",
@@ -317,22 +382,19 @@ def ekf_calibration(args) -> None:
                 ms=fs.MS,
                 zorder=3,
             )
-            lab = "mean error per std bin"
-            if lab not in labels:
+            if "mean error per std bin" not in labels:
                 handles.append(line)
-                labels.append(lab)
+                labels.append("mean error per std bin")
+
         if log_axes:
             ax.set_xscale("log")
             ax.set_yscale("log")
         ax.set_xlabel(fs.axis_label(std_col))
         ax.set_ylabel(fs.axis_label(err_col))
-        if corr is not None and axis in corr.index:
-            # Low-left in the position panel: the OOD band occupies the top.
+        rho = _spearman(scatter[std_col], scatter[err_col])
+        if rho == rho:  # not nan
             fs.note(
-                ax,
-                f"Spearman {corr.loc[axis, 'spearman']:.2f}",
-                corner="left",
-                y=0.10 if log_axes else 0.94,
+                ax, f"Spearman {rho:.2f}", corner="left", y=0.10 if log_axes else 0.94
             )
         fs.grid(ax)
     if handles:
@@ -343,7 +405,7 @@ def ekf_calibration(args) -> None:
 # --- Cross-seed robustness ---------------------------------------------------
 def seed_robustness(args) -> None:
     """Per-arm mean success with whiskers spanning the seed range."""
-    rob = pd.read_csv(args.frozen / "seed_robustness.csv")
+    rob = drop_unreported(pd.read_csv(args.frozen / "seed_robustness.csv"))
     conditions = sorted(rob["condition"].unique())
     x_index = {c: i for i, c in enumerate(conditions)}
     arms = [a for a in fs.ARM_ORDER if a in set(rob["arm"].astype(str))]
@@ -380,22 +442,27 @@ def seed_robustness(args) -> None:
 
 # --- Safety-gate ROC ---------------------------------------------------------
 def gate_roc(args) -> None:
-    """ROC of each candidate gate signal for predicting episode failure."""
+    """
+    @brief ROC of each candidate gate signal for predicting episode failure.
+    @param args: Parsed CLI namespace.
+
+    Restricted to the evidential arms: neither standard-head arm carries an
+    evidential head, so neither contributes a total-predictive curve, and an
+    EKF-std curve for them would compare unlike sets of signals.
+    """
     from scripts.analysis.gate_roc import _roc_curve
 
-    records = _pooled_episodes(args.raw, args.seeds, fs.ARM_ORDER)
-    records = records[~records["condition"].isin(_HELD_TIER)]
-    # Drop the unseen layout: no arm parks on it, so it contributes only
-    # failures and cannot be ranked within-condition. Matches the exclusion
-    # the EKF calibration statistics already apply.
-    records = records[records["condition"] != "ood_irregular_rtk_fixed"]
-    labels_arr = (records["success"].astype(float) == 0).astype(int)
-    records = records.assign(is_failure=labels_arr)
+    records = keep_varying(
+        pooled_frame(args.raw, args.seeds, EVIDENTIAL_ARMS, "episode_records.csv")
+    )
+    records = records.assign(
+        is_failure=(records["success"].astype(float) == 0).astype(int)
+    )
 
     # Score the deployed signal: the per-step epistemic + aleatoric sum, maxed
     # over the episode, merged in from the per-step records.
     records["max_total"] = np.nan
-    for arm in ("full_method", "output_uncertainty"):
+    for arm in EVIDENTIAL_ARMS:
         tot = _pooled_max_total(args.raw, args.seeds, arm)
         if tot.empty:
             continue
@@ -405,21 +472,15 @@ def gate_roc(args) -> None:
         )
         records.loc[idx, "max_total"] = merged["max_total"].to_numpy()
 
-    signals = {
-        "ekf_std_pos_max_m": None,
-        "max_total": ["output_uncertainty", "full_method"],
-    }
     signal_dash = {"ekf_std_pos_max_m": "-", "max_total": "--"}
     fs.apply()
     fig, ax = plt.subplots(figsize=(4.6, 4.0))
-    for arm in fs.ARM_ORDER:
+    for arm in EVIDENTIAL_ARMS:
         a = records[records["arm"] == arm]
         if a.empty:
             continue
         lab = a["is_failure"].to_numpy()
-        for signal, allowed in signals.items():
-            if allowed is not None and arm not in allowed:
-                continue
+        for signal in signal_dash:
             if signal not in a.columns:
                 continue
             scores = a[signal].to_numpy(dtype=float)
@@ -455,7 +516,10 @@ def ekf_sawtooth(args) -> None:
 
 
 def training_curves(args) -> None:
-    """Training curves across the curriculum, four arms, two panels."""
+    """
+    @brief Training curves across the curriculum, four arms, two panels.
+    @param args: Parsed CLI namespace.
+    """
     from scripts.analysis.figures.training_curves import render
 
     render(args.training_data, args.out / "training_curves")
@@ -523,13 +587,16 @@ def main() -> None:
         help="calibration_records.csv for the calibration backdrop.",
     )
     ap.add_argument(
-        "--trace", type=Path, default=None, help="Demo-trace CSV for the EKF sawtooth."
+        "--trace",
+        type=Path,
+        default=DEFAULT_TRACE,
+        help="Demo-trace CSV for the EKF sawtooth.",
     )
     ap.add_argument(
         "--training-data",
         type=Path,
         default=None,
-        help="Ported TensorBoard series for the training curves.",
+        help="Directory holding the exported training-curve CSVs.",
     )
     args = ap.parse_args()
 
