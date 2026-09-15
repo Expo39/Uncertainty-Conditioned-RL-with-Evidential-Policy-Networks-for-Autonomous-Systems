@@ -3,7 +3,7 @@
 .PHONY: help install test test-unit test-integration
 .PHONY: lint format typecheck verify clean clean-cache clean-all clean-venv
 .PHONY: backup-configs restore-configs backup-results restore-results list-results-archive
-.PHONY: figures run-figures training-curves analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d
+.PHONY: figures run-figures training-curves analysis-bundle generate-layouts visualise eval-visualise-2d docker-eval-visualise-3d clip check-host-deps
 .PHONY: docker-build docker-build-no-cache docker-build-no-cache-core docker-build-no-cache-inspect docker-build-ros2 docker-up docker-down docker-restart docker-ps docker-watch docker-top
 .PHONY: docker-eval docker-covariance-probe
 .PHONY: docker-test docker-test-unit docker-test-integration
@@ -49,6 +49,24 @@ PER_STEP_CAP ?= 0
 # NO_SAFETY=1 bypasses the SafetyWrapper in docker-eval. Results nest under
 # <baseline>/<leaf>/{with_wrapper,without_wrapper}/ for the A/B.
 NO_SAFETY    ?=
+
+# --- Visualiser / recording -------------------------------------------------
+# RECORD=true starts the 2D viewer recording an MP4 straight away; the R key
+# toggles recording at any time regardless. UI_SCALE enlarges fonts and the
+# legend for a projector or a recording. TRACE=false suppresses the demo's
+# per-step CSV traces for a look-but-don't-touch run.
+RECORD     ?= false
+UI_SCALE   ?= 1.5
+TRACE      ?= true
+RECORD_DIR ?= outputs/recordings
+REC_FPS    ?= 30
+# clip parameters (see the clip target).
+VIDEO  ?=
+START  ?=
+END    ?=
+FORMAT ?= gif
+WIDTH  ?= 800
+FPS    ?= 15
 
 # BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
 # layout <root>/<baseline>/<leaf>/. You type only the names:
@@ -491,18 +509,29 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 # Worker N: outputs/vis_history_N.jsonl
 _VIS_FILE = $(if $(filter 0,$(WORKER)),outputs/vis_history.jsonl,outputs/vis_history_$(WORKER).jsonl)
 
-visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0]
+# Recording flags shared by the two viewer targets. RECORD=true adds --record;
+# the viewer's R key works either way.
+_VIS_FLAGS = --ui-scale $(UI_SCALE) --record-dir $(RECORD_DIR) --fps $(REC_FPS) \
+	$(if $(filter true,$(RECORD)),--record,)
+
+visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0] [RECORD=false] [UI_SCALE=1.5]
 	$(call ensure-venv)
+	@if [ "$(RECORD)" = "true" ]; then $(MAKE) --no-print-directory check-host-deps; fi
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
-		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE)
+		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE) $(_VIS_FLAGS)
 
-eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [REALTIME=false] [STAGE=N] [GNSS_TIER=fixed|float|standalone|degraded]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [REALTIME=false] [STAGE=N] [GNSS_TIER=fixed|float|standalone|degraded] [RECORD=false] [TRACE=true] [UI_SCALE=1.5]
 	$(call ensure-venv)
+	@if [ "$(RECORD)" = "true" ]; then $(MAKE) --no-print-directory check-host-deps; fi
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
-	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(CHECKPOINT_NAME), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>)"
+	@echo "Demo drive 2D: layout=$(LAYOUT), checkpoint=$(CHECKPOINT_NAME), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>), record=$(RECORD), trace=$(TRACE)"
+	@# This tears the WHOLE stack down first (workers + compose, orphans
+	@# included), so it will kill a training run in progress. TRACE=false only
+	@# suppresses the demo's own CSVs; it does not make this target read-only.
+	@echo "NOTE: this stops any running training stack before starting the demo."
 	@# Tear down any pre-existing stack first (orphans included).
 	$(WORKERS_DOWN)
 	$(DOCKER_COMPOSE) down --remove-orphans
@@ -519,8 +548,44 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		DEMO_STAGE=$(STAGE) \
 		DEMO_GNSS_TIER=$(GNSS_TIER) \
 		DEMO_REALTIME=$(REALTIME) \
+		DEMO_TRACE=$(TRACE) \
 		DEMO_VIS_FILE=$(_VIS_FILE) \
+		DEMO_VIS_FLAGS="$(_VIS_FLAGS)" \
 		bash scripts/visualise/eval_visualise_2d.sh
+
+clip: ## Cut a GIF/MP4 from a recording. Usage: make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 [FORMAT=gif] [WIDTH=800] [FPS=15]
+	@$(MAKE) --no-print-directory check-host-deps
+	@if [ -z "$(VIDEO)" ]; then \
+		echo "Set VIDEO=outputs/recordings/<stamp>.mp4"; exit 1; fi
+	@if [ ! -f "$(VIDEO)" ]; then echo "No such video: $(VIDEO)"; exit 1; fi
+	@if [ -z "$(START)" ] || [ -z "$(END)" ]; then \
+		echo "Set START and END (MM:SS or seconds), e.g. START=00:05 END=00:20"; exit 1; fi
+	@mkdir -p $(dir $(VIDEO))
+	$(eval _CLIP_OUT := $(basename $(VIDEO))_$(subst :,,$(START))-$(subst :,,$(END)).$(FORMAT))
+	@# -ss/-to before -i seeks on keyframes (fast); re-encoding keeps the cut
+	@# frame-accurate. GIF uses the two-pass palette pipeline, which is far
+	@# better than a naive conversion on flat vector-style graphics.
+	@if [ "$(FORMAT)" = "gif" ]; then \
+		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(VIDEO)" \
+			-vf "fps=$(FPS),scale=$(WIDTH):-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
+			"$(_CLIP_OUT)"; \
+	else \
+		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(VIDEO)" \
+			-vf "scale=$(WIDTH):-2:flags=lanczos" -c:v libx264 -crf 18 -pix_fmt yuv420p \
+			"$(_CLIP_OUT)"; \
+	fi
+	@echo "Wrote $(_CLIP_OUT) ($$(du -h '$(_CLIP_OUT)' | cut -f1))"
+
+check-host-deps: ## Verify host-side tools the recording targets need (ffmpeg)
+	@if command -v ffmpeg >/dev/null 2>&1; then \
+		echo "ffmpeg: $$(ffmpeg -version | head -1)"; \
+	else \
+		echo "ffmpeg: MISSING."; \
+		echo "  The 2D viewer runs on the host, so recording and 'make clip'"; \
+		echo "  need the host ffmpeg binary (it is not in any container)."; \
+		echo "  Install it with: sudo apt-get install ffmpeg"; \
+		exit 1; \
+	fi
 
 # ----------------------------------------------------------------------
 # Testing
