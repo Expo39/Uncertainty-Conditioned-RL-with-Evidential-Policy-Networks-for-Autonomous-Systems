@@ -212,6 +212,41 @@ floor plan geometry in `scripts/layouts/floor_plans/*.py`.
 
 ---
 
+## Results Analysis
+
+Run these after an evaluation has written `outputs/raw/evaluation_results/`. They read
+raw CSVs and write derived ones; none of them needs a GPU or the simulator.
+
+| Command | Purpose | GPU? |
+|---------|---------|------|
+| `make analyse-cross-seed [STAGE=6]` | Pool every seed into the headline CSVs + per-seed robustness | No |
+| `make analyse-ablation [STAGE=6] [SEED=42]` | Single-seed cross-arm contrast | No |
+| `make analyse-gate [STAGE=6] [SEED=42]` | Single-seed safety-gate ROC | No |
+| `make analyse-calibration [ARM=full_method] [SEED=42]` | Is the EKF covariance honest? | No |
+| `make handover-timing [ARM=full_method]` | Handover latency vs degradation onset | No |
+| `make uncertainty-verdict EVAL_DIR=...` | Epistemic-vs-aleatoric separation | No |
+| `make docker-training-curves` | TensorBoard scalars -> CSV (`tensorboard` is container-only) | No |
+| `make figures [FIG=gate_roc]` | Render the figures into `outputs/main_analysis/figures/` | No |
+| `make run-figures [RUN_DIR=...]` | Per-run diagnostic panels | No |
+| `make analysis-bundle [STAGE=6]` | Assemble summaries, values and MANIFEST | No |
+
+Typical order after a completed evaluation:
+
+```bash
+make analyse-cross-seed STAGE=6   # pooled CSVs -> raw_derived/cross_seed_analysis/
+make docker-training-curves       # TB scalars  -> raw_derived/training/
+make figures                      # figures     -> main_analysis/figures/
+make analysis-bundle              # summaries + values + MANIFEST
+```
+
+The single-seed targets (`analyse-ablation`, `analyse-gate`, `analyse-calibration`,
+`handover-timing`) are debugging aids: `analyse-cross-seed` recomputes the same
+statistics over the pooled sample and is what the headline set reads.
+
+> **Further reading:** [scripts/analysis/README.md](scripts/analysis/README.md) - per-script reference and CSV schema. The `outputs/` tier layout is in the [main README](README.md#results-layout).
+
+---
+
 ## Maintenance
 
 | Command | Purpose |

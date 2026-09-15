@@ -1,5 +1,5 @@
 """
-@file plot_ekf_sawtooth.py
+@file ekf_sawtooth.py
 @brief The reported EKF sigma_x sawtooth over one
        episode, with GNSS fix-state tiers shown as shaded background bands.
 
@@ -26,7 +26,7 @@ sole channel.
 @note Read-only w.r.t. the trace. Pure CPU, no torch/CARLA.
 
 Usage:
-    python scripts/analysis/figures/plot_ekf_sawtooth.py \
+    python scripts/analysis/figures/ekf_sawtooth.py \
         --trace outputs/raw/demo_traces/<baseline>/<leaf>/<stamp>/episode_<N>.csv \
         --out   outputs/raw_derived/figures/ekf_sawtooth
 """
