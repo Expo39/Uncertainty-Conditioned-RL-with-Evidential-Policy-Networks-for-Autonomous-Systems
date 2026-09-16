@@ -12,7 +12,7 @@ Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evalua
 | Custom checkpoint | `make eval-visualise-2d BASELINE=full_method CHECKPOINT=6_42_22062026-1502` |
 | Record the drive to MP4 | `make eval-visualise-2d RECORD=true ...` |
 | Watch without writing trace CSVs | `make eval-visualise-2d TRACE=false ...` |
-| Cut a GIF from a recording | `make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20` |
+| Cut a GIF from the newest recording | `make clip START=00:05 END=00:20` |
 | Check the host ffmpeg dependency | `make check-host-deps` |
 
 > `make eval-visualise-2d` tears the whole Docker stack down before it starts
@@ -106,11 +106,11 @@ The card is always filled, so a tier change reads as a colour change within a fi
 `make clip` cuts a segment out of a recording, using ffmpeg's two-pass palette pipeline for GIFs (markedly better than a naive conversion on flat vector-style graphics):
 
 ```
-make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
-make clip VIDEO=outputs/recordings/<stamp>.mp4 START=12 END=28 FORMAT=mp4 WIDTH=1280
+make clip START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
+make clip START=12 END=28 FORMAT=mp4 WIDTH=1280
 ```
 
-`START`/`END` accept `MM:SS` or plain seconds. This is how the `docs/media/` GIF placeholders get filled.
+`VIDEO=` defaults to the newest file in `outputs/recordings/`, so the usual record-then-cut flow needs no filename lookup; pass it explicitly to cut an older recording. `OUT=` writes the clip somewhere specific (e.g. straight into `docs/media/`). `START`/`END` accept `MM:SS` or plain seconds. This is how the `docs/media/` GIF placeholders get filled.
 
 ### Capturing a tier comparison
 
