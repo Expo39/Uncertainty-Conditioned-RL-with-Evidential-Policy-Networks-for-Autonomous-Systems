@@ -212,9 +212,6 @@ make figures FIG=ablation_by_condition
 cp outputs/main_analysis/figures/ablation_by_condition.png docs/media/eval_degradation.png
 ```
 
-<!-- gif:placeholder name="baseline_comparison" caption="Vanilla PPO vs full method side by side under degraded GNSS" -->
-![Baseline comparison placeholder](../../docs/media/baseline_comparison.gif)
-
 ### On illustrating the safety handoff
 
 There is deliberately no "uncertainty crosses the threshold and the vehicle stops" clip.
