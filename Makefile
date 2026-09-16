@@ -26,39 +26,32 @@ LAYOUT       ?= rectangle
 CHECKPOINT   ?=
 BASELINE     ?=
 STAGE        ?=
-# SEED selects which seed's results the cross-arm analysis targets read; it does
-# NOT set a run's RNG seed (that is configs/deployment/agent_config.yaml, the one
-# source). Only analyse-gate / analyse-ablation use it (they key on STAGE, not a
-# checkpoint, so they cannot infer the seed otherwise).
+# Which seed's results to READ (a run's RNG seed lives in agent_config.yaml).
+# SEED is only needed by analyse-gate / analyse-ablation, which key on STAGE and
+# so cannot infer it; EVAL_SEED prefers the checkpoint leaf and owns the output
+# tree, where every path nests seed_<N>/ so seeds cannot overwrite each other.
 SEED         ?=
-# Seed owning the eval/analysis output tree, derived from the checkpoint leaf
-# (<stage>_<seed>_<timestamp>) so per-checkpoint targets get it from the run
-# name; cross-arm targets fall back to SEED then 42. Every eval tree nests a
-# seed_<N>/ layer so a second seed never overwrites the first.
 EVAL_SEED = $(or $(word 2,$(subst _, ,$(CHECKPOINT))),$(SEED),42)
 EVAL_RESULTS_ROOT = outputs/raw/evaluation_results/seed_$(EVAL_SEED)
 ABLATION_ROOT     = outputs/raw_derived/ablation_analysis/seed_$(EVAL_SEED)
 GATE_ROOT         = outputs/raw_derived/gate_analysis/seed_$(EVAL_SEED)
 CALIBRATION_ROOT  = outputs/raw_derived/calibration_analysis/seed_$(EVAL_SEED)
 HANDOVER_ROOT     = outputs/raw_derived/handover_timing/seed_$(EVAL_SEED)
-# Leading steps per episode logged to per_step_records.csv in docker-eval
-# (evidential only). 0 disables.
+# Leading steps/episode into per_step_records.csv; 0 disables.
 PER_STEP_CAP ?= 0
-# NO_SAFETY=1 bypasses the SafetyWrapper in docker-eval. Results nest under
-# <baseline>/<leaf>/{with_wrapper,without_wrapper}/ for the A/B.
+# 1 bypasses the SafetyWrapper; results nest with_/without_wrapper.
 NO_SAFETY    ?=
 
-# RECORD=true starts the 2D viewer recording immediately; R toggles it either
-# way. UI_SCALE enlarges fonts for a projector or recording. TRACE=false
-# suppresses the demo's per-step CSV traces for a look-but-don't-touch run.
+# Viewer: RECORD starts capture at once (R toggles either way), UI_SCALE sizes
+# fonts for a projector, TRACE=false suppresses the demo's per-step CSVs,
+# SHOW_EPISODE exposes internal bookkeeping that means nothing to an audience.
 RECORD     ?= false
 UI_SCALE   ?= 1.5
 TRACE      ?= true
-# SHOW_EPISODE=true adds the episode number to the viewer's context line. Off by
-# default: the number is internal bookkeeping that means nothing to an audience.
 SHOW_EPISODE ?= false
 RECORD_DIR ?= outputs/recordings
 REC_FPS    ?= 30
+
 # clip parameters (see the clip target).
 VIDEO  ?=
 START  ?=
@@ -66,32 +59,22 @@ END    ?=
 FORMAT ?= gif
 WIDTH  ?= 800
 FPS    ?= 15
-# The CARLA window launches at 800x600 (docker-compose.inspect.yml), hence the
-# default region; OFFSET is its top-left corner on the X display
-# (xwininfo -name CarlaUE4). Empty DURATION records until Ctrl+C; set seconds
-# for an unattended capture.
+
+# Screen capture; empty DURATION records until Ctrl+C. ultrafast + high CRF keeps
+# the encoder ahead of the capture rate, since a slower preset cannot sustain a 4K
+# desktop against CARLA on the same GPU and x11grab then drops frames.
 DURATION ?=
-# ultrafast + high CRF keeps the encoder ahead of the capture rate. A slower
-# preset cannot sustain a 4K desktop while CARLA competes for the GPU, so
-# x11grab silently drops frames and the recording stutters even though the
-# simulator looked smooth. Quality hardly matters at the ~800 px output size.
 REC_PRESET ?= ultrafast
 REC_CRF    ?= 23
-# Downscale at capture time. A 4K desktop grab is far more pixels than a README
-# clip needs (the GIF ends up ~800 px wide), and scaling here keeps the encoder
-# comfortably ahead of the capture rate so no frames are dropped. Height drives
-# it; width follows the window's aspect ratio.
 REC_HEIGHT ?= 720
 REGION   ?= 800x600
 OFFSET   ?= 0,0
 OUT      ?=
 
-# BASELINE and CHECKPOINT are bare names (e.g. BASELINE=input_uncertainty
-# CHECKPOINT=seed42_11062026-0628); the recipes reconstruct the full nested
-# output paths <root>/<baseline>/<leaf>/. BASELINE_NAME also accepts a full
-# YAML path (it takes the file stem either way); default full_method.
+# BASELINE and CHECKPOINT are bare names (BASELINE=input_uncertainty
+# CHECKPOINT=seed42_11062026-0628); the recipes rebuild the nested paths
+# <root>/<baseline>/<leaf>/. A full YAML path also works (the stem is taken).
 BASELINE_NAME = $(if $(BASELINE),$(notdir $(basename $(BASELINE))),full_method)
-# Full path to the baseline override config, passed to the scripts.
 BASELINE_YAML = $(CONFIG_DIR)/baselines/$(BASELINE_NAME).yaml
 # Resume/run directory (checkpoints/<baseline>/<leaf>) for train --resume-from.
 CHECKPOINT_DIR = checkpoints/$(BASELINE_NAME)/$(CHECKPOINT)
@@ -231,15 +214,12 @@ docker-covariance-probe: ## Causal probe - does the policy USE the covariance in
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make docker-eval-visualise-3d [BASELINE=full_method] [CHECKPOINT=6_42_22062026-1502] [STAGE=6] [GNSS_TIER=fixed|float|standalone|degraded]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	@echo "Demo drive 3D: checkpoint=$(CHECKPOINT_NAME), stage=$(if $(STAGE),$(STAGE),<base>), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>)"
-	@# Only the two demo services are named on the `up` below, so compose leaves
-	@# the training/tensorboard containers untouched and --abort-on-container-exit
-	@# cannot be tripped by an unrelated one exiting. The demo CARLA runs on its
-	@# own port range and coexists with the training stack, but both want the GPU.
+	@# Naming only the demo services keeps --abort-on-container-exit from being
+	@# tripped by an unrelated container. Demo CARLA has its own port range but
+	@# competes for the GPU, so stop a training run first.
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo uncertainty-rl-ros2-inspect 2>/dev/null || true
-	@# Grant on the RESOLVED display: this shell may have DISPLAY unset (the
-	@# value is globbed from /tmp/.X11-unix), and a bare xhost would then target
-	@# the wrong display, leaving CARLA unable to map its window (it opens the
-	@# window once at startup, so a late grant does not help).
+	@# Grant on the RESOLVED display: DISPLAY may be unset here, and CARLA maps
+	@# its window once at startup, so a late grant does not help.
 	DISPLAY=$(_DISPLAY) xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) CHECKPOINT=$(CHECKPOINT_MODEL) \
 		DEMO_BASELINE_ARG="$(if $(BASELINE),--baseline $(BASELINE_YAML),)" \
@@ -409,9 +389,8 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make ge
 		--plot-dir outputs/raw_derived/layouts \
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
 
-# Results analysis and diagnostics below are all host-side and CPU-only: they
-# read the raw CSVs under outputs/raw/ (or the TensorBoard event files under
-# logs/) and write derived CSVs. No CARLA, no ROS 2, no GPU.
+# Everything below is host-side and CPU-only: reads the raw CSVs (or TensorBoard
+# event files) and writes derived CSVs. No CARLA, no ROS 2, no GPU.
 analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml. Usage: make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]
 	$(call ensure-venv)
 	$(PYTHON) scripts/diagnostics/markov_analyser.py \
@@ -542,9 +521,8 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 
 clip: ## Cut a GIF/MP4 from the newest recording (or VIDEO=<path>). Usage: make clip START=00:05 END=00:20 [VIDEO=...] [FORMAT=gif] [WIDTH=800] [FPS=15] [OUT=docs/media/<name>.gif]
 	@$(MAKE) --no-print-directory check-host-deps
-	@# VIDEO defaults to the newest recording, so the usual "record then cut"
-	@# flow needs no filename lookup: the timestamped names are awkward to type
-	@# and nearly always the one just captured.
+	@# Defaults to the newest recording: the timestamped names are awkward to
+	@# type and it is nearly always the clip just captured.
 	$(eval _VIDEO := $(if $(VIDEO),$(VIDEO),$(shell ls -t $(RECORD_DIR)/*.mp4 2>/dev/null | head -1)))
 	@if [ -z "$(_VIDEO)" ]; then \
 		echo "No recordings in $(RECORD_DIR)/ - set VIDEO=<path>.mp4"; exit 1; fi
@@ -554,9 +532,8 @@ clip: ## Cut a GIF/MP4 from the newest recording (or VIDEO=<path>). Usage: make 
 		echo "Set START and END (MM:SS or seconds), e.g. START=00:05 END=00:20"; exit 1; fi
 	@mkdir -p $(dir $(_VIDEO))
 	$(eval _CLIP_OUT := $(if $(OUT),$(OUT),$(basename $(_VIDEO))_$(subst :,,$(START))-$(subst :,,$(END)).$(FORMAT)))
-	@# -ss/-to before -i seeks on keyframes (fast); re-encoding keeps the cut
-	@# frame-accurate. GIF uses the two-pass palette pipeline, which is far
-	@# better than a naive conversion on flat vector-style graphics.
+	@# -ss/-to before -i seeks on keyframes; re-encoding keeps the cut accurate.
+	@# GIF uses the two-pass palette pipeline, far better on flat graphics.
 	@if [ "$(FORMAT)" = "gif" ]; then \
 		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(_VIDEO)" \
 			-vf "fps=$(FPS),scale=$(WIDTH):-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
@@ -570,21 +547,15 @@ clip: ## Cut a GIF/MP4 from the newest recording (or VIDEO=<path>). Usage: make 
 
 record-screen: ## Screen-record the CARLA window to MP4 until Ctrl+C. Usage: make record-screen [DURATION=30] [REC_HEIGHT=720] [REGION=WxH] [OFFSET=X,Y] [OUT=...]
 	@$(MAKE) --no-print-directory check-host-deps
-	@# The CARLA 3D window and every inspector overlay are drawn by the CARLA
-	@# server itself (server-side debug API), not by a pygame surface we own -
-	@# so unlike the 2D viewer they cannot record themselves. x11grab captures
-	@# them from the host X display instead.
+	@# CARLA draws its window server-side, so unlike the 2D viewer it cannot
+	@# record itself; x11grab captures it from the host X display instead.
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
-	@# Locate the CARLA window automatically. Matching on the WM class, not the
-	@# title: CARLA titles its window "CarlaUE4  " with trailing spaces, so
-	@# `xwininfo -name CarlaUE4` fails outright. Explicit REGION/OFFSET win, so
-	@# a non-CARLA capture still works.
+	@# Match the WM class: CARLA's title has trailing spaces, so -name fails.
 	$(eval _WIN := $(shell DISPLAY=$(_DISPLAY) xwininfo -root -tree 2>/dev/null | grep -m1 CarlaUE4-Linux-Shipping))
 	$(eval _AUTO_REGION := $(shell echo '$(_WIN)' | awk '{print $$(NF-1)}' | grep -oE '^[0-9]+x[0-9]+'))
 	$(eval _AUTO_OFFSET := $(shell echo '$(_WIN)' | awk '{print $$NF}' | tr '+' ' ' | awk 'NF>=2 {print $$1","$$2}'))
-	@# Both must be detected together, or fall back to both defaults: a detected
-	@# region with an empty offset yields "-i :1+," which ffmpeg cannot parse.
+	@# Both or neither: a region with an empty offset gives ffmpeg "-i :1+,".
 	$(eval _REGION := $(if $(and $(_AUTO_REGION),$(_AUTO_OFFSET)),$(_AUTO_REGION),$(REGION)))
 	$(eval _OFFSET := $(if $(and $(_AUTO_REGION),$(_AUTO_OFFSET)),$(_AUTO_OFFSET),$(OFFSET)))
 	@if [ -z "$(_REGION)" ] || [ -z "$(_OFFSET)" ]; then \
@@ -674,9 +645,8 @@ sanity: ## Quick import check
 	$(call ensure-venv)
 	$(PYTHON) -c "import uncertainty_rl; print('Package imports OK')"
 
-# Mirrors the CI job exactly: CI installs only .[dev] (no torch), so it runs
-# lint + typecheck + import and no tests. The tests need torch and live in
-# docker-test-unit.
+# Mirrors CI exactly: only .[dev] is installed (no torch), so lint + typecheck
+# + import and no tests. The tests need torch - see docker-test-unit.
 verify: lint typecheck sanity ## Run the CI checks locally (lint + typecheck + import). Tests: docker-test-unit.
 
 
@@ -720,10 +690,9 @@ restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-wor
 	tar -xzf project_configs.tar.gz
 	@echo "Restored configs from project_configs.tar.gz"
 
-# Gitignored trees holding GPU time that a fresh clone cannot regenerate. The
-# archive lands in the repo root, which `make clean` never touches, so a backup
-# survives the very targets that delete what it holds. outputs/ goes in whole:
-# raw/ costs simulation time and the derived tiers are small enough to carry.
+# Gitignored trees holding GPU time a fresh clone cannot regenerate. The archive
+# lands in the repo root, which `make clean` never touches, so a backup survives
+# the very targets that delete what it holds.
 RESULTS_TREES = checkpoints logs outputs
 RESULTS_ARCHIVE ?= project_results.tar.gz
 
