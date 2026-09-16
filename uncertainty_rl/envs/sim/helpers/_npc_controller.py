@@ -46,10 +46,6 @@ class NPCController:
     _EGO_AVOID_RADIUS_SQ: float = _EGO_AVOID_RADIUS**2
     _PATROL_AVOID_RADIUS_SQ: float = _PATROL_AVOID_RADIUS**2
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     def __init__(
         self,
         num_patrol_max: int,
@@ -118,10 +114,6 @@ class NPCController:
         # so NPC placement and walk headings are reproducible at a fixed seed.
         self._rng: np.random.Generator = np.random.default_rng()
 
-    # -----------------------------------------------------------------------
-    # Per-reset setup
-    # -----------------------------------------------------------------------
-
     def set_rng(self, rng: "np.random.Generator") -> None:
         """
         @brief Inject the seeded RNG used for all NPC placement and heading draws.
@@ -153,10 +145,6 @@ class NPCController:
         @param all_vehicle_actors: All live vehicle actors in the world.
         """
         self._all_vehicle_actors = all_vehicle_actors
-
-    # -----------------------------------------------------------------------
-    # Spawning
-    # -----------------------------------------------------------------------
 
     def spawn_patrol(
         self,
@@ -330,10 +318,6 @@ class NPCController:
                 self._pedestrian_zones.append(zone)
 
         logger.debug("Spawned %d pedestrians.", len(self.pedestrian_actors))
-
-    # -----------------------------------------------------------------------
-    # Per-step updates
-    # -----------------------------------------------------------------------
 
     def update_patrol(
         self,
@@ -596,10 +580,6 @@ class NPCController:
             control.speed = self._pedestrian_speed
             walker.apply_control(control)
 
-    # -----------------------------------------------------------------------
-    # Cleanup
-    # -----------------------------------------------------------------------
-
     def cleanup(self) -> None:
         """
         @brief Destroy all patrol and pedestrian actors and clear per-episode state.
@@ -647,10 +627,6 @@ class NPCController:
         self._pedestrian_lifetime_steps.clear()
         self._pedestrian_zones.clear()
         self._all_vehicle_actors.clear()
-
-    # -----------------------------------------------------------------------
-    # Private helpers
-    # -----------------------------------------------------------------------
 
     def _respawn_pedestrian(self, idx: int, vehicle: Any) -> None:
         """

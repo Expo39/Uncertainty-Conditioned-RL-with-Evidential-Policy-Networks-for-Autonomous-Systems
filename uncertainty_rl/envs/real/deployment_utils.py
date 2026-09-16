@@ -46,10 +46,6 @@ class RealWorldDeployment:
         self._lot_y: float = float(datum.get("lot_y", 0.0))
         self._lot_yaw_rad: float = math.radians(float(datum.get("heading_deg", 0.0)))
 
-    # -----------------------------------------------------------------------
-    # Construction helpers
-    # -----------------------------------------------------------------------
-
     @classmethod
     def from_config(
         cls,
@@ -163,10 +159,6 @@ class RealWorldDeployment:
         target_bay = deployment.set_target_bay(bay_id, layout)
         return deployment, target_bay
 
-    # -----------------------------------------------------------------------
-    # EKF frame calibration
-    # -----------------------------------------------------------------------
-
     def reference_pose(self) -> Tuple[float, float, float]:
         """
         @brief Return the surveyed datum pose in the lot layout frame.
@@ -181,10 +173,6 @@ class RealWorldDeployment:
         @return True if datum dict is populated.
         """
         return bool(self._datum)
-
-    # -----------------------------------------------------------------------
-    # Target bay assignment (replaces random sampling used in sim)
-    # -----------------------------------------------------------------------
 
     def set_target_bay(
         self,
@@ -225,10 +213,6 @@ class RealWorldDeployment:
             f"Bay ID '{bay_id}' not found in layout. "
             f"Available IDs: {[b.get('id', b.get('bay_id', '')) for b in bays]}"
         )
-
-    # -----------------------------------------------------------------------
-    # Actuation calibration
-    # -----------------------------------------------------------------------
 
     def calibrate_action(
         self, steering: float, throttle: float, brake: float

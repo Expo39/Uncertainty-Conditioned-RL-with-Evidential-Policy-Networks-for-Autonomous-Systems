@@ -32,11 +32,9 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_THRESHOLD_VELOCITY,
 )
 
-# Scalar success thresholds used only by the real-world inference loop as a
-# placeholder until a measured vehicle bounding box and bay polygon are wired
-# in to mirror the sim's polygon-fit check (car_fully_inside_bay).
-# @todo(AG) replace with car_fully_inside_bay once deployment vehicle extents
-# are surveyed and added to the deployment config.
+# Placeholder for the sim's polygon-fit check (car_fully_inside_bay).
+# @todo(AG) replace once deployment vehicle extents are surveyed and
+# added to the deployment config.
 _REAL_WORLD_POS_THRESHOLD_M = 0.5
 _REAL_WORLD_YAW_THRESHOLD_RAD = math.radians(15.0)
 
@@ -188,19 +186,12 @@ class RealWorldInferenceLoop:
             max_steps=int(agent_cfg.get("max_steps", 500)),
         )
 
-    # -----------------------------------------------------------------------
-    # Mission startup
-    # -----------------------------------------------------------------------
-
     def prepare(self) -> None:
         """
         @brief Block until sensors are ready, then calibrate the EKF frame offset.
 
-        Call this once before run(). Waits for the CovarianceExtractorNode to
-        publish its first valid EKF state, then runs calibrate_ekf_frame_offset()
-        using the surveyed datum as the world reference. The resulting odom-to-
-        world transform is stored in self._ekf_odom_offset for use in every
-        subsequent _get_observation() call.
+        Call once before run(). The resulting odom-to-world transform is stored
+        in self._ekf_odom_offset for every subsequent _get_observation() call.
 
         @raises RuntimeError if sensors do not become ready within the configured
                 covariance_timeout.
@@ -233,10 +224,6 @@ class RealWorldInferenceLoop:
         self._target_x = float(self._target_bay["x"])
         self._target_y = float(self._target_bay["y"])
         self._target_yaw = float(self._target_bay["yaw"])
-
-    # -----------------------------------------------------------------------
-    # Sensor reads (partially implemented)
-    # -----------------------------------------------------------------------
 
     def _get_lidar_scan(self) -> Optional[np.ndarray]:
         """
@@ -311,10 +298,6 @@ class RealWorldInferenceLoop:
             self._include_obstacle_obs,
             self._obs_buffer,
         )
-
-    # -----------------------------------------------------------------------
-    # Actuation and termination (stubs)
-    # -----------------------------------------------------------------------
 
     def _apply_action(self, steering: float, throttle: float, brake: float) -> None:
         """
@@ -478,10 +461,6 @@ class RealWorldInferenceLoop:
         self._twist_msg = None
         self._twist_stop_msg = None
 
-    # -----------------------------------------------------------------------
-    # Safety
-    # -----------------------------------------------------------------------
-
     def _apply_safety_wrapper(
         self,
         action: np.ndarray,
@@ -509,10 +488,6 @@ class RealWorldInferenceLoop:
                 self._handoff_threshold,
             )
         return modulated, handoff
-
-    # -----------------------------------------------------------------------
-    # Mission loop
-    # -----------------------------------------------------------------------
 
     def run(self) -> Dict[str, Any]:
         """

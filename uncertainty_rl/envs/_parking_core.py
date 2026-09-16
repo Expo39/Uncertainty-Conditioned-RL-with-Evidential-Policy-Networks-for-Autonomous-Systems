@@ -259,12 +259,9 @@ def extract_obstacle_features(
     @note Self-returns closer than 1.0 m and the rear hemisphere (x <= 0) are
           discarded - matching the ~270 deg FOV of a front-bumper-mounted LiDAR.
     """
-    # Zero unconditionally: a missing scan or a scan with no valid returns
-    # means clear space (0.0 = infinite clearance by convention). Returning
-    # early without clearing would leave the previous frame's readings in the
-    # buffer, so a stale obstacle would follow the car through empty space -
-    # both in the observation and in the clearance penalty that reads this
-    # buffer.
+    # 0.0 = infinite clearance by convention. Zeroed unconditionally so a
+    # missing/empty scan reads as clear space rather than leaving the previous
+    # frame's readings (a stale obstacle) in the buffer the reward reads too.
     out[:] = 0.0
     if scan is None or len(scan) == 0:
         return out
