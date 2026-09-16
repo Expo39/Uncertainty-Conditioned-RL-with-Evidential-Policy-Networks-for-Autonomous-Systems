@@ -68,25 +68,6 @@ than "placeholder", so the page reads as prose with a figure in it.
 
 ---
 
-## Placeholder Convention
-
-Every visual asset is declared with a two-line block. Animated recordings use
-`gif:placeholder` with a `.gif` path; static plots use `img:placeholder` with a `.png`
-path:
-
-```markdown
-<!-- gif:placeholder name="<short_name>" caption="<one-line caption>" -->
-![<alt text> placeholder](docs/media/<short_name>.gif)
-```
-
-The comment line records the intended content. The image line is the path that will
-resolve once the asset is added. Paths from nested READMEs use relative
-`../../docs/media/` notation.
-
-To replace a placeholder: record the session (or export the plot), name the file
-`<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
-resolves automatically. Each asset is shown in exactly one README.
-
 ### How each asset is produced
 
 Assets fall into three groups. Run `make check-host-deps` first - every route needs the
@@ -139,7 +120,7 @@ tables.
 |------|---------|----------|
 | `carla_3d` | 3D CARLA spectator view - evidential policy navigating the rectangular lot | `README.md` |
 | `gnss_degradation` | Same bay attempted under RTK fixed vs degraded GNSS - driving behaviour side by side | `README.md` |
-| `visualiser_2d` | Detachable 2D bird's-eye visualiser during a parking episode | `scripts/visualise/README.md` |
+| `visualiser_2d` | **Present.** Parking as the GNSS fix state recovers degraded -> standalone -> RTK fixed | `scripts/visualise/README.md` |
 | `parking_episode` | Bird's-eye view of a parking episode under RTK float conditions | `uncertainty_rl/envs/README.md` |
 | `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
 | `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |
@@ -175,7 +156,7 @@ an asset is not neutral illustration when its caption makes a claim.
 
 | Asset | Route | Status |
 |-------|-------|--------|
-| `visualiser_2d` | A: `make eval-visualise-2d RECORD=true` | Ready |
+| `visualiser_2d` | A: `make eval-visualise-2d RECORD=true` | **Done** - in `docs/media/` |
 | `gnss_degradation` | A: two runs, `GNSS_TIER=fixed` and `=degraded` | Ready |
 | `parking_episode` | A: `GNSS_TIER=float` | Ready |
 | `baseline_comparison` | A: `BASELINE=vanilla_ppo` vs `full_method`, both `GNSS_TIER=degraded` | Ready |
