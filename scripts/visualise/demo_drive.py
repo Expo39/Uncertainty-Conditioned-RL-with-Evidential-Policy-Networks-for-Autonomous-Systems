@@ -24,7 +24,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from uncertainty_rl.envs import make_env
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
-from uncertainty_rl.utils.constants import STRICT_BAY_MARGIN
+from uncertainty_rl.utils.constants import OOB_INFLATION_MARGIN, STRICT_BAY_MARGIN
 
 
 def _parse_args() -> argparse.Namespace:
@@ -99,6 +99,15 @@ def _parse_args() -> argparse.Namespace:
         "--render",
         action="store_true",
         help="Enable CARLA 3D spectator rendering (requires display).",
+    )
+    parser.add_argument(
+        "--playback-speed",
+        type=float,
+        default=1.0,
+        help="Wall-clock playback rate relative to simulated time (default 1.0 "
+        "= real time). Below 1.0 slows the drive down, which is easier to "
+        "follow in a recording; above 1.0 speeds it up. Ignored with "
+        "--no-realtime.",
     )
     parser.add_argument(
         "--no-realtime",
@@ -176,6 +185,15 @@ _TRACE_COLUMNS = [
 ]
 
 
+# Overlay redraw cadence. CARLA debug primitives persist until they expire, so
+# the lifetime must NOT outlive the redraw interval by much: a lifetime long
+# enough to span an episode leaves the previous episode's target bay painted
+# green over the new one. Redrawing often with a slightly longer lifetime keeps
+# the overlay flicker-free while stale primitives clear within half a second.
+# Mirrors scripts/inspect/inspectors/base.py (_REDRAW_INTERVAL / _OVERLAY_LIFE).
+_OVERLAY_REDRAW_S = 3.0
+_OVERLAY_LIFETIME_S = 3.5
+
 # Map the short --gnss-tier choice to the tier key in gnss_noise_profiles.yaml.
 _GNSS_TIER_NAMES = {
     "fixed": "rtk_fixed",
@@ -222,6 +240,79 @@ def _make_env(
             )
         ]
     )
+
+
+def _inner_env(env: Any) -> Any:
+    """
+    @brief Unwrap the vectorised/normalised env down to CARLAParkingEnv.
+    @param env: The env as held by the demo loop.
+    @return The underlying CARLAParkingEnv instance.
+    """
+    inner = env.unwrapped.envs[0]
+    while hasattr(inner, "env"):
+        inner = inner.env
+    return inner
+
+
+def _set_tick_pacing(env: Any, seconds_per_tick: float) -> None:
+    """
+    @brief Ask the env to pace each simulation tick to wall-clock time.
+
+    Only meaningful with a window open: it makes CARLA's synchronous-mode frames
+    arrive evenly instead of in one burst per policy decision.
+
+    @param env: The env as held by the demo loop.
+    @param seconds_per_tick: Wall-clock budget for one tick.
+    """
+    try:
+        _inner_env(env)._tick_wall_seconds = max(0.0, seconds_per_tick)
+    except Exception as exc:  # noqa: BLE001 - pacing is cosmetic
+        print(f"Tick pacing unavailable: {exc}")
+
+
+def _draw_demo_overlays(env: Any) -> None:
+    """
+    @brief Draw the lot-geometry overlays into the CARLA window for one episode.
+
+    Reuses the inspector's drawing helpers so the 3D demo shows the same bay
+    outlines, target-bay highlight, spawn, patrol path and pedestrian zones the
+    layout inspector does - without them the windowed view is bare tarmac and
+    the viewer cannot tell which bay the car is aiming for.
+
+    Failures are swallowed: the overlay is decoration, and a drawing error must
+    never stop the drive.
+
+    @param env: The vectorised env wrapping CARLAParkingEnv.
+    """
+    try:
+        from scripts.inspect._drawing import _draw_layout_overlays
+
+        inner = _inner_env(env)
+        # Wipe the previous draw first. Primitives persist until they expire, so
+        # without this the last episode's target bay stays highlighted green
+        # until its lifetime runs out - over the top of the new target. Its own
+        # try/except keeps a clearing failure from also skipping the draw below.
+        if inner.world is not None:
+            try:
+                inner.world.debug.clear_debug_shape()
+                inner.world.debug.clear_debug_string()
+            except Exception as exc:  # noqa: BLE001 - stale overlays are cosmetic
+                print(f"Overlay clear skipped: {exc}")
+        layout = getattr(inner, "_current_layout", None)
+        if not layout or inner.world is None:
+            return
+        _draw_layout_overlays(
+            inner.world,
+            layout,
+            target_bay_id=inner._target_bay.get("bay_id", ""),
+            life_time=_OVERLAY_LIFETIME_S,
+            show_patrol=False,
+            show_pedestrians=False,
+            show_spawns=False,
+            oob_inflation_margin=OOB_INFLATION_MARGIN,
+        )
+    except Exception as exc:  # noqa: BLE001 - decoration must never break the run
+        print(f"Overlay drawing skipped: {exc}")
 
 
 def _sigterm_to_keyboard_interrupt(signum: int, frame: Optional[FrameType]) -> None:
@@ -367,6 +458,27 @@ def main() -> None:
 
     print("Driving. Close the visualiser or Ctrl+C to stop.")
 
+    # Wall-clock seconds one env.step() should occupy at real-time playback.
+    # A step spans action_repeat ticks, so the budget is the whole window, not
+    # a single tick; PLAYBACK_SPEED > 1 runs proportionally faster.
+    step_wall_seconds = (
+        float(env_config.get("carla_timestep", 0.05))
+        * max(1, int(env_config.get("action_repeat", 1)))
+        / max(0.05, args.playback_speed)
+    )
+    # With the window open, let the ENV pace each tick so CARLA's frames arrive
+    # evenly at the sim rate. Sleeping only once per decision here would bunch
+    # action_repeat frames together and play as a slideshow.
+    paced_in_env = args.realtime and args.render
+    if paced_in_env:
+        repeat = max(1, int(env_config.get("action_repeat", 1)))
+        _set_tick_pacing(env, step_wall_seconds / repeat)
+    if args.realtime:
+        print(
+            f"Real-time playback: {step_wall_seconds:.3f}s per decision "
+            f"(speed x{args.playback_speed:g})."
+        )
+
     # Current episode's trace file handle. Hoisted out of the loop so the
     # finally block can close it if the run is interrupted mid-episode.
     trace_file: Optional[TextIO] = None
@@ -377,6 +489,15 @@ def main() -> None:
             done_arr = np.array([False])
             steps = 0
             episode += 1
+
+            # Draw the lot overlays for the new episode's layout and target bay.
+            # Refreshed periodically inside the step loop below, so the short
+            # primitive lifetime cannot leave the previous episode's target bay
+            # highlighted once this episode picks a different one.
+            next_overlay_redraw = 0.0
+            if args.render:
+                _draw_demo_overlays(env)
+                next_overlay_redraw = time.monotonic() + _OVERLAY_REDRAW_S
 
             # Open a fresh per-episode trace CSV.
             trace_file = None
@@ -469,16 +590,24 @@ def main() -> None:
 
                 if args.render:
                     env.render()
+                    # Re-issue the overlays before they expire, so they persist
+                    # for the whole episode without any one draw outliving it.
+                    if time.monotonic() >= next_overlay_redraw:
+                        _draw_demo_overlays(env)
+                        next_overlay_redraw = time.monotonic() + _OVERLAY_REDRAW_S
 
                 # Pace the loop to wall-clock time so the drive is watchable.
                 # CARLA runs in synchronous mode, where world.tick() advances
-                # physics instantly - without this sleep the episode would
-                # play back many times faster than real time. carla_timestep
-                # (default 0.05s = 20 Hz) is the sim seconds one step covers.
-                if args.realtime:
-                    timestep = float(infos[0].get("carla_timestep", 0.05))
+                # physics instantly - without this sleep the episode would play
+                # back many times faster than real time.
+                #
+                # One env.step() covers action_repeat ticks, so the wall-clock
+                # budget is carla_timestep * action_repeat (default 0.05 * 4 =
+                # 0.2 s). Budgeting a single timestep here played the drive back
+                # at action_repeat times real speed.
+                if args.realtime and not paced_in_env:
                     elapsed = time.monotonic() - step_start
-                    remaining = timestep - elapsed
+                    remaining = step_wall_seconds - elapsed
                     if remaining > 0.0:
                         time.sleep(remaining)
 

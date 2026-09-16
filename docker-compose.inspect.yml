@@ -61,12 +61,23 @@ services:
       - demo
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      - ROS_DOMAIN_ID=42
+      # Must match ros2-bridge-inspect (default 43) so this container shares
+      # the inspect DDS domain and is isolated from any worker bridges still
+      # running on the default domain (42).
+      - ROS_DOMAIN_ID=${INSPECT_ROS_DOMAIN_ID:-43}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
+      # Needed for `import scripts.*` - the demo reuses the inspector's lot
+      # overlay drawing, which lives under scripts/.
+      - PYTHONPATH=/workspace
       - CARLA_HOST=carla-server-demo
       - CARLA_PORT=2100
     depends_on:
       carla-server-demo:
+        condition: service_healthy
+      # The env blocks in _wait_for_covariance() until the EKF publishes, so the
+      # demo needs the bridge running, not just CARLA.
+      ros2-bridge-inspect:
         condition: service_healthy
     networks:
       - uncertainty-rl-network
@@ -241,6 +252,7 @@ services:
     container_name: uncertainty-rl-ros2-inspect
     runtime: nvidia
     profiles:
+      - demo
       - inspect-dryrun
       - inspect-eval-dryrun
     environment:

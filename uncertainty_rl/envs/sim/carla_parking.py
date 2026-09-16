@@ -85,6 +85,9 @@ _TRAJECTORY_MAXLEN = 50
 _SPECTATOR_BACK_M = 12.0
 _SPECTATOR_UP_M = 6.0
 _SPECTATOR_PITCH_DEG = -18.0
+# Exponential smoothing factor for the chase camera, per simulation tick. Low
+# enough to absorb per-tick steering jitter, high enough to keep up with the car.
+_SPECTATOR_SMOOTHING = 0.15
 
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
@@ -222,6 +225,14 @@ class CARLAParkingEnv(gym.Env):
         self.town = town
         self.max_steps = max_steps
         self.render_mode = render_mode
+        # Smoothed chase-camera state (render_mode="human" only). None until the
+        # first update, which snaps to the ego rather than easing in from origin.
+        self._chase_xyz: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        self._chase_yaw: Optional[float] = None
+        # Wall-clock budget per simulation tick when a human is watching, so
+        # rendered frames arrive at the sim rate instead of in bursts. Zero
+        # (the default) leaves training and evaluation running flat out.
+        self._tick_wall_seconds: float = 0.0
         self._include_covariance = include_covariance
         self._include_obstacle_obs = include_obstacle_obs
         self._eval_mode = eval_mode
@@ -1909,6 +1920,9 @@ class CARLAParkingEnv(gym.Env):
         # reconnect failure), so a stall can never leak into the next episode.
         self._stall_counter = 0
         self._trajectory_buffer.clear()
+        # Snap the chase camera to the new spawn rather than gliding to it
+        # across the lot from wherever the last episode ended.
+        self._chase_yaw = None
         # Force signal-file recheck at episode start so new episodes don't
         # inherit a stale cached value from the previous episode's final step.
         self._vis_check_counter = 30
@@ -1994,16 +2008,26 @@ class CARLAParkingEnv(gym.Env):
             # Apply no_rendering_mode if enabled. Disables Unreal rendering pipeline
             # but physics and state sensors remain active. For state-based agents
             # (no camera input), this provides 3-4x speedup by skipping GPU rendering.
-            if self._no_rendering_mode and not settings.no_rendering_mode:
+            # render_mode="human" means a person is watching the CARLA window, so
+            # the two settings contradict: no_rendering_mode blacks the viewport
+            # out the moment it is applied. The watcher wins.
+            want_no_rendering = self._no_rendering_mode and self.render_mode != "human"
+            if want_no_rendering and not settings.no_rendering_mode:
                 logger.info(
                     "Enabling no_rendering_mode (state-based agent, no cameras)..."
                 )
                 settings.no_rendering_mode = True
                 settings_changed = True
+            elif not want_no_rendering and settings.no_rendering_mode:
+                # A previous run may have left the server in no-rendering mode;
+                # the setting is server-side and persists across clients.
+                logger.info("Disabling no_rendering_mode for the windowed view...")
+                settings.no_rendering_mode = False
+                settings_changed = True
 
             if settings_changed:
                 self.world.apply_settings(settings)
-                if self._no_rendering_mode:
+                if want_no_rendering:
                     logger.info("No rendering mode enabled. Expected speedup: 3-4x.")
 
         # Load floor plan and sample target bay
@@ -2241,6 +2265,7 @@ class CARLAParkingEnv(gym.Env):
         _post_velocity: Optional[Any] = None
 
         for _ in range(self._action_repeat):
+            tick_start = time.monotonic()
             self.steps += 1
 
             if self.vehicle is None:
@@ -2298,6 +2323,22 @@ class CARLAParkingEnv(gym.Env):
             self._trajectory_buffer.append(
                 (_post_transform.location.x, _post_transform.location.y)
             )
+
+            # Follow the car on every TICK, not once per policy decision: with
+            # action_repeat > 1 a per-decision update runs at a fraction of the
+            # sim rate and the view visibly stutters.
+            #
+            # In synchronous mode the server renders a frame per tick, so all
+            # action_repeat frames would otherwise be produced back to back and
+            # the caller's per-decision sleep would show them as one jump every
+            # 1 / action_repeat of a second - a slideshow. Spreading the wait
+            # across the ticks delivers frames evenly at the sim rate.
+            if self.render_mode == "human":
+                self._update_chase_camera()
+                if self._tick_wall_seconds > 0.0:
+                    lag = time.monotonic() - tick_start
+                    if lag < self._tick_wall_seconds:
+                        time.sleep(self._tick_wall_seconds - lag)
 
         # Construct the observation and reward once per decision.
         state = self._get_state()
@@ -2513,6 +2554,55 @@ class CARLAParkingEnv(gym.Env):
 
         return state, reward, terminated, truncated, info
 
+    def _update_chase_camera(self) -> None:
+        """
+        @brief Move the CARLA spectator to a smoothed chase view of the ego.
+
+        Called every simulation tick (not once per policy decision) so the view
+        does not stutter at 1 / action_repeat of the sim rate. Both the target
+        point and the yaw are low-pass filtered: the raw pose jitters with every
+        steering correction, which reads as camera shake on a recording. Yaw is
+        interpolated on the shortest arc so the +/-180 deg wrap does not spin the
+        camera the long way round.
+        """
+        if self.vehicle is None or self.world is None:
+            return
+
+        transform = self.vehicle.get_transform()
+        location = transform.location
+        yaw = transform.rotation.yaw
+
+        if self._chase_yaw is None:
+            smooth_x, smooth_y, smooth_z = location.x, location.y, location.z
+            smooth_yaw = yaw
+        else:
+            alpha = _SPECTATOR_SMOOTHING
+            prev_x, prev_y, prev_z = self._chase_xyz
+            smooth_x = prev_x + alpha * (location.x - prev_x)
+            smooth_y = prev_y + alpha * (location.y - prev_y)
+            smooth_z = prev_z + alpha * (location.z - prev_z)
+            # Shortest-arc yaw blend: wrap the delta into [-180, 180) first.
+            delta = (yaw - self._chase_yaw + 180.0) % 360.0 - 180.0
+            smooth_yaw = self._chase_yaw + alpha * delta
+
+        self._chase_xyz = (smooth_x, smooth_y, smooth_z)
+        self._chase_yaw = smooth_yaw
+
+        # Chase camera: behind and above the ego, looking down at it. A top-down
+        # view would only duplicate the 2D bird's-eye viewer, whereas the 3D
+        # window earns its place by showing the vehicle against the lot.
+        yaw_rad = math.radians(smooth_yaw)
+        self.world.get_spectator().set_transform(
+            carla.Transform(
+                carla.Location(
+                    x=smooth_x - _SPECTATOR_BACK_M * math.cos(yaw_rad),
+                    y=smooth_y - _SPECTATOR_BACK_M * math.sin(yaw_rad),
+                    z=smooth_z + _SPECTATOR_UP_M,
+                ),
+                carla.Rotation(pitch=_SPECTATOR_PITCH_DEG, yaw=smooth_yaw),
+            )
+        )
+
     def render(self) -> "RenderFrame | list[RenderFrame] | None":
         """
         @brief Render the environment.
@@ -2520,27 +2610,7 @@ class CARLAParkingEnv(gym.Env):
         """
         if self.render_mode == "human" and self.world is not None:
             if self.vehicle is not None:
-                transform = self.vehicle.get_transform()
-                spectator = self.world.get_spectator()
-                # Chase camera: behind and above the ego, looking down at it. A
-                # top-down view would only duplicate the 2D bird's-eye viewer,
-                # whereas the 3D window earns its place by showing the vehicle
-                # against the lot. Offsets are in metres.
-                yaw_rad = math.radians(transform.rotation.yaw)
-                offset = carla.Location(
-                    x=-_SPECTATOR_BACK_M * math.cos(yaw_rad),
-                    y=-_SPECTATOR_BACK_M * math.sin(yaw_rad),
-                    z=_SPECTATOR_UP_M,
-                )
-                spectator.set_transform(
-                    carla.Transform(
-                        transform.location + offset,
-                        carla.Rotation(
-                            pitch=_SPECTATOR_PITCH_DEG,
-                            yaw=transform.rotation.yaw,
-                        ),
-                    )
-                )
+                self._update_chase_camera()
         elif self.render_mode == "rgb_array":
             return cast(RenderFrame, np.zeros((600, 800, 3), dtype=np.uint8))
         return None
