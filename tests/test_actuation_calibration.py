@@ -13,10 +13,6 @@ import yaml
 
 from uncertainty_rl.utils.actuation_calibration import ActuationCalibration, ActuatorMap
 
-# ---------------------------------------------------------------------------
-# TestActuatorMap
-# ---------------------------------------------------------------------------
-
 
 class TestActuatorMap:
     """
@@ -53,7 +49,6 @@ class TestActuatorMap:
         @brief Input outside deadband must be mapped via gain.
         """
         m = ActuatorMap({"gain": 1.0, "deadband": 0.1})
-        # |0.5| > 0.1, so mapped = 1.0 * 0.5 = 0.5
         assert m.apply(0.5) == pytest.approx(0.5)
 
     def test_bias_added_inside_deadband(self) -> None:
@@ -76,15 +71,8 @@ class TestActuatorMap:
         @brief deadband_offset shifts the centre of the deadband.
         """
         m = ActuatorMap({"deadband": 0.1, "deadband_offset": 0.5})
-        # shifted = 0.55 - 0.5 = 0.05, inside deadband -> output = 0
         assert m.apply(0.55) == pytest.approx(0.0)
-        # shifted = 0.7 - 0.5 = 0.2, outside deadband -> output = 0.2
         assert m.apply(0.7) == pytest.approx(0.2)
-
-
-# ---------------------------------------------------------------------------
-# TestActuationCalibrationIdentity
-# ---------------------------------------------------------------------------
 
 
 class TestActuationCalibrationIdentity:
@@ -119,11 +107,6 @@ class TestActuationCalibrationIdentity:
         assert s == pytest.approx(0.8)
         assert thr == pytest.approx(0.2)
         assert brk == pytest.approx(0.1)
-
-
-# ---------------------------------------------------------------------------
-# TestActuationCalibrationFromConfig
-# ---------------------------------------------------------------------------
 
 
 class TestActuationCalibrationFromConfig:

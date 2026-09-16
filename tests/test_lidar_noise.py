@@ -13,10 +13,6 @@ import numpy as np
 
 from uncertainty_rl.envs.sim.helpers._sensor_manager import SensorManager
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_manager(noise_cfg: Dict[str, Any]) -> SensorManager:
     """Build a SensorManager with a minimal sensors_config dict."""
@@ -48,11 +44,6 @@ def _points(n: int, x: float = 5.0) -> np.ndarray:
     return np.tile(_point(x), (n, 1))
 
 
-# ---------------------------------------------------------------------------
-# TestLidarNoiseDisabled
-# ---------------------------------------------------------------------------
-
-
 class TestLidarNoiseDisabled:
     """Noise is disabled - input must pass through unchanged."""
 
@@ -67,11 +58,6 @@ class TestLidarNoiseDisabled:
         rng = np.random.default_rng(0)
         mgr.sample_lidar_noise_bias(rng)
         assert mgr._lidar_range_bias_m == 0.0
-
-
-# ---------------------------------------------------------------------------
-# TestLidarNoiseBiasSampling
-# ---------------------------------------------------------------------------
 
 
 class TestLidarNoiseBiasSampling:
@@ -112,11 +98,6 @@ class TestLidarNoiseBiasSampling:
         assert len(set(values)) > 1
 
 
-# ---------------------------------------------------------------------------
-# TestLidarNoiseRangeEffect
-# ---------------------------------------------------------------------------
-
-
 class TestLidarNoiseRangeEffect:
     """Bias and random noise alter range in the expected direction."""
 
@@ -154,16 +135,12 @@ class TestLidarNoiseRangeEffect:
         assert not np.array_equal(out1, out2)
 
 
-# ---------------------------------------------------------------------------
-# TestLidarNoiseMinRangeClipping
-# ---------------------------------------------------------------------------
-
-
 class TestLidarNoiseMinRangeClipping:
     """Returns below min_range_m are discarded after noise."""
 
     def test_sub_minimum_return_discarded(self) -> None:
-        # Point at 0.06 m with negative bias -0.060 -> noisy range ~0.0 m < 0.05 m.
+        # Point at 0.06 m with negative bias -0.060 puts the noisy range
+        # below the 0.05 m min_range_m floor.
         mgr = _make_manager(_enabled_cfg(range_random_stddev_m=0.0))
         mgr._lidar_range_bias_m = -0.060
         result = mgr._apply_lidar_noise(_point(0.06))
@@ -175,11 +152,6 @@ class TestLidarNoiseMinRangeClipping:
         pts = _points(10, x=5.0)
         result = mgr._apply_lidar_noise(pts)
         assert result.shape[0] == 10
-
-
-# ---------------------------------------------------------------------------
-# TestLidarNoiseDropout
-# ---------------------------------------------------------------------------
 
 
 class TestLidarNoiseDropout:
@@ -204,11 +176,6 @@ class TestLidarNoiseDropout:
         result = mgr._apply_lidar_noise(_points(n))
         # 3-sigma bounds for Binomial(n=10000, p=0.5): mean=5000, std=50
         assert 4_750 <= result.shape[0] <= 5_250
-
-
-# ---------------------------------------------------------------------------
-# TestLidarNoiseShapePreservation
-# ---------------------------------------------------------------------------
 
 
 class TestLidarNoiseShapePreservation:
@@ -242,11 +209,6 @@ class TestLidarNoiseShapePreservation:
         np.testing.assert_allclose(result[:, 2], pts[:, 2], atol=1e-6)
 
 
-# ---------------------------------------------------------------------------
-# TestLidarNoiseIntegrationWithExtractFeatures
-# ---------------------------------------------------------------------------
-
-
 class TestLidarNoiseIntegrationWithExtractFeatures:
     """Noisy scans must remain compatible with extract_obstacle_features."""
 
@@ -274,10 +236,8 @@ class TestLidarNoiseIntegrationWithExtractFeatures:
 
     def test_max_datasheet_noise_preserves_sector_assignment(self) -> None:
         """
-        A point at 30 deg bearing, 3 m range must remain in the left sector
-        after worst-case TiM571 range noise (bias +60 mm, random 20 mm).
-        Sector boundary is 15 deg; range noise does not alter bearing, so the
-        point stays at 30 deg regardless of how much range noise is applied.
+        @brief Worst-case TiM571 range noise never moves a point across a
+               sector boundary, since range noise does not alter bearing.
         """
         from uncertainty_rl.envs._parking_core import extract_obstacle_features
         from uncertainty_rl.utils.constants import OBSTACLE_FEATURES_DIM

@@ -69,11 +69,6 @@ def _mask_recovery_transitions(
     return masked / total
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _course_noise_std(doppler_std: float, speed: float) -> float:
     """
     @brief Compute course-over-ground noise std from Doppler velocity noise.
@@ -83,11 +78,6 @@ def _course_noise_std(doppler_std: float, speed: float) -> float:
     @return Course noise 1-sigma (rad).
     """
     return doppler_std / max(speed, 0.1)
-
-
-# ---------------------------------------------------------------------------
-# Tier defaults
-# ---------------------------------------------------------------------------
 
 
 class TestTierDefaults:
@@ -145,11 +135,6 @@ class TestTierDefaults:
         ), f"Doppler ratio {doppler_ratio:.1f}x must match position ratio {pos_ratio:.1f}x"
 
 
-# ---------------------------------------------------------------------------
-# Course noise helper
-# ---------------------------------------------------------------------------
-
-
 class TestCourseNoiseStd:
     """
     @class TestCourseNoiseStd
@@ -196,11 +181,6 @@ class TestCourseNoiseStd:
         assert math.degrees(course_std_rad) < 5.0
 
 
-# ---------------------------------------------------------------------------
-# YAML mirror consistency
-# ---------------------------------------------------------------------------
-
-
 class TestYamlMirror:
     """
     @class TestYamlMirror
@@ -232,11 +212,6 @@ class TestYamlMirror:
                 f"Tier '{tier}' doppler_stddev_ms mismatch: "
                 f"YAML={actual} vs _TIER_DEFAULTS={expected}"
             )
-
-
-# ---------------------------------------------------------------------------
-# One-way (monotone) degradation masking
-# ---------------------------------------------------------------------------
 
 
 class TestRecoveryMasking:

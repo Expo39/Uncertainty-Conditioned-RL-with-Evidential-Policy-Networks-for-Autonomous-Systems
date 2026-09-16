@@ -21,10 +21,6 @@ from uncertainty_rl.training.train_ppo import (
     make_env,
 )
 
-# ===========================================================================
-# TestLinearSchedule
-# ===========================================================================
-
 
 class TestLinearSchedule:
     """
@@ -81,11 +77,6 @@ class TestLinearSchedule:
 
         assert s1(0.5) == pytest.approx(5e-4)
         assert s2(0.5) == pytest.approx(2.5e-4)
-
-
-# ===========================================================================
-# TestEnvDiagnosticsCallback
-# ===========================================================================
 
 
 class TestEnvDiagnosticsCallback:
@@ -254,11 +245,6 @@ class TestEnvDiagnosticsCallback:
         mock_logger.record.assert_not_called()
 
 
-# ===========================================================================
-# TestMakeEnvParallel
-# ===========================================================================
-
-
 class TestMakeEnvParallel:
     """
     @class TestMakeEnvParallel
@@ -398,11 +384,6 @@ class TestMakeEnvParallel:
         )
 
 
-# ===========================================================================
-# TestLoadEnvConfigStage
-# ===========================================================================
-
-
 class TestLoadEnvConfigStage:
     """
     @class TestLoadEnvConfigStage
@@ -485,11 +466,6 @@ class TestLoadEnvConfigStage:
 
         with pytest.raises(FileNotFoundError):
             load_env_config(str(env_path), stage=99)
-
-
-# ===========================================================================
-# TestStageTrainingOverrides
-# ===========================================================================
 
 
 class TestStageTrainingOverrides:
