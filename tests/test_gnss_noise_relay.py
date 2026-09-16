@@ -3,10 +3,8 @@
 @brief Unit tests for GnssNoiseRelayNode's Doppler-style velocity and COG model.
 
 Tests the tier defaults, course-noise helper, and YAML mirror invariant.
-All tests are CPU-only and require no CARLA or ROS 2. The relay module imports
-sensor_msgs at the top level (ROS 2 only), so _TIER_DEFAULTS and _TIER_ORDER
-are inlined here. The YAML mirror test enforces that gnss_noise_profiles.yaml
-matches these values, which transitively pins the relay's _TIER_DEFAULTS too.
+CPU-only, no CARLA or ROS 2: the relay module imports sensor_msgs at the top
+level, so _TIER_DEFAULTS and _TIER_ORDER are inlined here instead.
 """
 
 import math

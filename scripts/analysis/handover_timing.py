@@ -2,26 +2,9 @@
 @file handover_timing.py
 @brief When does the safety wrapper hand over, relative to the degradation onset?
 
-Host-side, read-only diagnostic that turns the per-episode handover-timing columns
-(handoff_step, degraded_onset_step, written by uncertainty_rl/evaluation/evaluate.py)
-into a per-condition latency table. The claim is about TIMING, not rate: a useful
-uncertainty-conditioned controller hands over soon after conditions degrade. The
-reference point for "soon after" differs by condition, so each is tagged with an
-onset regime and latency is only ever compared within a regime:
-
-  - spawn regime: the condition is degraded/novel from episode start (gnss_degraded,
-    lidar_degraded, OOD layout). Latency = handoff_step (steps from spawn). Reads as
-    "how fast does the controller react to this standing condition?".
-  - switch regime: the condition starts clean and the GNSS Markov chain drifts into
-    the degraded tier mid-episode (gnss_degrade_one_way). Latency =
-    handoff_step - degraded_onset_step (steps AFTER the drift crossing). This is the
-    causal money shot: does the handover track the onset, not just the map?
-  - none regime: clean/in-distribution conditions where no handover is expected; a
-    LOW handover fraction here is the desired (low false-positive) result.
-
-A spawn latency and a switch latency are different quantities and are never averaged
-together. Run via `make handover-timing` (never python directly).
-@see uncertainty_rl/evaluation/evaluate.py (episode_records.csv handoff_step columns).
+Builds a per-condition latency table. Spawn regime measures handoff_step
+from spawn; switch regime (GNSS drifts mid-episode) measures handoff_step -
+degraded_onset_step. The two are never averaged together.
 """
 
 from __future__ import annotations

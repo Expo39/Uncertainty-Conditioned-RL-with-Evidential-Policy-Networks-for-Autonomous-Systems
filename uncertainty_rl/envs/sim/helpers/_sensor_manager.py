@@ -3,13 +3,8 @@
 @brief Sensor lifecycle manager for CARLAParkingEnv.
 
 Owns all per-episode sensor state (IMU, GNSS, 2D LiDAR, collision sensor)
-and the spawn, callback, and cleanup logic for each. CARLAParkingEnv holds
-a SensorManager instance and delegates sensor lifecycle calls to it.
-
-Sensor roles:
-  - RTK-GNSS + IMU: localisation via robot_localisation EKF.
-  - 2D LiDAR: obstacle detection only (obs indices 8-12). NOT localisation.
-  - Collision sensor: terminal reward signal.
+and the spawn/callback/cleanup logic for each. RTK-GNSS + IMU feed
+localisation via the EKF; 2D LiDAR is obstacle detection only.
 """
 
 import logging

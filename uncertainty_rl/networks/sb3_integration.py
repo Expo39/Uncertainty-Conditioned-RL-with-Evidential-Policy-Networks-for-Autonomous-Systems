@@ -64,7 +64,6 @@ class EvidentialDistribution(Distribution):
                before the sqrt. Without it the reward gradient can shrink the
                action std to a Dirac delta and exploration collapses; the
                evidential-actor analogue of the SAC log_std clamp.
-        @see documentation/detailed_notes/evidential_actor_variance_collapse.md
         """
         super().__init__()
         self.action_dim = action_dim

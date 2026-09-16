@@ -2,28 +2,9 @@
 @file cross_seed.py
 @brief Pool every seed's eval into one headline + a per-seed robustness table.
 
-Host-side, read-only aggregator that turns the SEPARATE per-seed result trees
-(outputs/raw/evaluation_results/seed_42/..., seed_123/..., seed_7/...) into the
-seed-robust statements the analysis needs. A cross-arm difference on a single
-seed is indistinguishable from seed luck, so this script produces two
-complementary reads side by side:
-
-  - POOLED: concatenate every seed's per-episode records into one sample and
-    run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC
-    AUC, the calibration rank correlation) on that ~3x larger pool - the
-    precision-of-effect headline (CIs over the largest n the plan wants).
-  - PER-SEED ROBUSTNESS: per arm, the mean and [min, max] of each metric
-    ACROSS seeds - the honest cross-seed-stability check, since a bootstrap on
-    a fixed pool of seeds under-represents the between-seed variance the
-    pooled CI cannot see.
-
-The statistics are NOT re-implemented: the four per-analysis modules expose
-pure DataFrame functions, so a pooled frame carrying an extra "seed" column
-flows through them untouched. This file only adds the pooling seam and the
-robustness groupby. Run via `make analyse-cross-seed` (never python directly).
-
-@see scripts/analysis/ablation.py (the pooled contrast / caution stats).
-@see scripts/analysis/_discovery.py (seed_roots - the per-seed sub-root locator).
+A cross-arm difference on one seed is indistinguishable from seed luck, so
+this pools every seed into one sample alongside the per-arm mean/[min, max]
+across seeds. Run via `make analyse-cross-seed`.
 """
 
 from __future__ import annotations

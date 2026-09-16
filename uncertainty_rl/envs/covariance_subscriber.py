@@ -2,10 +2,9 @@
 @file covariance_subscriber.py
 @brief File-based covariance reader for EKF uncertainty features.
 
-Reads the latest EKF state from a shared JSON file written by the
-CovarianceExtractorNode in the ros2-bridge container. This avoids DDS
-cross-distro serialisation issues between ROS 2 Humble (training container)
-and Jazzy (ros2-bridge container).
+Reads the latest EKF state from a shared JSON file written by
+CovarianceExtractorNode, avoiding DDS cross-distro serialisation issues
+between ROS 2 Humble (training) and Jazzy (ros2-bridge).
 """
 
 import json

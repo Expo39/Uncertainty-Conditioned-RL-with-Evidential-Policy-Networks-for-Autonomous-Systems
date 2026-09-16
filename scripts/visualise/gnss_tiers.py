@@ -2,14 +2,9 @@
 @file gnss_tiers.py
 @brief Load GNSS fix-state tier presentation data for the visualiser.
 
-The tier definitions in configs/deployment/sim/gnss_noise_profiles.yaml already
-carry everything needed to explain a tier on screen: the 1-sigma position noise
-(metric_stddev_m) and a plain-English description of the resulting behaviour.
-This module reads them once so the viewer never hardcodes tier names, sigmas or
-severity ordering - adding a tier to the YAML is enough to make it render.
-
-Severity is taken from declaration order in the YAML, which runs best fix to
-worst, and drives the green-to-red colour ramp.
+Reads tier sigma and description from gnss_noise_profiles.yaml once, so
+adding a tier to the YAML is enough to make it render. Severity is
+declaration order (best fix to worst), driving the colour ramp.
 """
 
 from pathlib import Path

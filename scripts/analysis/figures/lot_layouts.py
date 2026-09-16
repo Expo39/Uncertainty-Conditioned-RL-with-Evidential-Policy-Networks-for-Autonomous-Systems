@@ -2,18 +2,9 @@
 @file lot_layouts.py
 @brief Lot layout figure: both lots, one shared legend.
 
-Reads the generated layout YAMLs (already world-frame) and draws them as two
-panels of a single figure. Presentation only: no geometry is recomputed, so
-bays, spawns and lot corners are exactly what generate_layouts.py wrote.
-
-Both lots are drawn as one \\textwidth figure rather than two subfigures at
-0.48\\linewidth each: a narrower subfigure would scale fs.FS_LEGEND (8.5 pt)
-down to an illegible size on the page and would need a legend per panel,
-against the figure_style rule that a figure carries at most one.
-
-Both panels share one data extent (the larger lot's padded span, centred on
-each lot), so the two outlines print at the same metres-per-inch and occupy
-the same area. sharey keeps one y axis for the pair.
+Reads the generated layout YAMLs and draws two panels of one figure. No
+geometry is recomputed. Drawn wide, not as two narrower subfigures, so the
+one legend figure_style allows stays legible.
 """
 
 from __future__ import annotations

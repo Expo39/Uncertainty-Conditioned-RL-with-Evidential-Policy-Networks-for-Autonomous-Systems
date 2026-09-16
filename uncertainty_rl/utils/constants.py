@@ -2,30 +2,9 @@
 @file constants.py
 @brief Structural constants for the uncertainty RL project.
 
-These are fixed by the system architecture, not tuneable: changing them requires
-coordinated updates across networks, environments, and evaluation code. Tuneable
-values (timesteps, seeds, noise levels) belong in YAML configs.
-
-Observation layout (TOTAL_OBS_DIM = 13, both ablation flags on):
-
-    Index   0:      signed body-frame speed (m/s)
-    Index   1:      yaw rate (vyaw, rad/s)
-    Indices 2-4:    EKF covariance features (std_x, std_y, std_yaw),
-                    present when include_covariance=True
-    Indices 5-7:    relative target bay pose (dx, dy, dyaw), ego body frame
-    Indices 8-12:   hemispheric obstacle clearance (left_dist, left_bearing,
-                    right_dist, right_bearing, forward_dist), present when
-                    include_obstacle_obs=True
-
-Action layout (ACTION_DIM = 3), all continuous:
-
-    steering : [-1, 1]  left to right
-    throttle : [ 0, 1]  forward throttle (no reverse gear: forward
-                        perpendicular bay parking only)
-    brake    : [ 0, 1]  friction brake
-
-Throttle and brake are separate non-negative axes so a held stop
-(throttle = 0, brake > 0) is a stable region of the action space.
+Fixed by the system architecture, so changing them needs coordinated updates
+across networks, environments and evaluation code; tuneable values belong in
+YAML instead. Throttle/brake are separate axes so a held stop is stable.
 """
 
 import numpy as np

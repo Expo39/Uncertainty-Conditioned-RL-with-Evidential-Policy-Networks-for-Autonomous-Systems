@@ -2,20 +2,9 @@
 @file run_figures.py
 @brief Per-run summary panels rendered from a single run's evaluation_results.csv.
 
-Two figures per evaluation run, drawn beside the CSV they come from:
-
-  evaluation_plots.png  2x2 panel - success rate, average reward, average steps
-                        and the policy's uncertainty estimates, per condition.
-  failure_modes.png     stacked outcome shares per condition, success at the
-                        base and the failure taxonomy above it.
-
-These are the per-run overview figures, distinct from the cross-seed figures in
-build.py: they summarise one run in isolation and are never pooled. They read
-only the per-condition aggregate CSV, so a run's panels can be redrawn at any
-time without re-running the evaluation loop.
-
-@note Read-only with respect to the run directory apart from the two PNGs it
-writes. Pure CPU, no torch and no CARLA.
+Draws evaluation_plots.png (2x2 panel) and failure_modes.png (outcome
+shares). Distinct from the pooled figures in build.py: these summarise one
+run in isolation and are never pooled.
 """
 
 from __future__ import annotations

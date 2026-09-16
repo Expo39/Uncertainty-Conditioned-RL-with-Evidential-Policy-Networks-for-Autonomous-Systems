@@ -2,15 +2,9 @@
 @file recorder.py
 @brief Record Pygame surfaces to an MP4 by piping raw frames to ffmpeg.
 
-The visualiser draws at an uncapped rate and renders only the newest frame, so
-capturing once per draw would yield a variable-rate video that plays back at the
-wrong speed. FrameRecorder decouples the two: it accepts every drawn surface but
-emits frames on a wall-clock accumulator at a fixed output rate, repeating the
-last surface when the data stream is dry. Playback speed therefore matches
-wall-clock time regardless of how fast the viewer looped.
-
-Frames are piped to ffmpeg as raw RGB24 over stdin, so no Python video encoder
-dependency is needed - only the ffmpeg binary. @see check_ffmpeg.
+The visualiser renders only the newest frame at an uncapped rate, so
+FrameRecorder emits frames on a wall-clock accumulator instead, repeating
+the last surface when the stream is dry, matching playback to real time.
 """
 
 import shutil

@@ -2,10 +2,9 @@
 @file factory.py
 @brief Single env construction path for training, evaluation, and inspection.
 
-Centralises CARLAParkingEnv kwargs so the same dynamics (action_repeat,
-actuator_model, max_ego_speed_ms, etc.) flow into every context. Callers
-pass a merged config dict; this module owns the mapping from config keys
-to constructor kwargs.
+Centralises CARLAParkingEnv kwargs so the same dynamics flow into every
+context. Callers pass a merged config dict; this module owns the mapping
+from config keys to constructor kwargs.
 """
 
 from pathlib import Path

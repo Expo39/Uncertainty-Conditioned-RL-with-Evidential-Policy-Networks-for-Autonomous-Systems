@@ -1,27 +1,11 @@
 """
 @file ekf_sawtooth.py
-@brief The reported EKF sigma_x sawtooth over one
-       episode, with GNSS fix-state tiers shown as shaded background bands.
+@brief Plot the reported EKF sigma_x sawtooth over one episode, with GNSS
+       fix-state tiers shown as shaded background bands.
 
-Reads one per-episode demo-trace CSV (written by demo_drive.py) and plots the
-reported EKF position standard deviation sigma_x = `ekf_std_x` against time. sigma_x
-is exactly the covariance feature the policy observes; its sawtooth (growth during
-EKF prediction, collapse at each accepted GNSS fix) is the physical origin of
-observation indices 2-4.
-
-Tier bands: the GNSS fix-state tier is taken from the logged `gnss_tier` column,
-which is the true Markov-chain state driving the injected noise (added to the trace
-writer for exactly this figure). That is the faithful signal and is drawn as-is (no
-smoothing): every state, including a genuine single-tick one, is real.
-
-The saturation annotation compares the peak reported sigma_x to the DESIGN noise
-floor (Table T-7 / gnss_noise_profiles.yaml) of the worst tier the episode reached,
-a stable per-tier constant, not a per-tick error sample.
-
-Tier band palette is an ordered severity ramp (fixed=green ... degraded=red),
-validated colourblind-safe on adjacent pairs (OKLab dE >= 8 for normal/deutan/protan);
-tier is additionally encoded by ladder position and a legend, so colour is never the
-sole channel.
+Reads one per-episode demo-trace CSV (written by demo_drive.py) and plots
+sigma_x = `ekf_std_x` against time - the covariance feature the policy
+observes, drawn against the true `gnss_tier` Markov state, no smoothing.
 
 @note Read-only w.r.t. the trace. Pure CPU, no torch/CARLA.
 

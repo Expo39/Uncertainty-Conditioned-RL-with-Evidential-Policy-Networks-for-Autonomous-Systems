@@ -2,12 +2,9 @@
 @file bay_success.py
 @brief Per-bay success accounting for training and evaluation.
 
-Shared by the training callback (uncertainty_rl.training.train_ppo) and the
-evaluation loop (uncertainty_rl.evaluation.evaluate) so the on-disk format is
-identical for both sinks under outputs/raw/bay_successes/.
-
-Pure-Python: no torch, CARLA, or ROS 2 imports, so it is unit-testable on the
-host without the Docker stack.
+Shared by the training callback and the evaluation loop so the on-disk
+format is identical for both. Pure-Python: no torch, CARLA, or ROS 2
+imports, so it is unit-testable on the host without the Docker stack.
 """
 
 import csv

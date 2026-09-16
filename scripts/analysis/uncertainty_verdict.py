@@ -2,15 +2,9 @@
 @file uncertainty_verdict.py
 @brief One-shot verdict on whether the epistemic/aleatoric ratio varies with state.
 
-Reads an eval run's per-step uncertainty trace (per_step_records.csv, written when
-EVAL_PER_STEP_CAP > 0 for an evidential head) and reports, per condition, the epi/ale
-ratio and implied nu. A FLAT ratio across clean vs novel/degraded conditions confirms the
-single-head NIG conflation (epistemic = aleatoric/nu with nu state-independent) - the two
-channels are one signal, as expected for this architecture. See the detailed note below.
-For the safety controller, threshold the TOTAL uncertainty, not the (non-separating) split.
-
-Read-only diagnostic. Run via `make uncertainty-verdict EVAL_DIR=<run output dir>`.
-@see uncertainty_rl/evaluation/evaluate.py (per_step_records.csv).
+A FLAT epi/ale ratio across clean vs degraded conditions confirms the
+single-head NIG conflation (epistemic = aleatoric/nu), so the safety
+controller should threshold TOTAL uncertainty, not this split.
 """
 
 import argparse
@@ -154,12 +148,7 @@ def main() -> int:
     else:
         print("  -> FLAT: epistemic does NOT separate (one signal). Expected on the")
         print("     single-head NIG actor: epistemic = aleatoric/nu and RL leaves nu")
-        print(
-            "     unsupervised, so the two channels stay a fixed ratio. Not tunable -"
-        )
-        print(
-            "     see documentation/detailed_notes/epistemic_aleatoric_disentanglement.md."
-        )
+        print("     unsupervised, so the two channels stay a fixed ratio. Not tunable.")
     return 0
 
 

@@ -2,12 +2,9 @@
 @file config_merge.py
 @brief Single source of truth for the config merge hierarchy.
 
-The project layers YAML configs in one precedence chain:
-
-    sensor_config < agent_config < env_config (+ stage) < train_config (+ baseline)
-
-Every consumer (training, tuning, the demo driver) must merge through the helpers
-here so the precedence is defined once.
+Precedence chain: sensor_config < agent_config < env_config (+ stage) <
+train_config (+ baseline). Every consumer (training, tuning, the demo
+driver) merges through the helpers here so precedence is defined once.
 """
 
 from typing import Any, Dict, FrozenSet

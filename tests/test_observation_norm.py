@@ -2,12 +2,9 @@
 @file test_observation_norm.py
 @brief Unit tests for the fixed physical-range observation normaliser.
 
-CPU-only, no CARLA / ROS 2 / GPU. Verifies normalise_observation (applied inside
-build_observation) scales each observation dimension by its fixed physical range
-and clips, so a constant input maps to a constant well-scaled value (no
-division-by-near-zero blow-up) and the mapping is deterministic and
-layout-independent - the property that lets weights transfer across curriculum
-stages and keeps OOD evaluation unconfounded.
+CPU-only. Verifies normalise_observation scales each dimension by its fixed
+physical range and clips, so the mapping stays deterministic and
+layout-independent, letting weights transfer across curriculum stages.
 """
 
 import numpy as np

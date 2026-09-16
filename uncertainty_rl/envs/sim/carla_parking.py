@@ -2,10 +2,9 @@
 @file carla_parking.py
 @brief CARLA parking environment with EKF covariance and lot geometry.
 
-Gymnasium-compatible environment for autonomous parking in CARLA. Localisation
-uncertainty comes from the robot_localisation EKF fusing RTK-GNSS and IMU; 2D LiDAR
-provides obstacle detection only. CARLA ground truth is used only for reward
-computation.
+Localisation uncertainty comes from the robot_localisation EKF fusing
+RTK-GNSS and IMU; 2D LiDAR is obstacle detection only. CARLA ground truth is
+used only for reward computation.
 """
 
 import collections

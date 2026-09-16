@@ -2,12 +2,9 @@
 @file visualiser.py
 @brief Live 2D bird's-eye visualiser for CARLA parking training and evaluation.
 
-Tails outputs/vis_history.jsonl and renders each frame as it arrives using
-Pygame. Creates outputs/.vis_active so the environment starts writing frames;
-removing it (on window close) stops the env writing. The GNSS fix-state tier
-drives a colour-coded panel and an uncertainty ring around the ego vehicle
-scaled to that tier's 1-sigma position noise. Optional MP4 recording
-(@see recorder.FrameRecorder) captures the window.
+Tails outputs/vis_history.jsonl and renders each frame with Pygame. Creates
+outputs/.vis_active so the env starts writing frames; removing it (window
+close) stops it. GNSS tier drives an uncertainty ring around the ego car.
 """
 
 import json

@@ -2,12 +2,9 @@
 @file __init__.py
 @brief Centralised colour palette for all parking lot and sensor visualisations.
 
-Bay and lot colours are defined as hex strings (#RRGGBB). CARLA consumers convert
-to carla.Color via hex_to_carla_color(). Matplotlib consumers use hex strings directly.
-
-Sensor overlay colours are defined as carla.Color instances (CARLA-only consumers).
-The carla import is deferred so this module remains importable on the host (e.g.
-during make generate-layouts) where the carla package is not installed.
+Bay/lot colours are hex strings; CARLA consumers convert via
+hex_to_carla_color(). The carla import is deferred so this module stays
+importable on the host where carla is not installed.
 """
 
 from typing import Dict, Tuple

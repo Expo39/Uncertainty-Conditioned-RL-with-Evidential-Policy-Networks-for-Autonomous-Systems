@@ -19,7 +19,7 @@ pruner:
 # STRUCTURAL PPO params only. learning_rate and ent_coef are stage-owned, so
 # tuning them here is a no-op; net_arch/activation/policy_type are architectural
 # and locked; evidential.* cannot be tuned on vanilla without breaking fairness.
-# @see documentation/detailed_notes/ablation_hpo_methodology.md.
+# @see docs/detailed_notes/training/ablation_hpo_methodology.md.
 search_space:
   n_steps: [1024, 2048, 4096]  # Categorical.
   batch_size: [64, 128, 256]  # Categorical; constrained <= n_steps in code.

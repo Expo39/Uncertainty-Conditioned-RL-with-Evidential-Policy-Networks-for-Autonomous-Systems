@@ -1,19 +1,10 @@
 """
 @file degradation_tiers.py
-@brief Per-arm success across the TRUE-localisation GNSS tiers
-       under the live anchor Markov chain, pooled over seeds.
+@brief Per-arm success across TRUE-localisation GNSS tiers, pooled over seeds.
 
-The held gnss_fixed/gnss_degraded contrast is a weak stressor: the EKF suppresses
-a static raw fault, so the two held tiers do not separate at the policy's input
-(reported sigma p50 ~0.016 m in both). The real degradation axis lives inside the
-anchor_deployment condition, where the fix state transitions mid-episode and the
-TRUE localisation error sweeps the full tier range. This figure bands each anchor
-episode by its WORST true localisation error ||ekf_xy - gt_xy|| (the faithful tier
-proxy: the reported EKF std saturates ~1.3 m and understates the tier by up to 8x,
-per trace_tiers.py), then plots per-arm success rate across the bands,
-pooled over seeds 42/123/7.
-
-Read-only over the frozen eval CSVs. Pure CPU.
+The held gnss_fixed/gnss_degraded contrast barely separates (a static
+fault is EKF-suppressed); the real axis is anchor_deployment mid-episode
+drift, banded by WORST true error (see trace_tiers.py).
 """
 
 from __future__ import annotations

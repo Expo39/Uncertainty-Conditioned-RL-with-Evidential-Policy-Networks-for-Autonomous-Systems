@@ -2,17 +2,9 @@
 @file ablation.py
 @brief Cross-arm analysis of the input-covariance ablation from eval CSVs.
 
-Host-side, read-only diagnostic that loads every ablation arm's per-episode
-records (outputs/raw/evaluation_results/<baseline>/<leaf>/episode_records.csv),
-attaches the arm name from the directory tree, joins on condition, and computes:
-
-  - Per-condition success rate and final position error for each arm.
-  - The covariance contrast deltas with bootstrap CIs: input_uncertainty -
-    vanilla_ppo (standard heads) and full_method - output_uncertainty
-    (evidential heads), each covariance on/off.
-  - The GNSS degradation slope per arm: success/position-error change from the
-    cleanest GNSS tier (rtk_fixed) to the worst (degraded); a shallower slope
-    is the hypothesised covariance-arm advantage.
+Computes per-condition success/position error per arm, the covariance
+contrast deltas with bootstrap CIs, and the GNSS degradation slope per arm
+- a shallower slope is the hypothesised covariance advantage.
 """
 
 from __future__ import annotations
@@ -54,8 +46,7 @@ _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 
 # Held-tier conditions dropped from every summary and figure by default: each
 # pins one GNSS fix state for the whole episode, so the EKF suppresses the
-# static raw fault and the "slope" between them is flat by construction (see
-# documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md).
+# static raw fault and the "slope" between them is flat by construction.
 _HELD_TIER_CONDITIONS: List[str] = ["gnss_fixed", "gnss_degraded"]
 
 # lidar_degraded corrupts only the obstacle channel: the EKF never consumes

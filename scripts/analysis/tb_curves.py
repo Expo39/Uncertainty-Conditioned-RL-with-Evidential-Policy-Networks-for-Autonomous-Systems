@@ -1,23 +1,10 @@
 """
 @file tb_curves.py
-@brief Export the seed-averaged training curves from the TensorBoard logs to CSV.
+@brief Export the seed-averaged training curves from the TensorBoard logs.
 
-The training-curve figure is the one reading that does not come from the
-evaluation CSVs: its source is the per-stage TensorBoard scalars written during
-training. This module turns those logs into one tidy CSV so the figure has the
-same provenance as every other - generated data, not a literal.
-
-Reads `env/success_rate` and `env/collision_rate` from every
-`logs/<arm>/<stage>_<seed>_<stamp>/` run, concatenates the six curriculum
-stages end to end into a single cumulative decision axis, averages across
-seeds at matched steps, and applies one exponential smoothing pass.
-
-Writes `training_curves.csv` (arm, metric, decisions_m, value) plus
-`training_stage_bounds.csv` (stage, decisions_m) for the stage boundaries.
-
-@note Host-side and dependency-free: the event files are parsed directly by
-diagnostics/tb_read.py, so neither the tensorboard package nor its dashboard
-container is involved. Run via `make training-curves`.
+The one reading not sourced from evaluation CSVs. Concatenates every
+curriculum stage's scalars into one cumulative decision axis, averages
+across seeds, and smooths once. Parses event files directly.
 """
 
 from __future__ import annotations

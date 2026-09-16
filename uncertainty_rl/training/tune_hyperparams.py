@@ -2,14 +2,9 @@
 @file tune_hyperparams.py
 @brief Optuna tuning of the structural PPO hyperparameters.
 
-Uses TPESampler (multivariate) and MedianPruner to search the STRUCTURAL PPO
-params only - learning_rate/ent_coef are stage-owned schedules and
-evidential.* is ablation-specific, so neither is searched. Each trial runs a
-short from-scratch training session and evaluates env/success_rate (primary),
-with env/mean_progress_reward as a tiebreaker before any success has been
-observed. A per-baseline study writes its best params to
-logs/tuning/results/best_params_<baseline>.yaml; the no-baseline study writes
-back into train_config.yaml instead.
+Uses TPESampler (multivariate) and MedianPruner to search STRUCTURAL PPO
+params only - learning_rate/ent_coef are stage-owned schedules. Evaluates
+env/success_rate, with mean_progress_reward as an early tiebreaker.
 """
 
 import argparse
@@ -91,7 +86,7 @@ def sample_hyperparams(
 
     # Structural PPO params only: learning_rate / ent_coef are stage-owned and
     # evidential.* is ablation-specific, so neither is tuned.
-    # @see documentation/detailed_notes/ablation_hpo_methodology.md
+    # @see docs/detailed_notes/training/ablation_hpo_methodology.md
     gamma_range = space.get("gamma", [0.98, 0.999])
     gae_range = space.get("gae_lambda", [0.90, 0.98])
     clip_range_bounds = space.get("clip_range", [0.1, 0.3])

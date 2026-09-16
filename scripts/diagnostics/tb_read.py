@@ -2,18 +2,9 @@
 @file tb_read.py
 @brief Inspect scalar trajectories in TensorBoard event files from the CLI.
 
-Ad-hoc diagnostic for reading a training run's logged scalars without the
-TensorBoard UI. Prints, per tag, the full-series statistics (count, mean,
-nonzero count, first/last and min/max with their steps) plus an evenly
-sampled trajectory, so spiky sparse-positive metrics stay visible rather
-than being hidden behind quantiles. Supports tag selection, smoothing, tail
-inspection, multi-run comparison, and tidy CSV export.
-
-Usage (via make):
-  make tb-scalars LOG=logs/<run_dir>
-  make tb-scalars LOG=logs/<run_dir> ARGS="--match success collision"
-  make tb-scalars LOG=logs/<run_dir> ARGS="--tags env/success_rate --full"
-  make tb-scalars LOG=logs/<run_a> ARGS="logs/<run_b> --match success"
+Prints full-series statistics plus an evenly sampled trajectory, so spiky
+sparse-positive metrics stay visible rather than hidden behind quantiles.
+Usage: `make tb-scalars LOG=logs/<run_dir> [ARGS="--match success --full"]`.
 """
 
 import argparse

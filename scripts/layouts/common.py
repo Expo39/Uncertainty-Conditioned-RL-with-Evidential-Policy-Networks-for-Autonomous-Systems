@@ -1,11 +1,10 @@
 """
 @file common.py
-@brief World-frame transform, YAML serialisation, and PNG plotting for parking
-       lot layouts.
+@brief World-frame transform, YAML serialisation, and PNG plotting for
+       parking lot layouts.
 
-This module is the *engine* side of layout generation: it turns a layout dict
-(returned by LotBuilder.build()) into a CARLA-frame YAML file plus a bird's-eye
-PNG.
+The engine side of layout generation: turns a layout dict (from
+LotBuilder.build()) into a CARLA-frame YAML file plus a bird's-eye PNG.
 """
 
 import math

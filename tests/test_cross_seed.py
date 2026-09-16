@@ -2,12 +2,9 @@
 @file test_cross_seed.py
 @brief Tests for the cross-seed pooled aggregator (scripts/analysis/cross_seed.py).
 
-Builds tiny synthetic episode_records.csv files under the nested
-seed_<N>/<arm>/<leaf>/<variant>/ layout and checks that cross_seed pools every
-seed into one sample, that the pooled contrast frame keeps the expected schema and
-the ordered arm Categorical, that the pooled episode count is the sum across seeds,
-that the per-seed robustness mean/min/max match hand computation, and that a single
-seed (pool of one) still produces non-empty pooled tables with a zero range.
+Builds synthetic episode_records.csv files under the nested seed_<N>/ layout
+and checks pooling across seeds, the pooled schema, the per-seed robustness
+mean/min/max against hand computation, and single-seed non-empty tables.
 """
 
 from pathlib import Path

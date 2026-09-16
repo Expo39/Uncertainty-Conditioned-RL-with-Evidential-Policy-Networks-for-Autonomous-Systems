@@ -2,23 +2,9 @@
 @file bundle.py
 @brief Assemble the curated analysis bundle from the raw outputs tree.
 
-`outputs/` holds everything an evaluation and its analyses produce, which is
-far more than the headline set: five conditions where four are analysed, every
-arm where one characterises the filter, plus per-run panels and superseded
-trees. This module gathers only what is in the headline set into one directory:
-
-    outputs/main_analysis/
-      figures/   the headline figures (written by `make figures`)
-      summaries/ one tidy CSV per derived summary
-      values/    the pooled CSVs the headline metrics are read from
-      MANIFEST.md
-
-Summaries are RECOMPUTED here through the shared scope filters rather than copied,
-so every cell traces back to the per-episode records. Anything computed but not
-reported - the lidar_degraded condition, the covariance probe, the per-run
-panels - stays in the raw tree and is not copied.
-
-@note Read-only over the raw tree. Pure CPU, no torch and no CARLA.
+Gathers only the headline set into `outputs/main_analysis/`. Summaries are
+RECOMPUTED here rather than copied, so every cell traces to the raw
+records. Read-only over the raw tree.
 """
 
 from __future__ import annotations
