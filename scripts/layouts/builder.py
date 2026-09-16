@@ -255,11 +255,6 @@ class BayGroup:
         return cx - nx * self.bay_depth / 2.0
 
 
-# ---------------------------------------------------------------------------
-# PedestrianZone - axis-aligned strip in local frame
-# ---------------------------------------------------------------------------
-
-
 class PedestrianZone:
     """
     @class PedestrianZone
@@ -462,11 +457,6 @@ def _vec_to_cardinal(vx: float, vy: float) -> str:
     return "north" if vy > 0 else "south"
 
 
-# ---------------------------------------------------------------------------
-# PatrolPath - waypoint container with face-midpoint helpers
-# ---------------------------------------------------------------------------
-
-
 # Edge type accepted by aisle_x / aisle_y. Either a single BayGroup, a list
 # of them (for clusters of multiple rows), or a raw float coordinate (acting
 # as a virtual axis-aligned edge).
@@ -587,11 +577,6 @@ class PatrolPath:
         return [{"x": x, "y": y} for x, y in self.waypoints]
 
 
-# ---------------------------------------------------------------------------
-# LotBuilder
-# ---------------------------------------------------------------------------
-
-
 # Direction names map to unit vectors. "east"/"west" run along +x/-x, etc.
 _DIR_VECTORS: Dict[str, Point] = {
     "east": (1.0, 0.0),
@@ -685,10 +670,6 @@ class LotBuilder:
         self._patrol: Optional[PatrolPath] = None
         self._obstacles: List[Dict[str, float]] = []
 
-    # -----------------------------------------------------------------------
-    # Lot polygon helpers
-    # -----------------------------------------------------------------------
-
     def wall_y(self, wall: int) -> float:
         """
         @brief Y-coordinate of an axis-aligned horizontal perimeter wall.
@@ -712,10 +693,6 @@ class LotBuilder:
         if abs(p0["x"] - p1["x"]) > 1e-6:
             raise ValueError(f"wall_x({wall}) is undefined for a non-vertical wall.")
         return p0["x"]
-
-    # -----------------------------------------------------------------------
-    # Bay placement primitives
-    # -----------------------------------------------------------------------
 
     def row(
         self,
@@ -1218,10 +1195,6 @@ class LotBuilder:
         self._groups.append(group)
         return group
 
-    # -----------------------------------------------------------------------
-    # Spawns
-    # -----------------------------------------------------------------------
-
     def spawn(
         self,
         x: float,
@@ -1241,10 +1214,6 @@ class LotBuilder:
             self._primary_spawn = spawn_dict
         else:
             self._spawns.append(spawn_dict)
-
-    # -----------------------------------------------------------------------
-    # Pedestrian zones, patrol, obstacles
-    # -----------------------------------------------------------------------
 
     def add_zone(self, zone: PedestrianZone) -> None:
         """@brief Append a pedestrian zone."""
@@ -1275,10 +1244,6 @@ class LotBuilder:
                 "y_max": float(y_max),
             }
         )
-
-    # -----------------------------------------------------------------------
-    # Validation + build
-    # -----------------------------------------------------------------------
 
     def _all_bays(self) -> List[Dict[str, Any]]:
         bays: List[Dict[str, Any]] = []

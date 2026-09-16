@@ -46,12 +46,9 @@ _AXES: List[Tuple[str, str, str]] = [
 _N_BINS = 5
 
 # Conditions where the GNSS tier MOVES within the episode (Markov drift or the
-# one-way good->bad drift), so the predicted std takes a real range. These are
-# the genuine calibration test: only a varying std can be correlated against
-# error. The held endpoints pin one tier all episode, so their std barely moves
-# and a within-condition correlation there is statistically empty (the sign is
-# dominated by noise) - they are reported but EXCLUDED from the verdict.
-# Names match configs/eval_config.yaml; unlisted conditions are treated as held.
+# one-way good->bad drift): only a varying std gives a real calibration test,
+# so held-tier conditions (std pinned all episode) are reported but excluded
+# from the verdict. Names match configs/eval_config.yaml.
 _VARYING_CONDITIONS = {
     "anchor_deployment",
     "anchor_empty",
