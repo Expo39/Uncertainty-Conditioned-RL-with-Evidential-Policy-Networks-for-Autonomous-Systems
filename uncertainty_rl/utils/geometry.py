@@ -2,10 +2,7 @@
 @file geometry.py
 @brief Shared geometry utilities for parking lot layout processing.
 
-Provides helpers for converting zone dictionaries (from layout YAML files)
-into normalised bounding-box tuples, interpolating cone positions along a
-polygon perimeter, and computing target bay pose in the ego vehicle body frame.
-Used by both the training environment and the inspect_layout script so the
+Shared by the training environment and the inspect_layout script so the
 geometry logic lives in one place.
 """
 
@@ -19,21 +16,9 @@ def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
     """
     @brief Convert a pedestrian zone dict to a bounding-box tuple.
 
-    Handles two YAML formats produced by scripts/generate_layouts.py:
-
-    Format A - explicit extents:
-
-        x_min: <float>
-        x_max: <float>
-        y_min: <float>
-        y_max: <float>
-
-    Format B - centre + half-extents:
-
-        centre_x: <float>
-        centre_y: <float>
-        half_width: <float>
-        half_height: <float>
+    @note scripts/generate_layouts.py emits two zone formats: explicit extents
+          (x_min/x_max/y_min/y_max) or centre + half-extents (centre_x/centre_y/
+          half_width/half_height). Both are accepted here.
 
     @param zone_raw: Raw zone dict loaded from the layout YAML.
     @return Tuple (x_min, x_max, y_min, y_max) as world-frame floats.
@@ -46,7 +31,6 @@ def zone_bbox(zone_raw: Dict[str, Any]) -> Tuple[float, float, float, float]:
             float(zone_raw["y_max"]),
         )
 
-    # Format B: derive extents from centre + half-extents
     cx = float(zone_raw["centre_x"])
     cy = float(zone_raw["centre_y"])
     hw = float(zone_raw["half_width"])
@@ -78,7 +62,6 @@ def _interpolate_cone_positions(
     @note Uses adaptive spacing so the last cone on each edge aligns exactly
           with the corner rather than leaving a gap.
     """
-    # Collect all entrance centres into one list for uniform gap logic.
     all_entrances: List[Tuple[float, float]] = []
     if entrance_point is not None:
         all_entrances.append(entrance_point)
@@ -99,7 +82,6 @@ def _interpolate_cone_positions(
         if edge_len < 1e-6:
             continue
 
-        # Edge direction in degrees for marker alignment
         edge_yaw_deg = math.degrees(math.atan2(y1 - y0, x1 - x0))
 
         num_intervals = max(1, int(round(edge_len / spacing)))
@@ -134,10 +116,8 @@ def car_fully_inside_bay(
     """
     @brief Test whether all four corners of the car lie inside the bay rectangle.
 
-    Transforms the car corners into the bay's local axis-aligned frame and
-    checks |x_local| <= depth/2 and |y_local| <= width/2 against an
-    optionally-shrunk bay. The bay yaw points along the bay's depth (entry)
-    axis, matching the layout YAML convention.
+    @note The bay yaw points along the bay's depth (entry) axis, matching the
+          layout YAML convention.
 
     @param car_x: Car centre x in world frame (metres).
     @param car_y: Car centre y in world frame (metres).
@@ -170,10 +150,9 @@ def car_fully_inside_bay(
     )
 
     for lx, ly in car_corners_local:
-        # Corner in world frame
         wx = car_x + cos_c * lx - sin_c * ly
         wy = car_y + sin_c * lx + cos_c * ly
-        # Corner in bay frame (inverse rotation)
+        # Corner into the bay frame (inverse rotation).
         dx = wx - bay_x
         dy = wy - bay_y
         bx = cos_b * dx + sin_b * dy
@@ -207,9 +186,7 @@ def bay_containment_fraction(
     INTO the bay, instead of a flat plateau that lets a centred-but-short stop
     earn the same shaping as a true park (a stop-short local optimum).
 
-    The overhang is the corner's signed distance outside the nearest bay edge,
-    taken as the maximum over all four corners along both bay axes. The bay
-    frame and margin convention match `car_fully_inside_bay`.
+    @note Bay frame and margin convention match `car_fully_inside_bay`.
 
     @param reference: Overhang distance (m) at which the factor reaches 0.0.
                       Sized to the order of one car half-extent so the gradient
@@ -251,10 +228,9 @@ def point_in_polygon(x: float, y: float, corners: List[Tuple[float, float]]) -> 
     """
     @brief Ray-casting point-in-polygon test.
 
-    Returns True when (x, y) is strictly inside the polygon defined by
-    corners.  Used for OOB detection against the actual lot boundary rather
-    than its axis-aligned bounding box, which over-extends at non-rectangular
-    corners (trapezoid, irregular_a layouts).
+    @note Used for OOB detection against the actual lot boundary rather than its
+          axis-aligned bounding box, which over-extends at non-rectangular
+          corners (trapezoid, irregular_a layouts).
 
     @param x: Query point x coordinate.
     @param y: Query point y coordinate.
@@ -279,17 +255,14 @@ def inflate_polygon(
 
     Each edge is pushed out along its outward normal by exactly `margin`; each
     vertex moves to the intersection of its two offset edges, i.e. along the
-    edge-normal bisector by `margin / sin(half-interior-angle)`. For a convex
-    polygon (rectangle, trapezoid - the training layouts) this yields a true
-    uniform skirt: every boundary point sits `margin` metres outside the
-    original, and the original polygon stays strictly inside the result.
+    edge-normal bisector by `margin / sin(half-interior-angle)`.
 
-    Winding is detected from the signed area so "outward" is correct for either
-    orientation (layouts arrive here in CARLA's left-handed frame, so their
-    winding is the mirror of the right-handed source). Reflex vertices on a
-    concave polygon can overshoot, but the only concave layout (irregular_a) is
-    held out for evaluation and the skirt is a soft out-of-bounds boundary, not
-    a hard wall.
+    @note Winding is detected from the signed area so "outward" is correct for
+          either orientation: layouts arrive here in CARLA's left-handed frame,
+          so their winding is the mirror of the right-handed source.
+    @note Reflex vertices on a concave polygon can overshoot, but the only
+          concave layout (irregular_a) is held out for evaluation and the skirt
+          is a soft out-of-bounds boundary, not a hard wall.
 
     @param corners: Ordered polygon vertices as (x, y) pairs.
     @param margin: Outward offset distance in metres.
@@ -325,8 +298,8 @@ def inflate_polygon(
         prev_pt = corners[(i - 1) % n]
         curr_pt = corners[i]
         next_pt = corners[(i + 1) % n]
-        n_in = _edge_normal(prev_pt, curr_pt)  # normal of incoming edge
-        n_out = _edge_normal(curr_pt, next_pt)  # normal of outgoing edge
+        n_in = _edge_normal(prev_pt, curr_pt)
+        n_out = _edge_normal(curr_pt, next_pt)
         bx, by = n_in[0] + n_out[0], n_in[1] + n_out[1]
         bisector_len = math.hypot(bx, by)
         if bisector_len < 1e-9:
@@ -348,8 +321,8 @@ def yaw_from_quaternion(q_x: float, q_y: float, q_z: float, q_w: float) -> float
     """
     @brief Extract yaw angle from a quaternion (2D mode), wrapped to [-pi, pi].
 
-    Uses the standard ZYX Euler decomposition. Only valid for 2D operation
-    (z-axis rotation only - roll and pitch are assumed zero).
+    @warning Standard ZYX Euler decomposition, valid only for 2D operation
+             (z-axis rotation only - roll and pitch are assumed zero).
 
     @param q_x: Quaternion x component.
     @param q_y: Quaternion y component.

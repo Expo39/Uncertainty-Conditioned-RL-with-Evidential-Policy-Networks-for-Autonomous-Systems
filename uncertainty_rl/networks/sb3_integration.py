@@ -2,10 +2,9 @@
 @file sb3_integration.py
 @brief Stable-Baselines3 integration for evidential actor-critic policy.
 
-Provides SB3-compatible wrappers around the evidential deep learning
-components: a custom Distribution, a custom ActorCriticPolicy with
-evidential actor head, and a custom PPO subclass that adds evidential
-regularisation loss and uncertainty logging.
+SB3-compatible wrappers around the evidential components: a custom Distribution,
+an ActorCriticPolicy with an evidential actor head, and a PPO subclass adding the
+evidential regularisation loss and uncertainty logging.
 """
 
 import logging
@@ -37,10 +36,8 @@ logger = logging.getLogger("uncertainty_rl.networks.sb3_integration")
 def _insert_layernorm(seq: nn.Sequential) -> nn.Sequential:
     """
     @brief Rebuild an nn.Sequential, inserting LayerNorm after each Linear layer.
-    @param seq: Original sequential module from MlpExtractor.
-    @return New sequential with LayerNorm inserted after every nn.Linear.
-    @note Used by EvidentialActorCriticPolicy._build_mlp_extractor() to match
-          the LayerNorm-equipped EvidentialPolicyNetwork architecture.
+    @note Both policies use this so their backbones match; stock SB3 MlpExtractor
+          has no LayerNorm, which would confound the ablation.
     """
     layers: List[nn.Module] = []
     for layer in seq:
@@ -56,10 +53,6 @@ class EvidentialDistribution(Distribution):
     @brief SB3-compatible tanh-squashed Gaussian approximation of NIG predictive.
     """
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     # Numerical floor for the tanh Jacobian term; matches SB3.
     _SQUASH_EPS: float = 1e-6
 
@@ -67,14 +60,11 @@ class EvidentialDistribution(Distribution):
         """
         @brief Initialise the evidential distribution.
         @param action_dim: Dimension of the action space.
-        @param aleatoric_floor: Minimum predictive aleatoric (action variance) before
-               the sqrt, so the action sampling std cannot fall below
-               sqrt(aleatoric_floor). The NIG variance is the policy's exploration
-               noise, and beta is softplus-unbounded toward 0, so without a floor the
-               reward gradient can shrink it to a Dirac delta and exploration collapses
-               (a documented DER pathology). This is the evidential-actor analogue of
-               the SAC log_std clamp.
-               @see documentation/detailed_notes/evidential_actor_variance_collapse.md
+        @param aleatoric_floor: Lower clamp on the predictive aleatoric, applied
+               before the sqrt. Without it the reward gradient can shrink the
+               action std to a Dirac delta and exploration collapses; the
+               evidential-actor analogue of the SAC log_std clamp.
+        @see documentation/detailed_notes/evidential_actor_variance_collapse.md
         """
         super().__init__()
         self.action_dim = action_dim
@@ -103,10 +93,10 @@ class EvidentialDistribution(Distribution):
     ) -> "EvidentialDistribution":
         """
         @brief Set distribution parameters from NIG output.
-        @param gamma: Mean parameter (batch_size, action_dim).
-        @param nu: Precision parameter (batch_size, action_dim).
-        @param alpha: Shape parameter (batch_size, action_dim).
-        @param beta: Rate parameter (batch_size, action_dim).
+        @param gamma: Mean parameter, shape (batch_size, action_dim).
+        @param nu: Precision parameter, same shape.
+        @param alpha: Shape parameter, same shape.
+        @param beta: Rate parameter, same shape.
         @return Self with updated distribution.
         """
         self._gamma = gamma
@@ -115,11 +105,10 @@ class EvidentialDistribution(Distribution):
         self._beta = beta
         self._gaussian_actions = None
 
-        # Clamp before sqrt. The min is an exploration floor: the NIG variance is the
-        # action sampling std, and beta is softplus-unbounded toward 0, so the reward
-        # gradient can otherwise collapse it to a Dirac delta (DER variance-minimisation
-        # pathology). The max is a hard ceiling at the action half-range; the alpha >= 1.5
-        # construction bound constrains only the denominator.
+        # Clamp before the sqrt. The min is the exploration floor (@see __init__);
+        # the max caps the std at the action half-range, needed because the
+        # alpha >= 1.5 bound constrains only the denominator while beta is
+        # softplus-unbounded above.
         aleatoric = th.clamp(beta / (alpha - 1), min=self.aleatoric_floor, max=1.0)
         std = th.sqrt(aleatoric)
 
@@ -132,9 +121,9 @@ class EvidentialDistribution(Distribution):
         """
         @brief Log probability of squashed actions, with tanh Jacobian correction.
         @param actions: Squashed actions in (-1, 1), shape (batch_size, action_dim).
-        @param gaussian_actions: Optional pre-squash sample retained from sample().
-               When None, recovered via atanh on the clipped input.
-        @return Log probability summed over action dimensions, shape (batch_size,).
+        @param gaussian_actions: Pre-squash sample from sample(); when None it is
+               recovered via atanh on the clipped input.
+        @return Log probability summed over action dims, shape (batch_size,).
         """
         assert self.distribution is not None
         dist = cast(Normal, self.distribution)
@@ -145,7 +134,6 @@ class EvidentialDistribution(Distribution):
             clipped = th.clamp(actions, -1.0 + self._SQUASH_EPS, 1.0 - self._SQUASH_EPS)
             gaussian_actions = th.atanh(clipped)
         log_prob_gaussian = sum_independent_dims(dist.log_prob(gaussian_actions))
-        # Jacobian of y = tanh(x): dy/dx = 1 - tanh(x)^2.
         jacobian = th.log(1.0 - th.tanh(gaussian_actions) ** 2 + self._SQUASH_EPS)
         return log_prob_gaussian - jacobian.sum(dim=-1)
 
@@ -153,14 +141,9 @@ class EvidentialDistribution(Distribution):
         """
         @brief Differential entropy of the pre-squash Gaussian, summed over action dims.
         @return Entropy of shape (batch_size,), or None if no distribution is set.
-
-        The exact entropy of the tanh-squashed distribution has no closed form (it needs
-        the Jacobian expectation), so this returns the base Gaussian entropy
-        0.5*log(2*pi*e*std^2) summed over axes - a tractable proxy that, unlike the
-        -log_prob fallback, depends DIRECTLY on std. The entropy bonus then acts on the
-        action std (the exploration knob), restoring the standard PPO guard against the
-        Gaussian shrinking prematurely (Schulman et al. 2017). std reflects the
-        aleatoric_floor, so the bonus and the floor reinforce the same exploration level.
+        @note The squashed entropy has no closed form. Unlike the -log_prob
+              fallback, this depends directly on std, so the PPO entropy bonus
+              acts on the exploration knob itself.
         """
         dist = getattr(self, "distribution", None)
         if dist is None:
@@ -248,15 +231,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     @class EvidentialActorCriticPolicy
     @brief Actor-critic policy with evidential actor and standard critic.
 
-    Replaces the standard DiagGaussianDistribution actor head with an
-    EvidentialLayer that outputs NIG parameters (gamma, nu, alpha, beta).
-    The critic remains a standard MLP value head. Evidential deep learning
-    applies to the actor only.
+    Replaces SB3's DiagGaussianDistribution actor head with an EvidentialLayer.
+    The critic stays a standard MLP value head: evidential applies to the actor
+    only.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -274,18 +252,11 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param action_space: Action space.
         @param lr_schedule: Learning rate schedule.
         @param lambda_reg: Evidential regularisation weight.
-        @param aleatoric_floor: Minimum predictive aleatoric (action variance); the
-               action sampling std cannot fall below sqrt(aleatoric_floor). Passed to
-               EvidentialDistribution to stop exploration collapse. @see that class.
-        @param use_uncertainty_conditioning: If True, replace the flat MLP actor
-               with UncertaintyConditionedActor (dual-encoder). The covariance
-               block (obs indices VEHICLE_STATE_DIM through VEHICLE_STATE_DIM +
-               COVARIANCE_FEATURES_DIM - 1) is routed through a dedicated
-               uncertainty encoder; the rest of the observation (speed, yaw
-               rate, relative target pose, LiDAR clearances) is routed through
-               the state encoder. The two encoded representations are fused
-               before the EvidentialLayer head. Requires include_covariance=True
-               in the env config.
+        @param aleatoric_floor: Exploration floor passed to EvidentialDistribution.
+        @param use_uncertainty_conditioning: If True, use the dual-encoder actor.
+               Requires include_covariance=True in the env config, or the
+               covariance block is absent from the indices the split assumes.
+        @see EvidentialDistribution for the aleatoric_floor rationale.
         """
         self.lambda_reg = lambda_reg
         self.aleatoric_floor = aleatoric_floor
@@ -306,9 +277,6 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     def _build_mlp_extractor(self) -> None:
         """
         @brief Build MLP extractor with LayerNorm after each hidden Linear layer.
-
-        Calls the parent implementation then injects nn.LayerNorm into the
-        policy and value MLP sequences.
         """
         super()._build_mlp_extractor()
         self.mlp_extractor.policy_net = _insert_layernorm(self.mlp_extractor.policy_net)
@@ -317,14 +285,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     def _build(self, lr_schedule: Schedule) -> None:
         """
         @brief Build networks with evidential actor head and standard critic.
-
-        When use_uncertainty_conditioning=True, wires UncertaintyConditionedActor
-        as the action network. The MLP extractor's policy_net is bypassed; the
-        dual-encoder receives the raw observation split into a navigation-state
-        block (everything except the covariance dims) and the covariance block.
-        When False, uses the standard flat MLP + EvidentialLayer.
-
         @param lr_schedule: Learning rate schedule.
+        @note In dual-encoder mode the MLP extractor's policy_net is bypassed
+              entirely: the actor reads the raw observation instead.
         """
         self._build_mlp_extractor()
 
@@ -334,17 +297,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         )
 
         if self.use_uncertainty_conditioning:
-            # Dual-encoder actor. The state encoder receives the full
-            # observation MINUS the covariance block, so the actor sees
-            # speed, yaw rate, the relative target bay pose (dx, dy, dyaw)
-            # and the LiDAR clearances. The covariance block (std_x, std_y,
-            # std_yaw) flows into the uncertainty encoder only. An actor
-            # that cannot see dx / dy / dyaw has no goal-direction signal
-            # and cannot learn to drive to the bay; the covariance is a
-            # confidence input that modulates the action, not a replacement
-            # for the navigation features. The hidden width is taken from
-            # the MLP extractor's latent_dim_pi so net_arch in the YAML
-            # controls both encoders symmetrically.
+            # The state encoder gets the observation MINUS the covariance block,
+            # not just the vehicle state: an actor blind to dx / dy / dyaw has no
+            # goal-direction signal. Hidden width comes from latent_dim_pi so
+            # net_arch in the YAML sizes both encoders.
             obs_shape = cast(Tuple[int, ...], self.observation_space.shape)
             obs_dim = obs_shape[0]
             state_dim = obs_dim - COVARIANCE_FEATURES_DIM
@@ -356,13 +312,11 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 hidden_dims=[hidden_dim, hidden_dim],
             )
         else:
-            # Flat MLP actor: EvidentialLayer on top of MLP extractor latent.
             latent_dim_pi = self.mlp_extractor.latent_dim_pi
             self.action_net = self.action_dist.proba_distribution_net(
                 latent_dim=latent_dim_pi
             )
 
-        # Standard value head (critic unchanged)
         self.value_net = nn.Linear(self.mlp_extractor.latent_dim_vf, 1)
 
         if self.use_uncertainty_conditioning:
@@ -382,7 +336,6 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 action_dim,
             )
 
-        # Orthogonal initialisation
         if self.ortho_init:
             module_gains: Dict[nn.Module, float] = {
                 self.features_extractor: np.sqrt(2),
@@ -398,13 +351,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             for module, gain in module_gains.items():
                 module.apply(partial(self.init_weights, gain=gain))
 
-            # Re-apply NIG hyperprior biases: ortho_init zeroes all biases,
-            # overwriting the values set in EvidentialLayer.__init__.
-            # Must come AFTER the init_weights loop above.
-            # For dual-encoder, the EvidentialLayer lives inside action_net.
-            # Per-axis gamma bias must match EvidentialLayer.__init__ (steer
-            # bipolar, throttle default-on, brake default-off) when
-            # action_dim=3; symmetric gamma=0 fallback otherwise.
+            # Re-apply the NIG hyperprior biases: ortho_init zeroes every bias,
+            # wiping the values EvidentialLayer.__init__ set. Must come AFTER the
+            # init_weights loop, and must stay identical to that constructor.
             with th.no_grad():
                 n = action_dim
                 if self.use_uncertainty_conditioning:
@@ -419,45 +368,26 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                     bias[2] = -1.0  # gamma brake (default-off)
                 else:
                     bias[0 * n : 1 * n].fill_(0.0)
-                # nu bias must match EvidentialLayer.__init__: softplus(-1.0) < 1
-                # so epistemic > aleatoric in the no-evidence regime. @see the
-                # rationale in EvidentialLayer.__init__.
+                # @see EvidentialLayer.__init__ for the sub-1 nu prior rationale.
                 bias[1 * n : 2 * n].fill_(-1.0)  # nu
                 bias[2 * n : 3 * n].fill_(0.9)  # alpha
                 bias[3 * n : 4 * n].fill_(0.0)  # beta
 
-        # Set up optimiser
         optimizer_kwargs = dict(lr=cast(float, lr_schedule(1)), **self.optimizer_kwargs)
         self.optimizer = self.optimizer_class(self.parameters(), **optimizer_kwargs)
-
-    # -----------------------------------------------------------------------
-    # SB3 overrides
-    # -----------------------------------------------------------------------
 
     def _get_nig_from_obs(
         self, obs: th.Tensor
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor, th.Tensor]:
         """
         @brief Run the dual-encoder actor on raw observations.
-
-        Splits the observation into a navigation-state block and a covariance
-        block. The covariance block sits at obs[:, VEHICLE_STATE_DIM:
-        VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM]; everything else (speed,
-        yaw rate, relative target pose, LiDAR clearances) is concatenated
-        and forwarded to the state encoder. The covariance block is sent to
-        the uncertainty encoder. Both pathways feed into the
-        UncertaintyConditionedActor.
-
-        @param obs: Observation tensor of shape (batch, obs_dim).
-        @return Tuple (gamma, nu, alpha, beta) of NIG parameters.
-        @warning Only valid when use_uncertainty_conditioning=True. Requires
-                 include_covariance=True in the env config so the covariance
-                 block is actually present at the expected indices.
+        @warning Only valid when use_uncertainty_conditioning=True, and requires
+                 include_covariance=True so the covariance block sits at the
+                 expected indices.
         """
         cov_start = VEHICLE_STATE_DIM
         cov_end = VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM
-        # Navigation block: speed and yaw rate before the covariance, plus
-        # target pose and LiDAR clearances after it.
+        # Navigation block: everything either side of the covariance block.
         state = th.cat([obs[:, :cov_start], obs[:, cov_end:]], dim=-1)
         uncertainty = obs[:, cov_start:cov_end]
         dual = cast(UncertaintyConditionedActor, self.action_net)
@@ -471,19 +401,15 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     ) -> Tuple[th.Tensor, th.Tensor, th.Tensor]:
         """
         @brief Forward pass for rollout collection.
-
-        SB3's default forward() calls _get_action_dist_from_latent(latent_pi),
-        which only works for the flat MLP path. For the dual-encoder path,
-        we split the observation into state and covariance features and pass
-        them through UncertaintyConditionedActor directly.
-
         @param obs: Observation tensor.
         @param deterministic: Whether to use deterministic actions.
         @return Tuple of (actions, values, log_prob).
+        @note Overridden because SB3's default calls
+              _get_action_dist_from_latent(), which serves the flat MLP path only.
         """
         features = self.extract_features(obs, self.pi_features_extractor)
         if self.use_uncertainty_conditioning:
-            # Dual-encoder: actor reads raw obs directly; only critic MLP is needed.
+            # Actor reads raw obs directly, so only the critic MLP is needed.
             if self.share_features_extractor:
                 _, latent_vf = self.mlp_extractor(features)
             else:
@@ -521,13 +447,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     ) -> EvidentialDistribution:
         """
         @brief Get the action distribution for given observations.
-
-        Overrides SB3's default which calls _get_action_dist_from_latent().
-        For the dual-encoder path, splits observations and passes them
-        through UncertaintyConditionedActor directly.
-
         @param obs: Observation tensor.
         @return Evidential distribution.
+        @note Overridden for the same reason as forward().
         """
         if self.use_uncertainty_conditioning:
             gamma, nu, alpha, beta = self._get_nig_from_obs(obs)
@@ -547,13 +469,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         self, latent_pi: th.Tensor
     ) -> EvidentialDistribution:
         """
-        @brief Get evidential distribution from latent actor features (flat MLP path).
-
-        Only called when use_uncertainty_conditioning=False. For the dual-encoder
-        path, _get_nig_from_obs() is used directly.
-
-        @param latent_pi: Latent features from the actor MLP.
-        @return Evidential distribution with NIG parameters set.
+        @brief Get evidential distribution from latent actor features.
+        @note Flat MLP path only; the dual-encoder path calls _get_nig_from_obs().
         """
         flat = cast(EvidentialLayer, self.action_net)
         gamma, nu, alpha, beta = flat(latent_pi)
@@ -567,13 +484,6 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     ) -> Tuple[th.Tensor, th.Tensor, Optional[th.Tensor]]:
         """
         @brief Evaluate actions and cache NIG params for evidential loss.
-
-        For the dual-encoder path (use_uncertainty_conditioning=True), the
-        UncertaintyConditionedActor receives the raw observation split into
-        the navigation-state block (everything except the covariance dims)
-        and the covariance block, bypassing the MLP extractor's policy_net.
-        The critic path is unchanged regardless of mode.
-
         @param obs: Observations.
         @param actions: Actions to evaluate.
         @return Tuple of (values, log_prob, entropy).
@@ -582,7 +492,7 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         # a (pi_features, vf_features) tuple which we unpack below.
         features = self.extract_features(obs)
         if self.use_uncertainty_conditioning:
-            # Dual-encoder: only the critic MLP is needed; actor reads raw obs directly.
+            # Actor reads raw obs directly, so only the critic MLP is needed.
             if self.share_features_extractor:
                 _, latent_vf = self.mlp_extractor(features)
             else:
@@ -607,14 +517,9 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         values = self.value_net(latent_vf)
         entropy = distribution.entropy()
 
-        # Cache NIG params for EvidentialPPO.train()
         self._cached_nig_params = (gamma, nu, alpha, beta)
 
         return values, log_prob, entropy
-
-    # -----------------------------------------------------------------------
-    # Public interface
-    # -----------------------------------------------------------------------
 
     def get_action_with_uncertainty(
         self,
@@ -623,14 +528,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
     ) -> Tuple[th.Tensor, Dict[str, th.Tensor]]:
         """
         @brief Get action with uncertainty estimates.
-
-        Matches the get_action() -> (action, uncertainty_dict) interface
-        used throughout the project for evaluation and deployment.
-
         @param obs: Observation tensor.
         @param deterministic: Whether to use deterministic actions.
-        @return Tuple of (action, uncertainty_dict) where uncertainty_dict
-                contains epistemic, aleatoric, total, gamma, nu, alpha, beta.
+        @return Tuple of (action, uncertainty_dict) holding epistemic, aleatoric,
+                total, gamma, nu, alpha and beta.
         """
         if self.training:
             self.set_training_mode(False)
@@ -644,8 +545,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
                 gamma, nu, alpha, beta = flat(latent_pi)
 
             alpha_m1 = alpha - 1
-            # Reported aleatoric is the TRUE model output (the uncertainty signal),
-            # not floored - only the SAMPLING std below is floored, to match training.
+            # Reported aleatoric is the raw model output (the uncertainty signal);
+            # only the sampling std below is floored, to match training.
             aleatoric = th.clamp(beta / alpha_m1, min=1e-6)
             epistemic = beta / (nu * alpha_m1)
             total = epistemic + aleatoric
@@ -653,9 +554,8 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
             if deterministic:
                 action = th.tanh(gamma)
             else:
-                # Match EvidentialDistribution.proba_distribution exactly: aleatoric std
-                # only (not total), floored at aleatoric_floor so eval/deployment
-                # exploration matches training. Squash with tanh into [-1, 1] per axis.
+                # Must match EvidentialDistribution.proba_distribution exactly so
+                # eval/deployment sampling matches training.
                 sampling_aleatoric = th.clamp(
                     beta / alpha_m1, min=self.aleatoric_floor, max=1.0
                 )
@@ -693,18 +593,9 @@ class EvidentialPPO(PPO):
     @class EvidentialPPO
     @brief PPO with evidential regularisation loss on the actor.
 
-    Adds the evidential regression regularisation term to the PPO loss
-    during training. The NIG NLL is handled via the Gaussian approximation
-    in log_prob; this class adds the evidential regularisation penalty
-    that penalises high evidence on incorrect predictions.
-
-    Logs epistemic and aleatoric uncertainty to TensorBoard alongside
-    standard PPO metrics.
+    log_prob already carries the Gaussian approximation, so this class only adds
+    the penalties on the evidence parameters and the uncertainty logging.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -722,27 +613,19 @@ class EvidentialPPO(PPO):
         @brief Initialise EvidentialPPO.
         @param policy: Policy class or string.
         @param env: Environment.
-        @param lambda_reg: Evidential regularisation weight (target value after warmup).
-        @param lambda_reg_warmup_steps: Number of environment steps over which
-               lambda_reg is linearly annealed from 0 to lambda_reg. Allows the NLL to
-               establish good predictions before the regularisation term fires.
-        @param lambda_evidence: Evidence-accrual weight (target value after warmup) for
-               the nu-only advantage-gated term in train(). Drives nu off its prior so
-               the epistemic estimate carries state-dependent signal. 0.0 (the default)
-               disables the term, recovering the prior-anchored-nu behaviour.
-        @param lambda_evidence_warmup_steps: Number of environment steps over which
-               lambda_evidence is linearly annealed from 0 to lambda_evidence, so PPO
-               settles the action mean (gamma) before evidence accrual begins.
-        @param lambda_nu_anchor: Weight of a log-space restoring force pulling nu
-               toward its sub-1 prior (softplus(-1.0) ~ 0.313). The evidence term can
-               only RAISE nu, so alone it drives nu past 1 everywhere and epistemic
-               collapses onto a fixed fraction of aleatoric. This anchor opposes it on
-               the same 1/nu scale, so nu reaches a tunable equilibrium: above 1 only
-               where evidence overcomes the anchor (in-distribution), below 1 on novel
-               states (epistemic-dominant handoff regime). 0.0 (default) = unanchored.
-        @param aleatoric_floor: Minimum predictive aleatoric (action variance) floor for
-               the policy's sampling std; forwarded to EvidentialActorCriticPolicy to
-               prevent exploration collapse. @see EvidentialDistribution.
+        @param lambda_reg: Evidential regularisation weight (target after warmup).
+        @param lambda_reg_warmup_steps: Environment steps over which lambda_reg anneals
+               from 0, letting the NLL settle before regularisation fires.
+        @param lambda_evidence: Weight of the nu-only advantage-gated evidence term,
+               which gives epistemic its state-dependence. 0.0 disables it.
+        @param lambda_evidence_warmup_steps: Environment steps over which
+               lambda_evidence anneals from 0, so PPO settles gamma first.
+        @param lambda_nu_anchor: Restoring force pulling nu toward its sub-1 prior.
+               The evidence term can only RAISE nu, so without this nu passes 1
+               everywhere and epistemic collapses to a fixed fraction of aleatoric.
+               0.0 (default) leaves nu unanchored.
+        @param aleatoric_floor: Floor on the sampling std, preventing exploration
+               collapse. @see EvidentialDistribution.
         """
         self.lambda_reg = lambda_reg
         self.lambda_reg_warmup_steps = lambda_reg_warmup_steps
@@ -770,17 +653,14 @@ class EvidentialPPO(PPO):
     def train(self) -> None:
         """
         @brief PPO training step with evidential regularisation.
-
-        Reproduces the standard PPO training loop but adds the evidential
-        regularisation term to the combined loss. Also logs epistemic and
-        aleatoric uncertainty.
+        @note A full copy of the SB3 loop rather than a hook, because SB3 exposes
+              no extension point inside the minibatch loop.
         """
         self.policy.set_training_mode(True)
         self._update_learning_rate(self.policy.optimizer)
 
-        # Linearly anneal lambda_reg from 0 to self.lambda_reg over the first
-        # lambda_reg_warmup_steps environment steps. This lets the NLL loss
-        # establish good predictions before the evidential regularisation fires.
+        # Annealed from 0 so the NLL can establish good predictions before the
+        # evidential regularisation starts pulling on them.
         if self.lambda_reg_warmup_steps > 0:
             ramp = min(
                 1.0, float(self.num_timesteps) / float(self.lambda_reg_warmup_steps)
@@ -789,8 +669,8 @@ class EvidentialPPO(PPO):
             ramp = 1.0
         current_lambda_reg = self.lambda_reg * ramp
 
-        # Same linear warmup for the evidence-accrual term: defer it until PPO has
-        # settled the action mean (gamma), so the residual it reads is meaningful.
+        # Likewise deferred until PPO has settled the action mean (gamma), so the
+        # residual the evidence term reads is meaningful.
         if self.lambda_evidence_warmup_steps > 0:
             evidence_ramp = min(
                 1.0,
@@ -818,15 +698,14 @@ class EvidentialPPO(PPO):
             clip_range_vf_fn = cast(Schedule, self.clip_range_vf)
             clip_range_vf = clip_range_vf_fn(self._current_progress_remaining)
 
-        # Accumulate as detached tensors.
-        # approx_kl_div is synced per-batch only when target_kl early-stopping is active.
+        # Detached so the running stats hold no graph; approx_kl_div is synced to
+        # the host per-batch only when target_kl early-stopping is active.
         entropy_losses: List[th.Tensor] = []
         pg_losses: List[th.Tensor] = []
         value_losses: List[th.Tensor] = []
         evidential_reg_losses: List[th.Tensor] = []
         evidence_losses: List[th.Tensor] = []
         nu_anchor_losses: List[th.Tensor] = []
-        # clip_fraction as a running float sum.
         clip_fraction_sum: float = 0.0
         clip_fraction_count: int = 0
         epistemic_uncertainties: List[th.Tensor] = []
@@ -834,14 +713,13 @@ class EvidentialPPO(PPO):
 
         assert self.rollout_buffer is not None
         ev_policy = cast(EvidentialActorCriticPolicy, self.policy)
-        # NIG hyperprior targets match EvidentialLayer.__init__ bias values.
-        # alpha: softplus(0.9) + 1.5 offset. beta: softplus(0.0). nu: softplus(-1.0).
-        # alpha/beta use a raw-ratio quadratic anchor; nu is anchored in LOG space
-        # (lambda_nu_anchor) so its restoring gradient matches the evidence term's
-        # 1/nu scale (a tunable equilibrium, not a boundary tug-of-war).
-        _alpha_prior = 2.741
-        _beta_prior = 0.693
-        _nu_prior = 0.313  # softplus(-1.0) + 1e-6; sub-1 => epistemic-dominant prior.
+        # Hyperprior targets: the EvidentialLayer.__init__ biases put through
+        # softplus. Must track those biases or the anchor pulls off-init.
+        _alpha_prior = 2.741  # carries the layer's 1.5 offset; raw-ratio anchor.
+        _beta_prior = 0.693  # raw-ratio anchor.
+        _nu_prior = 0.313  # sub-1, so the prior is epistemic-dominant.
+        # Log space, so nu's restoring gradient shares the evidence term's scale:
+        # a tunable equilibrium rather than a boundary tug-of-war.
         _log_nu_prior = float(np.log(_nu_prior))
         continue_training = True
         for epoch in range(self.n_epochs):
@@ -851,16 +729,14 @@ class EvidentialPPO(PPO):
                 if isinstance(self.action_space, spaces.Discrete):
                     actions = actions.long().flatten()
 
-                # evaluate_actions caches NIG params
                 values, log_prob, entropy = self.policy.evaluate_actions(
                     rollout_data.observations, actions
                 )
                 values = values.flatten()
 
-                # Prior-anchoring penalty on the NIG evidence parameters as
-                # a raw-ratio quadratic (x / prior - 1)^2 - zero at the prior,
-                # with a restoring gradient that grows linearly with distance.
-                # Only alpha and beta are anchored; nu is left to the evidence term.
+                # Raw-ratio quadratic, not a squared-log-ratio: its restoring
+                # gradient grows with distance from the prior instead of
+                # vanishing far out. nu is left to the evidence term.
                 assert ev_policy._cached_nig_params is not None
                 gamma, nu, alpha, beta = ev_policy._cached_nig_params
 
@@ -868,24 +744,13 @@ class EvidentialPPO(PPO):
                     beta / _beta_prior - 1.0
                 ).pow(2).mean()
 
-                # Advantage-gated evidence accrual on nu only. The action mean
-                # (gamma) is detached so this term routes gradient solely into the
-                # evidence mass nu, never competing with the PPO surrogate over the
-                # mean. The residual is measured in the pre-squash space the actor
-                # parameterises (actions are tanh-squashed, so atanh maps them back).
-                # The advantage weight is clamped to be non-negative so only
-                # better-than-baseline actions are allowed to ACCRUE evidence.
-                # The per-element term 0.5*sq_resid*nu - 0.5*log(nu) is the nu-only
-                # Gaussian-precision negative log-likelihood; its stationary point
-                # nu* = 1 / sq_resid raises nu where the action was well-predicted
-                # (confident/familiar) and lowers it where it was surprising, so
-                # epistemic = beta / (nu * (alpha - 1)) becomes state-dependent.
-                # alpha and beta are absent, so this cannot collapse them.
+                # Accrues evidence on nu only, which is what makes epistemic
+                # state-dependent. Touching alpha/beta here would collapse them.
                 if self.lambda_evidence > 0.0:
                     raw_advantages = rollout_data.advantages
+                    # Non-negative: only better-than-baseline actions accrue evidence.
                     weight = th.clamp(raw_advantages, min=0.0).unsqueeze(-1)
-                    # Same atanh-stability epsilon the distribution uses to invert
-                    # the squash, so the residual is measured on a matching scale.
+                    # Matches the distribution's squash inversion.
                     atanh_eps = EvidentialDistribution._SQUASH_EPS
                     with th.no_grad():
                         clipped_actions = th.clamp(
@@ -894,6 +759,7 @@ class EvidentialPPO(PPO):
                             1.0 - atanh_eps,
                         )
                         pre_squash = th.atanh(clipped_actions)
+                        # Detached: PPO owns the mean, this term owns the evidence.
                         sq_resid = (pre_squash - gamma.detach()).pow(2)
                     evidence_loss = (
                         weight * (0.5 * sq_resid * nu - 0.5 * th.log(nu))
@@ -901,8 +767,8 @@ class EvidentialPPO(PPO):
                 else:
                     evidence_loss = th.zeros((), device=nu.device)
 
-                # Log-space restoring force pulling nu back to its sub-1 prior;
-                # opposes the (one-directional) evidence term so nu settles, not runs up.
+                # Restoring force pulling nu back to its sub-1 prior; opposes the
+                # one-directional evidence term so nu settles instead of running up.
                 if self.lambda_nu_anchor > 0.0:
                     nu_anchor_loss = (th.log(nu) - _log_nu_prior).pow(2).mean()
                 else:
@@ -915,14 +781,12 @@ class EvidentialPPO(PPO):
                     epistemic_uncertainties.append(epistemic.detach())
                     aleatoric_uncertainties.append(aleatoric.detach())
 
-                # Normalise advantage
                 advantages = rollout_data.advantages
                 if self.normalize_advantage and len(advantages) > 1:
                     advantages = (advantages - advantages.mean()) / (
                         advantages.std() + 1e-8
                     )
 
-                # Policy loss (clipped surrogate)
                 ratio = th.exp(log_prob - rollout_data.old_log_prob)
                 policy_loss_1 = advantages * ratio
                 policy_loss_2 = advantages * th.clamp(
@@ -931,13 +795,12 @@ class EvidentialPPO(PPO):
                 policy_loss = -th.min(policy_loss_1, policy_loss_2).mean()
 
                 pg_losses.append(policy_loss.detach())
-                # Sync clip fraction to CPU immediately as a float.
+                # Synced to the host here so no graph-holding tensor accumulates.
                 clip_fraction_sum += float(
                     th.mean((th.abs(ratio - 1) > clip_range).float())
                 )
                 clip_fraction_count += 1
 
-                # Value loss
                 if clip_range_vf is None:
                     values_pred = values
                 else:
@@ -949,17 +812,14 @@ class EvidentialPPO(PPO):
                 value_loss = F.mse_loss(rollout_data.returns, values_pred)
                 value_losses.append(value_loss.detach())
 
-                # EvidentialDistribution.entropy() returns the closed-form pre-squash
-                # Gaussian entropy, so the bonus acts directly on the action std. The
-                # -mean(log_prob) branch is a defensive fallback for a None entropy.
+                # The -mean(log_prob) branch is only a defensive fallback;
+                # EvidentialDistribution.entropy() never returns None here.
                 if entropy is None:
                     entropy_loss = -th.mean(log_prob)
                 else:
                     entropy_loss = -th.mean(entropy)
                 entropy_losses.append(entropy_loss.detach())
 
-                # Combined loss with annealed evidential regularisation and the
-                # annealed evidence-accrual term (both warmed up independently).
                 loss = (
                     policy_loss
                     + ent_coef * entropy_loss
@@ -972,8 +832,8 @@ class EvidentialPPO(PPO):
                 evidence_losses.append(evidence_loss.detach())
                 nu_anchor_losses.append(nu_anchor_loss.detach())
 
-                # KL divergence for early stopping - only sync to CPU when target_kl is
-                # set.
+                # Synced to the host only when target_kl is set; the sync is the
+                # expensive part and is pure waste when early stopping is off.
                 with th.no_grad():
                     log_ratio = log_prob - rollout_data.old_log_prob
                     kl_tensor = th.mean((th.exp(log_ratio) - 1) - log_ratio)
@@ -993,7 +853,6 @@ class EvidentialPPO(PPO):
                         )
                     break
 
-                # Optimisation step
                 self.policy.optimizer.zero_grad()
                 loss.backward()
                 th.nn.utils.clip_grad_norm_(
@@ -1014,7 +873,7 @@ class EvidentialPPO(PPO):
             self.rollout_buffer.returns.flatten(),
         )
 
-        # Standard PPO logs. `loss` is the last-batch tensor - SB3 convention.
+        # `loss` here is the last-batch tensor, matching SB3's own convention.
         self.logger.record("train/entropy_loss", _mean(entropy_losses))
         self.logger.record("train/policy_gradient_loss", _mean(pg_losses))
         self.logger.record("train/value_loss", _mean(value_losses))
@@ -1037,7 +896,6 @@ class EvidentialPPO(PPO):
         if self.clip_range_vf is not None:
             self.logger.record("train/clip_range_vf", clip_range_vf)
 
-        # Evidential-specific logs
         self.logger.record("train/evidential_reg_loss", _mean(evidential_reg_losses))
         self.logger.record("train/evidence_loss", _mean(evidence_losses))
         self.logger.record("train/nu_anchor_loss", _mean(nu_anchor_losses))
@@ -1057,18 +915,15 @@ class ScheduledEntCoefPPO(PPO):
     @class ScheduledEntCoefPPO
     @brief Standard SB3 PPO that accepts a callable (scheduled) ent_coef.
 
-    SB3 wraps learning_rate and clip_range into internal schedules but stores
-    ent_coef verbatim, so stock PPO.train() does `self.ent_coef * entropy_loss`
-    and raises `unsupported operand type(s) for *: 'function' and 'Tensor'` when
-    ent_coef is a linear-decay closure. The evidential path avoids this because
-    EvidentialPPO.train() resolves the callable itself; the standard (vanilla /
-    input-uncertainty) baselines use this subclass so the SAME ent_coef decay
-    schedule drives every baseline - a fairness requirement for the ablation.
+    SB3 wraps learning_rate and clip_range into schedules but stores ent_coef
+    verbatim, so stock PPO.train() raises on `self.ent_coef * entropy_loss` when
+    ent_coef is a decay closure. EvidentialPPO resolves the callable itself; the
+    standard baselines need this subclass so the same decay drives every
+    baseline, which the ablation requires for fairness.
 
-    @note Resolves ent_coef(progress_remaining) to a float for the duration of
-          one train() call, then restores the callable so the schedule keeps
-          advancing on the next update. The whole rollout's epochs share one
-          ent_coef value, matching SB3's per-update (not per-epoch) convention.
+    @note Resolves ent_coef to a float for one train() call, then restores the
+          callable so the schedule keeps advancing. All epochs in a rollout share
+          one value, matching SB3's per-update convention.
     """
 
     def train(self) -> None:
@@ -1093,25 +948,14 @@ class LayerNormActorCriticPolicy(ActorCriticPolicy):
     @brief Standard Gaussian actor-critic matched to the evidential policy's
            backbone and action prior.
 
-    The 2x2 ablation requires the four baselines to differ ONLY on the two axes
-    under test: the actor HEAD (Gaussian vs evidential NIG) and the OBSERVATION
-    (covariance present or not). Everything else - the feature backbone and the
-    initial action prior - must be identical, or it becomes a confound. Stock
-    SB3 MlpPolicy differs from EvidentialActorCriticPolicy in two ways that have
-    nothing to do with the head, both removed here:
-
-    1. LayerNorm: EvidentialActorCriticPolicy inserts nn.LayerNorm after every
-       hidden Linear in the policy/value MLPs (RL stability); MlpPolicy does not.
-       This policy injects the same LayerNorm so the backbones match.
-    2. Action prior: the evidential head biases the action mean to a gentle
-       default-forward (steer 0, throttle +0.5, brake -1.0 pre-tanh) so the car
-       drives at init; MlpPolicy starts at mean 0 (throttle 0 -> pedal-off, the
-       car defaults to doing nothing while the brake axis dominates by noise).
-       This policy sets the SAME action-mean bias so both heads start from the
-       same forward-leaning prior.
-
-    The Gaussian log_std remains the standard learned per-axis parameter - that
-    IS the head difference the ablation tests, so it is left as SB3 default.
+    The 2x2 ablation requires the baselines to differ only on the actor head and
+    the observation, so two stock-MlpPolicy differences that have nothing to do
+    with the head are removed here: it gains the LayerNorm that
+    EvidentialActorCriticPolicy puts after every hidden Linear, and the same
+    default-forward action-mean bias (steer 0, throttle +0.5, brake -1.0
+    pre-tanh), without which the car sits at pedal-off while brake noise
+    dominates. log_std is left as the SB3 default - that IS the head difference
+    under test.
     """
 
     def _build_mlp_extractor(self) -> None:
@@ -1127,11 +971,9 @@ class LayerNormActorCriticPolicy(ActorCriticPolicy):
         """
         @brief Build the policy, then set the default-forward action-mean bias.
         @param lr_schedule: Learning rate schedule.
-
-        After the standard build (which ortho-inits and zeroes action_net bias),
-        overwrite the Gaussian mean bias to match the evidential head's per-axis
-        action prior when action_dim == 3 (steer 0, throttle +0.5, brake -1.0).
-        Any other action_dim keeps the symmetric zero default (smoke tests).
+        @note The super() build ortho-inits and zeroes the action_net bias, so
+              the per-axis prior must be written afterwards. Any action_dim other
+              than 3 keeps the symmetric zero default.
         """
         super()._build(lr_schedule)
         action_dim = get_action_dim(self.action_space)

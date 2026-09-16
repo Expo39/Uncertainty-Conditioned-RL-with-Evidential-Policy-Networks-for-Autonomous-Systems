@@ -2,11 +2,9 @@
 @file bay_success.py
 @brief Per-bay success accounting for training and evaluation.
 
-Accumulates terminal-episode outcomes keyed by target bay id and writes a CSV
-(one row per bay: attempts, successes, success rate) plus a run_info.txt header.
-Used by both the training callback (uncertainty_rl.training.train_ppo) and the
+Shared by the training callback (uncertainty_rl.training.train_ppo) and the
 evaluation loop (uncertainty_rl.evaluation.evaluate) so the on-disk format is
-identical for the training and eval sinks under outputs/raw/bay_successes/.
+identical for both sinks under outputs/raw/bay_successes/.
 
 Pure-Python: no torch, CARLA, or ROS 2 imports, so it is unit-testable on the
 host without the Docker stack.
@@ -22,10 +20,8 @@ class BaySuccessTracker:
     @class BaySuccessTracker
     @brief Accumulates per-bay attempts and successes and dumps them to CSV.
 
-    One instance covers one run (training or eval). Call record() once per
-    terminated episode with the target bay id and the success flag, then dump()
-    to flush the running counts to disk. dump() is idempotent and may be called
-    periodically during training as well as once at the end.
+    One instance covers one run (training or eval). dump() is idempotent, so it
+    may be called periodically during training as well as once at the end.
     """
 
     def __init__(self) -> None:
@@ -65,7 +61,6 @@ class BaySuccessTracker:
     def _sorted_rows(self) -> List[Tuple[str, str, int, int, float]]:
         """
         @brief Build CSV rows sorted by bay id (numeric suffix where present).
-        @return List of (bay_id, bay_type, attempts, successes, success_rate).
         """
 
         def sort_key(item: Tuple[str, Tuple[str, int, int]]) -> Tuple[str, int]:
