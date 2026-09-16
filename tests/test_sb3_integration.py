@@ -31,16 +31,8 @@ from uncertainty_rl.networks.sb3_integration import (  # noqa: E402
 from uncertainty_rl.training.train_ppo import linear_schedule  # noqa: E402
 from uncertainty_rl.utils.constants import ACTION_DIM, TOTAL_OBS_DIM  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
 STATE_DIM = TOTAL_OBS_DIM
 BATCH_SIZE = 8
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -102,11 +94,6 @@ def policy(obs_space: spaces.Box, act_space: spaces.Box) -> EvidentialActorCriti
         net_arch=[64, 64],
         lambda_reg=0.01,
     )
-
-
-# ===========================================================================
-# TestEvidentialDistribution
-# ===========================================================================
 
 
 class TestEvidentialDistribution:
@@ -372,11 +359,6 @@ class TestEvidentialDistribution:
         assert beta_leaf.grad is not None
 
 
-# ===========================================================================
-# TestEvidentialActorCriticPolicy
-# ===========================================================================
-
-
 class TestEvidentialActorCriticPolicy:
     """
     @class TestEvidentialActorCriticPolicy
@@ -490,7 +472,6 @@ class TestEvidentialActorCriticPolicy:
         loss = log_prob.mean() + values.mean()
         loss.backward()
 
-        # Check EvidentialLayer (action_net) has gradients
         for param in policy.action_net.parameters():
             assert param.grad is not None
 
@@ -501,7 +482,6 @@ class TestEvidentialActorCriticPolicy:
         @brief Value predictions use the standard critic, not evidential.
         """
         assert isinstance(policy.value_net, torch.nn.Linear)
-        # Critic output dim should be 1
         assert policy.value_net.out_features == 1
 
     def test_save_load_roundtrip(
@@ -541,11 +521,6 @@ class TestEvidentialActorCriticPolicy:
             loaded = EvidentialActorCriticPolicy.load(path)
             assert loaded.aleatoric_floor == floor
             assert loaded.action_dist.aleatoric_floor == floor
-
-
-# ===========================================================================
-# TestEvidentialPPO
-# ===========================================================================
 
 
 class TestEvidentialPPO:
@@ -630,7 +605,6 @@ class TestEvidentialPPO:
         )
         model.learn(total_timesteps=128)
 
-        # Check that the evidential keys were recorded
         name_to_value = model.logger.name_to_value
         assert "train/evidential_reg_loss" in name_to_value
         assert "train/epistemic_uncertainty" in name_to_value
@@ -699,10 +673,8 @@ class TestEvidentialPPO:
 
     def test_evidential_reg_loss_bounded(self, dummy_env: gym.Env) -> None:
         """
-        @brief Prior-anchoring evidential reg loss stays bounded even with large NIG params.
-
-        Tests that the new log-penalty regulariser (replacing Amini et al. supervised term)
-        produces bounded values and stays finite across training steps.
+        @brief The log-penalty evidential reg loss stays bounded even with
+               large NIG params.
         """
         model = EvidentialPPO(
             policy=EvidentialActorCriticPolicy,
@@ -714,21 +686,14 @@ class TestEvidentialPPO:
         )
         model.learn(total_timesteps=128)
 
-        # Check that evidential_reg_loss is finite and not explosively large
         reg_loss = model.logger.name_to_value.get("train/evidential_reg_loss")
         assert reg_loss is not None, "evidential_reg_loss not logged"
         assert torch.isfinite(
             torch.tensor(reg_loss)
         ).item(), f"evidential_reg_loss is not finite: {reg_loss}"
-        # Prior-anchoring should produce values typically < 50 even with clamped params
         assert (
             reg_loss < 50.0
         ), f"evidential_reg_loss unexpectedly large: {reg_loss} (expected < 50)"
-
-
-# ===========================================================================
-# TestScheduledEntCoefPPO
-# ===========================================================================
 
 
 class TestScheduledEntCoefPPO:
@@ -802,11 +767,6 @@ class TestScheduledEntCoefPPO:
             model.learn(total_timesteps=128)
 
 
-# ===========================================================================
-# TestLayerNormActorCriticPolicy
-# ===========================================================================
-
-
 class TestLayerNormActorCriticPolicy:
     """
     @class TestLayerNormActorCriticPolicy
@@ -873,11 +833,6 @@ class TestLayerNormActorCriticPolicy:
         model.learn(total_timesteps=128)
 
 
-# ===========================================================================
-# TestNIGInit
-# ===========================================================================
-
-
 class TestNIGInit:
     """
     @class TestNIGInit
@@ -909,10 +864,9 @@ class TestNIGInit:
 
         n = act_space.shape[0]  # 3
         with torch.no_grad():
-            # Pass zero input so output ≈ bias (weight scaled by 0.01 -> ~0)
+            # Zero input so the output ~= bias (weight scaled by 0.01 -> ~0).
             latent_dim = policy.action_net.linear.in_features
             raw = policy.action_net.linear(torch.zeros(1, latent_dim))
-            # raw shape: (1, 4*n) = (1, 12)
             nu_raw = raw[0, 1 * n : 2 * n]
             alpha_raw = raw[0, 2 * n : 3 * n]
 
@@ -944,7 +898,6 @@ class TestNIGInit:
             lambda_reg=0.01,
         )
 
-        # policy_net and value_net should each contain at least one LayerNorm
         policy_ln_count = sum(
             1
             for m in policy.mlp_extractor.policy_net
@@ -957,11 +910,6 @@ class TestNIGInit:
         )
         assert policy_ln_count > 0, "No LayerNorm found in policy_net"
         assert value_ln_count > 0, "No LayerNorm found in value_net"
-
-
-# ===========================================================================
-# TestUncertaintyConditionedActorWiring
-# ===========================================================================
 
 
 class TestUncertaintyConditionedActorWiring:
@@ -1169,7 +1117,6 @@ class TestUncertaintyConditionedActorWiring:
         loss = log_prob.mean() + values.mean()
         loss.backward()
 
-        # Gradients must reach the dual-encoder action_net parameters
         for param in policy.action_net.parameters():
             assert param.grad is not None, "No gradient in dual-encoder action_net"
 

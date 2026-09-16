@@ -54,10 +54,6 @@ from uncertainty_rl.utils.geometry import (
 )
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
-# ---------------------------------------------------------------------------
-# Pure geometry: _interpolate_cone_positions
-# ---------------------------------------------------------------------------
-
 
 class TestInterpolateConePositions:
     """
@@ -82,7 +78,7 @@ class TestInterpolateConePositions:
         spacing = 3.0
         positions = _interpolate_cone_positions(corners, spacing=spacing)
 
-        # Check distances between consecutive positions on first edge (y ~ 0)
+        # First edge only (y ~ 0), to check adjacent-cone spacing along it.
         edge_pts = [(x, y) for x, y, _ in positions if abs(y) < 0.01]
         for i in range(len(edge_pts) - 1):
             dx = edge_pts[i + 1][0] - edge_pts[i][0]
@@ -109,11 +105,6 @@ class TestInterpolateConePositions:
         """
         positions = _interpolate_cone_positions([], spacing=2.0)
         assert positions == []
-
-
-# ---------------------------------------------------------------------------
-# Pure geometry: _compute_relative_target_pose
-# ---------------------------------------------------------------------------
 
 
 class TestComputeRelativeTargetPose:
@@ -241,11 +232,6 @@ class TestComputeRelativeTargetPose:
         )
         assert dx > 0.0
         assert abs(dy) < 1e-5
-
-
-# ---------------------------------------------------------------------------
-# Observation space shape tests
-# ---------------------------------------------------------------------------
 
 
 class TestObservationSpaceShape:
@@ -383,11 +369,6 @@ class TestHeldGnssTierResolution:
         env._sample_gnss_noise_tier()
         assert env._hold_gnss_tier is False
         env.close()
-
-
-# ---------------------------------------------------------------------------
-# Gymnasium API contract (requires live CARLA server - integration only)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.integration
@@ -593,11 +574,6 @@ class TestStallTruncation:
             _, _, _, truncated, _ = env.step(env.action_space.sample())
             assert not truncated
             env.close()
-
-
-# ---------------------------------------------------------------------------
-# Bay sampling helpers (via mock layout)
-# ---------------------------------------------------------------------------
 
 
 class TestBaySampling:
@@ -832,11 +808,6 @@ class TestGradedTimeoutPenalty:
         assert far >= near
 
 
-# ---------------------------------------------------------------------------
-# VisStateWriter
-# ---------------------------------------------------------------------------
-
-
 class TestVisStateWriter:
     """
     @class TestVisStateWriter
@@ -936,11 +907,6 @@ class TestVisStateWriter:
             assert out.exists()
 
 
-# ---------------------------------------------------------------------------
-# Covariance features in the observation
-# ---------------------------------------------------------------------------
-
-
 class TestCovarianceObservation:
     """
     @class TestCovarianceObservation
@@ -1038,11 +1004,6 @@ class TestCovarianceObservation:
         )
 
 
-# ---------------------------------------------------------------------------
-# zone_bbox
-# ---------------------------------------------------------------------------
-
-
 class TestZoneBbox:
     """
     @class TestZoneBbox
@@ -1115,11 +1076,6 @@ class TestZoneBbox:
         assert x_max == pytest.approx(5.0)
         assert y_min == pytest.approx(3.0)
         assert y_max == pytest.approx(3.0)
-
-
-# ---------------------------------------------------------------------------
-# _compute_reward
-# ---------------------------------------------------------------------------
 
 
 def _make_env_for_reward() -> Any:
@@ -1702,11 +1658,6 @@ class TestComputeReward:
         assert diag.get("oob", 0.0) == 0.0
 
 
-# ---------------------------------------------------------------------------
-# Info dict keys (step())
-# ---------------------------------------------------------------------------
-
-
 class TestStepInfoDict:
     """
     @class TestStepInfoDict
@@ -1775,11 +1726,6 @@ class TestStepInfoDict:
         assert info["speed"] >= 0.0
 
 
-# ---------------------------------------------------------------------------
-# Pure geometry: point_in_polygon
-# ---------------------------------------------------------------------------
-
-
 class TestPointInPolygon:
     """
     @class TestPointInPolygon
@@ -1821,11 +1767,6 @@ class TestPointInPolygon:
         corners = [(-2.0, -2.0), (2.0, -2.0), (2.0, 2.0), (-2.0, 2.0)]
         assert point_in_polygon(0.0, 0.0, corners) is True
         assert point_in_polygon(3.0, 0.0, corners) is False
-
-
-# ---------------------------------------------------------------------------
-# Pure geometry: inflate_polygon
-# ---------------------------------------------------------------------------
 
 
 class TestInflatePolygon:
@@ -1898,11 +1839,6 @@ class TestInflatePolygon:
         assert inflate_polygon(corners, margin=3.0) == corners
 
 
-# ---------------------------------------------------------------------------
-# LotSpawner: perimeter-cone toggle
-# ---------------------------------------------------------------------------
-
-
 class TestLotSpawnerConeFlag:
     """
     @class TestLotSpawnerConeFlag
@@ -1935,11 +1871,6 @@ class TestLotSpawnerConeFlag:
         assert spawner._spawn_perimeter_cones_enabled is False
 
 
-# ---------------------------------------------------------------------------
-# Pure geometry: car_fully_inside_bay
-# ---------------------------------------------------------------------------
-
-
 class TestCarFullyInsideBay:
     """
     @class TestCarFullyInsideBay
@@ -1949,9 +1880,8 @@ class TestCarFullyInsideBay:
     # CARLA-reported extents for vehicle.bmw.grandtourer.
     CAR_HL = 2.306
     CAR_HW = 1.121
-    # Rectangle layout angled bay dims. Lateral slack:
-    # (BAY_W - 2*CAR_HW) / 2 = (2.5 - 2.242) / 2 = 0.129 m.
-    # Longitudinal slack: (BAY_D - 2*CAR_HL) / 2 = (5.4 - 4.612) / 2 = 0.394 m.
+    # Rectangle layout angled bay dims: 0.129 m lateral slack, 0.394 m
+    # longitudinal slack against the car extents above.
     BAY_W = 2.5
     BAY_D = 5.4
 
@@ -2125,11 +2055,6 @@ class TestCarFullyInsideBay:
         )
 
 
-# ---------------------------------------------------------------------------
-# Pure geometry: bay_containment_fraction
-# ---------------------------------------------------------------------------
-
-
 class TestBayContainmentFraction:
     """
     @class TestBayContainmentFraction
@@ -2239,11 +2164,6 @@ class TestBayContainmentFraction:
         )
 
 
-# ---------------------------------------------------------------------------
-# Pure geometry: yaw_from_quaternion
-# ---------------------------------------------------------------------------
-
-
 class TestYawFromQuaternion:
     """
     @class TestYawFromQuaternion
@@ -2260,7 +2180,6 @@ class TestYawFromQuaternion:
         """
         @brief Quaternion for 90-deg rotation about z gives yaw = pi/2.
         """
-        # q = (0, 0, sin(pi/4), cos(pi/4))
         s = math.sin(math.pi / 4)
         c = math.cos(math.pi / 4)
         assert yaw_from_quaternion(0.0, 0.0, s, c) == pytest.approx(
@@ -2288,11 +2207,6 @@ class TestYawFromQuaternion:
             assert -math.pi <= yaw <= math.pi
 
 
-# ---------------------------------------------------------------------------
-# Pure geometry: wrap_angle_symmetric
-# ---------------------------------------------------------------------------
-
-
 class TestWrapAngleSymmetric:
     """
     @class TestWrapAngleSymmetric
@@ -2309,7 +2223,6 @@ class TestWrapAngleSymmetric:
         """
         @brief pi and -pi are equivalent to 0 under parking symmetry.
         """
-        # Both pi and -pi should map to 0 (symmetric heading error)
         assert abs(wrap_angle_symmetric(math.pi)) < math.pi / 2
 
     def test_small_positive_returns_itself(self) -> None:
@@ -2335,11 +2248,6 @@ class TestWrapAngleSymmetric:
         angle = 2 * math.pi / 3
         result = wrap_angle_symmetric(angle)
         assert abs(result) == pytest.approx(math.pi / 3, abs=1e-6)
-
-
-# ---------------------------------------------------------------------------
-# _parking_core: extract_obstacle_features
-# ---------------------------------------------------------------------------
 
 
 class TestExtractObstacleFeatures:
@@ -2450,11 +2358,6 @@ class TestExtractObstacleFeatures:
         out = self._empty_out()
         result = extract_obstacle_features(scan, out)
         assert result[4] == pytest.approx(2.0, abs=1e-3)
-
-
-# ---------------------------------------------------------------------------
-# _parking_core: build_observation
-# ---------------------------------------------------------------------------
 
 
 class TestBuildObservation:
@@ -2595,11 +2498,6 @@ class TestBuildObservation:
         assert buf[0] != 999.0
 
 
-# ---------------------------------------------------------------------------
-# _parking_core: load_floor_plan
-# ---------------------------------------------------------------------------
-
-
 class TestLoadFloorPlan:
     """
     @class TestLoadFloorPlan
@@ -2667,11 +2565,6 @@ class TestLoadFloorPlan:
         config = {"missing": {"layout_file": "/no/such/file.yaml", "ood": False}}
         with pytest.raises(FileNotFoundError):
             load_floor_plan(config, eval_mode=False, layout_cache={})
-
-
-# ---------------------------------------------------------------------------
-# _parking_core: wait_for_ekf
-# ---------------------------------------------------------------------------
 
 
 class TestWaitForEkf:

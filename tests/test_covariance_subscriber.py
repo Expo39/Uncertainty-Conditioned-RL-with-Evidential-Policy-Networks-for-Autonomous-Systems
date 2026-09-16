@@ -17,10 +17,6 @@ from unittest.mock import patch
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _write_ekf_json(
     path: Path,
@@ -80,8 +76,7 @@ def _make_subscriber(ekf_path: Path):
         sub._last_read_seq = 0
         # _read_file() skips a re-parse when the file mtime is unchanged.
         sub._last_mtime_ns = mod._MTIME_UNSET
-        # _read_file() now uses self._ekf_state_path (set in __init__).
-        # Bypass __init__ sets it directly so tests remain self-contained.
+        # Bypassing __init__ means self._ekf_state_path must be set directly.
         sub._ekf_state_path = ekf_path
     return sub, mod
 
@@ -91,11 +86,6 @@ def _patch_read_file_path(sub: object, mod: object, ekf_path: Path) -> None:
     @brief Update the instance EKF path used by _read_file.
     """
     sub._ekf_state_path = ekf_path  # type: ignore[attr-defined]
-
-
-# ---------------------------------------------------------------------------
-# _read_file: valid JSON
-# ---------------------------------------------------------------------------
 
 
 class TestReadFileValid:
@@ -219,11 +209,6 @@ class TestReadFileValid:
         assert sub._last_read_seq == 42
 
 
-# ---------------------------------------------------------------------------
-# _read_file: missing / malformed file
-# ---------------------------------------------------------------------------
-
-
 class TestReadFileMissing:
     """
     @class TestReadFileMissing
@@ -303,11 +288,6 @@ class TestReadFileMissing:
 
         assert sub._latest_uncertainty is None
         assert sub._latest_pose is None
-
-
-# ---------------------------------------------------------------------------
-# Seq-based staleness guard
-# ---------------------------------------------------------------------------
 
 
 class TestStalenessGuard:
@@ -404,11 +384,6 @@ class TestStalenessGuard:
         assert result is False
 
 
-# ---------------------------------------------------------------------------
-# invalidate()
-# ---------------------------------------------------------------------------
-
-
 class TestInvalidate:
     """
     @class TestInvalidate
@@ -490,11 +465,6 @@ class TestInvalidate:
         assert result is False
 
 
-# ---------------------------------------------------------------------------
-# get_latest_uncertainty() and get_latest_pose()
-# ---------------------------------------------------------------------------
-
-
 class TestGetLatest:
     """
     @class TestGetLatest
@@ -570,11 +540,6 @@ class TestGetLatest:
             result = sub.get_latest_pose()
 
         assert result is None
-
-
-# ---------------------------------------------------------------------------
-# has_data property
-# ---------------------------------------------------------------------------
 
 
 class TestHasData:

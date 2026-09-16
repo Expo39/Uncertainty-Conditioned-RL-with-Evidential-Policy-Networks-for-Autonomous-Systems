@@ -16,10 +16,6 @@ import pytest
 
 from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 class _StubEnv(gym.Env):
     """
@@ -65,11 +61,6 @@ def _make_action(
     steer: float = 0.0, throttle: float = 0.5, brake: float = 0.0
 ) -> np.ndarray:
     return np.array([steer, throttle, brake], dtype=np.float32)
-
-
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperApply - pure static method, no env needed
-# ---------------------------------------------------------------------------
 
 
 class TestSafetyWrapperApply:
@@ -132,11 +123,6 @@ class TestSafetyWrapperApply:
             handoff_threshold=5.0,
         )
         np.testing.assert_array_equal(action, original)
-
-
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperStep
-# ---------------------------------------------------------------------------
 
 
 class TestSafetyWrapperStep:
@@ -207,11 +193,6 @@ class TestSafetyWrapperStep:
         assert not truncated
 
 
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperReset
-# ---------------------------------------------------------------------------
-
-
 class TestSafetyWrapperReset:
     """
     @class TestSafetyWrapperReset
@@ -245,11 +226,6 @@ class TestSafetyWrapperReset:
         _, _, _, _, info = wrapper.step(_make_action())
         assert info["epistemic"] == pytest.approx(0.0)
         assert info["aleatoric"] == pytest.approx(0.0)
-
-
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperStats
-# ---------------------------------------------------------------------------
 
 
 class TestSafetyWrapperStats:

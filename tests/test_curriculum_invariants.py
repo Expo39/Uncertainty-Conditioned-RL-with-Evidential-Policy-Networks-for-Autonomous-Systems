@@ -127,11 +127,10 @@ def test_override_blocks_allowlisted_and_aligned(n: int) -> None:
     for name, blk in (("standard", std), ("evidential", evi)):
         bad = set(blk) - _ALLOWLIST
         assert not bad, f"stage{n}: {name}_overrides has non-allowlisted keys {bad}"
-    # The two blocks must agree on every schedule EXCEPT the entropy coefficient: the
-    # evidential head's action std IS sqrt(aleatoric), so a collapsing head needs a
-    # higher ent_coef floor than the standard log_std (a documented, deliberate split,
-    # not a confound). Everything else - budget, LR schedule, structural PPO keys -
-    # stays identical so the ablation is fair.
+    # The blocks must agree on every schedule except entropy coefficient: the
+    # evidential head's action std IS sqrt(aleatoric), so a collapsing head
+    # needs a higher ent_coef floor than the standard log_std - a deliberate
+    # split, not a confound.
     _ENTROPY_KEYS = {"ent_coef", "ent_coef_final"}
     std_shared = {k: v for k, v in std.items() if k not in _ENTROPY_KEYS}
     evi_shared = {k: v for k, v in evi.items() if k not in _ENTROPY_KEYS}

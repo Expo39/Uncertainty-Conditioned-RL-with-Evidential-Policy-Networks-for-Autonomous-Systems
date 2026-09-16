@@ -250,7 +250,6 @@ class TestPoolOfOne:
         assert (robustness["n_seeds"] == 1).all()
         # A pool of one has zero cross-seed range everywhere.
         assert (robustness["success_range_pp"] == 0.0).all()
-        # The pooled summary was written too.
         assert (stage_dir / "pooled_condition_summary.csv").exists()
         # The aggregator writes CSVs only; figures are drawn separately from
         # them by scripts/analysis/figures/, so nothing here renders.

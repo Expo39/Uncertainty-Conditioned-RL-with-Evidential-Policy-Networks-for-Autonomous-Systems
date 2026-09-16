@@ -22,10 +22,6 @@ from uncertainty_rl.training.tune_hyperparams import (  # noqa: E402
     sample_hyperparams,
 )
 
-# ===========================================================================
-# Fixtures
-# ===========================================================================
-
 
 @pytest.fixture
 def tuning_config() -> Dict[str, Any]:
@@ -65,11 +61,6 @@ def train_config_template() -> Dict[str, Any]:
         },
         "net_arch": [256, 256],
     }
-
-
-# ===========================================================================
-# sample_hyperparams Tests
-# ===========================================================================
 
 
 class TestSampleHyperparams:
@@ -180,11 +171,6 @@ class TestSampleHyperparams:
             ), f"max_grad_norm out of range: {params['max_grad_norm']}"
 
 
-# ===========================================================================
-# apply_best_params Tests
-# ===========================================================================
-
-
 class TestApplyBestParams:
     """
     @class TestApplyBestParams
@@ -200,22 +186,18 @@ class TestApplyBestParams:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "train_config.yaml"
 
-            # Write template
             import yaml
 
             with open(config_path, "w") as f:
                 yaml.dump(train_config_template, f)
 
-            # Apply update
             best_params = {"learning_rate": 1e-4}
             apply_best_params(best_params, str(config_path))
 
-            # Verify
             with open(config_path) as f:
                 updated = yaml.safe_load(f)
 
             assert updated["learning_rate"] == 1e-4
-            # Other keys should be unchanged
             assert updated["n_steps"] == 2048
             assert updated["gamma"] == 0.99
 
@@ -228,22 +210,18 @@ class TestApplyBestParams:
         with tempfile.TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "train_config.yaml"
 
-            # Write template
             import yaml
 
             with open(config_path, "w") as f:
                 yaml.dump(train_config_template, f)
 
-            # Apply nested update
             best_params = {"evidential": {"lambda_reg": 0.005}}
             apply_best_params(best_params, str(config_path))
 
-            # Verify
             with open(config_path) as f:
                 updated = yaml.safe_load(f)
 
             assert updated["evidential"]["lambda_reg"] == 0.005
-            # Other evidential keys should be unchanged
             assert updated["evidential"]["lambda_reg_warmup_steps"] == 50000
 
     def test_apply_best_params_creates_backup(
@@ -256,42 +234,32 @@ class TestApplyBestParams:
             config_path = Path(tmpdir) / "train_config.yaml"
             backup_dir = Path(tmpdir) / "logs" / "tuning" / "backups"
 
-            # Write template
             import yaml
 
             with open(config_path, "w") as f:
                 yaml.dump(train_config_template, f)
 
-            # Patch the apply_best_params to use our temp backup dir
+            # apply_best_params resolves the backup dir relative to cwd.
             import os
 
             original_cwd = os.getcwd()
             try:
                 os.chdir(tmpdir)
 
-                # Apply update
                 best_params = {"learning_rate": 1e-4}
                 apply_best_params(best_params, str(config_path))
 
-                # Verify backup dir was created
                 assert backup_dir.exists(), f"Backup dir not created at {backup_dir}"
 
-                # Verify at least one backup file exists (with timestamp pattern)
                 backup_files = list(backup_dir.glob("train_config_*.yaml.bak"))
                 assert len(backup_files) > 0, "No timestamped backup found"
 
-                # Verify backup contains original config
                 with open(backup_files[0]) as f:
                     backup = yaml.safe_load(f)
 
-                assert backup["learning_rate"] == 0.0003  # Original value
+                assert backup["learning_rate"] == 0.0003  # Pre-update value.
             finally:
                 os.chdir(original_cwd)
-
-
-# ===========================================================================
-# TrialEvalCallback Tests
-# ===========================================================================
 
 
 class TestTrialEvalCallback:
@@ -307,26 +275,23 @@ class TestTrialEvalCallback:
         """
         from uncertainty_rl.training.tune_hyperparams import _TIEBREAK_SCALE
 
-        # Mock trial and model logger
         trial = MagicMock()
-        trial.should_prune.return_value = False  # Don't prune
+        trial.should_prune.return_value = False
         callback = TrialEvalCallback(trial)
 
-        # Mock model and logger - no success_rate yet, only progress reward.
+        # No success_rate yet, only progress reward.
         callback.model = MagicMock()
         callback.model.logger = MagicMock()
         callback.model.logger.name_to_value = {"env/mean_progress_reward": 0.05}
         callback.num_timesteps = 10000
 
-        # Simulate rollout end
         callback._on_rollout_end()
 
-        # Verify trial.report was called with the composite objective. With no
-        # success, the objective is the scaled progress tiebreaker.
+        # With no success, the objective is the scaled progress tiebreaker.
         trial.report.assert_called_once()
         args, kwargs = trial.report.call_args
         assert args[0] == pytest.approx(_TIEBREAK_SCALE * 0.05)
-        assert kwargs["step"] == 10000  # num_timesteps as keyword arg
+        assert kwargs["step"] == 10000
 
     def test_trial_eval_callback_handles_missing_metric(self) -> None:
         """
@@ -338,23 +303,22 @@ class TestTrialEvalCallback:
 
         callback.model = MagicMock()
         callback.model.logger = MagicMock()
-        # Neither primary nor fallback metric present
+        # Neither primary nor fallback metric present.
         callback.model.logger.name_to_value = {}
         callback.num_timesteps = 10000
 
-        # Should not raise; should use fallback value 0.0
         callback._on_rollout_end()
 
         trial.report.assert_called_once()
         args = trial.report.call_args[0]
-        assert args[0] == 0.0  # Fallback to 0.0
+        assert args[0] == 0.0
 
     def test_trial_eval_callback_checks_pruning(self) -> None:
         """
         @brief TrialEvalCallback raises TrialPruned if trial.should_prune().
         """
         trial = MagicMock()
-        trial.should_prune.return_value = True  # Signal pruning
+        trial.should_prune.return_value = True
         callback = TrialEvalCallback(trial)
 
         callback.model = MagicMock()
@@ -362,6 +326,5 @@ class TestTrialEvalCallback:
         callback.model.logger.name_to_value = {"env/mean_progress_reward": 0.05}
         callback.num_timesteps = 10000
 
-        # Should raise TrialPruned
         with pytest.raises(optuna.TrialPruned):
             callback._on_rollout_end()

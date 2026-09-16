@@ -22,11 +22,6 @@ from scripts.visualise.gnss_tiers import (
 _PROFILES = Path("configs/deployment/sim/gnss_noise_profiles.yaml")
 
 
-# ---------------------------------------------------------------------------
-# TestLoadGnssTiers
-# ---------------------------------------------------------------------------
-
-
 class TestLoadGnssTiers:
     """
     @class TestLoadGnssTiers
@@ -113,11 +108,6 @@ class TestLoadGnssTiers:
         tiers = load_gnss_tiers(many)
         assert len(tiers) == 7
         assert tiers["t6"].colour == tiers["t3"].colour
-
-
-# ---------------------------------------------------------------------------
-# TestTierLookup
-# ---------------------------------------------------------------------------
 
 
 class TestTierLookup:

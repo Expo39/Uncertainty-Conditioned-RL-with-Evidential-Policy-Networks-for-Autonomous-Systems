@@ -78,11 +78,6 @@ def _probe_dimensions(path: Path) -> Optional[Tuple[int, int]]:
     return int(width), int(height)
 
 
-# ---------------------------------------------------------------------------
-# TestSurfaceConversion
-# ---------------------------------------------------------------------------
-
-
 class TestSurfaceConversion:
     """
     @class TestSurfaceConversion
@@ -103,11 +98,6 @@ class TestSurfaceConversion:
         """
         arr = surface_to_rgb_array(_filled_surface(8, 4, 123))
         assert np.all(arr == 123)
-
-
-# ---------------------------------------------------------------------------
-# TestFrameRecorderLifecycle
-# ---------------------------------------------------------------------------
 
 
 class TestFrameRecorderLifecycle:
@@ -152,11 +142,6 @@ class TestFrameRecorderLifecycle:
         assert not rec.is_recording
 
 
-# ---------------------------------------------------------------------------
-# TestFrameRecorderGeometry
-# ---------------------------------------------------------------------------
-
-
 class TestFrameRecorderGeometry:
     """
     @class TestFrameRecorderGeometry
@@ -189,11 +174,6 @@ class TestFrameRecorderGeometry:
         fitted = rec._fit_to_geometry(np.full((40, 60, 3), 7, dtype=np.uint8))
         assert fitted.shape == (10, 20, 3)
         assert np.all(fitted == 7)
-
-
-# ---------------------------------------------------------------------------
-# TestFrameRecorderEncoding
-# ---------------------------------------------------------------------------
 
 
 @_needs_ffmpeg
