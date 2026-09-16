@@ -170,17 +170,6 @@ All of these use the project's `.venv/` virtual environment, which the Makefile 
 make install   # one-time setup: creates .venv/ and installs the package + dev dependencies
 ```
 
-One host tool is not a Python package and so is not covered by `make install`: recording
-the 2D visualiser to MP4 (`RECORD=true`) and cutting clips (`make clip`) need the
-**`ffmpeg` binary on the host**. Because the viewer runs on the host, ffmpeg is
-deliberately not installed in any container image. Everything except recording works
-without it.
-
-```bash
-make check-host-deps        # verify ffmpeg is present
-sudo apt-get install ffmpeg # if it is missing (Ubuntu)
-```
-
 ---
 
 ## Quick Start
