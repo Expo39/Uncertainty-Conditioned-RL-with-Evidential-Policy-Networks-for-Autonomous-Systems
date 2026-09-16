@@ -50,9 +50,6 @@ make docker-inspect INSPECT_LAYOUT=trapezoid
 make docker-inspect INSPECT_LAYOUT=irregular_a
 ```
 
-<!-- gif:placeholder name="inspect_layout" caption="Layout inspector showing bay outlines, patrol path, and pedestrian zones" -->
-![Layout inspector placeholder](../../docs/media/inspect_layout.gif)
-
 ### Sensors (`--mode sensors`)
 
 Spawns the ego vehicle and draws static sensor mount dots and FOV arcs:
@@ -72,8 +69,11 @@ make docker-inspect-sensors SENSORS_VIEW=front         # Front profile
 make docker-inspect-sensors INSPECT_ZOOM=wide          # Raise camera to show full arc
 ```
 
-<!-- gif:placeholder name="inspect_sensors" caption="Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye" -->
-![Sensor inspector placeholder](../../docs/media/inspect_sensors.gif)
+Birds-eye view of the sensor mounts and LiDAR FOV arc on the ego vehicle:
+
+<p align="center">
+  <img src="../../docs/media/inspect_sensors.jpeg" alt="Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye" width="620">
+</p>
 
 ### Live (`--mode live`)
 
@@ -83,9 +83,6 @@ Spawns a real 2D LiDAR on the ego vehicle and displays live scan returns as red 
 make docker-inspect-live                               # Default: rectangle layout
 make docker-inspect-live INSPECT_LAYOUT=trapezoid
 ```
-
-<!-- gif:placeholder name="inspect_live" caption="Live LiDAR inspector - red scan return dots in the CARLA world from birds-eye" -->
-![Live LiDAR inspector placeholder](../../docs/media/inspect_live.gif)
 
 ### Dryrun (`--mode dryrun`)
 
@@ -97,9 +94,6 @@ make docker-inspect-dryrun                             # Constant forward action
 ```
 
 Keyboard controls (dryrun, `MANUAL=true`): Up = throttle, Down = brake, Left/Right = steer.
-
-<!-- gif:placeholder name="inspect_dryrun" caption="Dryrun inspector: manual keyboard drive with EKF covariance output" -->
-![Dryrun inspector placeholder](../../docs/media/inspect_dryrun.gif)
 
 ### Eval dryrun (`--mode eval_dryrun`)
 
