@@ -28,15 +28,15 @@ placement.
 
 | Layout | Bays | OOD | Training use | Description |
 |--------|------|-----|-------------|-------------|
-| `rectangle` | 47 | No | Training + evaluation | Rectangular lot, perpendicular bays across a centre row, top row, bottom rows, and left and right walls, plus two always-empty motorcycle bays in the top-right corner. Three spawns: left, bottom-centre, top-right. |
+| `rectangle` | 47 perpendicular, 2 motorcycle | No | Training + evaluation | Rectangular lot, perpendicular bays across a centre row, top row, bottom rows, and left and right walls, plus two always-empty motorcycle bays in the corner. Three spawns give varied approach angles. |
 | `trapezoid` | 39 | Yes | OOD evaluation only | Trapezoid lot, held out from training, with perpendicular bays in central clusters plus perimeter rows along the tapered walls. |
-| `irregular_a` | 36 | Yes | OOD evaluation only | Irregular polygon lot, held out from training, with perpendicular bays around a central obstacle and the perimeter. |
+| `irregular_a` | 30 | Yes | OOD evaluation only | Five-sided irregular lot, held out from training, with perpendicular bays along the bottom, left, right, diagonal and top-flat walls. |
 
 Bay counts are read from the generated `configs/layouts/*.yaml`. Regeneration through
 `make generate-layouts` is required whenever a floor plan module changes.
 
-The reported evaluation uses `irregular_a` as the out-of-distribution probe. Results
-on it are given in the [root README](README.md#where-the-method-does-not-help).
+The reported evaluation uses `irregular_a` as the out-of-distribution probe. Results on
+it are given in the [root README](README.md#results).
 
 ### Verify Layout in CARLA
 
@@ -141,8 +141,13 @@ Observation dimensions are derived at runtime from `include_covariance` and
 `include_obstacle_obs` through `compute_obs_dim()`. The full seed matrix is run with:
 
 ```bash
-make docker-experiment    # 4 baselines x 3 seeds
+make run-seed-leg              # trains every arm and stage, then evaluates the final stage
+make run-seed-leg DRY_RUN=1    # print the plan without running it
 ```
+
+The seeds are set inside `scripts/training/run_seed_leg.sh`. The target is idempotent, so
+completed work is skipped and a crashed leg resumes by re-running. It is long-running and
+best started under `tmux`.
 
 Reported results use seeds 42, 123 and 7, with 200 episodes per arm per condition per
 seed, giving 600 pooled episodes per cell.

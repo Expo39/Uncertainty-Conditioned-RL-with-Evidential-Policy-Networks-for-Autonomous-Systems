@@ -119,9 +119,9 @@ make docker-eval BASELINE=full_method CHECKPOINT=seed42_11062026-0628
 make docker-down
 ```
 
-`BASELINE` and `CHECKPOINT` are bare names rather than paths. The output tree is
-nested as `<root>/<baseline>/<run_leaf>/`, where the run leaf takes the form
-`seed<N>_<DDMMYYYY-HHMM>`, and the Make recipes reconstruct the full paths.
+`BASELINE` and `CHECKPOINT` are bare names rather than paths, with the Make recipes
+reconstructing the full paths. The convention is set out in
+[COMMANDS.md](COMMANDS.md).
 
 Training follows a six-stage single-phase curriculum. Every observation
 channel is live in every stage, and the range of one axis is ramped per stage, moving

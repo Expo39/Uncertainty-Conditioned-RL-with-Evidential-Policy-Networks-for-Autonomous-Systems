@@ -4,10 +4,10 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 ## At a glance
 
-- 7 conditions: 6 de-confounded single-factor conditions plus one mid-episode degradation condition. Each de-confounded condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors)
-- Base noise from `env_config.yaml`; per-condition multipliers applied by `_scale_sensor_noise()` (LiDAR noise always enabled at eval, matching the training realism floor)
-- Success: every corner of the ego bounding box inside the bay polygon (`car_fully_inside_bay()` at `STRICT_BAY_MARGIN`) with speed $< 0.1$ m/s, held for `SUCCESS_DWELL_STEPS`
-- `n_episodes = 10` per condition by default (use 200+ for headline runs), deterministic (mean) actions
+- 7 conditions are defined: 6 de-confounded single-factor conditions plus one mid-episode degradation condition. Each de-confounded condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors). The analysis scripts then drop the two held-tier conditions by default, leaving the 5 retained conditions that the tables report, of which the headline figure draws 4
+- Base noise from `env_config.yaml`, with per-condition multipliers applied by `_scale_sensor_noise()`. LiDAR noise is always enabled at eval, matching the training realism floor
+- Success is the geometric criterion evaluated at `STRICT_BAY_MARGIN`, defined in [utils/README.md](../utils/README.md#the-success-criterion)
+- `n_episodes = 200` per condition in `eval_config.yaml`, falling back to 100 when the key is unset, with deterministic (mean) actions. Pooling three seeds gives the 600 episodes per condition behind the reported results
 - OOD conditions use `irregular_a` floor plan (never seen during training)
 - No weather variation - FlatPlane does not render weather effects
 
@@ -15,9 +15,9 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 | Module | Class / purpose |
 |--------|----------------|
-| `evaluate.py` | Orchestration: `evaluate_agent()` - single-condition episode loop; `evaluate_across_conditions()` - full condition sweep (returns `(DataFrame, run_output_dir)`); `main()` - CLI. Re-exports the moved symbols below so `...evaluation.evaluate.*` import paths stay stable |
-| `metrics.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records); `_classify_outcome()` - failure-mode taxonomy. No torch / stable-baselines3 dependency |
-| `env_builder.py` | The condition -> env contract: `_scale_sensor_noise()` - `base * multiplier`; `build_eval_env_factory()` - single source of truth, returns the BARE env factory + SafetyWrapper params; `make_eval_env()` - wraps it in SafetyWrapper + DummyVecEnv for the sweep |
+| `evaluate.py` | Orchestration: `evaluate_agent()` - single-condition episode loop, `evaluate_across_conditions()` - full condition sweep (returns `(DataFrame, run_output_dir)`), and `main()` - CLI. Re-exports the moved symbols below so `...evaluation.evaluate.*` import paths stay stable |
+| `metrics.py` | `EvaluationMetrics` - per-condition results dataclass (success rate, outcome taxonomy rates, uncertainty stats, per-episode records), plus `_classify_outcome()` - failure-mode taxonomy. No torch / stable-baselines3 dependency |
+| `env_builder.py` | The condition -> env contract: `_scale_sensor_noise()` - `base * multiplier`, `build_eval_env_factory()` - single source of truth, returning the BARE env factory + SafetyWrapper params, and `make_eval_env()` - wraps it in SafetyWrapper + DummyVecEnv for the sweep |
 | `__init__.py` | Lazily re-exports `EvaluationMetrics`, `evaluate_agent`, `evaluate_across_conditions` |
 
 This package writes **CSVs only** and imports no plotting library. The per-run
@@ -66,11 +66,11 @@ flowchart TB
 
 De-confounded sweep: every condition varies exactly ONE factor against the
 in-distribution anchor (rectangle lot, bay occupancy 0.5, no dynamic actors).
-GNSS multipliers derive from `configs/deployment/sim/gnss_noise_profiles.yaml`
-as `metric_stddev_m / 0.020` (the RTK-fixed base); a condition with a multiplier
-resolves to the matching fix-state tier and HOLDS it for the whole episode (the
-relay's Markov drift is suppressed via the per-episode `hold_tier` flag), so the
-level is a clean independent variable. The held conditions still go through the
+The GNSS level is set by `held_gnss_tier`, which names one fix-state tier from
+`configs/deployment/sim/gnss_noise_profiles.yaml` and HOLDS it for the whole episode by
+suppressing the relay's Markov drift through the per-episode `hold_tier` flag, so the
+level is a clean independent variable. There is no GNSS noise multiplier. Only
+`lidar_noise_multiplier` scales a sensor stddev directly. The held conditions still go through the
 exact per-episode publish training uses (tier signal + GNSS datum re-latch),
 which is why no condition needs a separate code path. The anchor leaves the flag
 off and runs the training noise process itself (per-episode tier sampling +
@@ -79,7 +79,7 @@ mid-episode Markov drift). The exact list lives in `configs/eval_config.yaml`.
 ### Anchor (training noise process, rectangle)
 
 The two anchor conditions both run the full training GNSS process (per-episode
-tier sampling + mid-episode Markov drift); they differ only in occupancy. The
+tier sampling + mid-episode Markov drift), differing only in occupancy. The
 empty-lot control removes the LiDAR neighbour-car crutch so the policy must park
 on localisation alone - the `anchor` / `anchor_empty` pair isolates how much the
 policy leans on neighbours versus localisation.
@@ -100,7 +100,7 @@ arms and the blind arms are indistinguishable there.
 | Condition | Held tier | Approx. noise | Notes |
 |-----------|-----------|---------------|-------|
 | `gnss_fixed` | `rtk_fixed` | ~0.02 m | Clean baseline (slope start) |
-| `gnss_degraded` | `degraded` | ~5.0 m | Worst tier; safety handoff expected (slope end) |
+| `gnss_degraded` | `degraded` | ~5.0 m | Worst tier, with safety handoff expected (slope end) |
 
 ### LiDAR axis (GNSS held at RTK fixed, occupancy 0.5, rectangle)
 
@@ -115,7 +115,7 @@ evidential head sees the corrupted obstacle features.
 
 ### OOD layout generalisation (GNSS held at RTK fixed, occupancy 0.5)
 
-Training uses the `rectangle` floor plan only; `irregular_a` (five-sided lot with
+Training uses the `rectangle` floor plan only, so `irregular_a` (five-sided lot with
 a diagonal top wall) is the designated OOD layout. Held at RTK fixed so the only
 OOD factor is the layout - isolating generalisation from localisation degradation.
 
@@ -133,7 +133,7 @@ crosses into the degraded regime, rather than from the spawn? See
 
 | Condition | GNSS | Bay occ. | Notes |
 |-----------|------|----------|-------|
-| `gnss_degrade_one_way` | RTK fixed -> degraded, one-way | 0.5 | Onset mid-episode; handover-timing money shot |
+| `gnss_degrade_one_way` | RTK fixed -> degraded, one-way | 0.5 | Onset mid-episode, the handover-timing test |
 
 ## Metrics collected
 
@@ -145,11 +145,10 @@ crosses into the degraded regime, rather than from the spawn? See
 | Epistemic uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
 | Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
 
-**Success criteria**: judged geometrically in the env, not by scalar thresholds.
-Every corner of the ego bounding box must lie inside the target bay polygon
-(`car_fully_inside_bay()` with `STRICT_BAY_MARGIN` at evaluation) and speed must be
-below `SUCCESS_THRESHOLD_VELOCITY`, held for `SUCCESS_DWELL_STEPS` consecutive steps.
-See `uncertainty_rl/utils/constants.py`.
+**Success criteria**: judged geometrically in the env rather than by scalar thresholds,
+and evaluated here at `STRICT_BAY_MARGIN`, the published criterion behind every reported
+figure. The full definition is in
+[utils/README.md](../utils/README.md#the-success-criterion).
 
 ## Key interfaces
 
@@ -186,12 +185,12 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 | `configs/eval_config.yaml` | `model_path`, `n_episodes`, `deterministic`, `debug`, `near_miss_threshold_m`, `eval_conditions` (connection/timing come from env_config) |
 | `configs/deployment/sim/env_config.yaml` | `carla_sensors.gnss.*`, `carla_sensors.imu.*` (base noise, scaled by condition multipliers) |
 | `configs/baselines/<arm>.yaml` | `policy_type`, `include_covariance`, `include_obstacle_obs` (model class + obs shape of the evaluated checkpoint) |
-| `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_VELOCITY`, `STRICT_BAY_MARGIN` (the strict margin applied during evaluation/demo/inspector; training reads `bay_margin` from config, relaxed per curriculum stage). Success is tested geometrically via `car_fully_inside_bay()` in `utils/geometry.py`. |
+| `uncertainty_rl/utils/constants.py` | `SUCCESS_THRESHOLD_VELOCITY`, `STRICT_BAY_MARGIN` (the strict margin applied during evaluation, demo and inspector runs, where training instead reads the per-stage `bay_margin`). Success is tested geometrically via `car_fully_inside_bay()` in `utils/geometry.py`. |
 
 ## Results by condition
 
 Success rate (top) and mean final position error (bottom) for each arm, per reported
-condition. `full_method` leads on success in every condition that any arm solves; all four
+condition. `full_method` leads on success in every condition that any arm solves, and all four
 arms score 0% on `ood_irregular_rtk_fixed`, which is why that group is empty in the top
 panel and appears only in the position-error panel below.
 

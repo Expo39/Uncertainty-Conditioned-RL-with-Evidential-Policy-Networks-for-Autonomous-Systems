@@ -105,7 +105,7 @@ make docker-inspect-eval-dryrun SCENARIO=gnss_standalone MANUAL=true         # D
 make docker-inspect-eval-dryrun SCENARIO=heldout_trapezoid_rtk_fixed MANUAL=true  # Held-out floor plan
 ```
 
-The `SCENARIO` value is any condition `name` in `configs/eval_config.yaml`; omit it to default to `anchor_deployment`. Keyboard controls are the same as dryrun.
+The `SCENARIO` value is any condition `name` in `configs/eval_config.yaml`. Omitting it selects the first condition in that file. Keyboard controls are the same as dryrun.
 
 ## Arguments
 
@@ -120,14 +120,18 @@ The `SCENARIO` value is any condition `name` in `configs/eval_config.yaml`; omit
 | `--episodes` | int | unlimited | Max episodes (dryrun / eval_dryrun) |
 | `--duration` | int (seconds) | `86400` | Max run time (24 h) |
 | `--manual` | flag | off | Keyboard control (dryrun / eval_dryrun) |
-| `--stage` | int | `None` -> `DEFAULT_STAGE` (1) | Curriculum stage (dryrun only); omit to default to stage 1 |
+| `--stage` | int | `None` -> `DEFAULT_STAGE` (1) | Curriculum stage (dryrun only). Omitting it selects stage 1 |
 | `--baseline` | path | full method | Baseline obs flags / policy_type (dryrun / eval_dryrun) |
-| `--scenario` | string | first condition | `eval_config.yaml` condition name (eval_dryrun only) |
+| `--scenario` | string | first condition, currently `anchor_deployment` | `eval_config.yaml` condition name (eval_dryrun only) |
 | `--eval-config` | path | `configs/eval_config.yaml` | Condition sweep file (eval_dryrun only) |
 | `--host` | string | `carla-server-demo` | CARLA server hostname |
 | `--port` | int | `2100` | CARLA server port |
 
-Make variables map directly to CLI arguments: `INSPECT_LAYOUT` -> `--layout`, `SENSORS_VIEW` -> `--view` (sensors mode only), `INSPECT_ZOOM` -> `--zoom`, `MANUAL=true` -> `--manual`, `SCENARIO` -> `--scenario` (eval_dryrun only).
+Make variables map onto CLI arguments as follows: `INSPECT_LAYOUT` to `--layout`,
+`SENSORS_VIEW` to `--view` (sensors mode only), `INSPECT_ZOOM` to `--zoom`,
+`INSPECT_VIEW` to `--inspect-view`, `INSPECT_PAUSE` to `--termination-pause`,
+`INSPECT_EPISODES` to `--episodes`, `MANUAL=true` to `--manual`, `STAGE` to `--stage`,
+`BASELINE` to `--baseline`, and `SCENARIO` to `--scenario` (eval_dryrun only).
 
 ## Requirements
 

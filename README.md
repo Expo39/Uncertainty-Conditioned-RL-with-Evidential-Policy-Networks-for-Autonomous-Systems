@@ -10,7 +10,7 @@
 ![Dissertation](https://img.shields.io/badge/MSc%20Dissertation-September%202026-purple)
 
 MSc Artificial Intelligence dissertation by Antonio Galdes, September 2026.
-**[Read the full document (PDF, 150 pp)](docs/AntonioGaldes_Dissertation.pdf)**
+**[Read the full document](docs/AntonioGaldes_Dissertation.pdf)**
 
 ---
 

@@ -18,7 +18,7 @@ the real vehicle.
 
 Before any real-vehicle deployment run:
 
-- [ ] `cp real_world_datum.yaml.example real_world_datum.yaml` and fill in the surveyed UTM easting/northing and heading of the reference marker.
+- [ ] `cp real_world_datum.yaml.example real_world_datum.yaml` and fill in the reference marker's geodetic and UTM position, its `heading_deg`, and its `lot_x` / `lot_y` in the layout frame.
 - [ ] Run actuation calibration and update `actuation_calibration.yaml` with measured gains and deadbands.
 - [ ] Set `mission.yaml`: correct `target_bay_id` and `layout_file` for this run.
 - [ ] Confirm `agent_config.yaml`'s `baseline:` names the baseline the deployed checkpoint was trained as (its `include_covariance` / `include_obstacle_obs` / `policy_type` must match the checkpoint).
@@ -40,18 +40,37 @@ cp configs/deployment/real/real_world_datum.yaml.example \
 Then fill in the surveyed values at the test site. Do not commit `real_world_datum.yaml`
 with placeholder values.
 
-Keys: `utm_easting`, `utm_northing`, `utm_heading_deg`, `lot_x`, `lot_y`, `lot_yaw_deg`.
+All keys are nested under a top-level `datum:` mapping:
+
+| Key | Purpose |
+|-----|---------|
+| `datum_lat`, `datum_lon` | Geodetic position of the reference marker, consumed by `navsat_transform_node` |
+| `utm_easting`, `utm_northing`, `utm_zone` | The same marker in UTM |
+| `heading_deg` | Marker heading, used to rotate the odometry frame onto the lot frame |
+| `lot_x`, `lot_y` | The marker's position in the lot layout frame |
+
+`RealWorldDeployment` reads `lot_x`, `lot_y` and `heading_deg` to build the rigid-body
+transform. Note that the template's procedure comments refer to `lot_origin_x` and
+`lot_origin_y`, whereas the keys it emits are `lot_x` and `lot_y`. The emitted names are
+the ones the loader expects.
 
 ## `actuation_calibration.yaml`
 
-Maps policy normalised outputs `[-1, 1]` to physical actuator commands. Consumed by
-`ActuationCalibration.from_config()`. All values are identity (gain=1.0, deadband=0.0,
-bias=0.0) until a calibration run is performed.
+Maps policy normalised outputs to physical actuator commands. Consumed by
+`ActuationCalibration.from_config()`. Each of the three actuators under `calibration:`
+carries `gain`, `deadband`, `deadband_offset`, `bias`, `min_output` and `max_output`.
+Note that `min_output` is `-1.0` for steering but
+`0.0` for throttle and brake, which are non-negative axes. All values are identity until
+a calibration run is performed.
 
 ## `mission.yaml`
 
-Per-run mission definition. Set `target_bay_id` to the ID of the target bay in the
-layout YAML, and `layout_file` to the path of the corresponding layout.
+Per-run mission definition. Set `target_bay_id` to the identifier of the target bay in
+the layout YAML, and `layout_file` to the path of that layout.
+
+Bay identifiers follow the `<bay_type>_<index>` form the generator writes, for example
+`perpendicular_12`. The shipped `target_bay_id` is a placeholder and must be set for the
+site before a run.
 
 ## See also
 

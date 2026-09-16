@@ -39,3 +39,15 @@ Technical notes on system design, derivations, and rationale. Organised by subsy
 |------|---------------|-------|
 | `real_world_deployment.md` | `envs/real/deployment_utils.py`, `envs/real/inference_loop.py` | Sensor data flow, EKF frame calibration, surveyed datum, actuation calibration |
 | `sim_to_real_transfer.md` | `envs/real/inference_loop.py` | Known sim-to-real gaps and mitigations |
+
+## The other notes tree
+
+These notes are extracted from the code and are indexed above. A second set of notes
+lives under `documentation/detailed_notes/`, covering the methodological and
+argumentative material behind the dissertation rather than the implementation. Several
+are cited directly from source and from the analysis scripts, among them
+`epistemic_aleatoric_disentanglement.md`, `evidential_actor_variance_collapse.md`,
+`degraded_gnss_is_not_a_blackout.md`, `uncertainty_input_only.md` and
+`curriculum_design_principles.md`.
+
+Where a topic appears in both trees, the `documentation/` copy is canonical.
