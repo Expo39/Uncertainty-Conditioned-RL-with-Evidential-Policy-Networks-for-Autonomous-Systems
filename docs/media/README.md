@@ -75,9 +75,8 @@ than "placeholder", so the page reads as prose with a figure in it.
 Assets fall into three groups. Run `make check-host-deps` first - every route needs the
 host `ffmpeg` binary.
 
-**Group A - the 2D viewer records itself.** `visualiser_2d`, `baseline_comparison`. The
-viewer owns its Pygame surface, so
-`RECORD=true` (or the `R` key) captures it directly:
+**Group A - the 2D viewer records itself.** `visualiser_2d`. The viewer owns its Pygame
+surface, so `RECORD=true` (or the `R` key) captures it directly:
 
 ```bash
 make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
@@ -85,18 +84,17 @@ make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
 make clip START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
 ```
 
-`GNSS_TIER=fixed|float|standalone|degraded` pins one fix state for a whole drive, which is
-what makes a controlled side-by-side possible; leave it empty for the live Markov drift.
-`BASELINE=vanilla_ppo` vs `full_method` gives the arm comparison.
+`GNSS_TIER=fixed|float|standalone|degraded` pins one fix state for a whole drive, so the
+localisation level is a controlled constant; leave it empty for the live Markov drift.
 
-**Group B - screen capture.** `carla_3d`, `inspect_layout`, `inspect_sensors`,
-`inspect_live`, `inspect_dryrun`. These are drawn by the CARLA server into its own Unreal
-window (the inspectors use CARLA's server-side debug API), so nothing in this repo can
-record them from the inside. `make record-screen` grabs the window off the X display:
+**Group B - screen capture.** `carla_3d`, `inspect_live`. These are drawn by the CARLA
+server into its own Unreal window (the inspectors use CARLA's server-side debug API), so
+nothing in this repo can record them from the inside. `make record-screen` grabs the
+window off the X display:
 
 ```bash
 xhost +local:docker
-make docker-inspect INSPECT_LAYOUT=rectangle          # or the target for the asset
+make docker-inspect-live                              # or the target for the asset
 xwininfo -name CarlaUE4                               # read "Absolute upper-left X/Y"
 make record-screen DURATION=30 REGION=800x600 OFFSET=<X>,<Y>
 make clip START=00:02 END=00:14
@@ -104,13 +102,11 @@ make clip START=00:02 END=00:14
 
 The CARLA window is launched at 800x600, which is the default `REGION`.
 
-**Group C - static plots, already generated.** `training_curves`, `eval_degradation`.
-These come from the figure pipeline, not a recording; copy the PNG out of
-`outputs/main_analysis/figures/`. Both are already in place.
-
-**Retired.** `uncertainty_evolution` and `safety_handoff` were removed rather than filled -
-each captioned a positive claim this project reports as negative. See the note below the
-tables.
+**Group C - static plots, already generated or a single screen grab.**
+`training_curves`, `eval_degradation` come from the figure pipeline, not a recording; copy
+the PNG out of `outputs/main_analysis/figures/`. Both are already in place. `inspect_sensors`
+is a single frame off the CARLA window (same `xhost`/`xwininfo` setup as Group B, then a
+still screenshot instead of `record-screen`).
 
 ---
 
@@ -122,11 +118,6 @@ tables.
 |------|---------|----------|
 | `carla_3d` | **Present.** Chase view across an episode boundary, parking into a different highlighted bay each time | `README.md` |
 | `visualiser_2d` | **Present.** Parking as the GNSS fix state climbs degraded -> standalone -> float -> RTK fixed | `README.md`, `scripts/visualise/README.md` |
-| `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
-| `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |
-| `inspect_sensors` | Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye | `scripts/inspect/README.md` |
-| `inspect_live` | Live LiDAR inspector - red scan return dots in the CARLA world from birds-eye | `scripts/inspect/README.md` |
-| `inspect_dryrun` | Dryrun inspector: manual keyboard drive with EKF covariance output | `scripts/inspect/README.md` |
 
 ### PNGs (static plots)
 
@@ -134,21 +125,14 @@ tables.
 |------|---------|----------|
 | `training_curves` | Success and collision rate per arm across the six curriculum stages | `uncertainty_rl/training/README.md` |
 | `eval_degradation` | Success rate and mean final position error per arm across the reported evaluation conditions | `uncertainty_rl/evaluation/README.md` |
+| `inspect_sensors` | **Present.** Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye | `scripts/inspect/README.md` |
 
-Both are **present** - copied from `outputs/main_analysis/figures/` (see each README for the
-two-command regeneration recipe). `uncertainty_evolution` was **retired**: plotting epistemic
-against aleatoric would imply a separation the project documents as absent
-(`epistemic = aleatoric / nu` with `nu` collapsed to a constant), so
-`uncertainty_rl/networks/README.md` now points at `gate_roc` instead.
-@see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md`.
+`training_curves` and `eval_degradation` are copied from `outputs/main_analysis/figures/`
+(see each README for the two-command regeneration recipe). `inspect_sensors` is a
+screen-grab still.
 
-`safety_handoff` was retired for the same reason: the handoff gate scores at chance
-(AUC 0.55 / 0.52 vs the EKF std's 0.57 / 0.63, `outputs/main_analysis/summaries/gate_auc.csv`),
-so a clip of it firing would assert a working mechanism the evaluation contradicts.
-
-**Before filling any placeholder, check the caption against the result it implies.** Three of
-the original thirteen asserted positive findings this project reports as negative or mild;
-an asset is not neutral illustration when its caption makes a claim.
+**Before filling any placeholder, check the caption against the result it implies.** An
+asset is not neutral illustration when its caption makes a claim.
 
 ---
 
@@ -157,18 +141,11 @@ an asset is not neutral illustration when its caption makes a claim.
 | Asset | Route | Status |
 |-------|-------|--------|
 | `visualiser_2d` | A: `make eval-visualise-2d RECORD=true` | **Done** - in `docs/media/` |
-| `gnss_degradation` | - | **Retired.** `visualiser_2d` already shows a full degraded-to-fixed recovery ending in a successful park, which reads better than a fixed-vs-degraded side-by-side. The root README shows that clip instead |
-| `parking_episode` | - | **Retired.** A plain park under one held tier adds nothing beyond `visualiser_2d`, which already drives a full episode through the float rung. The envs README links to that clip instead |
-| `baseline_comparison` | A: `BASELINE=vanilla_ppo` vs `full_method`, both `GNSS_TIER=degraded` | Ready |
-| `safety_handoff` | - | **Retired, do not create.** The gate is a negative result: total predictive uncertainty scores ROC AUC 0.55 / 0.52 over 1800 episodes (chance), below the EKF position std at 0.57 / 0.63. A clip of a handoff firing would present a mechanism the data says does not beat the covariance baseline. `gate_roc` is the defensible figure |
 | `carla_3d` | B: `make docker-eval-visualise-3d` + `make record-screen` | **Done** - in `docs/media/` |
-| `inspect_layout` | B: `make docker-inspect INSPECT_LAYOUT=rectangle` | Ready |
-| `inspect_sensors` | B: `make docker-inspect-sensors SENSORS_VIEW=birds_eye INSPECT_ZOOM=close` | Ready |
+| `inspect_sensors` | C: `make docker-inspect-sensors SENSORS_VIEW=birds_eye INSPECT_ZOOM=close` | **Done** - in `docs/media/` |
 | `inspect_live` | B: `make docker-inspect-live` | Ready |
-| `inspect_dryrun` | B: `make docker-inspect-dryrun MANUAL=true` - capture the terminal too, the EKF output prints there | Ready |
-| `training_curves` | C: `make training-curves` then `make figures FIG=training_curves` | **Done** - in `docs/media/`. Caption corrected: it plots success + collision rate, not reward/uncertainty |
-| `eval_degradation` | C: `make figures FIG=ablation_by_condition` | **Done** - in `docs/media/`. Caption corrected: success rate + final position error over the 4 reported conditions, not epistemic over 9 |
-| `uncertainty_evolution` | - | **Retired, do not create.** `epistemic = aleatoric / nu`; `nu` has no RL supervision and collapses to a constant, so `corr(epi, ale) ~ 0.9` and the two channels are one signal. A side-by-side plot would assert a separation the project documents as absent. `gate_roc` is the defensible figure |
+| `training_curves` | C: `make training-curves` then `make figures FIG=training_curves` | **Done** - in `docs/media/` |
+| `eval_degradation` | C: `make figures FIG=ablation_by_condition` | **Done** - in `docs/media/` |
 
 ### Known gaps in the capture path
 
@@ -183,7 +160,7 @@ an asset is not neutral illustration when its caption makes a claim.
 - `INSPECT_SENSOR` is dead - `lot_inspector.py` has no `--sensor` argument and live mode is
   always the 2D LiDAR.
 - No RGB camera sensor is ever spawned, so CARLA's native `save_to_disk()` frame dump is not
-  available; screen capture is the only route for Group B.
+  available; screen capture is the only route for Groups B and C's inspector stills.
 
 ---
 
