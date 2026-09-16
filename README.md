@@ -1,39 +1,133 @@
 # Uncertainty-Conditioned RL with Evidential Policy Networks
 
 > Propagating EKF localisation uncertainty through evidential deep learning policies
-> for safer autonomous parking under degraded GNSS conditions.
+> for autonomous parking under degraded GNSS conditions.
 
 ![Python](https://img.shields.io/badge/Python-3.10%2B-blue)
 ![ROS 2](https://img.shields.io/badge/ROS%202-Jazzy-green)
 ![CARLA](https://img.shields.io/badge/CARLA-0.9.16-orange)
 ![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-red)
-![License](https://img.shields.io/badge/License-MIT-lightgrey)
+![Dissertation](https://img.shields.io/badge/MSc%20Dissertation-September%202026-purple)
+
+MSc Artificial Intelligence dissertation by Antonio Galdes, September 2026.
+**[Read the full document (PDF, 150 pp)](docs/AntonioGaldes_Dissertation.pdf)**
 
 ---
 
-## About This Project
+## Overview
 
-The system trains a reinforcement learning agent to park an autonomous vehicle in a
-known parking lot using RTK-GNSS, IMU, and 2D LiDAR. The lot geometry (bay positions,
-perimeter, pedestrian zones) is known via a pre-computed layout YAML. What varies
-is *how accurately the vehicle can localise itself within that known layout* - the
-RTK-GNSS fix state drifts from centimetre-level (RTK fixed) to metre-level (standalone
-or degraded), and the policy must respond accordingly.
+RL parking policies are usually developed on the assumption that localisation is
+reliable. In operational parking areas, however, RTK-GNSS accuracy can fall silently
+from centimetres to metres during a manoeuvre. The pose estimate remains available and
+plausible throughout, so a vehicle with no channel to carry that change commits to the
+manoeuvre regardless.
 
-Two layers of uncertainty are propagated through the policy:
-
-- **Localisation uncertainty** - how confident is the EKF about where the vehicle is
-  within the known lot layout? (from RTK-GNSS fix state via `robot_localisation`)
-- **Policy uncertainty** - how confident is the actor about what action to take?
-  (from the evidential NIG distribution)
-
-Both are quantified online in a single forward pass using Normal-Inverse-Gamma (NIG)
-evidential distributions, enabling principled safety handoffs when either layer
-signals high uncertainty.
+Two mechanisms are examined on a PPO parking agent, one supplying uncertainty and the
+other allowing the actor to use it. On the input side, an EKF fusing RTK-GNSS with an
+IMU passes its posterior covariance into the observation. On the output side, that
+signal is consumed by an evidential Normal-Inverse-Gamma actor head, which produces
+per-action epistemic and aleatoric estimates in a single forward pass. Training runs in
+CARLA under an always-on GNSS fix-state Markov chain, and the reward pays for the
+outcome alone. Uncertainty is thus observed but never rewarded, so any
+uncertainty-dependent behaviour must emerge on its own.
 
 ---
 
-## System Overview
+## Demonstrations
+
+The evidential policy parking in CARLA, followed by a chase camera. The clip spans an
+episode boundary, so the car sits parked, the episode resets, and a different target
+bay is approached. Blue outlines mark the bays and green the episode's target.
+
+<p align="center">
+  <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="820">
+</p>
+
+The 2D bird's-eye viewer. The GNSS fix state climbs back up the ladder as the car
+closes on the bay, moving from degraded in red through standalone in orange and RTK
+float in amber to RTK fixed in green. The chain is neighbour-only, so a recovery never
+skips a rung.
+
+<p align="center">
+  <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
+</p>
+
+> The ring is the tier's **configured** 1-sigma GNSS noise, not the EKF's live
+> covariance. Degraded injects zero-mean 5 m noise, but the fused estimate stays
+> sub-metre most of the time, so the posterior separation between tiers is milder than
+> the ring suggests.
+
+---
+
+## Results
+
+A 2x2 factorial ablation switches each mechanism on and off independently. All four
+arms share one architecture, one hyperparameter configuration and one curriculum. Each
+was trained on three seeds and evaluated over 600 pooled episodes per condition.
+
+<p align="center">
+  <img src="docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the four reported evaluation conditions" width="820">
+</p>
+
+| Arm | Covariance in obs | Actor head | Success at anchor | Under GNSS drift |
+|-----|-------------------|------------|-------------------|------------------|
+| `vanilla_ppo` | No | Gaussian | 23.8% | 27.3% |
+| `input_uncertainty` | Yes | Gaussian | 25.2% | 28.5% |
+| `output_uncertainty` | No | Evidential NIG | 19.0% | 20.0% |
+| **`full_method`** | **Yes** | **Evidential NIG** | **45.8%** | **52.5%** |
+
+Supplying the covariance to the evidential actor raised parking success by **26.8 to
+36.2 pp** across the three trainable conditions, more than doubling the rate of the
+identical actor denied that input. Every bootstrap interval excludes zero. The same
+input on a standard Gaussian head shifted success by between -2.7 and +1.3 pp, a range
+including zero throughout. The effect is therefore a synergy rather than an additive
+benefit of either part.
+
+Median final position error is lowest under the full method in all three trainable
+conditions, at 0.76 m, 0.41 m and 0.64 m.
+
+**The behaviour was not rewarded.** No uncertainty term appears in the reward and no
+slow-down is scripted, yet braking intensifies as the filter reports greater positional
+uncertainty, at a Spearman correlation of +0.41 against +0.22 for the covariance-blind
+arm. The covariance supplies the timing of the response and the evidential head
+supplies its effort. Only the combination pays.
+
+The contrast is positive in all nine matched-seed comparisons, at margins of +16.0 to
++59.0 pp, whereas the standard-head contrast varies in sign across seeds.
+
+The full analysis, including the calibration of the filter covariance, the behavioural
+breakdown and the bounds placed on these claims, is set out in
+[the dissertation](docs/AntonioGaldes_Dissertation.pdf).
+
+<p align="center">
+  <img src="docs/media/training_curves.png" alt="Success and collision rate per arm across the six curriculum stages" width="820">
+</p>
+
+Training follows a six-stage single-phase curriculum that widens one difficulty axis at
+a time, progressing on budget rather than on performance. Twelve chains were run, being
+four arms across three seeds, at ten million policy decisions each and roughly two
+weeks of continuous GPU time.
+
+---
+
+## Contributions
+
+1. Raw EKF covariance features as policy observations for ego-vehicle parking control,
+   with the ablation establishing the benefit as causal and as conditional on an
+   uncertainty-capable head.
+2. An actor-side NIG evidential head on a continuous-control policy-gradient agent,
+   with the variance-collapse pathology inherent to that placement diagnosed and
+   mitigated.
+3. Evidence that uncertainty-conditioned behaviour can be emergent, arising with no
+   uncertainty term in the reward.
+4. A characterisation of the conditions under which a single-head NIG actor separates
+   its epistemic and aleatoric channels, and of why model-free RL does not supply them.
+5. A reproducible evaluation asset, being a de-confounded four-condition sweep under
+   controlled GNSS degradation with a fixed three-seed protocol.
+
+---
+
+## How it works
 
 ```mermaid
 flowchart TB
@@ -46,7 +140,7 @@ flowchart TB
     subgraph ros2["ros2-bridge"]
         R1["GnssNoiseRelayNode"]
         R2["ImuNoiseRelayNode"]
-        EKF["robot_localisation EKF"]
+        EKF["robot_localization EKF"]
         EXT["CovarianceExtractorNode"]
     end
 
@@ -69,431 +163,56 @@ flowchart TB
     ENV -->|VehicleControl| carla
 ```
 
----
-
-## Demos
-
-The evidential policy parking in CARLA, followed by a chase camera. The clip spans an
-episode boundary - the car sits parked, the episode resets, and it drives to a different
-target bay and parks again. The overlays are the layout inspector's own: blue bay
-outlines, with each episode's target bay highlighted green.
-
-<p align="center">
-  <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="820">
-</p>
-
-The 2D bird's-eye viewer at the end of an episode. The GNSS fix state climbs back up the
-ladder as the car closes on the bay - degraded (red) to standalone (orange) to RTK float
-(amber) to RTK fixed (green) - and the car parks once localisation is trustworthy again.
-The chain is neighbour-only, so a recovery never skips a rung; here the float step lasts a
-few tenths of a second.
-
-<p align="center">
-  <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
-</p>
-
-> The ring around the car is the tier's **configured** 1-sigma GNSS noise, not the EKF's
-> live covariance estimate. Degraded injects zero-mean 5 m noise, but the fused estimate
-> stays sub-metre most of the time, so the posterior separation between tiers is milder
-> than the ring suggests.
-> @see `documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`.
+The observation is 13-dimensional at its maximum, comprising EKF speed and yaw rate,
+three covariance features from the diagonal, the relative target bay pose in the ego
+body frame, and five hemispheric LiDAR clearance features. The action is
+`[steer, throttle, brake]` with no reverse gear, and the task is forward perpendicular
+bay parking. CARLA ground truth is used for reward computation alone and is never
+observable to the agent, which keeps the observation path identical between simulation
+and a real vehicle. The evidential head is applied to the actor alone, not the critic.
 
 ---
 
-## Installation
+## Repository map
 
-Everything runs inside Docker. You need Git, Docker Engine, Make, and the
-NVIDIA Container Toolkit. No Python, CARLA, or ROS 2 installation on the host is required.
-
-### 1 - Install Docker Engine (Ubuntu)
-
-```bash
-sudo apt update && sudo apt install -y make git curl
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER && newgrp docker
 ```
-
-### 2 - Install NVIDIA Container Toolkit
-
-```bash
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
-  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
-  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
-  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
-sudo apt update && sudo apt install -y nvidia-container-toolkit
-sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker
-```
-
-Verify GPU passthrough:
-
-```bash
-docker run --rm --gpus all nvidia/cuda:12.0.0-base-ubuntu22.04 nvidia-smi
-```
-
-### 3 - Clone and Build
-
-```bash
-git clone <repo-url>
-cd Uncertainty-Conditioned-RL-with-Evidential-Policy-Networks-for-Autonomous-Systems
-make docker-build            # first build - bakes ROS 2 nodes into images (~15-20 min)
-make docker-up               # start CARLA + ROS 2 + training stack
-make docker-ps               # verify all three services are healthy
-```
-
-### Container Architecture
-
-Three containers orchestrated via `docker-compose.yml`:
-
-| Container | Image Base | Contents |
-|-----------|-----------|----------|
-| `carla-server` | CARLA 0.9.16 | Headless simulation with GPU passthrough |
-| `ros2-bridge` | ROS 2 Jazzy | CARLA bridge, `robot_localisation` EKF, noise relay nodes |
-| `training` | NGC PyTorch 24.10 | Stable-Baselines3, evidential networks, rclpy (Humble) |
-
-Code directories are bind-mounted. Edits on the host reflect immediately inside containers.
-
-### Host Python Setup
-
-Two categories of command run on the host rather than inside Docker:
-
-| Command | Why it runs on the host |
-|---------|------------------------|
-| `make visualise`, `make eval-visualise-2d` | Opens a Pygame window - Docker containers are headless |
-| `make generate-layouts` | Writes layout PNGs via Matplotlib - no CARLA or GPU needed |
-| `make analyse-*`, `make figures`, `make analysis-bundle` | Read the eval CSVs with pandas - no CARLA or GPU needed |
-| `make training-curves`, `make tb-scalars` | Parse TensorBoard event files - the reader library only, not the dashboard container |
-
-All of these use the project's `.venv/` virtual environment, which the Makefile manages automatically:
-
-```bash
-make install   # one-time setup: creates .venv/ and installs the package + dev dependencies
+uncertainty_rl/       Main package
+  networks/             Evidential NIG policy, SB3 integration
+  envs/                 CARLA Gymnasium parking environment, safety wrapper
+  training/             PPO training loop, Optuna tuning
+  evaluation/           Condition sweep, metrics (CSVs only, no figures)
+  ros2/                 EKF bridge, GNSS and IMU noise relay nodes
+  utils/                Constants, geometry, covariance features
+configs/              YAML only, nothing hardcoded in source
+scripts/              Layout generation, inspectors, visualiser, analysis
+tests/                Unit and integration tiers
+docs/                 Dissertation PDF, technical notes, media
 ```
 
 ---
 
-## Quick Start
+## Getting started
 
 ```bash
-# 1. Start the full stack
-make docker-up
-
-# 2. Train a curriculum stage (STAGE defaults to 1, the curriculum head)
-make docker-train STAGE=1
-
-# 3. Resume the next stage from the previous stage's run leaf (bare name, not a path)
-make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=seed42_11062026-0628
-
-# 4. Attach the 2D visualiser at any time (host terminal, non-blocking)
-make visualise
-
-# 5. Run evaluation across all 7 uncertainty conditions
-make docker-eval
-
-# 6. Stop when done
-make docker-down
+make docker-build && make docker-up      # build and start the three-container stack
+make docker-train STAGE=1 BASELINE=full_method
 ```
 
-Training follows a single-phase ADR curriculum (6 stages): every observation
-channel is live in every stage, and one axis's range ramps per stage (bays + margin
--> obstacle occupancy). The GNSS degradation process is a fixed, stage-invariant
-Markov chain (always-on mid-episode drift), so localisation uncertainty is present
-from stage 1 rather than being a ramped axis. Each stage resumes from the previous
-stage's checkpoint. See the
-[curriculum stage README](configs/deployment/sim/curriculum/README.md).
-
----
-
-## Architecture
-
-```
-Uncertainty-Conditioned-RL.../
-|
-|-- uncertainty_rl/                    Main Python package
-|   |
-|   |-- networks/                      Evidential deep learning policy
-|   |   |-- evidential_policy.py       EvidentialLayer, EvidentialPolicyNetwork,
-|   |   |                              UncertaintyConditionedActor
-|   |   +-- sb3_integration.py         EvidentialDistribution,
-|   |                                  EvidentialActorCriticPolicy, EvidentialPPO
-|   |
-|   |-- envs/                          Gymnasium environments
-|   |   |-- sim/carla_parking.py       CARLAParkingEnv (Gymnasium parking env)
-|   |   |-- factory.py                 Env factory (training vs eval bay margin)
-|   |   |-- real/deployment_utils.py   RealWorldDeployment
-|   |   |-- real/inference_loop.py     RealWorldInferenceLoop
-|   |   |-- _parking_core.py           Shared pure logic: obs build, reward,
-|   |   |                              load_floor_plan, wait_for_ekf
-|   |   +-- safety_wrapper.py          SafetyWrapper (uncertainty-gated actions)
-|   |
-|   |-- training/                      RL training pipeline
-|   |   |-- train_ppo.py               PPO loop, config loading, callbacks
-|   |   |-- tune_hyperparams.py        Optuna hyperparameter search
-|   |   +-- Dockerfile                 NGC PyTorch 24.10 + SB3 + rclpy (Humble)
-|   |
-|   |-- evaluation/                    Condition-sweep evaluation
-|   |   |-- evaluate.py                evaluate_agent, evaluate_across_conditions
-|   |   |-- metrics.py                 EvaluationMetrics, _classify_outcome
-|   |   +-- env_builder.py             build_eval_env_factory, make_eval_env
-|   |                                  (CSVs only - figures live in scripts/)
-|   |
-|   |-- ros2/                          ROS 2 bridge to robot_localisation EKF
-|   |   |-- uncertainty_rl_ros2/
-|   |   |   |-- covariance_extractor.py  CovarianceExtractorNode,
-|   |   |   |                            CovarianceMonitorNode
-|   |   |   +-- sensor_relay/
-|   |   |       |-- gnss_noise_relay.py  GnssNoiseRelayNode
-|   |   |       +-- imu_noise_relay.py   ImuNoiseRelayNode
-|   |   +-- Dockerfile                 ROS 2 Jazzy + CARLA bridge +
-|   |                                  robot_localisation
-|   |
-|   +-- utils/                         Shared utilities (no CARLA or ROS 2 deps)
-|       |-- constants.py               Structural dims and success thresholds
-|       |-- config_merge.py            deep_merge, apply_baseline (config precedence)
-|       |-- covariance_utils.py        extract_2d_covariance_features
-|       |-- geometry.py                point_in_polygon, car_fully_inside_bay,
-|       |                              inflate_polygon, wrap_angle_symmetric
-|       |-- bay_success.py             Geometric in-bay success test helpers
-|       |-- logging.py                 DebugLogger (per-step structured output)
-|       |-- visualisation.py           Matplotlib plots, VisStateWriter
-|       +-- actuation_calibration.py   Real-vehicle gain / deadband / bias mapping
-|
-|-- configs/                           YAML only - nothing hardcoded in source
-|   |-- train_config.yaml              PPO + evidential hyperparameters
-|   |-- eval_config.yaml               7-condition evaluation sweep
-|   |-- ros2_config.yaml               EKF topics and QoS settings
-|   |-- deployment/sim/env_config.yaml CARLA env, sensors, GNSS noise profiles
-|   |-- deployment/sim/curriculum/     Per-stage env overrides (stage1..stage6)
-|   |-- deployment/sensor_config.yaml  Physical sensor mounts and specs
-|   |-- deployment/agent_config.yaml   safety thresholds, actuator model, baseline
-|   |-- layouts/                       Pre-computed lot YAMLs (do not edit by hand)
-|   |-- baselines/                     4 ablation override configs (2x2 study)
-|   +-- training/tuning_config.yaml    Optuna study settings and search bounds
-|
-|-- scripts/                           Offline tooling (never imported by training)
-|   |-- layouts/                       Floor plan modules + generate_layouts.py
-|   |-- inspect/                       CARLA debug overlay (lot_inspector.py)
-|   |-- visualise/                     Detachable 2D Pygame viewer + demo driver
-|   +-- colours/                       Shared visualisation colour palette
-|
-|-- tests/                             pytest suite - unit and integration tiers
-|-- docs/                              Technical notes (detailed_notes/) and media
-+-- docker-compose.yml                 Three-container stack orchestration
-```
-
----
-
-## Layout Generation
-
-Parking lot geometry (bay positions, perimeter corners, pedestrian zones, patrol paths)
-is pre-computed offline and stored in `configs/layouts/`.
-
-### Generate YAMLs and PNGs (no CARLA needed)
-
-```bash
-make generate-layouts                      # all layouts
-make generate-layouts LAYOUT=rectangle     # single layout
-```
-
-Writes `configs/layouts/{rectangle,trapezoid,irregular_a}.yaml` and
-`outputs/raw_derived/layouts/*.png`. Inspect the PNGs to confirm bay placement.
-
-### Three Floor Plans
-
-| Layout | Bays | OOD | Training use | Description |
-|--------|------|-----|-------------|-------------|
-| `rectangle` | 47 | No | Training + evaluation | Rectangular lot, perpendicular bays across a centre row, top row, bottom rows, and left and right walls, plus two always-empty motorcycle bays in the top-right corner. Three spawns: left, bottom-centre, top-right. |
-| `trapezoid` | 39 | Yes | OOD evaluation only | Trapezoid lot (held out from training), perpendicular bays in central clusters plus perimeter rows along the tapered walls. |
-| `irregular_a` | 36 | Yes | OOD evaluation only | Irregular polygon lot (held out from training), perpendicular bays around a central obstacle and the perimeter. |
-
-Bay counts come from the generated `configs/layouts/*.yaml`; regenerate with
-`make generate-layouts` if a floor plan module changes.
-
-### Verify Layout in CARLA
-
-```bash
-make docker-inspect INSPECT_LAYOUT=rectangle                     # Bird's Eye Inspection
-make docker-inspect-sensors INSPECT_LAYOUT=rectangle             # Sensor Mount Inspection
-```
-
-> **Further reading:** [scripts/layouts/README.md](scripts/layouts/README.md) - floor plan module conventions, LotBuilder DSL, coordinate frame, adding a new layout.
-
----
-
-## Visualisation
-
-### 2D Bird's-Eye View (detachable, no training overhead)
-
-Attach and detach the Pygame visualiser at any time without restarting training.
-The env writes frames to `outputs/vis_history.jsonl` only when the visualiser is active.
-
-```bash
-make visualise           # open viewer (close window to detach - training unaffected)
-make eval-visualise-2d   # load checkpoint + demo drive + 2D viewer
-```
-
-Shows: lot boundary, bay outlines (blue = perpendicular, grey = motorcycle),
-target bay (green), parked NPCs (orange), patrol NPC (red), pedestrians (magenta),
-ego vehicle (cyan) with heading arrow and 50-step trail.
-
-### 3D CARLA Spectator View
-
-```bash
-make docker-eval-visualise-3d                                          # default checkpoint
-make docker-eval-visualise-3d BASELINE=full_method CHECKPOINT=seed42_11062026-0628
-```
-
-### Live Inspect Modes
-
-```bash
-make docker-inspect-live INSPECT_SENSOR=lidar         # live LiDAR scan overlay
-make docker-inspect-dryrun MANUAL=true                # drive manually through the lot
-```
-
-> **Further reading:** [scripts/visualise/README.md](scripts/visualise/README.md) - JSONL frame schema, Pygame controls, signal-file protocol.
-> [scripts/inspect/README.md](scripts/inspect/README.md) - all inspector modes, CLI flags, Make targets.
-
----
-
-## Configuration
-
-All tuneable hyperparameters live in `configs/` YAML files - never hardcoded
-in source. Structural constants (obs / action dims, success thresholds) live
-in [`uncertainty_rl/utils/constants.py`](uncertainty_rl/utils/constants.py).
-
-Settings change as the project iterates (reward coefficients, curriculum
-overrides, success thresholds, RTK tier sampling weights). Rather than
-duplicate concrete values here - which would rot the moment a checkpoint
-is reached - the table below points at the file that owns each setting.
-Read the YAML directly to see the live values.
-
-| File | What it owns |
-|------|--------------|
-| [`train_config.yaml`](configs/train_config.yaml) | PPO hyperparameters, evidential settings, training schedule |
-| [`eval_config.yaml`](configs/eval_config.yaml) | Evaluation condition sweep |
-| [`ros2_config.yaml`](configs/ros2_config.yaml) | EKF, GNSS relay, IMU relay node parameters |
-| [`deployment/sim/env_config.yaml`](configs/deployment/sim/env_config.yaml) | CARLA env: episode length, sensors, parking scenarios, curriculum overrides |
-| [`deployment/agent_config.yaml`](configs/deployment/agent_config.yaml) | Observation flags, safety thresholds (shared sim and real) |
-| [`deployment/sensor_config.yaml`](configs/deployment/sensor_config.yaml) | Physical sensor mounts and specs (shared sim and real) |
-| [`deployment/sim/gnss_noise_profiles.yaml`](configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers + Markov transition matrix |
-| [`training/tuning_config.yaml`](configs/training/tuning_config.yaml) | Optuna study and search-space bounds |
-| [`baselines/*.yaml`](configs/baselines/) | Override files for the 2x2 ablation study |
-
-> **Further reading:** [configs/deployment/sim/README.md](configs/deployment/sim/README.md) - full breakdown of the sim config files and what consumes each key.
-
----
-
-## Hyperparameter Tuning
-
-```bash
-# 1. Edit configs/training/tuning_config.yaml (n_trials, timesteps_per_trial, seed)
-# 2. Run Optuna study
-make docker-tune
-
-# 3. Best params are automatically written to configs/train_config.yaml
-# 4. Normal training now uses tuned values
-make docker-train
-```
-
-> **Further reading:** [uncertainty_rl/training/README.md](uncertainty_rl/training/README.md) - full training pipeline, Optuna search space, callback descriptions.
-
----
-
-## Ablation Study (2x2)
-
-Four baselines controlled by `configs/baselines/` override files:
-
-| Baseline | Uncertainty input (covariance in obs) | Policy output |
-|----------|---------------------------------------|---------------|
-| `vanilla_ppo` | No | Gaussian (standard MLP) |
-| `input_uncertainty` | Yes | Gaussian (standard MLP) |
-| `output_uncertainty` | No | Evidential NIG |
-| `full_method` | Yes | Evidential NIG |
-
-Actual observation dimensions are derived at runtime from
-`include_covariance` / `include_obstacle_obs` via `compute_obs_dim()`. Read
-[`uncertainty_rl/utils/constants.py`](uncertainty_rl/utils/constants.py)
-for the structural dims and the
-[baselines README](configs/baselines/README.md) for the override matrix.
-
-> **Further reading:** [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md) - eval conditions, metrics definitions, output plots.
-
----
-
-## Results Layout
-
-`outputs/` is gitignored and splits into three tiers by how each artefact is produced.
-Only `raw/` costs simulation time; everything else regenerates from it in minutes.
-
-```
-outputs/
-|-- raw/                      Written ONLY by training and evaluation. CSVs, no figures.
-|   |-- evaluation_results/     Per-run condition sweeps (make docker-eval)
-|   |-- bay_successes/          Per-bay success tallies (training + eval)
-|   +-- demo_traces/            Per-episode traces (make eval-visualise-2d)
-|
-|-- raw_derived/              Intermediate, regenerated from raw/ by scripts/analysis/
-|   |-- cross_seed_analysis/    Pooled + per-seed robustness (make analyse-cross-seed)
-|   |-- ablation_analysis/      Single-seed contrasts (make analyse-ablation)
-|   |-- gate_analysis/          Single-seed gate ROC (make analyse-gate)
-|   |-- training/               Seed-averaged curves (make training-curves)
-|   |-- layouts/                Lot PNGs (make generate-layouts)
-|   +-- per_run_figures/        Per-run diagnostic panels (make run-figures)
-|
-+-- main_analysis/            The deliverable. No duplicates of anything above.
-    |-- figures/                Written directly by make figures
-    |-- summaries/              Derived CSVs, recomputed from raw/ (make analysis-bundle)
-    |-- values/                 The pooled CSVs those summaries are read from
-    +-- MANIFEST.md             What each artefact is and where it came from
-```
-
-The boundary is enforced in code: `uncertainty_rl/evaluation/` imports no plotting
-library, and the analysis modules under `scripts/analysis/` write CSVs only. Every
-figure comes from `scripts/analysis/figures/`, which is the single place that renders.
-
-To rebuild everything downstream of a completed evaluation:
-
-```bash
-make analyse-cross-seed STAGE=6   # pooled CSVs
-make training-curves              # TensorBoard scalars -> CSV
-make figures                      # the figures, into main_analysis/figures/
-make analysis-bundle              # summaries + values + MANIFEST
-```
-
----
-
-## Useful Commands Reference
-
-| Command | Purpose | GPU? |
-|---------|---------|------|
-| `make docker-up` | Start all containers | Yes |
-| `make docker-down` | Stop all containers | No |
-| `make docker-train` | Full training run | Yes |
-| `make docker-train-short` | 10k-step smoke test | Yes |
-| `make docker-tune` | Optuna tuning | Yes |
-| `make docker-eval` | Evaluation sweep | Yes |
-| `make docker-shell` | Interactive shell in training container | Yes |
-| `make docker-test-unit` | Run Unit tests | No |
-| `make docker-test-unit` | Unit tests in container (they need torch) | No |
-| `make generate-layouts` | Regenerate lot YAMLs + PNGs | No |
-| `make analyse-cross-seed` | Pool every seed into the headline CSVs | No |
-| `make training-curves` | TensorBoard scalars -> CSV | No |
-| `make figures` | Render the figures into `main_analysis/figures/` | No |
-| `make run-figures` | Per-run diagnostic panels | No |
-| `make analysis-bundle` | Assemble summaries + values + MANIFEST | No |
-| `make visualise` | Live 2D bird's-eye viewer | No |
-| `make verify` | Local lint + typecheck + sanity | No |
-
-See [COMMANDS.md](COMMANDS.md) for the full reference, including accepted variables, and GPU requirements.
+- **[SETUP.md](SETUP.md)** covers installation, the container architecture and the
+  first run.
+- **[USAGE.md](USAGE.md)** covers layout generation, the visualisers, configuration,
+  the ablation study and the results layout.
+- **[COMMANDS.md](COMMANDS.md)** is the complete Make target reference.
 
 ---
 
 ## Documentation
 
-Each subpackage and script directory has its own README with deeper detail.
-
 | Topic | README |
 |-------|--------|
+| Installation and first run | [SETUP.md](SETUP.md) |
+| Day-to-day operation | [USAGE.md](USAGE.md) |
+| All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
 | Python package overview, subpackage map | [uncertainty_rl/README.md](uncertainty_rl/README.md) |
 | Evidential NIG networks, dual-encoder actor, loss design | [uncertainty_rl/networks/README.md](uncertainty_rl/networks/README.md) |
 | Observation space, reward function, action space, env config | [uncertainty_rl/envs/README.md](uncertainty_rl/envs/README.md) |
@@ -509,35 +228,26 @@ Each subpackage and script directory has its own README with deeper detail.
 | Sim deployment config files and their consumers | [configs/deployment/sim/README.md](configs/deployment/sim/README.md) |
 | Technical notes index (NIG init, obs space, EKF, layouts) | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/BUILDER.md](scripts/layouts/BUILDER.md) |
-| All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
+
 ---
 
 ## Citation
 
-If you use this work, please cite:
-
 ```bibtex
-@software{Galdes2026UncertaintyRL,
+@mastersthesis{Galdes2026UncertaintyRL,
   author  = {Galdes, Antonio},
   title   = {Uncertainty-Conditioned Reinforcement Learning with Evidential Policy
              Networks for Autonomous Systems},
+  school  = {University of Malta, Faculty of Information and Communication Technology},
+  type    = {{MSc} dissertation},
   year    = {2026},
+  month   = {September},
 }
 ```
 
 ---
 
-## Licence
+## Academic use
 
-TODO
-
----
-
-## Acknowledgements
-
-[CARLA](https://carla.org/) |
-[Stable-Baselines3](https://stable-baselines3.readthedocs.io/) |
-[Gymnasium](https://gymnasium.farama.org/) |
-[ROS 2](https://docs.ros.org/) |
-[robot_localization](https://docs.ros.org/en/jazzy/p/robot_localization/) |
-[Evidential Deep Learning (Amini et al. 2020)](https://arxiv.org/abs/1910.02600)
+The code and the dissertation are provided for academic reference. Citation is
+requested where either is drawn upon.
