@@ -59,6 +59,12 @@ Two things are needed, and **both** matter:
    two-panel plots here are about 1:1) need the narrower end of that range, since width
    drives height too; a wide, short figure can take 700-760.
 
+   To place two assets side by side, put both `<img>` tags in one `<p align="center">`
+   and pick widths that make their RENDERED HEIGHTS match, or the pair looks ragged:
+   for heights to match at `h`, each width is `w = original_width * h / original_height`.
+   The root README pairs a 620x362 clip at 336 px with an 800x549 one at 286 px, both
+   landing on 196 px tall and 622 px wide in total.
+
 Keep the full-resolution original in `outputs/` - that is the one to cite in the
 dissertation, where a fixed `\includegraphics` width makes the DPI an asset rather than a
 problem. GIFs from `make clip` take `WIDTH=800`, which is already sized for a README, but
