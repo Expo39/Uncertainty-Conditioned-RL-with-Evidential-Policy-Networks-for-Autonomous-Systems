@@ -31,35 +31,30 @@ def make_env(
     @brief Create a callable that returns a new environment instance.
     @param config: Configuration dictionary.
     @param bay_margin: Geometric success margin (metres) to use for this env.
-           Required and explicit: training/tuning callers pass the `bay_margin`
-           resolved from env_config (relaxed per curriculum stage); evaluation,
-           demo, and inspector callers pass STRICT_BAY_MARGIN. No default, to
-           prevent silent training-vs-eval contamination.
+           Required and explicit, no default: training/tuning callers pass the
+           per-stage value merged in from a curriculum stage YAML; evaluation,
+           demo, and inspector callers pass STRICT_BAY_MARGIN.
     @param rank: Environment rank for seeding.
     @param carla_sensors_override: Override sensor noise config (for evaluation).
-    @param host_override: Override the per-worker CARLA host (e.g. for the
-           dryrun inspector which connects to carla-server-demo). When None,
-           the per-rank training host is used.
-    @param port_override: Override the per-worker CARLA port. When None, the
-           per-rank training port is used.
-    @param held_gnss_tier_override: If set, locks the GNSS noise to this named
-           fix-state tier for the whole episode (bypasses per-episode tier
-           sampling and the Markov drift). Evaluation passes the per-condition
-           tier name so a GNSS level becomes a controlled independent variable;
-           None runs the training noise process (sampling + drift).
+    @param host_override: Override the per-worker CARLA host (e.g. the dryrun
+           inspector, which connects to carla-server-demo); None uses the
+           per-rank training host.
+    @param port_override: Override the per-worker CARLA port; None uses the
+           per-rank training port.
+    @param held_gnss_tier_override: If set, locks GNSS noise to this fix-state
+           tier for the whole episode, bypassing per-episode sampling and Markov
+           drift, so evaluation can make GNSS level a controlled variable; None
+           runs the training noise process.
     @param degrade_one_way_override: If True, the episode starts at rtk_fixed and
-           the Markov chain may only degrade (never recover) - the monotone-
-           degradation eval condition. Ignored when held_gnss_tier_override is set
-           (a held tier has no drift). None/False runs the normal recovering chain.
+           the chain may only degrade, never recover (the monotone-degradation
+           eval condition); has no effect when held_gnss_tier_override is set.
     @param degrade_rate_scale: Multiplier on the one-way chain's downward
-           transition mass, compressing the drift schedule so the walk to the
-           worst tier completes inside the episode horizon. 1.0 is the
-           datasheet-anchored rate and the default everywhere; only the drift
-           condition raises it. Ignored unless degrade_one_way_override is set.
+           transition mass so the walk to the worst tier completes inside the
+           episode horizon; 1.0 is the datasheet-anchored default everywhere
+           except the drift condition. Ignored unless degrade_one_way_override.
     @return Callable that creates and returns a CARLAParkingEnv instance.
     """
 
-    # Compute per-worker connection params.
     worker_port = (
         port_override
         if port_override is not None

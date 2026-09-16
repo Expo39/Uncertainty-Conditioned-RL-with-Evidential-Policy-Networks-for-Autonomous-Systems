@@ -41,10 +41,6 @@ class SafetyWrapper(gym.Wrapper):
     @note Only evaluation/deployment uses this wrapper; training runs without it.
     """
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     def __init__(
         self,
         env: gym.Env,

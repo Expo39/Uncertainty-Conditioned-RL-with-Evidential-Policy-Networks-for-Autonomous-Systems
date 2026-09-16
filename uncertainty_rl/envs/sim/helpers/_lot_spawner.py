@@ -132,10 +132,6 @@ class LotSpawner:
     # Motorcycle occupant name -> blueprint attribute (matches YAML 'occupant' field)
     _MOTORCYCLE_OCCUPANTS: Tuple[str, ...] = ("Kawasaki Ninja", "Yamaha YZF-R")
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     def __init__(
         self,
         cone_spacing: float,
@@ -150,10 +146,10 @@ class LotSpawner:
         @param cone_spacing: Spacing between perimeter/obstacle cone markers (metres).
         @param marker_blueprint: CARLA blueprint ID for cone markers (e.g.
                'static.prop.constructioncone').
-        @param bay_occupancy_min: Minimum fraction of non-target bays to fill
-               with parked cars [0, 1]. Resampled each episode.
-        @param bay_occupancy_max: Maximum fraction of non-target bays to fill
-               with parked cars [0, 1]. Resampled each episode.
+        @param bay_occupancy_min: Min fraction of non-target bays to fill with
+               parked cars [0, 1]; resampled each episode.
+        @param bay_occupancy_max: Max fraction of non-target bays to fill with
+               parked cars [0, 1]; resampled each episode.
         @param spawn_perimeter_cones: When False, the perimeter cone ring is not
                spawned - the lot boundary is enforced by the soft out-of-bounds
                penalty instead. Interior obstacle cones are unaffected.
@@ -186,10 +182,6 @@ class LotSpawner:
         self._yzf_bp: Optional[Any] = None
         # Prebuilt occupant map - populated in refresh_blueprints().
         self._occupant_bp: Dict[str, Optional[Any]] = {}
-
-    # -----------------------------------------------------------------------
-    # Per-reset setup
-    # -----------------------------------------------------------------------
 
     def set_rng(self, rng: "np.random.Generator") -> None:
         """
@@ -233,10 +225,6 @@ class LotSpawner:
             self._MOTORCYCLE_OCCUPANTS[0]: self._ninja_bp,
             self._MOTORCYCLE_OCCUPANTS[1]: self._yzf_bp,
         }
-
-    # -----------------------------------------------------------------------
-    # Spawning
-    # -----------------------------------------------------------------------
 
     def spawn_all(
         self,
@@ -309,10 +297,6 @@ class LotSpawner:
         self._settle_pending(world, vehicle_pending)
         self._freeze_pending(vehicle_pending, self.spawned_static_vehicles)
 
-    # -----------------------------------------------------------------------
-    # Cleanup
-    # -----------------------------------------------------------------------
-
     def cleanup(self) -> None:
         """
         @brief Destroy per-episode parked vehicles and clear the vehicle list.
@@ -352,10 +336,6 @@ class LotSpawner:
         self.spawned_cones.clear()
         self.spawned_static_vehicles.clear()
         self._cached_cones_layout = ""
-
-    # -----------------------------------------------------------------------
-    # Private helpers
-    # -----------------------------------------------------------------------
 
     def _freeze_pending(
         self,
