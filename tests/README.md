@@ -52,7 +52,6 @@ make docker-test               # Full suite (unit + integration)
 | `test_carla_parking.py` | `CARLAParkingEnv` obs/action shapes, geometry helpers (`point_in_polygon`, `yaw_from_quaternion`, `wrap_angle_symmetric`), `build_observation`, `extract_obstacle_features`, `load_floor_plan`, `wait_for_ekf`, bay sampling, reward, `VisStateWriter` |
 | `test_covariance_utils.py` | `extract_2d_covariance_features`, `validate_covariance_matrix`, `get_covariance_dimension`, `make_diagonal_covariance` |
 | `test_sb3_integration.py` | SB3 + evidential policy: policy construction, forward pass, action sampling, dual-encoder wiring |
-| `test_baseline_configs.py` | All 4 baseline YAMLs load correctly and override only permitted keys |
 | `test_evaluation.py` | `EvaluationMetrics` container and aggregation, `_scale_sensor_noise` (no CARLA connection) |
 | `test_covariance_subscriber.py` | `_CovarianceSubscriber`: JSON file reading, mtime staleness guard, `invalidate()`, `get_latest_uncertainty()`, `get_latest_pose()`, `has_data` |
 | `test_train_ppo.py` | `linear_schedule`, `EnvDiagnosticsCallback`, `make_env` helpers (no CARLA required) |
@@ -114,7 +113,6 @@ than reading a fixture. The structural constants themselves (`TOTAL_OBS_DIM`,
 | `utils/bay_success.py` | `test_bay_success.py` |
 | `envs/_parking_core.py` (`normalise_observation`) | `test_observation_norm.py` |
 | `ros2/.../sensor_relay/gnss_noise_relay.py` | `test_gnss_noise_relay.py` |
-| `configs/baselines/*.yaml` | `test_baseline_configs.py` |
 | `configs/deployment/sim/curriculum/*.yaml` | `test_curriculum_invariants.py` |
 | `scripts/analysis/cross_seed.py` | `test_cross_seed.py` |
 | `scripts/analysis/_discovery.py` | `test_cross_seed_discovery.py` |

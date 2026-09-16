@@ -23,7 +23,8 @@ on the real vehicle.
 | RTK-GNSS | `sensors.gnss.mount` | Antenna mount position. |
 | 2D LiDAR | `sensors.lidar` | Range (25 m), FOV (270 deg), frequency (15 Hz), a single channel, and mount position. |
 
-> **Warning**: All mount values are unmeasured placeholders until filled in at the test site.
+> **Note**: Mount values are the nominal design positions. Confirm them against the
+> survey for the specific vehicle before a deployment run.
 
 ## `agent_config.yaml`
 

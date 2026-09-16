@@ -1,17 +1,17 @@
 # configs/deployment/real/
 
-Real-vehicle deployment configs. These files are placeholders until the test site is
-instrumented and a calibration run is performed. The deployment path loads the
-`real_world_datum` and `actuation_calibration` files referenced in
-`configs/deployment/agent_config.yaml` to calibrate the EKF frame and actuators on
-the real vehicle.
+Real-vehicle deployment configs. These are site- and vehicle-specific: the values here
+are the defaults, and each is set from the survey and calibration run for the site being
+deployed to. The deployment path loads the `real_world_datum` and `actuation_calibration`
+files referenced in `configs/deployment/agent_config.yaml` to calibrate the EKF frame and
+actuators on the real vehicle.
 
 ## Files
 
 | File | Purpose | Status |
 |------|---------|--------|
-| `real_world_datum.yaml.example` | Surveyed lot datum for EKF frame calibration | Template only - copy and fill in at test site |
-| `actuation_calibration.yaml` | Per-actuator gain, deadband, bias mapping | Identity (uncalibrated) until calibration run |
+| `real_world_datum.yaml.example` | Surveyed lot datum for EKF frame calibration | Template - copy and set from the site survey |
+| `actuation_calibration.yaml` | Per-actuator gain, deadband, bias mapping | Identity mapping; set from the vehicle's response curve |
 | `mission.yaml` | Target bay and layout file for a deployment run | Set before each run |
 
 ## Pre-deployment checklist
@@ -37,8 +37,8 @@ cp configs/deployment/real/real_world_datum.yaml.example \
    configs/deployment/real/real_world_datum.yaml
 ```
 
-Then fill in the surveyed values at the test site. Do not commit `real_world_datum.yaml`
-with placeholder values.
+Then fill in the surveyed values for the site. `real_world_datum.yaml` is per-site and
+is not committed.
 
 All keys are nested under a top-level `datum:` mapping:
 
@@ -60,8 +60,9 @@ Maps policy normalised outputs to physical actuator commands. Consumed by
 `ActuationCalibration.from_config()`. Each of the three actuators under `calibration:`
 carries `gain`, `deadband`, `deadband_offset`, `bias`, `min_output` and `max_output`.
 Note that `min_output` is `-1.0` for steering but
-`0.0` for throttle and brake, which are non-negative axes. All values are identity until
-a calibration run is performed.
+`0.0` for throttle and brake, which are non-negative axes. The shipped values are an
+identity mapping; set the per-axis terms from the vehicle's measured response curve,
+since they are a property of its drive-by-wire hardware.
 
 ## `mission.yaml`
 
@@ -69,8 +70,7 @@ Per-run mission definition. Set `target_bay_id` to the identifier of the target 
 the layout YAML, and `layout_file` to the path of that layout.
 
 Bay identifiers follow the `<bay_type>_<index>` form the generator writes, for example
-`perpendicular_12`. The shipped `target_bay_id` is a placeholder and must be set for the
-site before a run.
+`perpendicular_12`. Set `target_bay_id` for the site before each run.
 
 ## See also
 

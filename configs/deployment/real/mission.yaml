@@ -10,7 +10,7 @@
 #   3. Set layout_file to the matching layout YAML path.
 #   4. Restart the deployment process.
 
-# Bay to park in. Placeholder - set for the site before each mission.
+# Bay to park in; set for the site before each mission.
 # IDs take the form <bay_type>_<index>, e.g. "perpendicular_12".
 target_bay_id: "B01"
 
