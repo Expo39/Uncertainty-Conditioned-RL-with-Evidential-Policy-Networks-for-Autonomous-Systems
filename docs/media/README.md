@@ -23,7 +23,8 @@ resolve once the asset is added. Paths from nested READMEs use relative
 
 To replace a placeholder: record the session (or export the plot), name the file
 `<short_name>.gif` / `<short_name>.png`, and drop it in this directory. The image link
-resolves automatically. Each asset is shown in exactly one README.
+resolves automatically. An asset may be shown in more than one README - reference the same
+file rather than committing a second copy of the same bytes.
 
 ### Sizing (do not skip)
 
@@ -73,8 +74,8 @@ than "placeholder", so the page reads as prose with a figure in it.
 Assets fall into three groups. Run `make check-host-deps` first - every route needs the
 host `ffmpeg` binary.
 
-**Group A - the 2D viewer records itself.** `visualiser_2d`, `gnss_degradation`,
-`parking_episode`, `baseline_comparison`. The viewer owns its Pygame surface, so
+**Group A - the 2D viewer records itself.** `visualiser_2d`, `parking_episode`,
+`baseline_comparison`. The viewer owns its Pygame surface, so
 `RECORD=true` (or the `R` key) captures it directly:
 
 ```bash
@@ -119,8 +120,7 @@ tables.
 | Name | Caption | Shown in |
 |------|---------|----------|
 | `carla_3d` | 3D CARLA spectator view - evidential policy navigating the rectangular lot | `README.md` |
-| `gnss_degradation` | Same bay attempted under RTK fixed vs degraded GNSS - driving behaviour side by side | `README.md` |
-| `visualiser_2d` | **Present.** Parking as the GNSS fix state recovers degraded -> standalone -> RTK fixed | `scripts/visualise/README.md` |
+| `visualiser_2d` | **Present.** Parking as the GNSS fix state climbs degraded -> standalone -> float -> RTK fixed | `README.md`, `scripts/visualise/README.md` |
 | `parking_episode` | Bird's-eye view of a parking episode under RTK float conditions | `uncertainty_rl/envs/README.md` |
 | `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
 | `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |
@@ -157,7 +157,7 @@ an asset is not neutral illustration when its caption makes a claim.
 | Asset | Route | Status |
 |-------|-------|--------|
 | `visualiser_2d` | A: `make eval-visualise-2d RECORD=true` | **Done** - in `docs/media/` |
-| `gnss_degradation` | A: two runs, `GNSS_TIER=fixed` and `=degraded` | Ready |
+| `gnss_degradation` | - | **Retired.** `visualiser_2d` already shows a full degraded-to-fixed recovery ending in a successful park, which reads better than a fixed-vs-degraded side-by-side. The root README shows that clip instead |
 | `parking_episode` | A: `GNSS_TIER=float` | Ready |
 | `baseline_comparison` | A: `BASELINE=vanilla_ppo` vs `full_method`, both `GNSS_TIER=degraded` | Ready |
 | `safety_handoff` | - | **Retired, do not create.** The gate is a negative result: total predictive uncertainty scores ROC AUC 0.55 / 0.52 over 1800 episodes (chance), below the EKF position std at 0.57 / 0.63. A clip of a handoff firing would present a mechanism the data says does not beat the covariance baseline. `gate_roc` is the defensible figure |

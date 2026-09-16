@@ -76,15 +76,20 @@ flowchart TB
 <!-- gif:placeholder name="carla_3d" caption="3D CARLA spectator view - evidential policy navigating the rectangular lot" -->
 ![CARLA 3D placeholder](docs/media/carla_3d.gif)
 
-<!-- gif:placeholder name="gnss_degradation" caption="Same bay attempted under RTK fixed vs degraded GNSS - driving behaviour side by side" -->
-![GNSS degradation placeholder](docs/media/gnss_degradation.gif)
+The 2D bird's-eye viewer at the end of an episode. The GNSS fix state climbs back up the
+ladder as the car closes on the bay - degraded (red) to standalone (orange) to RTK float
+(amber) to RTK fixed (green) - and the car parks once localisation is trustworthy again.
+The chain is neighbour-only, so every recovery passes through float; here that rung lasts
+a few tenths of a second.
 
-> Captured with `GNSS_TIER=fixed` and `GNSS_TIER=degraded` (see
-> [scripts/visualise/README.md](scripts/visualise/README.md)). The clip shows the
-> **behaviour** difference - the ring is the tier's configured 1-sigma GNSS noise, which is
-> what changes between the two runs. It is not a claim about the EKF posterior: degraded
-> injects zero-mean 5 m noise, but the fused estimate stays sub-metre most of the time, so
-> the covariance separation between the tiers is mild by design.
+<p align="center">
+  <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="620">
+</p>
+
+> The ring around the car is the tier's **configured** 1-sigma GNSS noise, not the EKF's
+> live covariance estimate. Degraded injects zero-mean 5 m noise, but the fused estimate
+> stays sub-metre most of the time, so the posterior separation between tiers is milder
+> than the ring suggests.
 > @see `documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`.
 
 ---
