@@ -60,7 +60,7 @@ RUN pip install --no-cache-dir pip==26.1.2 setuptools==82.0.1 wheel==0.47.0
 # Create workspace directory
 WORKDIR /workspace
 
-# Copy pyproject.toml for pip install -e 
+# Copy pyproject.toml for pip install -e
 COPY pyproject.toml /workspace/pyproject.toml
 # Minimal stub so pip install -e resolves the package at build time.
 # The real source is provided at runtime via the bind-mount in docker-compose.yml,
