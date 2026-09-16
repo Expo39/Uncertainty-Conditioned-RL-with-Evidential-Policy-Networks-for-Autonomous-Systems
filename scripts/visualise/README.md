@@ -10,10 +10,7 @@ Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evalua
 | Load checkpoint + headless CARLA + 2D viewer | `make eval-visualise-2d` |
 | Load checkpoint + CARLA 3D spectator | `make docker-eval-visualise-3d` |
 | Custom checkpoint | `make eval-visualise-2d BASELINE=full_method CHECKPOINT=6_42_22062026-1502` |
-| Record the drive to MP4 | `make eval-visualise-2d RECORD=true ...` |
 | Watch without writing trace CSVs | `make eval-visualise-2d TRACE=false ...` |
-| Cut a GIF from the newest recording | `make clip START=00:05 END=00:20` |
-| Check the host ffmpeg dependency | `make check-host-deps` |
 
 > `make eval-visualise-2d` tears the whole Docker stack down before it starts
 > (workers and compose, orphans included), so it **will stop a training run in
@@ -99,31 +96,6 @@ Both the card and the ring are driven by `configs/deployment/sim/gnss_noise_prof
 
 The card is always filled, so a tier change reads as a colour change within a fixed shape rather than as a panel appearing and disappearing. The accuracy figure is stated once, as `Position known to +/- X m (1-sigma)`; the tier's YAML `description` is deliberately not drawn, since it restates the same number and changes too fast to read on video.
 
-## Recording
-
-`RECORD=true` starts recording on launch; the `R` key toggles it at any time, which is the easier route when you want to skip the 30-60 s CARLA start-up and capture only the interesting part of a drive. Recording state is reported on the console rather than on screen, so nothing about the capture appears in the window or the video. Files land in `outputs/recordings/<DD-MM-YYYY-HHMMSS>.mp4` and are finalised on Ctrl+C or window close.
-
-`make clip` cuts a segment out of a recording, using ffmpeg's two-pass palette pipeline for GIFs (markedly better than a naive conversion on flat vector-style graphics):
-
-```
-make clip START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
-make clip START=12 END=28 FORMAT=mp4 WIDTH=1280
-```
-
-`VIDEO=` defaults to the newest file in `outputs/recordings/`, so the usual record-then-cut flow needs no filename lookup; pass it explicitly to cut an older recording. `OUT=` writes the clip somewhere specific (e.g. straight into `docs/media/`). `START`/`END` accept `MM:SS` or plain seconds. This is how the `docs/media/` GIF placeholders get filled.
-
-### Capturing a tier comparison
-
-To show what the policy does at each fix state, pin the tier so a whole drive runs at one level, then record each in turn:
-
-```
-make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
-  CHECKPOINT=6_42_22062026-1502 STAGE=6 REALTIME=true \
-  GNSS_TIER=fixed RECORD=true TRACE=false
-```
-
-Repeat with `GNSS_TIER=float`, `standalone`, `degraded` - identical layout, checkpoint and policy, with only the fix state changing. Leave `GNSS_TIER=` empty for the live Markov chain, which is what shows the transitions and the recovery; use the `R` key there to record only once the tier card changes colour.
-
 ### Episode number
 
 The HUD context line omits the episode number by default, since it is run bookkeeping that means nothing to an audience watching a recording. Pass `SHOW_EPISODE=true` to either viewer target (or `--show-episode` when running `visualiser.py` directly) to put `Ep: N` back between the floor plan and the step count.
@@ -132,7 +104,6 @@ The HUD context line omits the episode number by default, since it is run bookke
 
 | Key | Action |
 |-----|--------|
-| R | Start/stop MP4 recording |
 | F | Toggle fullscreen |
 | ESC / Q | Exit (removes signal file) |
 
@@ -161,8 +132,6 @@ Font sizes, the legend width and stroke widths are all multiplied by `--ui-scale
 ## Dependencies
 
 Pygame, numpy and PyYAML, all installed in the project `.venv/` (via `make install`). Colours are imported from `scripts/colours/` - the single source of truth for the full visualisation palette.
-
-Recording and `make clip` additionally need the **host** `ffmpeg` binary. The viewer runs on the host (only `demo_drive.py` runs in a container), so ffmpeg is not installed in any image - `make check-host-deps` verifies it, and the recording targets call that check for you. Install with `sudo apt-get install ffmpeg`. Everything except recording works without it.
 
 ## See also
 
