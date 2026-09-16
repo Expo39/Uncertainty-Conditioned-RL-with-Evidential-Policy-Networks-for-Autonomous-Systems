@@ -39,8 +39,13 @@ sequenceDiagram
     V->>E: remove outputs/.vis_active, delete JSONL
 ```
 
-<!-- gif:placeholder name="visualiser_2d" caption="Detachable 2D bird's-eye visualiser during a parking episode" -->
-![2D visualiser placeholder](../../docs/media/visualiser_2d.gif)
+The end of one episode, with the GNSS fix state recovering as the car closes on the bay:
+the panel walks degraded (red) to standalone (orange) and back up to RTK fixed (green)
+while the Markov chain drifts, and the car parks once localisation is trustworthy again.
+
+<p align="center">
+  <img src="../../docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded to RTK fixed" width="620">
+</p>
 
 ## File protocol
 
