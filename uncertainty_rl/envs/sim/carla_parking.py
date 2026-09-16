@@ -76,29 +76,21 @@ from uncertainty_rl.utils.logging import DebugLogger
 
 logger = logging.getLogger(__name__)
 
-# Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
 
-# Chase-camera placement for render_mode="human" (windowed demo only). Far
-# enough back to keep the target bay and its neighbours in frame while the car
-# manoeuvres, angled down so the bay markings stay readable.
+# Chase-camera placement for render_mode="human". Far enough back to keep the
+# target bay and its neighbours in frame, angled down so markings stay readable.
 _SPECTATOR_BACK_M = 12.0
 _SPECTATOR_UP_M = 6.0
 _SPECTATOR_PITCH_DEG = -18.0
-# Exponential smoothing factor for the chase camera, per simulation tick. Low
-# enough to absorb per-tick steering jitter, high enough to keep up with the car.
+# Per-tick smoothing: low enough to absorb steering jitter, high enough to keep up.
 _SPECTATOR_SMOOTHING = 0.15
 
-# Re-export geometry helpers so existing imports from this module still work
+# Re-exported so existing imports from this module still work.
 __all__ = [
     "CARLAParkingEnv",
     "_compute_relative_target_pose",
 ]
-
-
-# ---------------------------------------------------------------------------
-# Main environment
-# ---------------------------------------------------------------------------
 
 
 class CARLAParkingEnv(gym.Env):
@@ -113,10 +105,6 @@ class CARLAParkingEnv(gym.Env):
     """
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 30}
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -158,65 +146,33 @@ class CARLAParkingEnv(gym.Env):
         @param carla_sensors_config: Sensor noise parameters (imu, lidar subsections).
         @param parking_scenarios_config: Parking lot configuration (floor_plans,
                cone spacing, bay occupancy, NPC counts).
-        @param include_covariance: If True, obs includes EKF std devs.
-               If False, covariance omitted (no ROS 2 subscription).
-        @param include_obstacle_obs: If True, obs includes 5 LiDAR clearance dims.
-               Set False to ablate obstacle awareness.
-        @param vis_output_path: Path for vis_history.jsonl writes. If None,
-               defaults to outputs/vis_history.jsonl. Writing only occurs when
-               the signal file outputs/.vis_active exists (created by the
-               visualiser process).
-        @param carla_timestep: Simulation timestep in seconds (default 0.05 = 20 Hz).
-               Written into vis frames so the visualiser can pace playback at
-               real-time speed.
-        @param eval_mode: If True, OOD floor plans are included in sampling.
-               If False (training), only non-OOD floor plans are used.
-        @param debug: If True, emit per-step diagnostics via DebugLogger and include
-               a debug dict in vis frames for the visualiser HUD. Off by default.
-        @param map_load_sleep: Seconds to wait after loading the FlatPlane OpenDRIVE
-               world before continuing. Increase on slow servers (default 5.0).
-        @param max_ego_speed_ms: Maximum ego vehicle speed in m/s. Throttle is cut
-               when this speed is exceeded. Default 8.0 m/s (~29 km/h),
-               appropriate for parking lot manoeuvres. The live value comes from
-               max_ego_speed_ms in agent_config.yaml; this default is the guard
-               used only when that key is absent.
-        @param use_extra_spawns: If True, extra spawn transforms from the layout
-               YAML are included in the spawn pool. If False (default), only the
-               primary spawn is used. With RTK-GNSS the odom frame is UTM-aligned
-               regardless of spawn location, so extra spawns are safe to enable.
-        @param gnss_noise_profiles_path: Path to GNSS noise profiles YAML. If
-               provided, the env samples an RTK fix-state tier each reset() and
-               spawns the GNSS sensor with the corresponding noise multiplier.
-        @param held_gnss_tier_override: If set, locks the GNSS noise to the named
-               fix-state tier for the WHOLE episode (Markov drift held off in the
-               relay) every reset. The name must match a tier in the loaded GNSS
-               noise profiles; that tier drives both the relay noise and the
-               held-level signalling, so the level is a controlled independent
-               variable. Used during evaluation to lock GNSS noise to a specific
-               condition.
-        @param degrade_one_way_override: If True, the episode STARTS at rtk_fixed
-               and the relay lets the Markov chain only degrade (never recover) -
-               the monotone-degradation eval condition (starts good, drifts to
-               degraded, stays there). Mutually exclusive with a held tier (a held
-               tier suppresses drift entirely). Training leaves it False.
+        @param include_covariance: If True, the obs carries the EKF std devs.
+        @param include_obstacle_obs: If True, the obs carries the LiDAR clearances.
+        @param vis_output_path: Destination for vis_history.jsonl (default
+               outputs/vis_history.jsonl); written only while .vis_active exists.
+        @param carla_timestep: Simulation timestep (seconds).
+        @param eval_mode: If True, OOD floor plans join the sampling pool.
+        @param debug: If True, emit per-step diagnostics and a vis HUD debug dict.
+        @param map_load_sleep: Seconds to settle after loading the OpenDRIVE world.
+        @param max_ego_speed_ms: Speed (m/s) above which throttle is cut.
+        @param use_extra_spawns: If True, the layout's extra spawn transforms join
+               the spawn pool.
+        @param gnss_noise_profiles_path: GNSS noise profiles YAML; enables
+               per-episode RTK fix-state tier sampling.
+        @param held_gnss_tier_override: Locks GNSS noise to this tier for the whole
+               episode (relay drift suppressed), making the level a controlled
+               independent variable during evaluation.
+        @param degrade_one_way_override: If True, start at rtk_fixed and let the
+               chain only degrade. Mutually exclusive with a held tier.
         @param degrade_rate_scale: Multiplier on the one-way chain's downward
-               transition mass, compressing the drift so the walk to the worst
-               tier completes inside the episode horizon (at the native rate it
-               takes ~27 s in expectation against a ~17 s episode). 1.0 is the
-               datasheet-anchored schedule and the default; only the drift
-               evaluation condition raises it. Ignored unless
-               degrade_one_way_override is active.
-        @param success_dwell_steps: Number of consecutive steps all success
-               criteria (position, orientation, velocity) must be satisfied
-               before the episode terminates as a success. Prevents a fast
-               drive-through that momentarily satisfies the thresholds from
-               being counted as a park. Default 5 steps = 0.25 s at 20 Hz.
-        @param actuator_model: Per-axis rate limits and the brake-overrides-
-               throttle threshold. Keys: steer_max_delta_per_decision,
-               throttle_max_delta_per_decision, brake_max_delta_per_decision,
-               brake_override_throttle_threshold. Clamps the policy command
-               in step() before forwarding to CARLA. If None or missing keys,
-               defaults match production drive-by-wire literature.
+               transition mass, so the walk to the worst tier fits inside the
+               episode horizon (natively ~27 s against a ~17 s episode).
+        @param success_dwell_steps: Consecutive decisions the success criteria must
+               hold, so a drive-through cannot count as a park.
+        @param bay_margin: Inward margin (metres) for the polygon-fit success check;
+               negative values let corners overhang.
+        @param actuator_model: Per-axis rate limits and the brake-overrides-throttle
+               threshold, applied to the policy command in step().
         """
         super().__init__()
 
@@ -225,13 +181,12 @@ class CARLAParkingEnv(gym.Env):
         self.town = town
         self.max_steps = max_steps
         self.render_mode = render_mode
-        # Smoothed chase-camera state (render_mode="human" only). None until the
-        # first update, which snaps to the ego rather than easing in from origin.
         self._chase_xyz: Tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # None until the first update, which snaps to the ego rather than
+        # easing in from the origin.
         self._chase_yaw: Optional[float] = None
-        # Wall-clock budget per simulation tick when a human is watching, so
-        # rendered frames arrive at the sim rate instead of in bursts. Zero
-        # (the default) leaves training and evaluation running flat out.
+        # Wall-clock budget per tick when a human is watching, so frames arrive at
+        # the sim rate. Zero leaves training and evaluation running flat out.
         self._tick_wall_seconds: float = 0.0
         self._include_covariance = include_covariance
         self._include_obstacle_obs = include_obstacle_obs
@@ -240,7 +195,6 @@ class CARLAParkingEnv(gym.Env):
         self._max_ego_speed_ms = max_ego_speed_ms
         self._use_extra_spawns = use_extra_spawns
 
-        # Actuator rate limits and brake-overrides-throttle threshold.
         am = actuator_model or {}
         self._steer_max_delta: float = float(
             am.get("steer_max_delta_per_decision", 0.15)
@@ -255,33 +209,27 @@ class CARLAParkingEnv(gym.Env):
             am.get("brake_override_throttle_threshold", 0.1)
         )
 
-        # Previous actuator command (post-clamp), persisted across calls so the
-        # rate limiter measures the delivered command, not the commanded one.
-        # Reset to zero on episode start.
+        # Post-clamp commands, persisted across calls so the rate limiter measures
+        # the delivered command, not the commanded one.
         self._prev_steer_cmd: float = 0.0
         self._prev_throttle_cmd: float = 0.0
         self._prev_brake_cmd: float = 0.0
         self._held_gnss_tier_override = held_gnss_tier_override
-        # Monotone-degradation eval condition: start at rtk_fixed and let the
-        # relay drift only downward. Ignored when a held tier is set (held tiers
-        # have no drift at all).
+        # Ignored when a held tier is set: held tiers have no drift at all.
         self._degrade_one_way_override = bool(degrade_one_way_override) and (
             held_gnss_tier_override is None
         )
-        # Drift-schedule compression, forwarded to the relay with the one-way
-        # flag. Floored at 1.0 so a stray config value cannot slow the chain.
+        # Floored at 1.0 so a stray config value cannot slow the chain.
         self._degrade_rate_scale: float = max(1.0, float(degrade_rate_scale))
 
         self._bay_margin: float = float(bay_margin)
 
-        # Load GNSS noise profiles for per-episode RTK fix-state sampling.
         self._gnss_noise_tiers: List[Dict[str, Any]] = []
         self._gnss_tier_weights: np.ndarray = np.empty(0, dtype=np.float64)
         self._current_gnss_multiplier: float = 1.0
         self._current_gnss_tier: Optional[Dict[str, Any]] = None
-        # When a held-tier override locks a single tier for evaluation, the
-        # relay must HOLD that tier (no Markov drift) so the level is a clean
-        # independent variable. publish_episode_config carries this flag.
+        # Forwarded to the relay by publish_episode_config: it must HOLD the tier
+        # (no Markov drift) so an evaluated level is a clean independent variable.
         self._hold_gnss_tier: bool = False
         if gnss_noise_profiles_path:
             self._load_gnss_noise_profiles(gnss_noise_profiles_path)
@@ -328,22 +276,17 @@ class CARLAParkingEnv(gym.Env):
         )
         self._fixed_gnss_tier: Optional[str] = scenarios.get("fixed_gnss_tier", None)
 
-        # Optional whitelist restricting which bays the per-episode sampler may
-        # target. None (default) samples from every eligible bay in the layout.
-        # A non-empty list restricts the target pool to those bay ids, used by
-        # the curriculum to introduce bay variety on a SUBSET (e.g. one row at a
-        # single approach orientation) before opening up to the whole lot. It is
-        # ignored when fixed_target_bay_id is set (a single fixed bay already
-        # pins the target). Bay ids absent from the layout raise at pool build.
+        # Whitelist narrowing the target pool, so the curriculum can introduce bay
+        # variety on a subset before opening up the whole lot. None samples every
+        # eligible bay; ignored when fixed_target_bay_id already pins the target.
         _allowed = scenarios.get("allowed_bay_ids", None)
         self._allowed_bay_ids: Optional[List[str]] = (
             [str(b) for b in _allowed] if _allowed else None
         )
 
-        # Soft out-of-bounds boundary: the lot polygon inflated by a margin forms
-        # a run-off skirt; leaving it costs a small per-decision penalty that
-        # accumulates until the episode terminates. Config overrides the
-        # structural defaults in constants.py.
+        # Soft out-of-bounds boundary: the lot polygon inflated by a margin forms a
+        # run-off skirt; leaving it costs a per-decision penalty that accumulates
+        # until the episode terminates.
         self._oob_step_penalty: float = scenarios.get(
             "oob_step_penalty", OOB_STEP_PENALTY
         )
@@ -353,38 +296,32 @@ class CARLAParkingEnv(gym.Env):
         self._oob_inflation_margin: float = scenarios.get(
             "oob_inflation_margin", OOB_INFLATION_MARGIN
         )
-        # Inflated boundary polygon and accumulated cost - both reset per episode.
         self._oob_inflated_corners: List[Tuple[float, float]] = []
         self._oob_accumulated_penalty: float = 0.0
 
-        # CARLA handles
         self.client: Optional[Any] = None
         self.world: Optional[Any] = None
         self.vehicle: Optional[Any] = None
 
-        # The spawn transform chosen for this episode (set in reset() before
-        # any world ticks so the GNSS datum config is written first).
+        # Set in reset() before any world tick, so the GNSS datum config is
+        # written before the first GNSS callback fires.
         self._chosen_spawn: Dict[str, float] = {}
-        # Index of the chosen spawn in self._spawn_pool (0 = primary spawn,
-        # 1+ = extra_spawn_transforms). Surfaced in step info as "spawn_id".
+        # Index into self._spawn_pool (0 = primary, 1+ = extra_spawn_transforms).
         self._chosen_spawn_idx: int = 0
 
-        # Ego vehicle CoM z after settling under gravity.  Set in _spawn_vehicle()
-        # and passed to all static spawners so props and vehicles land on the same
-        # ground surface instead of using the hardcoded YAML origin_z.
+        # Ego CoM z after settling under gravity, passed to the static spawners so
+        # props and vehicles land on the same ground surface as the ego rather
+        # than on the YAML origin_z.
         self._floor_z: float = 0.3
 
-        # Ego bounding-box half-extents (metres) read from CARLA at spawn time.
-        # Used by the polygon-fit success check in _compute_reward to test
-        # whether every corner of the car lies inside the target bay polygon.
+        # Ego bounding-box half-extents (metres), read from CARLA at spawn time
+        # for the polygon-fit success check.
         self._ego_half_length: float = 0.0
         self._ego_half_width: float = 0.0
 
-        # Per-step debug diagnostics.
-        # Instantiated here so NPCController / SensorManager can share the reference.
+        # Constructed here so NPCController / SensorManager share the reference.
         self._debug_logger: DebugLogger = DebugLogger(debug=debug)
 
-        # Lot spawner - owns static cones and parked vehicles.
         self._lot_spawner = LotSpawner(
             cone_spacing=scenarios.get("perimeter_cone_spacing", 2.0),
             marker_blueprint=scenarios.get(
@@ -395,7 +332,6 @@ class CARLAParkingEnv(gym.Env):
             spawn_perimeter_cones=scenarios.get("spawn_perimeter_cones", True),
         )
 
-        # NPC controller - owns patrol vehicles and pedestrians.
         self._npc_controller = NPCController(
             num_patrol_max=self._num_patrol_max,
             patrol_obstacle_distance=self._patrol_obstacle_distance,
@@ -408,54 +344,47 @@ class CARLAParkingEnv(gym.Env):
             pedestrian_max_lifetime=self._pedestrian_max_lifetime,
         )
 
-        # Sensor manager - owns IMU, GNSS, 2D LiDAR, collision sensor.
         self._sensor_manager = SensorManager(
             sensors_config=self._sensors_config,
         )
 
-        # Cached actor list for patrol obstacle proximity checks.  Rebuilt
-        # once after all vehicles are spawned; avoids per-step world queries.
+        # Rebuilt once after all vehicles spawn, so the patrol proximity check
+        # needs no per-step world query.
         self._all_vehicle_actors: List[Any] = []
 
-        # Cached blueprint lists - fetched once on first connect, never re-fetched.
-        # Car blueprints are owned by LotSpawner; walker BPs shared with NPCController.
+        # Blueprints are static for the lifetime of the CARLA server, so these
+        # are fetched once and never re-fetched.
         self._walker_blueprints: List[Any] = []
         self._vehicle_bp: Optional[Any] = None
 
-        # Pre-allocated observation buffer - reused every step to avoid
-        # repeated small heap allocations.
+        # Pre-allocated and reused every step to avoid repeated heap allocations.
         _obs_dim = self._compute_obs_dim()
         self._obs_dim: int = _obs_dim
         self._obs_buffer: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
-        # Most recent normalised observation returned to the agent; reused as
-        # the safe return value when a mid-decision CARLA failure aborts the
-        # episode before a fresh observation can be built.
+        # Returned in place of a fresh observation when a mid-decision CARLA
+        # failure aborts the episode before one can be built.
         self._last_norm_obs: np.ndarray = np.zeros(_obs_dim, dtype=np.float32)
         self._obstacle_features_buffer: np.ndarray = np.zeros(
             OBSTACLE_FEATURES_DIM, dtype=np.float32
         )
-        # World-frame pose buffer: [x, y, yaw, vyaw, vx_body]. vx_body is the
-        # signed body-frame longitudinal velocity (m/s).
+        # [x, y, yaw, vyaw, vx_body] in the world frame; vx_body is the signed
+        # body-frame longitudinal velocity (m/s).
         self._world_pose_buf: np.ndarray = np.empty(5, dtype=np.float32)
 
-        # Snapshot of the EKF-derived world pose from the most recent
-        # _get_state() call, surfaced into step() info for trace logging and
-        # EKF-vs-ground-truth accuracy checks. Layout matches _world_pose_buf:
-        # [x, y, yaw, vyaw, vx_body]. _last_ekf_is_real is False on the CI/test
-        # fallback path (no EKF available), so consumers can mark EKF columns
-        # as not-a-number rather than logging ground truth as if it were EKF.
+        # EKF world pose snapshotted by the last _get_state(), same layout as
+        # _world_pose_buf, surfaced into step() info. _last_ekf_is_real is False
+        # on the CI/test ground-truth fallback, so consumers can write NaN
+        # instead of logging ground truth in the EKF columns.
         self._last_ekf_world: np.ndarray = np.full(5, np.nan, dtype=np.float32)
         self._last_ekf_is_real: bool = False
-        # EKF 1-sigma localisation stds [std_x, std_y, std_yaw] (m, m, rad)
-        # from the same _get_state() read. The EKF runs for every baseline, so
-        # this is populated regardless of include_covariance - the obs flag
-        # only controls whether the policy SEES it, not whether it exists.
-        # Surfaced into step() info for uncertainty-gating analysis.
+        # EKF 1-sigma stds [std_x, std_y, std_yaw] (m, m, rad). The EKF runs for
+        # every baseline, so this is populated regardless of include_covariance -
+        # that flag controls only whether the policy SEES it.
         self._last_ekf_std: np.ndarray = np.full(3, np.nan, dtype=np.float32)
 
-        # Identity odom-to-world transform (tx, ty, cos_r, sin_r, r).
-        # The GNSS datum is latched to spawn position each episode reset, so
-        # the odom frame coincides with the world frame by construction.
+        # Odom-to-world transform (tx, ty, cos_r, sin_r, r). The GNSS datum is
+        # re-latched to the spawn position each reset, so the rotation is always
+        # identity and only the translation changes.
         self._ekf_odom_offset: Tuple[float, float, float, float, float] = (
             0.0,
             0.0,
@@ -464,9 +393,8 @@ class CARLAParkingEnv(gym.Env):
             0.0,
         )
 
-        # Target bay (world frame, set in reset). dx/dy/dyaw are computed each
-        # step by reconstructing vehicle_world via _ekf_odom_offset and then
-        # differencing against this.
+        # Target bay in the world frame, set in reset(). The obs dx/dy/dyaw come
+        # from differencing the odom-to-world EKF pose against this.
         self._target_bay: Dict[str, Any] = {
             "x": 0.0,
             "y": 0.0,
@@ -474,31 +402,25 @@ class CARLAParkingEnv(gym.Env):
             "width": 2.5,
             "depth": 5.0,
         }
-        # Cached float scalars from _target_bay to avoid dict lookup + float()
-        # cast on every _compute_reward call.
+        # Cached to spare _compute_reward a dict lookup and float() cast per call.
         self._target_x: float = 0.0
         self._target_y: float = 0.0
         self._target_yaw: float = 0.0
 
-        # Current floor plan layout (loaded from YAML in reset)
         self._current_layout: Dict[str, Any] = {}
         self._current_floor_plan_name: str = ""
-        # Spawn pool built once per layout load.
+        # Spawn pool and bay-type grouping, both built once per layout load.
         self._spawn_pool: List[Any] = []
-        # Bay-type grouping built once per layout load.
         self._bays_by_type: Dict[str, List[Dict[str, Any]]] = {}
         self._bay_type_keys: List[str] = []
 
-        # Trajectory buffer for debug overlays (ring buffer of (x, y) tuples)
         self._trajectory_buffer: Deque[Tuple[float, float]] = collections.deque(
             maxlen=_TRAJECTORY_MAXLEN
         )
-        # Last action applied (post-clamp): [steer, throttle, brake]. Updated
-        # in step() on the policy decision boundary after the actuator model
-        # has rate-limited the policy command.
+        # Post-clamp [steer, throttle, brake] actually delivered to CARLA, set on
+        # the decision boundary once the actuator model has rate-limited it.
         self._last_action: np.ndarray = np.zeros(ACTION_DIM, dtype=np.float32)
 
-        # Visualisation state writer
         self._vis_history_path: Path = (
             Path(vis_output_path)
             if vis_output_path
@@ -507,8 +429,8 @@ class CARLAParkingEnv(gym.Env):
         self._vis_signal_path: Path = self._vis_history_path.parent / ".vis_active"
         # Persistent append file handle; opened lazily, avoids per-step open().
         self._vis_file: Optional[Any] = None
-        # Signal-file stat is cached and refreshed every N steps to avoid per-step
-        # filesystem calls when the visualiser is not active (the common case).
+        # Cached signal-file stat, refreshed every N steps so the common
+        # visualiser-inactive case costs no per-step filesystem call.
         self._vis_active: bool = False
         self._vis_check_counter: int = 0
         # Truncate vis_history.jsonl every N episodes to bound file size.
@@ -516,13 +438,10 @@ class CARLAParkingEnv(gym.Env):
         self._vis_rotation_interval: int = 10
         self._carla_timestep: float = carla_timestep
 
-        # CARLA 0.9.16 segfaults (SIGSEGV, container exit 139) on long headless
-        # runs. With `restart: on-failure` on the carla-server service Docker
-        # relaunches the engine within seconds, so the failure surfaces here as
-        # a world.tick() RuntimeError. Rather than killing a multi-hour run, the
-        # env reconnects to the fresh server and drops the in-flight episode.
-        # max_reconnect_attempts caps the wait so a genuinely dead server (no
-        # restart policy, crashed host) still fails loudly instead of hanging.
+        # CARLA 0.9.16 segfaults on long headless runs; `restart: on-failure` on
+        # the carla-server service relaunches it, so the crash surfaces here as a
+        # world.tick() RuntimeError and the env reconnects rather than killing a
+        # multi-hour run. The attempt cap makes a genuinely dead server fail loud.
         recovery = self._ros2_config.get("carla_recovery", {})
         self._max_reconnect_attempts: int = int(
             recovery.get("max_reconnect_attempts", 30)
@@ -539,42 +458,31 @@ class CARLAParkingEnv(gym.Env):
 
         self._success_dwell_steps: int = max(1, success_dwell_steps)
 
-        # Episode state
         self._episode_id: int = 0
         self.steps = 0
         self._actors_frozen: bool = False
         self._success_counter: int = 0
         # Consecutive decisions below the success speed threshold while outside
-        # the acceptance box; truncates the episode as a stall at
-        # STALL_TRUNCATION_DECISIONS. @see step().
+        # the acceptance box. @see step().
         self._stall_counter: int = 0
-        # Previous corridor potential phi for the potential-based progress term
-        # in _compute_reward. progress = phi(curr) - phi(prev) telescopes to zero
-        # over any loiter, so a stationary car earns nothing from it.
+        # Previous corridor potential. progress = phi(curr) - phi(prev) telescopes
+        # to zero over a loiter, so a stationary car earns nothing from it.
         self._prev_phi: float = 0.0
-        # Per-episode reward normaliser: |phi(start)| (floored). progress and the
-        # graded timeout penalty are divided by this (then scaled by PROGRESS_TARGET)
-        # so every bay - near or far - yields a full-episode progress sum of
-        # PROGRESS_TARGET, and the timeout penalty stays on the same scale regardless
-        # of how far the sampled bay is from the spawn. Set on reset; the floor avoids
-        # a blow-up when the spawn is already near the bay. @see PHI_NORM_FLOOR.
+        # Per-episode normaliser |phi(start)|, set in reset(). Dividing progress
+        # and the graded timeout penalty by it puts every bay, near or far, on one
+        # scale. @see PHI_NORM_FLOOR for the floor that keeps it from blowing up.
         self._phi_start: float = PHI_NORM_FLOOR
 
-        # Corridor potential weights (shaping, hence code not YAML; values in
-        # constants.py). cross-track and heading are weighted above along-track so
-        # the dominant progress gradient pulls the car onto the centreline and
-        # square before advancing in depth. @see _corridor_potential.
+        # Shaping weights, hence code rather than YAML. @see _corridor_potential.
         self._w_along: float = CORRIDOR_W_ALONG
         self._w_cross: float = CORRIDOR_W_CROSS
         self._w_head: float = CORRIDOR_W_HEAD
-        # Clearance penalty coefficient (Gap B, safety nudge). NOTE: not yet
-        # tuned against the offline scenario suite - the late-turn-crash vs
-        # clean-park margin (B2 vs B1) is the acceptance bar; raise this if
-        # neighbour-clipping persists while alignment improves.
+        # Safety nudge only: sized well below the terminal magnitudes so it cannot
+        # outweigh parking. @see _obstacle_clearance_penalty.
         self._clearance_coef: float = 0.02
 
-        # Cached CARLA zero objects - reused across calls to avoid per-call
-        # construction overhead in _freeze_all_actors and _teleport_vehicle.
+        # Cached so _freeze_all_actors and _teleport_vehicle need not construct
+        # them per call.
         if carla is not None:
             self._zero_vec3: Any = carla.Vector3D(x=0.0, y=0.0, z=0.0)
             self._zero_walker_ctrl: Any = carla.WalkerControl()
@@ -591,37 +499,26 @@ class CARLAParkingEnv(gym.Env):
             dtype=np.float32,
         )
 
-        # Action space: [steer, throttle, brake], uniformly in [-1, 1].
-        # The policy outputs a tanh-squashed Gaussian on every axis. step()
-        # passes steer through and remaps throttle / brake from [-1, 1] to
-        # [0, 1] via (a + 1) / 2 so a held stop (throttle = 0, brake > 0)
-        # remains a stable region of the policy's action space.
+        # [steer, throttle, brake], all uniformly in [-1, 1] because the policy
+        # emits a tanh-squashed Gaussian on every axis. step() folds the negative
+        # half of throttle and brake to zero. @see step().
         self.action_space = spaces.Box(
             low=np.array([-1.0, -1.0, -1.0]),
             high=np.array([1.0, 1.0, 1.0]),
             dtype=np.float32,
         )
 
-        # ROS 2 covariance subscriber (only when covariance included)
-        # EKF localisation runs for EVERY baseline - it is the source of the
-        # pose, speed, and yaw-rate the policy navigates by, and the per-episode
-        # GNSS noise that the EKF estimates. include_covariance controls ONLY
-        # whether the 3 covariance feature dims (std_x/y/yaw) are written into
-        # the observation vector (an obs-layout ablation), NOT whether the EKF
-        # runs. Coupling the two would give the no-covariance baselines perfect
-        # ground-truth localisation while the covariance baselines run on noisy
-        # EKF - an unfair ablation. The subscriber is file-based (no DDS, no
-        # connection), so constructing it is always safe; when ekf_state.json is
-        # absent (CI/tests) get_latest_state() returns (None, None) and the env
-        # falls back to CARLA ground truth in _get_state().
+        # Constructed for EVERY baseline, not just include_covariance ones: the EKF
+        # supplies the pose, speed and yaw rate the policy navigates by. Coupling
+        # the two would hand the no-covariance baselines perfect ground-truth
+        # localisation, making the ablation unfair.
         self._cov_subscriber: Optional[_CovarianceSubscriber] = None
+        # File-based (no DDS, no connection), so this cannot fail; without
+        # ekf_state.json _get_state() falls back to CARLA ground truth.
         self._init_ros2()
 
-        # -------------------------------------------------------------------
-        # Stored callables for fixed-flag hot-path branches
-        # -------------------------------------------------------------------
-
-        # _read_ekf_state() -> (raw_pose, uncertainty) or (None, None)
+        # Bound once here rather than branched per step on a flag fixed at
+        # construction. Returns (raw_pose, uncertainty), or (None, None).
         if self._cov_subscriber is not None:
             _read_ekf_state: Callable[
                 [], Tuple[Optional[np.ndarray], Optional[np.ndarray]]
@@ -633,7 +530,7 @@ class CARLAParkingEnv(gym.Env):
 
         self._read_ekf_state = _read_ekf_state
 
-        # _get_lidar_scan() -> scan array or None
+        # Returns the latest scan array, or None when obstacle obs are ablated.
         if self._include_obstacle_obs:
             self._get_lidar_scan = self._sensor_manager.get_latest_lidar_scan
         else:
@@ -643,30 +540,20 @@ class CARLAParkingEnv(gym.Env):
 
             self._get_lidar_scan = _get_lidar_scan
 
-    # -----------------------------------------------------------------------
-    # Observation dimension helper
-    # -----------------------------------------------------------------------
-
     def _compute_obs_dim(self) -> int:
         """
-        @brief Compute the observation dimension based on active feature flags.
-        @return Integer observation dimension.
+        @brief Observation dimension implied by the active feature flags.
         """
         return compute_obs_dim(self._include_covariance, self._include_obstacle_obs)
-
-    # -----------------------------------------------------------------------
-    # ROS 2 initialisation
-    # -----------------------------------------------------------------------
 
     def _init_ros2(self) -> None:
         """
         @brief Create the covariance reader (file-based, no DDS).
 
-        The covariance reader uses a shared file to avoid cross-distro
-        serialisation issues between Humble and Jazzy. The /set_pose
-        signal is also file-based: the reader writes initial_pose.json and
-        the CovarianceExtractorNode in ros2-bridge publishes it locally.
-        No rclpy initialisation is needed.
+        A shared file rather than a topic, to avoid cross-distro serialisation
+        issues between Humble and Jazzy; /set_pose goes the same way, with
+        CovarianceExtractorNode publishing initial_pose.json locally. No rclpy
+        initialisation is needed.
         """
         node_name = f"covariance_subscriber_{id(self)}"
         self._cov_subscriber = _CovarianceSubscriber(
@@ -676,19 +563,14 @@ class CARLAParkingEnv(gym.Env):
         )
         logger.info("Covariance reader initialised (file-based, no DDS).")
 
-    # -----------------------------------------------------------------------
-    # GNSS noise profile loading and tier sampling
-    # -----------------------------------------------------------------------
-
     def _load_gnss_noise_profiles(self, path: str) -> None:
         """
         @brief Load RTK-GNSS noise tiers from YAML for per-episode sampling.
         @param path: Path to the GNSS noise profiles YAML file.
 
-        Each tier models a different RTK fix state (fixed, float, standalone,
-        degraded) with corresponding CARLA GNSS sensor noise and a sampling
-        weight. At each reset(), a tier is drawn from this weighted distribution
-        and the GNSS sensor is spawned with the corresponding noise multiplier.
+        Each tier models an RTK fix state with its own measurement noise and
+        sampling weight. reset() draws a start tier from the weighted
+        distribution and names it to the relay, which injects the noise.
         """
         profiles_path = Path(path)
         if not profiles_path.is_absolute():
@@ -712,7 +594,7 @@ class CARLAParkingEnv(gym.Env):
             self._gnss_noise_tiers.append(tier)
             raw_weights.append(float(tier.get("weight", 1.0)))
 
-        # Normalise and store as ndarray so np_random.choice needs no conversion.
+        # np_random.choice wants a normalised ndarray of probabilities.
         weights_arr = np.array(raw_weights, dtype=np.float64)
         total = float(weights_arr.sum())
         if total > 0:
@@ -729,15 +611,7 @@ class CARLAParkingEnv(gym.Env):
     def _resolve_held_tier(self, tier_name: str) -> Dict[str, Any]:
         """
         @brief Map a held-tier name to its loaded fix-state tier dict.
-
-        The eval conditions name the RTK fix-state tier to hold directly (e.g.
-        rtk_float), so resolution is an exact name lookup against the loaded
-        profiles. Names must match a tier in
-        configs/deployment/sim/gnss_noise_profiles.yaml.
-
-        @param tier_name: Fix-state tier name (from a held-tier override or the
-               curriculum fixed_gnss_tier).
-        @return The matching loaded tier dict.
+        @param tier_name: Tier name, matching a key in gnss_noise_profiles.yaml.
         @raises RuntimeError if no GNSS tiers are loaded or the name is unknown.
         """
         if len(self._gnss_noise_tiers) == 0:
@@ -754,13 +628,11 @@ class CARLAParkingEnv(gym.Env):
 
     def _sample_gnss_noise_tier(self) -> None:
         """
-        @brief Sample a GNSS noise tier for the current episode.
+        @brief Sample the episode's START GNSS noise tier.
 
-        When held_gnss_tier_override is set (evaluation mode), the named
-        fix-state tier is resolved and HELD for the whole episode (the relay's
-        Markov drift is suppressed via the hold flag), so the condition is a
-        clean independent variable. Otherwise a tier is sampled and the relay
-        wanders it via the Markov chain, exactly as in training.
+        A held-tier override pins the tier for the whole episode with the relay's
+        Markov drift suppressed, so the evaluated level is a clean independent
+        variable; otherwise the relay wanders the sampled tier, as in training.
         """
         if self._held_gnss_tier_override is not None:
             tier = self._resolve_held_tier(self._held_gnss_tier_override)
@@ -787,13 +659,11 @@ class CARLAParkingEnv(gym.Env):
             self._current_gnss_tier = None
             return
 
-        # Monotone-degradation condition: pin the START tier to rtk_fixed (so the
-        # episode genuinely "starts good") and let the relay's one-way chain drift
-        # it down to degraded without recovery. The downward-only behaviour is
-        # enforced relay-side via the degrade_one_way flag in publish_episode_config.
+        # Monotone degradation must genuinely "start good", so the START tier is
+        # pinned to rtk_fixed; the downward-only drift itself is enforced
+        # relay-side by the degrade_one_way flag.
         if self._degrade_one_way_override:
             tier = self._resolve_held_tier("rtk_fixed")
-        # When a fixed tier is configured, bypass the weighted sampler.
         elif self._fixed_gnss_tier is not None:
             tier = self._resolve_held_tier(self._fixed_gnss_tier)
         else:
@@ -804,10 +674,9 @@ class CARLAParkingEnv(gym.Env):
             tier = self._gnss_noise_tiers[idx]
         self._current_gnss_tier = tier
 
-        # Multiplier = tier metric stddev / base RTK-fixed stddev.
-        # The base GNSS sensor noise in env_config.yaml corresponds to
-        # RTK-fixed (~0.02 m).
-        base_stddev = 0.02  # RTK-fixed base (metres)
+        # Reported relative to the best fix, so the multiplier reads as "how much
+        # worse than RTK-fixed". Diagnostic only - the relay injects the noise.
+        base_stddev = 0.02  # rtk_fixed metric_stddev_m (metres)
         tier_stddev = float(tier.get("metric_stddev_m", base_stddev))
         self._current_gnss_multiplier = max(1.0, tier_stddev / base_stddev)
 
@@ -821,9 +690,7 @@ class CARLAParkingEnv(gym.Env):
 
     def _get_current_gnss_tier(self) -> Optional[Dict[str, Any]]:
         """
-        @brief Return the currently sampled GNSS noise tier dict.
-        @return Tier dict with lat_stddev_deg, lon_stddev_deg, alt_stddev_m,
-                metric_stddev_m, name, weight. None if no tiers loaded.
+        @brief Return the START tier sampled for this episode, or None.
         """
         return self._current_gnss_tier
 
@@ -831,11 +698,9 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Return the GNSS fix-state tier name in force at this instant.
 
-        self._current_gnss_tier holds only the START tier sampled at reset, while
-        the relay walks the Markov chain at 20 Hz and writes the live tier back
-        for the subscriber to read. Falls back to the start tier when the
-        subscriber is absent (baselines without covariance, CI/tests) or no live
-        tier has been published yet.
+        _current_gnss_tier holds only the START tier, while the relay walks the
+        Markov chain and writes the live tier back for the subscriber to read.
+        Falls back to the start tier when no live tier has been published.
 
         @return Tier name as in gnss_noise_profiles.yaml, or "" if unknown.
         """
@@ -849,10 +714,6 @@ class CARLAParkingEnv(gym.Env):
             if live:
                 tier_name = live
         return tier_name
-
-    # -----------------------------------------------------------------------
-    # Floor plan loading and bay sampling
-    # -----------------------------------------------------------------------
 
     def _load_floor_plan(self) -> None:
         """
@@ -880,10 +741,8 @@ class CARLAParkingEnv(gym.Env):
             b for b in layout.get("bays", []) if not b.get("always_empty", False)
         ]
 
-        # Restrict the target pool to the whitelist when one is set (and no
-        # single bay is pinned). Validate every requested id resolves to an
-        # eligible bay so a typo in a curriculum stage fails loud rather than
-        # silently shrinking the pool.
+        # Every whitelisted id must resolve, so a typo in a curriculum stage fails
+        # loud rather than silently shrinking the target pool.
         if self._allowed_bay_ids is not None and self._fixed_target_bay_id is None:
             allowed = set(self._allowed_bay_ids)
             eligible_ids = {b.get("id") for b in eligible}
@@ -905,19 +764,11 @@ class CARLAParkingEnv(gym.Env):
 
     def _sample_target_bay(self) -> None:
         """
-        @brief Stratified sample of target bay: uniform over type, then uniform
-               within type.
-
-        In-scope target bay types are perpendicular and angled (forward-only
-        parking). When `fixed_target_bay_id` is set the sampler returns that
-        single bay and the type stratification is bypassed. Always-empty bays
-        are excluded from target selection.
-
-        @warning When the bay is NOT fixed, this samples uniformly over every
-                 bay type present in the layout, which may include out-of-scope
-                 types (e.g. motorcycle, parallel) if the layout contains them.
-                 Filter `self._bay_type_keys` to the in-scope set before
-                 unfixing the target bay for multi-bay training.
+        @brief Stratified sample of the target bay: uniform over bay type, then
+               uniform within the chosen type.
+        @warning The stratification spans every bay type present in the layout,
+                 including out-of-scope ones (parallel, motorcycle). Filter
+                 self._bay_type_keys before widening the target pool.
         """
         if not self._bay_type_keys:
             raise RuntimeError("No eligible bays found in floor plan layout.")
@@ -945,10 +796,9 @@ class CARLAParkingEnv(gym.Env):
                     f"(first 20): {available_ids[:20]}"
                 )
         else:
-            # Drive task selection from the Gymnasium per-env RNG (seeded via
-            # super().reset(seed=)) so the (target bay, spawn) sequence is
-            # reproducible at a fixed training seed. np_random.choice cannot
-            # index a list of dicts directly, so choose by integer index.
+            # Drawn from the Gymnasium per-env RNG so the (bay, spawn) sequence is
+            # reproducible at a fixed seed. Indexed by integer because
+            # np_random.choice cannot index a list of dicts.
             type_idx = int(self.np_random.integers(len(self._bay_type_keys)))
             bay_type = self._bay_type_keys[type_idx]
             bays = self._bays_by_type[bay_type]
@@ -985,41 +835,28 @@ class CARLAParkingEnv(gym.Env):
             ty,
         )
 
-    # -----------------------------------------------------------------------
-    # Actor spawning
-    # -----------------------------------------------------------------------
-
     def _select_spawn(self) -> Dict[str, Any]:
         """
-        @brief Choose a spawn transform for this episode from the pre-built pool.
-        @return Chosen spawn dict with keys x, y, z, yaw_deg.
-
-        Drawn from the Gymnasium per-env RNG so the spawn sequence is
-        reproducible at a fixed training seed.
+        @brief Draw this episode's spawn transform (keys x, y, z, yaw_deg) from
+               the per-env RNG, so the spawn sequence is seed-reproducible.
         """
         idx = int(self.np_random.integers(len(self._spawn_pool)))
-        # Record the pool index as the episode's spawn id (0 = primary spawn,
-        # 1+ = extra_spawn_transforms in layout order) so traces can report
-        # where the episode started from.
+        # Kept so traces can report where the episode started from.
         self._chosen_spawn_idx = idx
         return cast(Dict[str, Any], self._spawn_pool[idx])
 
     def _cache_blueprints(self) -> None:
         """
-        @brief Fetch blueprint lists once per reset and distribute to owners.
-
-        LotSpawner receives vehicle blueprints (for static parked cars).
-        NPCController receives vehicle + walker blueprints (for patrol + peds).
+        @brief Fetch blueprint lists once per reset and distribute them to the
+               LotSpawner and NPCController.
         """
         if self.world is None:
             return
 
-        # LotSpawner builds its own car blueprint filter internally.
-        # Blueprints are static for the lifetime of the CARLA server so both
-        # managers skip the fetch on subsequent calls if already populated.
+        # Blueprints are static for the lifetime of the CARLA server, so the
+        # managers skip the fetch once populated.
         self._lot_spawner.refresh_blueprints(self.world)
 
-        # Walker blueprints: only fetch once.
         if not self._walker_blueprints:
             bp_lib = self.world.get_blueprint_library()
             self._walker_blueprints = list(bp_lib.filter("walker.pedestrian.*"))
@@ -1031,8 +868,6 @@ class CARLAParkingEnv(gym.Env):
     def _spawn_lot_statics(self) -> None:
         """
         @brief Spawn all static lot actors (cones and parked vehicles).
-
-        Delegates to LotSpawner.spawn_all().
         """
         self._lot_spawner.spawn_all(
             self.world,
@@ -1045,8 +880,6 @@ class CARLAParkingEnv(gym.Env):
     def _spawn_npc_patrol(self) -> None:
         """
         @brief Spawn scripted patrol vehicles that follow waypoints in the lot.
-
-        Delegates to NPCController.spawn_patrol().
         """
         self._npc_controller.spawn_patrol(
             self.world, self.vehicle, self._current_layout
@@ -1055,57 +888,33 @@ class CARLAParkingEnv(gym.Env):
     def _spawn_pedestrians(self) -> None:
         """
         @brief Spawn random-walk pedestrians inside the lot pedestrian zones.
-
-        Delegates to NPCController.spawn_pedestrians().
         """
         self._npc_controller.spawn_pedestrians(self.world, self._current_layout)
 
-    # -----------------------------------------------------------------------
-    # Per-step NPC updates
-    # -----------------------------------------------------------------------
-
     def _update_patrol_npcs(self) -> None:
         """
-        @brief Advance patrol NPC vehicles one step using a proportional heading
-               controller.
-
-        Delegates to NPCController.update_patrol().
+        @brief Advance patrol NPC vehicles one step.
         """
         self._npc_controller.update_patrol(self.vehicle, self.steps)
 
     def _update_pedestrians(self) -> None:
         """
-        @brief Advance pedestrians one step, re-randomise headings periodically,
-               and handle zone boundaries, lifetime expiry, and ego avoidance.
-
-        Delegates to NPCController.update_pedestrians().
+        @brief Advance pedestrians one step.
         """
         self._npc_controller.update_pedestrians(self.vehicle)
-
-    # -----------------------------------------------------------------------
-    # Clearance and reward
-    # -----------------------------------------------------------------------
 
     def _bay_frame_pose(
         self, x: float, y: float, yaw: float
     ) -> Tuple[float, float, float]:
         """
-        @brief Express the ego pose in the target bay's frame.
-        @param x: Ego x position (metres, CARLA world frame).
-        @param y: Ego y position (metres, CARLA world frame).
-        @param yaw: Ego heading (radians, CARLA world frame).
-        @return Tuple (along, cross, heading_err):
-                - along: signed distance along the bay depth axis from the parked
-                  position (the drive-in axis). The reward uses abs(along) because
-                  the bays are open / back-to-back and either side is a valid
-                  approach.
-                - cross: perpendicular (cross-track) distance from the bay
-                  centreline. Sign is irrelevant to the reward (abs is used).
-                - heading_err: absolute heading error from the bay axis, wrapped
-                  with 180-deg parking symmetry (in [0, pi/2]).
-        @note This is the transpose of `_compute_relative_target_pose` (which
-              gives target-in-ego); here we want ego-in-bay so the centreline and
-              depth axes are the bay's, not the car's.
+        @brief Express the ego pose (CARLA world frame, metres and radians) in
+               the target bay's frame.
+        @return (along, cross, heading_err) in metres, metres and radians. Both
+                distances are signed but the reward takes abs: the bays are open
+                and back-to-back, so either approach side is valid. heading_err
+                is already absolute and 180-deg symmetric, in [0, pi/2].
+        @note The transpose of _compute_relative_target_pose (target-in-ego):
+              here the centreline and depth axes must be the bay's, not the car's.
         """
         dx_world = x - self._target_x
         dy_world = y - self._target_y
@@ -1120,20 +929,14 @@ class CARLAParkingEnv(gym.Env):
         self, along: float, cross: float, heading_err: float
     ) -> float:
         """
-        @brief Bay-frame shaping potential phi for the progress term.
-        @param along: Along-track distance from the parked depth (metres).
-        @param cross: Cross-track distance from the centreline (metres).
-        @param heading_err: Absolute heading error from the bay axis (radians).
-        @return Potential phi (always <= 0); 0 at the perfectly parked pose.
+        @brief Bay-frame shaping potential phi (<= 0, zero at the parked pose)
+               for the progress term.
 
-        phi = -(W_ALONG*|along| + W_CROSS*|cross| + W_HEAD*heading_err). Linear and
-        monotone in each coordinate, so reducing any of depth, cross-track, or
-        heading error always raises phi (no traps, and driving in always pays). The
-        cross-track and heading weights exceed the along-track weight so the
-        gradient pulls the car onto the centreline and square before advancing in
-        depth: a crooked short-cut accrues cross/heading cost en route and scores
-        below an aligned arc that ends at the same parked pose.
-        @see CORRIDOR_W_ALONG/CROSS/HEAD.
+        Linear and monotone in each coordinate, so reducing depth, cross-track or
+        heading error always raises phi - no traps, and driving in always pays.
+        Cross-track and heading outweigh along-track, so a crooked short-cut
+        accrues cost en route and scores below an aligned arc ending at the same
+        parked pose. @see CORRIDOR_W_ALONG/CROSS/HEAD.
         """
         return -(
             self._w_along * abs(along)
@@ -1143,20 +946,14 @@ class CARLAParkingEnv(gym.Env):
 
     def _obstacle_clearance_penalty(self, on_line: float, aligned: float) -> float:
         """
-        @brief Smooth clearance penalty for drifting toward a neighbouring car.
+        @brief Smooth clearance penalty (<= 0) for drifting toward a neighbouring
+               car, from the observed LiDAR clearances.
         @param on_line: Corridor on-centreline factor in [0, 1] (1 = on the line).
         @param aligned: Corridor heading-alignment factor in [0, 1] (1 = square).
-        @return Penalty <= 0; 0 when no obstacle is inside the danger band or when
-                the car is square on the centreline.
 
-        Reads the hemispheric LiDAR clearance features in
-        `self._obstacle_features_buffer` (a hemisphere with no return is 0.0, treated
-        as infinite clearance). The forward cone is weighted above the side clearances
-        since a return ahead while moving is the real collision risk. The penalty
-        ramps from 0 at OBSTACLE_CLEARANCE_SAFE to its cap at OBSTACLE_CLEARANCE_DANGER
-        and is multiplied by (1 - on_line*aligned), fading to zero once the car is
-        square on the line, so a correct park (~0.98 m from a neighbour) is never
-        penalised.
+        Ramps from 0 at OBSTACLE_CLEARANCE_SAFE to its cap at
+        OBSTACLE_CLEARANCE_DANGER, then fades out as the car squares up on the
+        line so a correct park (~0.98 m from a neighbour) is never penalised.
         """
         if not self._include_obstacle_obs:
             return 0.0
@@ -1170,10 +967,9 @@ class CARLAParkingEnv(gym.Env):
         def _clear(d: float) -> float:
             return d if d > 0.0 else float("inf")
 
-        # Forward cone is the collision-critical direction; side returns are
-        # discounted (a square car alongside a neighbour is safe). The discount
-        # widens the effective clearance of the side returns so they only register
-        # when a corner genuinely swings in close.
+        # Side returns are discounted because a square car alongside a neighbour is
+        # safe, so they only register when a corner genuinely swings in close. The
+        # forward cone gets no discount: it is the collision-critical direction.
         side_clear = min(_clear(left_dist), _clear(right_dist)) + 0.5
         nearest = min(_clear(forward_dist), side_clear)
         if not math.isfinite(nearest) or nearest >= OBSTACLE_CLEARANCE_SAFE:
@@ -1196,10 +992,9 @@ class CARLAParkingEnv(gym.Env):
         velocity: Optional[Any] = None,
     ) -> Tuple[float, bool, bool, Dict[str, float]]:
         """
-        @brief Compute reward and termination flags using CARLA ground truth.
-
-        @param transform: Pre-fetched vehicle transform. Fetched internally when None.
-        @param velocity: Pre-fetched vehicle velocity. Fetched internally when None.
+        @brief Compute reward and termination flags from CARLA ground truth.
+        @param transform: Pre-fetched vehicle transform; fetched here when None.
+        @param velocity: Pre-fetched vehicle velocity; fetched here when None.
         @return Tuple of (reward, terminated, success, diagnostics).
         """
         if self.vehicle is None:
@@ -1226,9 +1021,8 @@ class CARLAParkingEnv(gym.Env):
         yaw = math.radians(transform.rotation.yaw)
         speed = math.hypot(velocity.x, velocity.y)
 
-        # position_error (Euclidean to bay centre) is diagnostic / terminal only: it
-        # feeds the diag, the graded timeout penalty, and the metric, not the per-step
-        # reward (the corridor potential shapes that).
+        # Diagnostic and terminal only - the corridor potential, not this radial
+        # distance, shapes the per-step reward.
         position_error = math.hypot(x - self._target_x, y - self._target_y)
         orientation_error = abs(wrap_angle_symmetric(yaw - self._target_yaw))
 
@@ -1245,13 +1039,11 @@ class CARLAParkingEnv(gym.Env):
         )
         if collision_detected:
             diag["collision"] = 1.0
-            # Ego-fault penalised harder than non-fault. Magnitudes preserve
-            # success(+50) > timeout(~0) > collision.
+            # Ego fault costs more; both magnitudes keep the ordering
+            # success(+50) > timeout > collision.
             reward = -25.0 if collision_ego_fault else -10.0
             return reward, True, False, diag
 
-        # Success: every corner of the ego bounding box inside the bay
-        # polygon and the vehicle essentially stopped.
         in_bay = (
             car_fully_inside_bay(
                 car_x=x,
@@ -1276,33 +1068,29 @@ class CARLAParkingEnv(gym.Env):
         if self._success_counter >= self._success_dwell_steps:
             return 50.0, True, True, diag
 
-        # Ego pose in the bay frame: how far in (along), how far off the
-        # centreline (cross), and how square to the bay axis (heading_err).
         along, cross, heading_err = self._bay_frame_pose(x, y, yaw)
 
-        # Corridor potential progress. progress = phi(curr) - phi(prev) telescopes to
-        # zero over a loiter; the cross/heading weighting pulls the car onto the
-        # centreline and square before advancing. Divided by the start potential and
-        # scaled by PROGRESS_TARGET so every bay's full-episode progress sum is equal.
-        # @see _corridor_potential, PROGRESS_TARGET, PHI_NORM_FLOOR.
+        # Telescopes to zero over a loiter, so a stationary car earns nothing.
+        # Normalising by the start potential equalises every bay's full-episode
+        # progress sum. @see _corridor_potential, PROGRESS_TARGET, PHI_NORM_FLOOR.
         curr_phi = self._corridor_potential(along, cross, heading_err)
         progress = (curr_phi - self._prev_phi) / self._phi_start * PROGRESS_TARGET
         self._prev_phi = curr_phi
 
-        # Corridor shaping factors, each in [0, 1]:
-        #   on_line    - 1 on the centreline, 0 at the corridor half-width.
-        #   near_depth - 1 at the parked depth, 0 at the along-track scale.
-        #   aligned    - yaw straightness, saturates at the alignment cutoff.
-        #   stopped    - sharp slowness against the success velocity (held stop).
+        # Corridor shaping factors, each in [0, 1] and 1 at the parked pose.
+        # Referenced to the success velocity so "stopped" means stopped enough
+        # to park, not merely slow.
         slowness_reference_speed = 5.0 * SUCCESS_THRESHOLD_VELOCITY
+        # 1 on the centreline, 0 at the corridor half-width.
         on_line = max(0.0, 1.0 - abs(cross) / CORRIDOR_HALF_WIDTH)
+        # 1 at the parked depth, 0 at the along-track scale.
         near_depth = max(0.0, 1.0 - abs(along) / ALONG_TRACK_SCALE)
+        # Yaw straightness, saturating at the alignment cutoff.
         aligned = max(0.0, 1.0 - heading_err / APPROACH_INNER_ALIGNMENT_CUTOFF)
         stopped = max(0.0, 1.0 - speed / slowness_reference_speed)
 
-        # Endgame finisher gated on the corridor factors: their conjunction
-        # (on_line AND aligned AND near_depth) means a stop-short-and-crooked pose
-        # earns ~0, and +HOLD*stopped sharpens the final commit to a held stop.
+        # A conjunction, so a stop-short-and-crooked pose earns ~0, and the
+        # stopped term sharpens the final commit to a held stop.
         endgame = (
             (ENDGAME_MOVE_COEF + ENDGAME_HOLD_COEF * stopped)
             * on_line
@@ -1310,25 +1098,22 @@ class CARLAParkingEnv(gym.Env):
             * near_depth
         )
 
-        # Obstacle clearance: smooth penalty for drifting toward a neighbouring parked
-        # car during a crooked approach. Uses the observed LiDAR clearance (so it
-        # transfers to hardware), anchored below the ~0.98 m parked-square side gap and
-        # gated off once the car is square on the line. Raw, like the OOB penalty.
+        # Computed from observed LiDAR clearance rather than ground truth, so it
+        # transfers to hardware. Raw, like the OOB penalty.
         clearance_term = self._obstacle_clearance_penalty(on_line, aligned)
 
-        # Pure additive task reward; no single factor can zero it. Uncertainty is
-        # input-only: it enters via the EKF covariance observation and the evidential
-        # head, never the reward.
+        # Additive, so no single factor can zero the reward. Uncertainty stays
+        # input-only: it enters via the covariance obs and the evidential head,
+        # never here.
         reward = progress + endgame + clearance_term
 
         diag["progress_reward"] = float(progress)
         diag["endgame_reward"] = float(endgame)
         diag["clearance_penalty"] = float(clearance_term)
 
-        # Soft out-of-bounds boundary, evaluated last so collision and success take
-        # precedence. Applied raw (leaving the lot is a safety boundary, not shaping);
-        # accumulates until the limit, then terminates with no extra crash cost. Tested
-        # on CARLA ground truth, so it is exact regardless of EKF noise.
+        # Evaluated last so collision and success take precedence. Raw, because
+        # leaving the lot is a safety boundary rather than shaping, and tested on
+        # ground truth so it is exact regardless of EKF noise.
         if self._oob_inflated_corners and not point_in_polygon(
             x, y, self._oob_inflated_corners
         ):
@@ -1342,26 +1127,20 @@ class CARLAParkingEnv(gym.Env):
 
         return float(reward), False, False, diag
 
-    # -----------------------------------------------------------------------
-    # State
-    # -----------------------------------------------------------------------
-
     def _get_state(self) -> np.ndarray:
         """
         @brief Build the observation vector from EKF pose and sim sensors.
 
-        Resolves EKF odom -> world transform (sim-specific), then delegates
-        obs construction to build_observation() in _parking_core.
-
-        Falls back to CARLA ground truth when EKF is unavailable (CI/tests).
+        Resolves the sim-specific EKF odom -> world transform, then delegates to
+        build_observation(). Falls back to CARLA ground truth when the EKF is
+        unavailable (CI/tests).
         """
         if self.vehicle is None or self.world is None:
             return np.zeros(self._obs_dim, dtype=np.float32)
 
-        # Read EKF pose + uncertainty in one file read (no-op when EKF absent).
+        # Pose and uncertainty come from a single file read.
         raw_ekf_pose, uncertainty = self._read_ekf_state()
 
-        # Resolve EKF odom pose -> world frame.
         world_pose: Optional[np.ndarray] = None
         if raw_ekf_pose is not None:
             ekf_odom_x = float(raw_ekf_pose[0])
@@ -1375,7 +1154,7 @@ class CARLAParkingEnv(gym.Env):
             # vx is body-frame; invariant under the odom-to-world rigid transform.
             self._world_pose_buf[4] = raw_ekf_pose[4]
             world_pose = self._world_pose_buf
-            # Snapshot the genuine EKF world pose for step() info / trace CSV.
+            # Snapshotted for step() info and the trace CSV.
             self._last_ekf_world[:] = self._world_pose_buf
             self._last_ekf_is_real = True
             if uncertainty is not None:
@@ -1383,7 +1162,7 @@ class CARLAParkingEnv(gym.Env):
             else:
                 self._last_ekf_std[:] = np.nan
         else:
-            # CI / tests fallback: use CARLA GT (no EKF available)
+            # CI / tests fallback: no EKF available, so navigate on CARLA GT.
             self._debug_logger._logger.debug(
                 "[state] EKF pose unavailable at step %d - using CARLA GT",
                 self.steps,
@@ -1400,9 +1179,8 @@ class CARLAParkingEnv(gym.Env):
             self._world_pose_buf[3] = math.radians(av.z)
             self._world_pose_buf[4] = vx_body
             world_pose = self._world_pose_buf
-            # GT fallback path: no genuine EKF estimate this step. Mark the
-            # snapshot as not-real so trace consumers log EKF columns as NaN
-            # rather than as a copy of ground truth.
+            # Marked not-real so trace consumers write NaN in the EKF columns
+            # rather than a copy of ground truth.
             self._last_ekf_world[:] = np.nan
             self._last_ekf_is_real = False
             self._last_ekf_std[:] = np.nan
@@ -1422,10 +1200,6 @@ class CARLAParkingEnv(gym.Env):
             self._obs_buffer,
         )
 
-    # -----------------------------------------------------------------------
-    # Visualisation
-    # -----------------------------------------------------------------------
-
     def _write_vis_state(
         self,
         end_reason: Optional[str] = None,
@@ -1435,21 +1209,17 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Append a visualisation frame to the JSONL history file.
 
-        Writing only occurs when the signal file (outputs/.vis_active) exists,
-        which is created by the visualiser process. A persistent
-        append file handle is kept open while the visualiser is active.
+        Writes only while the visualiser's signal file exists, keeping one append
+        handle open for as long as it does.
 
-        @param end_reason: If set, written into the frame as "end_reason" so
-                           the visualiser can log why the episode terminated.
-                           One of: "collision", "out_of_bounds", "success",
-                           "timeout". None for mid-episode frames.
-        @param transform: Pre-fetched vehicle transform. Fetched internally when None.
-        @param velocity: Pre-fetched vehicle velocity. Fetched internally when None.
+        @param end_reason: One of "collision", "out_of_bounds", "success" or
+                           "timeout"; None for mid-episode frames.
+        @param transform: Pre-fetched vehicle transform; fetched here when None.
+        @param velocity: Pre-fetched vehicle velocity; fetched here when None.
         """
         if self.vehicle is None:
             return
 
-        # Refresh the signal-file check every 30 calls.
         self._vis_check_counter += 1
         if self._vis_check_counter >= 30:
             self._vis_check_counter = 0
@@ -1471,22 +1241,21 @@ class CARLAParkingEnv(gym.Env):
         y = transform.location.y
         yaw = transform.rotation.yaw
 
-        # Ground-truth yaw rate in REP-103 convention (left turn positive),
-        # matching the EKF vyaw at obs[1] and the LiDAR bearing convention.
+        # Negated into REP-103 (left turn positive) to match the EKF vyaw at
+        # obs[1] and the LiDAR bearing convention.
         gt_av_z_deg = self.vehicle.get_angular_velocity().z
         gt_vyaw = -math.radians(gt_av_z_deg)
 
-        # Reuse the obs buffer populated earlier this step by _get_state()
-        # rather than re-reading the EKF file.
+        # Reuses the buffer _get_state() filled this step rather than re-reading
+        # the EKF file.
         ekf_speed = float(self._obs_buffer[0])
         ekf_vyaw = float(self._obs_buffer[1])
 
-        # Live tier, not the reset-time one: the visualiser shows this as the
-        # headline field, so it must track the mid-episode Markov drift.
+        # The live tier, not the reset-time one: this is the visualiser's headline
+        # field, so it must track the mid-episode Markov drift.
         gnss_tier_name = self._get_live_gnss_tier_name()
 
         patrol_npcs = self._npc_controller.patrol_npcs
-        # Build an id-set for O(1) membership test in the actor loop.
         patrol_npc_ids = {id(a) for a in patrol_npcs}
         actor_transforms = []
         for actor in patrol_npcs + self._lot_spawner.spawned_static_vehicles:
@@ -1507,7 +1276,6 @@ class CARLAParkingEnv(gym.Env):
                 wt = walker.get_transform()
                 pedestrian_transforms.append({"x": wt.location.x, "y": wt.location.y})
 
-        # Read CARLA world clock for diagnostics
         carla_elapsed = 0.0
         carla_sync = False
         carla_fixed_dt = 0.0
@@ -1538,8 +1306,8 @@ class CARLAParkingEnv(gym.Env):
                 "ekf_vyaw": ekf_vyaw,
                 "gnss_tier": gnss_tier_name,
             },
-            # Clamped action sent to the vehicle (not the policy's pre-clip
-            # output), so the HUD reflects what actually drove the car.
+            # The clamped command, not the policy's raw output, so the HUD
+            # reflects what actually drove the car.
             "action": {
                 "steer": float(np.clip(self._last_action[0], -1.0, 1.0)),
                 "throttle": float(np.clip(self._last_action[1], 0.0, 1.0)),
@@ -1568,33 +1336,24 @@ class CARLAParkingEnv(gym.Env):
             self._vis_file.write("\n")
             self._vis_file.flush()
         except Exception as exc:
-            # Non-fatal - visualisation is optional
+            # Non-fatal: visualisation must never take down a training run.
             logger.debug(f"Could not write vis state: {exc}")
-
-    # -----------------------------------------------------------------------
-    # CARLA world management
-    # -----------------------------------------------------------------------
 
     def _connect_to_carla(self) -> None:
         """
-        @brief Connect to CARLA and load the FlatPlane OpenDRIVE world.
-
-        Loads configs/layouts/flat_plane.xodr via generate_opendrive_world()
+        @brief Connect to CARLA and load configs/layouts/flat_plane.xodr as the
+               FlatPlane OpenDRIVE world.
         """
         try:
             self.client = carla.Client(self.carla_host, self.carla_port)
             self.client.set_timeout(120.0)
             self.world = self.client.get_world()
 
-            # generate_opendrive_world() leaves the world reporting
-            # "Carla/Maps/OpenDriveMap", not "FlatPlane", so both names mean
-            # the FlatPlane OpenDRIVE world is already present. Regenerating an
-            # already-loaded world resets CARLA's elapsed-seconds sensor clock
-            # to zero; the long-lived ros2-bridge EKF then rejects every fresh
-            # transform as TF_OLD_DATA and stops writing ekf_state.json (the
-            # evaluation sweep builds a fresh env per condition, so this fired
-            # at every condition boundary). Skip regen when either name is seen.
             current_map_name = self.world.get_map().name.split("/")[-1]
+            # Regenerating an already-loaded world zeroes CARLA's elapsed-seconds
+            # sensor clock, after which the long-lived ros2-bridge EKF rejects
+            # every fresh transform as TF_OLD_DATA and stops writing ekf_state.json.
+            # Either name below means FlatPlane is already present.
             if current_map_name not in ("FlatPlane", "OpenDriveMap"):
                 xodr = Path("configs/layouts/flat_plane.xodr").read_text(
                     encoding="utf-8"
@@ -1627,11 +1386,8 @@ class CARLAParkingEnv(gym.Env):
 
     def _carla_port_open(self) -> bool:
         """
-        @brief Probe whether the CARLA RPC port is accepting connections.
-        @return True if a TCP connection to (carla_host, carla_port) succeeds.
-
-        Used to wait for a restarted CARLA server to finish booting before a
-        reconnect attempt, so we do not race the engine's RPC startup.
+        @brief Probe whether the CARLA RPC port accepts connections, so a
+               reconnect does not race a restarted engine's RPC startup.
         """
         try:
             with socket.create_connection(
@@ -1646,16 +1402,12 @@ class CARLAParkingEnv(gym.Env):
         @brief Tear down the stale CARLA client and reconnect to a fresh server.
         @return True if a fresh world handle was obtained, False otherwise.
 
-        @note CARLA 0.9.16 segfaults on long headless runs; `restart: on-failure`
-              on the carla-server service relaunches the engine. This polls for
-              the RPC port to reopen, then rebuilds the client and reloads the
-              FlatPlane world. Episode actors are NOT respawned here - the caller
-              (reset) does that on the next episode. @see _connect_to_carla.
+        @note Episode actors are NOT respawned here; the fresh world starts empty
+              and reset() repopulates it on the next episode.
         """
-        # Drop every handle into the dead server. The vehicle / sensor / NPC
-        # actors live in the crashed engine and cannot be destroyed over RPC, so
-        # forget them rather than calling _cleanup_actors (which would itself
-        # time out). The fresh world starts empty; reset() repopulates it.
+        # The actors live in the crashed engine and cannot be destroyed over RPC,
+        # so forget the handles rather than calling _cleanup_actors, whose
+        # destroy() RPCs would themselves time out.
         self.client = None
         self.world = None
         self.vehicle = None
@@ -1692,18 +1444,14 @@ class CARLAParkingEnv(gym.Env):
 
     def _spawn_vehicle(self) -> None:
         """
-        @brief Spawn the ego vehicle at a randomly selected spawn transform.
-
-        All spawn transforms (primary + extra_spawn_transforms) are collected
-        and one is chosen uniformly at random each episode to ensure the agent
-        learns to park from varied entry angles and distances.
+        @brief Spawn the ego vehicle at this episode's spawn transform.
         """
         if self.world is None:
             return
 
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
-        # _chosen_spawn is pre-selected in reset() before ticks so the GNSS
-        # datum config is written before any GNSS callbacks fire.
+        # Pre-selected in reset() before any tick, so the GNSS datum config is
+        # written before the first GNSS callback fires.
         chosen = self._chosen_spawn
         sx = float(chosen.get("x", 0.0))
         sy = float(chosen.get("y", 0.0))
@@ -1728,36 +1476,32 @@ class CARLAParkingEnv(gym.Env):
             logger.error("Ego vehicle could not be spawned at lot spawn point.")
 
         if self.vehicle is not None:
-            # CARLA's bounding_box.extent is half-lengths along the body axes:
-            # x = forward (length/2), y = lateral (width/2).
+            # CARLA's extent is already half-lengths on the body axes: x forward,
+            # y lateral.
             bb_extent = self.vehicle.bounding_box.extent
             self._ego_half_length = float(bb_extent.x)
             self._ego_half_width = float(bb_extent.y)
 
         if self.vehicle is not None and self.world is not None:
-            # Tick until the vehicle settles onto the ground plane.
-            # In synchronous mode, time.sleep() does not advance physics -
-            # world.tick() is required.  Never toggle set_simulate_physics on
-            # the ego vehicle: in CARLA 0.9.16 that locks the drivetrain so
-            # the wheels steer but the vehicle cannot translate.
+            # Settle onto the ground plane by ticking: in synchronous mode
+            # time.sleep() does not advance physics. Never toggle
+            # set_simulate_physics on the ego - in CARLA 0.9.16 that locks the
+            # drivetrain, so the wheels steer but the vehicle cannot translate.
             for _ in range(40):
                 self.world.tick(10.0)
                 if abs(self.vehicle.get_velocity().z) < 0.01:
                     break
-            # Record the true floor z so static spawners use the same reference
-            # instead of a hardcoded layout_origin_z + guess offset.
+            # The settled z, so the static spawners share the ego's ground
+            # reference rather than guessing from the layout origin.
             self._floor_z = self.vehicle.get_transform().location.z
 
     def _teleport_vehicle(self) -> None:
         """
         @brief Teleport the existing ego vehicle to the chosen spawn point.
 
-        Used instead of destroy+respawn to keep sensors alive across episodes,
-        which prevents the CARLA ROS bridge from accumulating actor-stream
-        registrations and eventually segfaulting mid-training.
-
-        Zeros linear and angular velocity so the vehicle starts stationary,
-        then ticks until physics settle (same condition as _spawn_vehicle).
+        Preferred over destroy+respawn because keeping the sensors alive stops
+        the CARLA ROS bridge accumulating actor-stream registrations and
+        eventually segfaulting mid-training.
         """
         if self.vehicle is None or self.world is None:
             return
@@ -1765,8 +1509,6 @@ class CARLAParkingEnv(gym.Env):
         self.vehicle.disable_constant_velocity()
 
         default_z = float(self._current_layout.get("origin", {}).get("z", 0.3))
-        # _chosen_spawn is pre-selected in reset() before ticks so the GNSS
-        # datum config is written before any GNSS callbacks fire.
         chosen = self._chosen_spawn
         sx = float(chosen.get("x", 0.0))
         sy = float(chosen.get("y", 0.0))
@@ -1779,14 +1521,14 @@ class CARLAParkingEnv(gym.Env):
         )
         self.vehicle.set_transform(spawn_transform)
 
-        # Zero velocity so the vehicle does not carry momentum from the
-        # previous episode into the new one.
+        # Zeroed so the vehicle does not carry the previous episode's momentum
+        # into the new one.
         zero = self._zero_vec3
         self.vehicle.set_target_velocity(zero)
         self.vehicle.set_target_angular_velocity(zero)
         self.vehicle.apply_control(carla.VehicleControl())
 
-        # Settle under gravity (same loop as _spawn_vehicle).
+        # Settle under gravity, as in _spawn_vehicle.
         for _ in range(40):
             self.world.tick(10.0)
             if abs(self.vehicle.get_velocity().z) < 0.01:
@@ -1797,10 +1539,8 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Spawn sensors (IMU, GNSS, 2D LiDAR, collision) on the ego vehicle.
 
-        Delegates to SensorManager.spawn(), passing the current episode's GNSS
-        noise multiplier (sampled in reset()) and the NPC controller's
-        patrol_npc_ids set by reference so the collision callback can identify
-        patrol vehicles.
+        The NPC controller's patrol_npc_ids set is passed by reference so the
+        collision callback can tell a patrol vehicle from a static one.
         """
         self._sensor_manager.spawn(
             self.world,
@@ -1841,12 +1581,11 @@ class CARLAParkingEnv(gym.Env):
 
     def _freeze_all_actors(self) -> None:
         """
-        @brief Zero velocity on all moving actors immediately on episode end.
+        @brief Zero velocity on all moving actors immediately on episode end, so
+               they do not run on their last command while reset() tears down.
 
-        Called as soon as terminated or truncated is True so actors do not
-        continue on their last command while reset() tears down the episode.
-        Uses set_target_velocity for instant stops rather than brake control,
-        which takes multiple ticks to converge through physics.
+        Pins the velocity rather than braking: brake control needs several ticks
+        to converge through physics.
         """
         zero = self._zero_vec3
 
@@ -1888,47 +1627,41 @@ class CARLAParkingEnv(gym.Env):
                     self.vehicle.destroy()
                 self.vehicle = None
 
-    # -----------------------------------------------------------------------
-    # Gymnasium API
-    # -----------------------------------------------------------------------
-
     def reset(
         self,
         seed: Optional[int] = None,
         options: Optional[Dict[str, Any]] = None,
     ) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
-        @brief Reset the environment for a new episode.
+        @brief Reset the environment for a new episode: clean up the previous
+               one, select a floor plan, sample the target bay, then spawn the
+               cones, static vehicles, patrol NPCs and pedestrians.
         @param seed: Random seed for reproducibility.
         @param options: Additional options (currently unused).
         @return Tuple of (initial_observation, info_dict).
-
-        Each reset: cleans up previous episode, selects floor plan, samples target
-        bay, spawns cones/static vehicles/patrol NPCs/pedestrians.
         """
         super().reset(seed=seed)
 
-        # Push the Gymnasium per-env RNG (seeded above) into the spawner and NPC
-        # controller so all per-episode placement draws (static cars, patrol
-        # vehicles, pedestrians) share one reproducible stream at a fixed seed.
+        # Sharing the seeded per-env RNG puts every per-episode placement draw on
+        # one reproducible stream.
         self._lot_spawner.set_rng(self.np_random)
         self._npc_controller.set_rng(self.np_random)
 
         self._episode_id += 1
         self.steps = 0
-        # Reset here, before any early-return path (CARLA unavailable /
-        # reconnect failure), so a stall can never leak into the next episode.
+        # Cleared ahead of every early-return path below, so a stall can never
+        # leak into the next episode.
         self._stall_counter = 0
         self._trajectory_buffer.clear()
-        # Snap the chase camera to the new spawn rather than gliding to it
-        # across the lot from wherever the last episode ended.
+        # Snaps the chase camera to the new spawn instead of gliding across the
+        # lot from wherever the last episode ended.
         self._chase_yaw = None
-        # Force signal-file recheck at episode start so new episodes don't
-        # inherit a stale cached value from the previous episode's final step.
+        # Forces a signal-file recheck, so the episode cannot inherit a stale
+        # cached value from the previous episode's final step.
         self._vis_check_counter = 30
 
-        # Reopen the vis history file in write mode periodically to truncate
-        # it. The visualiser detects the shrink and resets its read offset.
+        # Periodic truncation bounds the file size; the visualiser detects the
+        # shrink and resets its read offset.
         self._vis_episodes_since_rotation += 1
         if (
             self._vis_file is not None
@@ -1938,55 +1671,48 @@ class CARLAParkingEnv(gym.Env):
             self._vis_file.close()
             self._vis_file = open(self._vis_history_path, "w")
 
-        # Sample GNSS noise tier for this episode (RTK fix-state variation).
-        # Must happen before _spawn_sensors() so the multiplier is available.
+        # Must precede publish_episode_config below, which names the start tier
+        # to the relay.
         self._sample_gnss_noise_tier()
-        # Draw TiM571 systematic range bias once per training run (NaN sentinel
-        # in SensorManager makes subsequent calls no-ops).
+        # Redraws the LiDAR systematic range bias for this episode.
         self._sensor_manager.sample_lidar_noise_bias(self.np_random)
 
-        # Recover from a CARLA server crash flagged by the previous step().
-        # Must run before _cleanup_actors() below, whose destroy() RPCs would
-        # time out against the dead engine. _reconnect_to_carla forgets all
-        # stale actor handles and waits for the restarted server, so the reset
-        # then proceeds as a fresh full spawn into the new world.
+        # Recovery from a crash the previous step() flagged. Must precede
+        # _cleanup_actors(), whose destroy() RPCs would time out against the dead
+        # engine; the reset then proceeds as a fresh full spawn into a new world.
         if self._needs_reconnect:
             reconnected = self._reconnect_to_carla()
             self._needs_reconnect = False
-            # Actors were never destroyed over RPC (server was dead), so no
-            # destroy commands are pending - skip the flush tick below.
+            # Nothing was destroyed over RPC against the dead server, so no
+            # destroy commands are in flight - skip the flush tick below.
             self._actors_frozen = True
             if not reconnected:
                 return np.zeros(self._obs_dim, dtype=np.float32), {}
 
-        # Connect to CARLA on first reset
         if self.client is None:
             self._connect_to_carla()
 
         if self.world is None:
             return np.zeros(self._obs_dim, dtype=np.float32), {}
 
-        # Determine whether to reuse the existing vehicle and sensors.
-        # On the first episode (vehicle is None) or if the actor has gone stale,
-        # do a full spawn.  On all subsequent episodes, teleport instead to avoid
-        # the destroy/respawn cycle that causes the CARLA ROS bridge to accumulate
-        # actor-stream registrations and eventually segfault (exit code -11).
+        # Teleporting rather than respawning avoids the destroy/respawn cycle
+        # that makes the CARLA ROS bridge accumulate actor-stream registrations
+        # and eventually segfault. Only a first or stale actor needs a spawn.
         reuse_vehicle = self.vehicle is not None and self.vehicle.is_alive
 
-        # Always clean up NPCs, cones, and static vehicles from the previous
-        # episode - only skip sensor/ego-vehicle destruction when reusing.
+        # NPCs, cones and static vehicles always go; only the sensors and ego
+        # survive, and only when reused.
         self._cleanup_actors(skip_ego=reuse_vehicle)
 
-        # Flush pending destroy commands before spawning. Skipped when actors
-        # were already frozen at step() termination - no commands in-flight.
+        # Flushes the pending destroy commands before spawning. Unnecessary when
+        # step() already froze the actors, as nothing is then in flight.
         if not self._actors_frozen:
             self.world.tick(10.0)
         self._actors_frozen = False
 
-        # A world reload (generate_opendrive_world / load_world) resets all
-        # CARLA settings to async defaults, so sync mode is re-applied here
-        # rather than relying on the bridge. Both sync and no_rendering_mode
-        # checks share a single get_settings() / apply_settings() pair.
+        # A world reload resets every CARLA setting to the async defaults, so
+        # sync mode is re-applied here rather than trusted to the bridge. Both
+        # checks share one get_settings() / apply_settings() pair.
         if self.world is not None:
             settings = self.world.get_settings()
             settings_changed = False
@@ -2005,12 +1731,9 @@ class CARLAParkingEnv(gym.Env):
                     f"(fixed_delta={settings.fixed_delta_seconds}s)."
                 )
 
-            # Apply no_rendering_mode if enabled. Disables Unreal rendering pipeline
-            # but physics and state sensors remain active. For state-based agents
-            # (no camera input), this provides 3-4x speedup by skipping GPU rendering.
-            # render_mode="human" means a person is watching the CARLA window, so
-            # the two settings contradict: no_rendering_mode blacks the viewport
-            # out the moment it is applied. The watcher wins.
+            # Skipping the Unreal rendering pipeline is a 3-4x speedup and costs
+            # a state-based agent nothing, but it blacks out the viewport the
+            # moment it is applied, so a human watcher overrides it.
             want_no_rendering = self._no_rendering_mode and self.render_mode != "human"
             if want_no_rendering and not settings.no_rendering_mode:
                 logger.info(
@@ -2030,18 +1753,16 @@ class CARLAParkingEnv(gym.Env):
                 if want_no_rendering:
                     logger.info("No rendering mode enabled. Expected speedup: 3-4x.")
 
-        # Load floor plan and sample target bay
         if self._floor_plans_config:
             self._load_floor_plan()
             self._sample_target_bay()
 
-        # Cache blueprint lists once before any spawning to avoid repeated
-        # world queries inside each spawn method.
+        # Cached before any spawning, so no spawn method repeats the world query.
         self._cache_blueprints()
 
-        # Pre-select spawn and publish GNSS episode config BEFORE any world
-        # ticks. The gravity-settle ticks inside _spawn_vehicle/_teleport_vehicle
-        # fire GNSS callbacks in the ROS 2 bridge.
+        # The spawn and the GNSS episode config must both be settled BEFORE any
+        # world tick: the gravity-settle ticks in _spawn_vehicle /
+        # _teleport_vehicle already fire GNSS callbacks in the ROS 2 bridge.
         self._chosen_spawn = self._select_spawn()
         sx = float(self._chosen_spawn.get("x", 0.0))
         sy = float(self._chosen_spawn.get("y", 0.0))
@@ -2070,56 +1791,51 @@ class CARLAParkingEnv(gym.Env):
                 )
 
         if reuse_vehicle:
-            # Teleport the existing vehicle; sensors stay attached and alive.
+            # Sensors stay attached and alive across the teleport.
             self._teleport_vehicle()
             self._sensor_manager.reset_state()
         else:
             self._spawn_vehicle()
             self._spawn_sensors()
 
-        # Invalidate stale pre-reset EKF data so _wait_for_covariance() blocks
-        # until a genuinely post-spawn reading arrives from ekf_state.json.
+        # Drops the pre-reset reading so _wait_for_covariance() blocks until a
+        # genuinely post-spawn one arrives.
         if self._cov_subscriber is not None:
             self._cov_subscriber.invalidate()
 
-        # Publish spawn pose as local (0, 0, yaw) so /set_pose seeds the EKF
-        # at local origin, matching the re-latched GNSS datum frame.
+        # Local (0, 0, yaw), so /set_pose seeds the EKF at the origin of the
+        # re-latched GNSS datum frame.
         if self._cov_subscriber is not None and self._ros2_config.get(
             "publish_initial_pose", False
         ):
             self._cov_subscriber.publish_initial_pose(0.0, 0.0, syaw)
 
-        # Spawn all static lot actors (cones + parked vehicles) then NPCs
         self._spawn_lot_statics()
         self._spawn_npc_patrol()
         self._spawn_pedestrians()
 
-        # Rebuild vehicle actor cache after all vehicles are spawned so
-        # update_patrol() can use it without a per-step world query.
+        # Rebuilt only now that every vehicle exists, so update_patrol() needs
+        # no per-step world query.
         if self.world is not None:
             self._all_vehicle_actors = list(self.world.get_actors().filter("vehicle.*"))
             self._npc_controller.set_vehicle_cache(self._all_vehicle_actors)
 
         if self._cov_subscriber is not None:
-            # Wait once to confirm the extractor is writing, tick the world
-            # long enough for the EKF to consume the /set_pose published from
-            # initial_pose.json, then invalidate and wait again so only
-            # post-reset EKF state is accepted.
+            # Waits twice on purpose: the first confirms the extractor is
+            # writing and gives the EKF ticks to consume /set_pose, the second
+            # (after invalidate) accepts only post-reset EKF state.
             self._wait_for_covariance()
             if self.world is not None:
                 for _ in range(10):
                     self.world.tick(10.0)
             self._cov_subscriber.invalidate()
             self._wait_for_covariance()
-            # Always recalibrate: the GNSS datum is re-latched to the spawn
-            # position at each episode reset, so the EKF odom origin shifts
-            # every episode.
+            # Unconditional, because the GNSS datum is re-latched to the spawn
+            # each reset and the odom origin moves with it.
             self._calibrate_ekf_frame_offset()
 
-        # Initialise prev_distance for potential-based reward shaping
         self._success_counter = 0
-        # Reset the soft out-of-bounds accumulator and recompute the inflated
-        # boundary once per episode (lot corners are fixed for a floor plan).
+        # Recomputed per episode, the lot corners being fixed for a floor plan.
         self._oob_accumulated_penalty = 0.0
         lot_corners = [
             (float(c["x"]), float(c["y"]))
@@ -2129,9 +1845,8 @@ class CARLAParkingEnv(gym.Env):
             lot_corners, self._oob_inflation_margin
         )
         self._last_action[:] = 0.0
-        # Actuator-side previous commands reset to the zero rest state each
-        # episode so the first decision starts from zero throttle / brake /
-        # centred steering, matching the policy's first observation.
+        # Back to the rest state, so the first decision starts from zero pedal
+        # and centred steering, matching the policy's first observation.
         self._prev_steer_cmd = 0.0
         self._prev_throttle_cmd = 0.0
         self._prev_brake_cmd = 0.0
@@ -2143,11 +1858,9 @@ class CARLAParkingEnv(gym.Env):
                 math.radians(t.rotation.yaw),
             )
             self._prev_phi = self._corridor_potential(along0, cross0, head0)
-            # Fix the per-episode normaliser from the start potential. phi is <= 0
-            # and 0 at the parked pose, so |phi(start)| is the total potential the
-            # car must close to park; dividing progress by it makes the full-episode
-            # progress sum equal to PROGRESS_TARGET for every bay. Floored to avoid a
-            # blow-up when the spawn already sits near the bay.
+            # |phi(start)| is the whole potential the car must close to park, so
+            # dividing progress by it equalises the full-episode sum across bays.
+            # The floor stops a spawn that already sits near the bay blowing it up.
             self._phi_start = max(abs(self._prev_phi), PHI_NORM_FLOOR)
         else:
             self._prev_phi = 0.0
@@ -2156,7 +1869,6 @@ class CARLAParkingEnv(gym.Env):
         state = self._get_state()
         self._last_norm_obs = state
 
-        # Emit debug reset summary (no-op when debug=False)
         self._debug_logger.log_reset(
             self._current_floor_plan_name,
             self._target_bay.get("bay_id", ""),
@@ -2170,9 +1882,8 @@ class CARLAParkingEnv(gym.Env):
             n_cones=len(self._lot_spawner.spawned_cones),
         )
 
-        # Write the first vis frame for this episode so the visualiser shows
-        # the new layout immediately rather than displaying the previous
-        # episode's stale scene during the reset gap.
+        # A first frame now, so the visualiser shows the new layout during the
+        # reset gap instead of the previous episode's stale scene.
         self._write_vis_state()
 
         info: Dict[str, Any] = {
@@ -2191,34 +1902,26 @@ class CARLAParkingEnv(gym.Env):
         """
         @brief Execute one policy decision (action_repeat sim ticks).
 
-        One step() call is one agent transition: the rate-limited command is
-        held constant while CARLA advances action_repeat fixed timesteps, then
-        the observation and reward are built once from the post-tick state.
-        The agent never sees intermediate sim ticks, so every transition pairs
-        the decision with the normalised observation that resulted from it,
-        and SB3 timesteps count policy decisions, not sim ticks.
+        One call is one agent transition: the rate-limited command is held while
+        CARLA advances action_repeat fixed timesteps, and the observation and
+        reward are built once from the post-tick state. The agent never sees the
+        intermediate ticks, so SB3 timesteps count decisions, not sim ticks.
 
-        @param action: 3-dim action vector [steer, throttle, brake] in the
-                policy's normalised command space. Steer in [-1, 1], throttle
-                and brake in [0, 1]. The env rate-limits the command via the
-                actuator model before forwarding to CARLA, so what the policy
-                commands and what the vehicle physically receives may differ.
+        @param action: [steer, throttle, brake], each in [-1, 1]. The actuator
+                model rate-limits the command before CARLA sees it, so what the
+                policy asks for and what the vehicle receives may differ.
         @return Tuple of (observation, reward, terminated, truncated, info).
         """
-        # Rate-limit the raw policy command so the action delivered to CARLA
-        # matches a physical actuator. The post-clamp values are persisted via
-        # _prev_*_cmd and held constant for the action_repeat sim ticks of this
-        # decision (~0.2 s).
-        # Policy axes are uniformly [-1, 1] (tanh-squashed). Steer passes
-        # through. Throttle / brake fold the negative half to zero so the
-        # symmetric prior gamma = 0 maps to pedal-off; only the positive
-        # half engages the pedal. A linear (a + 1) / 2 remap put both
-        # pedals at 0.5 at init, which triggered the brake-overrides-
-        # throttle override and prevented any movement at training start.
+        # Every policy axis is uniformly [-1, 1] (tanh-squashed), so steer passes
+        # through while throttle and brake fold their negative half to zero: the
+        # symmetric prior gamma = 0 must map to pedal-off. A linear (a + 1) / 2
+        # would instead sit both pedals at 0.5 and trip the brake override.
         steer_cmd = float(np.clip(action[0], -1.0, 1.0))
         throttle_cmd = float(np.clip(action[1], 0.0, 1.0))
         brake_cmd = float(np.clip(action[2], 0.0, 1.0))
 
+        # Rate-limited to a physical actuator, then persisted in _prev_*_cmd and
+        # held for this decision's action_repeat sim ticks.
         steer_cmd = float(
             np.clip(
                 steer_cmd,
@@ -2234,12 +1937,10 @@ class CARLAParkingEnv(gym.Env):
             )
         )
 
-        # Brake-overrides-throttle. A real driver-assistance system cuts
-        # throttle whenever the brake is meaningfully pressed; modelling
-        # the same here keeps the policy from learning to fight itself.
-        # Apply the override BEFORE the throttle rate limit so the cut
-        # itself still respects the actuator rate (a real throttle plate
-        # cannot slam closed faster than its slew rate).
+        # Brake-overrides-throttle, as a real driver-assistance system does, so
+        # the policy cannot learn to fight itself. Applied BEFORE the throttle
+        # rate limit: a real throttle plate cannot slam closed instantly, so the
+        # cut must respect the actuator slew rate too.
         if brake_cmd > self._brake_override_throttle_threshold:
             throttle_cmd = 0.0
         throttle_cmd = float(
@@ -2292,12 +1993,10 @@ class CARLAParkingEnv(gym.Env):
 
             self._update_patrol_npcs()
             self._update_pedestrians()
-            # 10s timeout surfaces a frozen CARLA server as an error rather
-            # than hanging the process indefinitely. CARLA 0.9.16 segfaults
-            # on long headless runs; a crash here is recoverable - flag the
-            # env for reconnect on the next reset() and abort the episode as
-            # a truncation so SB3 ends it cleanly rather than the whole
-            # multi-hour run dying on the exception. @see _reconnect_to_carla.
+            # CARLA 0.9.16 segfaults on long headless runs. The timeout surfaces
+            # a frozen server as an error, and the episode truncates so SB3 ends
+            # it cleanly instead of a multi-hour run dying on the exception.
+            # @see _reconnect_to_carla.
             try:
                 self.world.tick(10.0)
             except RuntimeError as exc:
@@ -2324,15 +2023,10 @@ class CARLAParkingEnv(gym.Env):
                 (_post_transform.location.x, _post_transform.location.y)
             )
 
-            # Follow the car on every TICK, not once per policy decision: with
-            # action_repeat > 1 a per-decision update runs at a fraction of the
-            # sim rate and the view visibly stutters.
-            #
-            # In synchronous mode the server renders a frame per tick, so all
-            # action_repeat frames would otherwise be produced back to back and
-            # the caller's per-decision sleep would show them as one jump every
-            # 1 / action_repeat of a second - a slideshow. Spreading the wait
-            # across the ticks delivers frames evenly at the sim rate.
+            # Follow on every TICK, not once per policy decision: in synchronous
+            # mode the server renders a frame per tick, so a per-decision update
+            # would emit action_repeat frames back to back and the caller's sleep
+            # would show them as one jump per decision - a slideshow.
             if self.render_mode == "human":
                 self._update_chase_camera()
                 if self._tick_wall_seconds > 0.0:
@@ -2377,15 +2071,10 @@ class CARLAParkingEnv(gym.Env):
 
         truncated = self.steps >= self.max_steps
 
-        # Stall truncation: a car holding a near-stop OUTSIDE the acceptance box
-        # for STALL_TRUNCATION_DECISIONS consecutive decisions is parked in the
-        # wrong place and (forward-only, no reverse) almost never recovers -
-        # truncate through the same path as the clock running out, so the graded
-        # timeout penalty below applies identically. _success_counter > 0 means
-        # the car is slow INSIDE the box (the success dwell), which must not
-        # count as a stall. The window is sized above the GNSS Markov chain's
-        # full recovery time, so stopping to wait out a degraded fix is never
-        # cut short. @see STALL_TRUNCATION_DECISIONS.
+        # A near-stop OUTSIDE the acceptance box is parked in the wrong place and,
+        # forward-only, almost never recovers. Truncates through the same path as
+        # the clock running out so the graded penalty applies identically.
+        # @see STALL_TRUNCATION_DECISIONS.
         if not terminated:
             # Live EKF position std (m): mean of the x/y diagonal stds, matching
             # how the observation and eval combine them. NaN when the EKF is
@@ -2396,17 +2085,16 @@ class CARLAParkingEnv(gym.Env):
                 if np.any(np.isfinite(self._last_ekf_std[:2]))
                 else 0.0
             )
-            # Suspend the stall counter while localisation is genuinely degraded:
-            # a near-stop there is a legitimate wait-for-recovery, not a stall,
-            # and must not be punished (the behaviour the covariance induces). The
-            # counter is HELD (neither incremented nor reset) during the wait, so
-            # a real good-fix stall briefly interrupted by a degraded blip resumes
-            # rather than restarting from zero.
+            # Waiting out a degraded fix is legitimate, not a stall - punishing it
+            # would suppress the behaviour the covariance is meant to induce.
             waiting_out_bad_fix = ekf_std_pos > STALL_GATE_EKF_STD_M
+            # Counter > 0 means slow INSIDE the box, i.e. the success dwell.
             near_stop = (
                 reward_diag["speed"] < SUCCESS_THRESHOLD_VELOCITY
                 and self._success_counter == 0
             )
+            # Held, not reset, during the wait: a genuine good-fix stall briefly
+            # interrupted by a degraded blip resumes rather than restarting.
             if not waiting_out_bad_fix:
                 if near_stop:
                     self._stall_counter += 1
@@ -2415,16 +2103,10 @@ class CARLAParkingEnv(gym.Env):
             if self._stall_counter >= STALL_TRUNCATION_DECISIONS:
                 truncated = True
 
-        # Graded timeout penalty: judge the final state when the clock runs out
-        # without a park. Scaled by how far and how misaligned the car ended, so
-        # ending closer and straighter is always less costly than stopping short.
-        # Transformed by /|phi(start)| * PROGRESS_TARGET (the same normaliser the
-        # corridor progress uses) so the penalty lives on the dense progress scale
-        # and a far-bay timeout is not penalised more heavily than a near-bay one
-        # merely for being far. Clamped to TIMEOUT_PENALTY_FLOOR_NORM so timing out
-        # costs about as much as forfeiting the whole progress reward and the fixed
-        # terminals stay far larger, keeping success(+50) > timeout > ego
-        # collision(-25).
+        # Graded on final distance and misalignment, so ending closer and
+        # straighter always costs less than stopping short. Normalised by
+        # |phi(start)| like the corridor progress, so a far-bay timeout is not
+        # penalised merely for being far. @see TIMEOUT_PENALTY_FLOOR_NORM.
         if truncated and not terminated:
             reward += max(
                 -(
@@ -2540,10 +2222,9 @@ class CARLAParkingEnv(gym.Env):
             "ekf_std_y": float(self._last_ekf_std[1]),
             "ekf_std_yaw": float(self._last_ekf_std[2]),
             # Live GNSS fix-state tier (name + noise multiplier vs RTK-fixed),
-            # read back from the relay's Markov drift (see above). Lets timing
-            # analysis recover the step the drift first reaches a degraded tier
-            # (the onset reference for handover-latency), which varies per
-            # episode under the degrade_one_way drift.
+            # read back from the relay's Markov drift. Lets timing analysis
+            # recover the degraded-tier onset step (the handover-latency
+            # reference), which varies per episode under degrade_one_way.
             "gnss_tier": _live_tier,
             "gnss_multiplier": _live_multiplier,
             # Target bay this episode (id, world pose, dimensions). Constant
