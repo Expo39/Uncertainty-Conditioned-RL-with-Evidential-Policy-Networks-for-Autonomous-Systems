@@ -299,6 +299,11 @@ def main() -> None:
     )
     if held_gnss_tier is not None:
         print(f"Holding GNSS tier '{held_gnss_tier}' for the whole drive.")
+    # --render turns on the chase spectator inside CARLA's own window, which is
+    # what the 3D demo captures. The env only moves the spectator when its
+    # render_mode is "human", so set it here rather than leaving render() inert.
+    if args.render:
+        env_config["render_mode"] = "human"
     base_env = _make_env(env_config, held_gnss_tier=held_gnss_tier)
     env = base_env
 

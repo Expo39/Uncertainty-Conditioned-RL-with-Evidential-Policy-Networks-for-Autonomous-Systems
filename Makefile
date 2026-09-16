@@ -237,10 +237,16 @@ docker-covariance-probe: ## Causal probe - does the policy USE the covariance in
 		$(if $(REAL_OBS),--real-obs $(REAL_OBS),)
 
 
-docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D spectator view. Usage: make docker-eval-visualise-3d [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make docker-eval-visualise-3d [BASELINE=full_method] [CHECKPOINT=6_42_22062026-1502] [STAGE=6] [GNSS_TIER=fixed|float|standalone|degraded]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
+	@echo "Demo drive 3D: checkpoint=$(CHECKPOINT_NAME), stage=$(if $(STAGE),$(STAGE),<base>), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>)"
+	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) CHECKPOINT=$(CHECKPOINT_MODEL) \
+		DEMO_BASELINE_ARG="$(if $(BASELINE),--baseline $(BASELINE_YAML),)" \
+		DEMO_STAGE_ARG="$(if $(STAGE),--stage $(STAGE),)" \
+		DEMO_TIER_ARG="$(if $(GNSS_TIER),--gnss-tier $(GNSS_TIER),)" \
 		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
+	xhost -local:docker 2>/dev/null || true
 
 # ----------------------------------------------------------------------
 # Docker: Testing & Linting
