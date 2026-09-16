@@ -46,9 +46,8 @@ def static_tf(
     """
     @brief Create a zero-rotation static_transform_publisher node.
 
-    Always passes use_sim_time=False by default. Timestamp=0 from static
-    publishers is valid at all times in TF2, so wall clock is correct here
-    regardless of whether the rest of the stack uses sim time.
+    Defaults to wall clock: TF2 treats a static publisher's timestamp=0 as
+    valid at all times, so sim time buys nothing here.
 
     @param name: Node name.
     @param parent: Parent TF frame ID.
@@ -95,7 +94,6 @@ def build_sensor_tf_nodes(
 ) -> List[Node]:
     """
     @brief Build static TF nodes connecting sensor frames to the vehicle body frame.
-
     @param sensors_config: Dict with imu/lidar/gnss mount sub-dicts.
     @param body_frame: Vehicle body frame ID.
     @param imu_frame: IMU child frame ID.
@@ -104,9 +102,8 @@ def build_sensor_tf_nodes(
     @param use_sim_time: Forwarded to static_tf() (default False).
     @return List of static TF publisher nodes.
     """
-    # Sim: sensors_config is carla_sensors sub-dict from env_config.yaml.
-    # Real: sensors_config is sensors sub-dict from sensor_config.yaml.
-    # Both use the same mount key structure: {imu: {mount: {x,y,z}}, ...}.
+    # Serves both deployments: carla_sensors from env_config.yaml and sensors
+    # from sensor_config.yaml share the {imu: {mount: {x,y,z}}} key structure.
     imu_mount = sensors_config.get("imu", {}).get("mount", {})
     lidar_mount = sensors_config.get("lidar", {}).get("mount", {})
     gnss_mount = sensors_config.get("gnss", {}).get("mount", {})

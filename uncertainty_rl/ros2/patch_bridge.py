@@ -11,7 +11,6 @@ import pathlib
 
 BASE = pathlib.Path("/workspace/src/ros-bridge/carla_ros_bridge/src/carla_ros_bridge")
 
-# sensor.py: catch RuntimeError on stop()/destroy() of an already-gone actor
 p = BASE / "sensor.py"
 original = p.read_text()
 _SENSOR_TARGET = (
@@ -38,7 +37,6 @@ assert _SENSOR_TARGET in original, (
 )
 p.write_text(original.replace(_SENSOR_TARGET, _SENSOR_PATCH))
 
-# actor_factory.py: catch RuntimeError on destroy() of an already-gone actor
 p = BASE / "actor_factory.py"
 original = p.read_text()
 _FACTORY_TARGET = (

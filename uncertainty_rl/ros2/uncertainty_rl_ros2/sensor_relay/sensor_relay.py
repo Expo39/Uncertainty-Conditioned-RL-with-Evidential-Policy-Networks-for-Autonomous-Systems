@@ -2,9 +2,8 @@
 @file sensor_relay.py
 @brief Entry point that co-spins GnssNoiseRelayNode and ImuNoiseRelayNode.
 
-Both nodes are independent (separate subscriptions and publishers) but are
-spun together in a single process via MultiThreadedExecutor to avoid the
-overhead of a second container process.
+The two nodes share no state; they are spun in one process purely to avoid
+the overhead of a second container process.
 """
 
 from typing import Optional
