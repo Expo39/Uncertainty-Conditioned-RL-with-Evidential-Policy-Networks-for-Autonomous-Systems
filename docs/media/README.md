@@ -81,7 +81,7 @@ viewer owns its Pygame surface, so
 ```bash
 make eval-visualise-2d LAYOUT=rectangle BASELINE=full_method \
   CHECKPOINT=6_42_22062026-1502 STAGE=6 REALTIME=true RECORD=true TRACE=false
-make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
+make clip START=00:05 END=00:20 FORMAT=gif WIDTH=800 FPS=15
 ```
 
 `GNSS_TIER=fixed|float|standalone|degraded` pins one fix state for a whole drive, which is
@@ -98,7 +98,7 @@ xhost +local:docker
 make docker-inspect INSPECT_LAYOUT=rectangle          # or the target for the asset
 xwininfo -name CarlaUE4                               # read "Absolute upper-left X/Y"
 make record-screen DURATION=30 REGION=800x600 OFFSET=<X>,<Y>
-make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:02 END=00:14
+make clip START=00:02 END=00:14
 ```
 
 The CARLA window is launched at 800x600, which is the default `REGION`.
@@ -119,7 +119,7 @@ tables.
 
 | Name | Caption | Shown in |
 |------|---------|----------|
-| `carla_3d` | 3D CARLA spectator view - evidential policy navigating the rectangular lot | `README.md` |
+| `carla_3d` | **Present.** Chase view across two consecutive episodes, each parking into its own highlighted target bay | `README.md` |
 | `visualiser_2d` | **Present.** Parking as the GNSS fix state climbs degraded -> standalone -> float -> RTK fixed | `README.md`, `scripts/visualise/README.md` |
 | `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
 | `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |
@@ -160,7 +160,7 @@ an asset is not neutral illustration when its caption makes a claim.
 | `parking_episode` | - | **Retired.** A plain park under one held tier adds nothing beyond `visualiser_2d`, which already drives a full episode through the float rung. The envs README links to that clip instead |
 | `baseline_comparison` | A: `BASELINE=vanilla_ppo` vs `full_method`, both `GNSS_TIER=degraded` | Ready |
 | `safety_handoff` | - | **Retired, do not create.** The gate is a negative result: total predictive uncertainty scores ROC AUC 0.55 / 0.52 over 1800 episodes (chance), below the EKF position std at 0.57 / 0.63. A clip of a handoff firing would present a mechanism the data says does not beat the covariance baseline. `gate_roc` is the defensible figure |
-| `carla_3d` | B: `make docker-eval-visualise-3d` + `make record-screen` | Ready (spectator aimed by hand - `--render` auto-follow is dead, see below) |
+| `carla_3d` | B: `make docker-eval-visualise-3d` + `make record-screen` | **Done** - in `docs/media/` |
 | `inspect_layout` | B: `make docker-inspect INSPECT_LAYOUT=rectangle` | Ready |
 | `inspect_sensors` | B: `make docker-inspect-sensors SENSORS_VIEW=birds_eye INSPECT_ZOOM=close` | Ready |
 | `inspect_live` | B: `make docker-inspect-live` | Ready |

@@ -73,8 +73,14 @@ flowchart TB
 
 ## Demos
 
-<!-- gif:placeholder name="carla_3d" caption="3D CARLA spectator view - evidential policy navigating the rectangular lot" -->
-![CARLA 3D placeholder](docs/media/carla_3d.gif)
+The evidential policy parking in CARLA, followed by a chase camera. The clip spans two
+consecutive episodes - the car parks, the episode resets, and it drives to a different
+target bay. The overlays are the ones the layout inspector draws: blue bay outlines, with
+each episode's target bay highlighted green.
+
+<p align="center">
+  <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="620">
+</p>
 
 The 2D bird's-eye viewer at the end of an episode. The GNSS fix state climbs back up the
 ladder as the car closes on the bay - degraded (red) to standalone (orange) to RTK float
