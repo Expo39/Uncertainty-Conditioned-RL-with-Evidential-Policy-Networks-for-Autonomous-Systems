@@ -6,9 +6,9 @@ Visual assets used across the project's READMEs.
 |------|----------|----------|
 | `carla_3d.gif` | CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay | `README.md` |
 | `visualiser_2d.gif` | 2D bird's-eye visualiser parking as the GNSS fix state climbs degraded -> standalone -> float -> RTK fixed | `README.md`, `scripts/visualise/README.md` |
-| `training_curves.png` | Success and collision rate per arm across the six curriculum stages | `uncertainty_rl/training/README.md` |
-| `eval_degradation.png` | Success rate and mean final position error per arm across the reported evaluation conditions | `uncertainty_rl/evaluation/README.md` |
-| `inspect_sensors.jpeg` | Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye | `scripts/inspect/README.md` |
+| `training_curves.png` | Success and collision rate per arm across the six curriculum stages | `README.md`, `uncertainty_rl/training/README.md` |
+| `eval_degradation.png` | Success rate and mean final position error per arm across the reported evaluation conditions | `README.md`, `uncertainty_rl/evaluation/README.md` |
+| `inspect_sensors.jpeg` | Sensor inspector showing GNSS, IMU, and LiDAR FOV arc from birds-eye | `USAGE.md`, `scripts/inspect/README.md` |
 
 ## Regenerating an asset
 
