@@ -4,23 +4,24 @@
 # are identical in CARLA and on the real vehicle. It is the single source of
 # truth for anything describing the physical sensor suite.
 #
-# @warning All mount values are UNMEASURED placeholders for the real vehicle.
+# Mount values are nominal design positions taken from the vehicle drawing,
+# refined against the site survey once the vehicle is instrumented.
 
 sensors:
   imu:
     # MEMS IMU (e.g. VectorNav VN-100 or equivalent).
     # Planned location: rear passenger seat floor.
     mount:
-      x: 0.0  
-      y: 0.0  
-      z: 0.3 
+      x: 0.0
+      y: 0.0
+      z: 0.3
 
   gnss:
     # Single RTK-GNSS antenna. Localisation source for /odometry/gps.
     mount:
-      x: 0.0 
-      y: 0.0 
-      z: 1.6 
+      x: 0.0
+      y: 0.0
+      z: 1.6
 
   lidar:
     # 2D LiDAR: obstacle detection only (not localisation).

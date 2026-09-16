@@ -5,27 +5,19 @@
 # agent behaviour, observation flags, ROS 2 pipeline settings, safety policy
 # parameters, and deployment flags.
 
-# ---------------------------------------------------------------------------
-# Master RNG seed
-# ---------------------------------------------------------------------------
-# Single source of truth for the whole experiment: seeds training and the
-# separate-process GNSS/IMU noise relays. Nothing else carries a seed.
+# Master RNG seed: single source of truth for the whole experiment, seeds
+# training and the separate-process GNSS/IMU noise relays. Nothing else
+# carries a seed.
 seed: 7  # Change this one line to run a new seed.
 
-# ---------------------------------------------------------------------------
-# Policy safety parameters
-# ---------------------------------------------------------------------------
-# Hard speed governor (throttle is cut at or above this speed, brake unaffected).
-
+# Policy safety parameters: hard speed governor (throttle is cut at or above
+# this speed, brake unaffected).
 max_ego_speed_ms: 6.0  # Speed limit (m/s).
 
-# ---------------------------------------------------------------------------
-# Actuator model
-#
-# Rate limits and a brake-overrides-throttle constraint applied to the policy
-# action before it reaches CARLA or the real vehicle. Units are normalised
-# action units per policy decision (0.2 s at action_repeat=4, carla_timestep=0.05).
-# ---------------------------------------------------------------------------
+# Actuator model: rate limits and a brake-overrides-throttle constraint
+# applied to the policy action before it reaches CARLA or the real vehicle.
+# Units are normalised action units per policy decision (0.2 s at
+# action_repeat=4, carla_timestep=0.05).
 actuator_model:
   steer_max_delta_per_decision: 0.20  # Steer rate limit (~70 deg/s at the road wheel).
   throttle_max_delta_per_decision: 0.5  # Throttle rate limit (0 -> full in 0.4 s).
@@ -36,25 +28,17 @@ actuator_model:
 # the threshold. Calibrate per checkpoint to the calm-condition total upper tail.
 safety_handoff_threshold: 1.2
 
-# ---------------------------------------------------------------------------
-# Deployed baseline (real vehicle)
-#
-# Names the baseline the deployed checkpoint was trained as; its obs flags and
-# policy_type are read from that file.
-# ---------------------------------------------------------------------------
+# Deployed baseline (real vehicle): names the baseline the deployed checkpoint
+# was trained as; its obs flags and policy_type are read from that file.
 baseline: configs/baselines/full_method.yaml
 
-# ---------------------------------------------------------------------------
-# ROS 2 / EKF pipeline settings
-# ---------------------------------------------------------------------------
+# ROS 2 / EKF pipeline settings.
 ros2:
-  covariance_topic: "/odometry/filtered"  # Topic where EKF publishes covariance. 
+  covariance_topic: "/odometry/filtered"  # Topic where EKF publishes covariance.
   covariance_timeout: 120.0  # Seconds to wait for covariance messages.
   ekf_convergence_timeout: 15.0  # Seconds to wait for EKF convergence.
   publish_initial_pose: true  # Publishes /set_pose at each episode reset.
 
-# ---------------------------------------------------------------------------
-# Real-world deployment paths
-# ---------------------------------------------------------------------------
+# Real-world deployment paths.
 real_world_datum: configs/deployment/real/real_world_datum.yaml
 actuation_calibration: configs/deployment/real/actuation_calibration.yaml

@@ -31,12 +31,10 @@ STAGE        ?=
 # source). Only analyse-gate / analyse-ablation use it (they key on STAGE, not a
 # checkpoint, so they cannot infer the seed otherwise).
 SEED         ?=
-# Seed that owns the eval/analysis output tree. Derived from the checkpoint leaf
-# (<stage>_<seed>_<timestamp>, e.g. 6_42_22062026-1502 -> 42) so per-checkpoint
-# targets (docker-eval, analyse-calibration, handover-timing) get it for free
-# from the run name. The cross-arm targets fall back to SEED then 42. Every
-# eval-related tree nests a seed_<N>/ layer so a second seed never overwrites the
-# first.
+# Seed owning the eval/analysis output tree, derived from the checkpoint leaf
+# (<stage>_<seed>_<timestamp>) so per-checkpoint targets get it from the run
+# name; cross-arm targets fall back to SEED then 42. Every eval tree nests a
+# seed_<N>/ layer so a second seed never overwrites the first.
 EVAL_SEED = $(or $(word 2,$(subst _, ,$(CHECKPOINT))),$(SEED),42)
 EVAL_RESULTS_ROOT = outputs/raw/evaluation_results/seed_$(EVAL_SEED)
 ABLATION_ROOT     = outputs/raw_derived/ablation_analysis/seed_$(EVAL_SEED)
@@ -50,11 +48,9 @@ PER_STEP_CAP ?= 0
 # <baseline>/<leaf>/{with_wrapper,without_wrapper}/ for the A/B.
 NO_SAFETY    ?=
 
-# --- Visualiser / recording -------------------------------------------------
-# RECORD=true starts the 2D viewer recording an MP4 straight away; the R key
-# toggles recording at any time regardless. UI_SCALE enlarges fonts and the
-# legend for a projector or a recording. TRACE=false suppresses the demo's
-# per-step CSV traces for a look-but-don't-touch run.
+# RECORD=true starts the 2D viewer recording immediately; R toggles it either
+# way. UI_SCALE enlarges fonts for a projector or recording. TRACE=false
+# suppresses the demo's per-step CSV traces for a look-but-don't-touch run.
 RECORD     ?= false
 UI_SCALE   ?= 1.5
 TRACE      ?= true
@@ -70,19 +66,15 @@ END    ?=
 FORMAT ?= gif
 WIDTH  ?= 800
 FPS    ?= 15
-# record-screen parameters. The CARLA server window is launched at 800x600
-# (docker-compose.inspect.yml), so that is the default capture region; OFFSET is
-# its top-left corner on the X display (xwininfo -name CarlaUE4).
-# Empty DURATION records until Ctrl+C, which is usually what you want: start the
-# capture, drive until the interesting bit is done, then stop. Set a number of
-# seconds for an unattended capture.
+# The CARLA window launches at 800x600 (docker-compose.inspect.yml), hence the
+# default region; OFFSET is its top-left corner on the X display
+# (xwininfo -name CarlaUE4). Empty DURATION records until Ctrl+C; set seconds
+# for an unattended capture.
 DURATION ?=
-# Capture encoding. ultrafast + a high CRF keeps the encoder well ahead of the
-# capture rate: a slow preset cannot sustain a 4K desktop in real time (medium
-# manages only ~1.2x on an idle machine, and CARLA is competing for the same
-# GPU), so x11grab silently drops frames and the recording stutters even though
-# the simulator looked smooth. Quality barely matters here - the clip is scaled
-# down to ~800 px for the README anyway.
+# ultrafast + high CRF keeps the encoder ahead of the capture rate. A slower
+# preset cannot sustain a 4K desktop while CARLA competes for the GPU, so
+# x11grab silently drops frames and the recording stutters even though the
+# simulator looked smooth. Quality hardly matters at the ~800 px output size.
 REC_PRESET ?= ultrafast
 REC_CRF    ?= 23
 # Downscale at capture time. A 4K desktop grab is far more pixels than a README
@@ -94,12 +86,10 @@ REGION   ?= 800x600
 OFFSET   ?= 0,0
 OUT      ?=
 
-# BASELINE and CHECKPOINT are bare names, mirroring the nested-by-baseline output
-# layout <root>/<baseline>/<leaf>/. You type only the names:
-#   BASELINE=input_uncertainty   CHECKPOINT=seed42_11062026-0628
-# and the recipes reconstruct the full paths. BASELINE_NAME tolerates a legacy
-# full YAML path too (it takes the file stem). The checkpoint folder is always the
-# baseline (default full_method); the leaf is whatever CHECKPOINT was given.
+# BASELINE and CHECKPOINT are bare names (e.g. BASELINE=input_uncertainty
+# CHECKPOINT=seed42_11062026-0628); the recipes reconstruct the full nested
+# output paths <root>/<baseline>/<leaf>/. BASELINE_NAME also accepts a full
+# YAML path (it takes the file stem either way); default full_method.
 BASELINE_NAME = $(if $(BASELINE),$(notdir $(basename $(BASELINE))),full_method)
 # Full path to the baseline override config, passed to the scripts.
 BASELINE_YAML = $(CONFIG_DIR)/baselines/$(BASELINE_NAME).yaml
@@ -122,17 +112,11 @@ define ensure-venv
 	fi
 endef
 
-# ----------------------------------------------------------------------
-# Help
-# ----------------------------------------------------------------------
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-22s\033[0m %s\n", $$1, $$2}'
 
-# ----------------------------------------------------------------------
-# Setup
-# ----------------------------------------------------------------------
 
 install: ## Create .venv and install package + dev dependencies
 	python3 -m venv $(VENV)
@@ -141,13 +125,7 @@ install: ## Create .venv and install package + dev dependencies
 	$(VENV)/bin/pre-commit install || true  # Non-fatal: core.hooksPath may be managed externally
 
 
-# ======================================================================
-# DOCKER - commands that run inside containers
-# ======================================================================
 
-# ----------------------------------------------------------------------
-# Docker: Lifecycle
-# ----------------------------------------------------------------------
 
 # Pre-create host-side bind-mount targets so the Docker daemon (root) does not
 # create them as root-owned. Must run before any `docker compose up` call.
@@ -200,9 +178,6 @@ docker-watch: ## Watch container health status (refreshes every 5s, Ctrl+C to ex
 docker-top: ## Show running processes in containers
 	$(DOCKER_COMPOSE) top
 
-# ----------------------------------------------------------------------
-# Docker: Training & Evaluation
-# ----------------------------------------------------------------------
 
 run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
 	bash scripts/training/run_seed_leg.sh
@@ -256,12 +231,10 @@ docker-covariance-probe: ## Causal probe - does the policy USE the covariance in
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make docker-eval-visualise-3d [BASELINE=full_method] [CHECKPOINT=6_42_22062026-1502] [STAGE=6] [GNSS_TIER=fixed|float|standalone|degraded]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	@echo "Demo drive 3D: checkpoint=$(CHECKPOINT_NAME), stage=$(if $(STAGE),$(STAGE),<base>), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>)"
-	@# Only the two demo services are named on the `up` below, so compose does
-	@# not touch the training/tensorboard containers and --abort-on-container-exit
-	@# cannot be tripped by an unrelated one exiting (a `make docker-shell`
-	@# session ending used to kill the whole demo with exit 137). The demo CARLA
-	@# runs on its own port range, so it coexists with the training stack - but
-	@# both want the GPU, so stop a training RUN first if one is in progress.
+	@# Only the two demo services are named on the `up` below, so compose leaves
+	@# the training/tensorboard containers untouched and --abort-on-container-exit
+	@# cannot be tripped by an unrelated one exiting. The demo CARLA runs on its
+	@# own port range and coexists with the training stack, but both want the GPU.
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo uncertainty-rl-ros2-inspect 2>/dev/null || true
 	@# Grant on the RESOLVED display: this shell may have DISPLAY unset (the
 	@# value is globbed from /tmp/.X11-unix), and a bare xhost would then target
@@ -279,9 +252,6 @@ docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make 
 	@# so clear it here rather than leaving it for the next run to trip over.
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo uncertainty-rl-ros2-inspect 2>/dev/null || true
 
-# ----------------------------------------------------------------------
-# Docker: Testing & Linting
-# ----------------------------------------------------------------------
 
 docker-test: ## Run full test suite inside container 
 	@bash scripts/multi_workers/ensure_stack.sh
@@ -295,9 +265,6 @@ docker-test-integration: ## Run integration tests inside container
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
 
-# ----------------------------------------------------------------------
-# Docker: Shells & Logs
-# ----------------------------------------------------------------------
 
 docker-shell: ## Interactive shell in training container
 	$(DOCKER_COMPOSE) exec training /bin/bash
@@ -327,9 +294,6 @@ docker-inspect-dryrun-logs: ## Follow dryrun training container logs (run alongs
 docker-logs-ros2-inspect: ## Follow ROS 2 inspect container logs (run alongside docker-inspect-dryrun)
 	$(DOCKER_COMPOSE_INSPECT) logs -f ros2-bridge-inspect
 
-# ----------------------------------------------------------------------
-# Docker: Cleanup
-# ----------------------------------------------------------------------
 
 STACK ?= all
 docker-clean: ## Stop containers and remove volumes. Usage: make docker-clean [STACK=all|training|inspect]
@@ -343,9 +307,6 @@ docker-dev: ## Start N env workers + training stack and drop into training shell
 	$(DOCKER_COMPOSE) up -d --wait
 	$(DOCKER_COMPOSE) exec training /bin/bash
 
-# ----------------------------------------------------------------------
-# Docker: Demo to evaluate model in windowed mode
-# ----------------------------------------------------------------------
 
 MODEL ?= checkpoints/final_model
 docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make docker-demo MODEL=<path>
@@ -354,9 +315,6 @@ docker-demo: ## Windowed CARLA demo with checkpoint (requires X11). Usage: make 
 	DISPLAY=$(_DISPLAY) MODEL=$(MODEL) $(DOCKER_COMPOSE_INSPECT) --profile demo up --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
 
-# ----------------------------------------------------------------------
-# Docker: Inspection Tools to confirm all is good in the simulator
-# ----------------------------------------------------------------------
 
 INSPECT_EPISODES ?=
 INSPECT_VIEW     ?= third_person
@@ -430,13 +388,7 @@ docker-inspect-live: ## Live sensor mode in windowed CARLA. Usage: make docker-i
 
 
 
-# ======================================================================
-# LOCAL - commands that run on the host machine
-# ======================================================================
 
-# ----------------------------------------------------------------------
-# Layout Generation
-# ----------------------------------------------------------------------
 
 figures: ## Regenerate the analysed-data figures into outputs/main_analysis/figures. Usage: make figures [FIG=gate_roc]
 	$(call ensure-venv)
@@ -459,14 +411,9 @@ generate-layouts: ## Generate lot layout YAMLs + bird's-eye PNGs. Usage: make ge
 		--plot-dir outputs/raw_derived/layouts \
 		$(if $(filter command line,$(origin LAYOUT)),--layout $(LAYOUT),)
 
-# ----------------------------------------------------------------------
-# Results Analysis and Diagnostics
-#
-# All host-side and CPU-only: they read the raw CSVs under outputs/raw/ (or
-# the TensorBoard event files under logs/) and write derived CSVs. No CARLA,
-# no ROS 2, no GPU.
-# ----------------------------------------------------------------------
-
+# Results analysis and diagnostics below are all host-side and CPU-only: they
+# read the raw CSVs under outputs/raw/ (or the TensorBoard event files under
+# logs/) and write derived CSVs. No CARLA, no ROS 2, no GPU.
 analyse-markov: ## Diagnose GNSS tier Markov chain from gnss_noise_profiles.yaml. Usage: make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]
 	$(call ensure-venv)
 	$(PYTHON) scripts/diagnostics/markov_analyser.py \
@@ -544,12 +491,6 @@ tb-scalars: ## Print TB scalar trajectories. Usage: make tb-scalars LOG=logs/<ru
 	@if [ -z "$(LOG)" ]; then echo "Set LOG=logs/<run_dir>"; exit 1; fi
 	$(PYTHON) $(SCRIPTS_DIR)/diagnostics/tb_read.py $(LOG) $(ARGS)
 
-# ----------------------------------------------------------------------
-# Visualisation (host-side viewer + Docker driver)
-# Two use cases:
-#   make visualise          - training already running, just open the viewer
-#   make eval-visualise-2d  - start checkpoint demo drive + open viewer
-# ----------------------------------------------------------------------
 
 # WORKER selects which env worker's vis_history file to watch.
 # Worker 0 (default): outputs/vis_history.jsonl
@@ -658,22 +599,21 @@ record-screen: ## Screen-record the CARLA window to MP4 until Ctrl+C. Usage: mak
 	@echo "Recording $(_REGION) at +$(_OFFSET) on $(_DISPLAY)$(if $(DURATION), for $(DURATION)s, until Ctrl+C) -> $(_SCREEN_OUT)"
 	@# libx264 needs even dimensions and a window is rarely even (the CARLA
 	@# window measures 3774x2091), so pad up rather than fail with a 0-byte file.
+
 	@# Fragmented MP4: a plain MP4 writes its index (the moov atom) only when
 	@# encoding ends, so ANY abrupt stop leaves an unplayable file. Fragments
-	@# write the index incrementally, so the recording stays valid even if
-	@# ffmpeg is killed outright - which is what makes "record until Ctrl+C"
-	@# safe. The trap below still forwards a single clean SIGINT so the normal
-	@# path finalises tidily.
-	@# Ctrl+C must stop the recording AND end the target. Two things make that
-	@# reliable: ffmpeg runs in the foreground with the terminal attached (so the
-	@# interrupt reaches it - do NOT background it under `set -m`, which leaves it
-	@# with no controlling terminal and kills x11grab instantly, and do NOT
-	@# redirect stdin from /dev/null, which detaches it so Ctrl+C never arrives),
-	@# and the exit status is re-raised as a real SIGINT so make stops too rather
-	@# than treating the interrupt as a completed step. The fragmented container
-	@# keeps whatever was captured valid either way. The remux runs in THIS shell,
-	@# not a later recipe line: Ctrl+C aborts the target, so a separate line would
-	@# be skipped on exactly the path that needs it most.
+	@# write the index incrementally, so an ffmpeg kill mid-recording still
+	@# leaves a valid file - what makes "record until Ctrl+C" safe.
+
+	@# ffmpeg runs in the foreground with the terminal attached so Ctrl+C
+	@# reaches it directly: do NOT background it under `set -m` (leaves it with
+	@# no controlling terminal, killing x11grab instantly) and do NOT redirect
+	@# stdin from /dev/null (detaches it so Ctrl+C never arrives).
+
+	@# The exit status is re-raised as a real SIGINT so make stops too, rather
+	@# than treating the interrupt as a completed step. The remux runs in THIS
+	@# shell, not a later recipe line, since Ctrl+C aborts the target and a
+	@# separate line would be skipped on exactly the path that needs it most.
 	@ffmpeg -hide_banner -loglevel error -y -f x11grab \
 		-video_size $(_REGION) -framerate $(REC_FPS) -i "$(_DISPLAY)+$(_OFFSET)" \
 		$(if $(DURATION),-t $(DURATION),) \
@@ -723,17 +663,11 @@ check-host-deps: ## Verify host-side tools the recording targets need (ffmpeg)
 		exit 1; \
 	fi
 
-# ----------------------------------------------------------------------
-# Testing
-# ----------------------------------------------------------------------
 
 test-unit: ## Run unit tests only (no GPU, no CARLA, no ROS 2)
 	$(call ensure-venv)
 	$(PYTEST) $(TESTS_DIR) -v --tb=short -m "not integration"
 
-# ----------------------------------------------------------------------
-# Linting & Formatting
-# ----------------------------------------------------------------------
 
 lint: ## Run all linters (flake8 + isort + black)
 	$(call ensure-venv)
@@ -750,9 +684,6 @@ typecheck: ## Run mypy type checking
 	$(call ensure-venv)
 	$(VENV)/bin/mypy $(SRC_DIR) --ignore-missing-imports
 
-# ----------------------------------------------------------------------
-# Sanity Check
-# ----------------------------------------------------------------------
 
 sanity: ## Quick import check
 	$(call ensure-venv)
@@ -763,9 +694,6 @@ sanity: ## Quick import check
 # docker-test-unit.
 verify: lint typecheck sanity ## Run the CI checks locally (lint + typecheck + import). Tests: docker-test-unit.
 
-# ----------------------------------------------------------------------
-# Cleanup
-# ----------------------------------------------------------------------
 
 clean-cache: ## Remove only build caches and .pyc files (preserves checkpoints, logs, outputs, maps)
 	rm -rf __pycache__ .pytest_cache htmlcov .mypy_cache
@@ -791,9 +719,6 @@ clean-all: ## Remove everything including checkpoints and logs (preserves .xodr 
 clean-venv: ## Remove the local virtual environment (re-create with make install)
 	rm -rf $(VENV)
 
-# ----------------------------------------------------------------------
-# Config Backup
-# ----------------------------------------------------------------------
 
 backup-configs: ## Pack CLAUDE.md, TODO.md, documentation/, and the real-world datum into project_configs.tar.gz
 	@find . -name "CLAUDE.md" -not -path "./.venv/*" > /tmp/_backup_files.txt
@@ -810,14 +735,10 @@ restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-wor
 	tar -xzf project_configs.tar.gz
 	@echo "Restored configs from project_configs.tar.gz"
 
-# ----------------------------------------------------------------------
-# Results Backup
-#
 # checkpoints/, logs/ and outputs/ are gitignored and represent GPU time that
 # cannot be regenerated on a fresh clone. The archive lands in the repo root,
-# which `make clean` and `make clean-all` never touch - so a backup survives
+# which `make clean` and `make clean-all` never touch, so a backup survives
 # the very targets that delete what it holds.
-# ----------------------------------------------------------------------
 
 # Trees holding irreplaceable run output. outputs/ goes in whole: its raw/
 # tier costs simulation time, and the derived tiers are small enough to carry.
