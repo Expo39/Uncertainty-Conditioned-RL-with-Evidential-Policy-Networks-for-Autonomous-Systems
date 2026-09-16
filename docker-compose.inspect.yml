@@ -257,11 +257,10 @@ services:
       - inspect-eval-dryrun
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
-      # Inspect stack uses a separate ROS_DOMAIN_ID so its EKF and topics are
-      # isolated from any worker ros2-bridge containers (default domain 42)
-      # that may still be running from a previous training session. Without
-      # this, two ekf_filter_node instances appear on the same DDS network and
-      # the CovarianceExtractorNode reads a corrupted mix of their outputs.
+      # Separate domain so this EKF and its topics stay isolated from worker
+      # ros2-bridge containers (domain 42) left over from a training session.
+      # Sharing one would put two ekf_filter_node instances on the same DDS
+      # network and CovarianceExtractorNode would read a mix of their outputs.
       - ROS_DOMAIN_ID=${INSPECT_ROS_DOMAIN_ID:-43}
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - CARLA_HOST=carla-server-demo
@@ -366,11 +365,10 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # Manual eval-scenario dry-run: identical container to training-inspect-dryrun
-  # but the env is built from a named eval_config.yaml condition
-  # (INSPECT_SCENARIO) via the same path the eval sweep uses, so you can drive an
-  # eval scenario by keyboard and verify its noise / occupancy / floor-plan
-  # wiring against the printed inputs / GT / EKF. No checkpoint is loaded.
+  # Manual eval-scenario dry-run. Same container as training-inspect-dryrun, but
+  # the env comes from a named eval_config.yaml condition (INSPECT_SCENARIO)
+  # built through the eval sweep's own path, so keyboard driving verifies the
+  # real noise/occupancy/floor-plan wiring. No checkpoint is loaded.
   training-inspect-eval-dryrun:
     build:
       context: .

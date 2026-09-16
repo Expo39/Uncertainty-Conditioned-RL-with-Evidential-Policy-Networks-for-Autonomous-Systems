@@ -16,13 +16,10 @@ pruner:
   n_warmup_steps: 5  # ~10k steps before pruning begins.
   n_min_trials: 5  # Require 5 completed trials before pruning any.
 
-# STRUCTURAL PPO params only. Excluded from the search (single-phase curriculum):
-# - learning_rate, ent_coef: stage-owned (standard_overrides/evidential_overrides), so
-#   tuning them in train_config is a no-op (the stage overrides clobber them);
-# - net_arch, activation, policy_type: architectural, locked across stages/baselines;
-# - evidential.*: ablation-specific (cannot be tuned on vanilla; would break fairness);
-# - total_timesteps, seed, eval/checkpoint freqs: infrastructure, not hyperparameters.
-# See documentation/detailed_notes/ablation_hpo_methodology.md.
+# STRUCTURAL PPO params only. learning_rate and ent_coef are stage-owned, so
+# tuning them here is a no-op; net_arch/activation/policy_type are architectural
+# and locked; evidential.* cannot be tuned on vanilla without breaking fairness.
+# @see documentation/detailed_notes/ablation_hpo_methodology.md.
 search_space:
   n_steps: [1024, 2048, 4096]  # Categorical.
   batch_size: [64, 128, 256]  # Categorical; constrained <= n_steps in code.

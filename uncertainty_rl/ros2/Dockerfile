@@ -17,13 +17,10 @@ ENV ROS_DISTRO=${ROS_DISTRO}
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Install system dependencies and ROS 2 packages in a single layer.
-# - robot-localization: EKF node + navsat_transform_node (fuses GNSS+IMU, outputs /odometry/filtered)
-# - cv-bridge, derived-object-msgs: required by carla_ros_bridge internals
-# apt package versions are NOT pinned: ROS apt repos are rolling and delete old
-# versions, so a version pin would eventually fail to fetch. Reproducibility of
-# the apt layers is instead achieved by distributing the BUILT image (docker
-# save/load), not by rebuilding from this Dockerfile on each machine.
+# robot-localization supplies the EKF and navsat_transform nodes; cv-bridge and
+# derived-object-msgs are carla_ros_bridge internals. Versions are deliberately
+# unpinned: ROS repos are rolling and delete old versions, so a pin would
+# eventually fail to fetch. Reproducibility comes from shipping the BUILT image.
 RUN apt-get update && apt-get install -y \
     python3-pip \
     python3-colcon-common-extensions \
@@ -86,12 +83,10 @@ RUN /bin/bash -c "source /opt/ros/${ROS_DISTRO}/setup.bash && \
     colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release \
     --packages-select carla_msgs carla_common ros_compatibility carla_spawn_objects carla_manual_control carla_ros_bridge"
 
-# Install the uncertainty_rl Python package for its uncertainty_rl.utils modules.
-# --no-deps: the Jazzy/Noble base ships this image's only runtime deps (numpy and
-# PyYAML - all utils/ imports) as apt packages with no pip RECORD, so letting pip
-# resolve the pyproject pins would try to upgrade them and fail (it cannot
-# uninstall a Debian-managed package). The pyproject pins serve the training
-# image (pip-managed Python 3.10); here the system packages already satisfy them.
+# --no-deps because the Jazzy base ships this image's only runtime deps (numpy,
+# PyYAML) as apt packages with no pip RECORD: resolving the pyproject pins would
+# try to upgrade them and fail, since pip cannot uninstall a Debian-managed
+# package. The system packages already satisfy those pins here.
 COPY pyproject.toml /opt/uncertainty_rl_pkg/pyproject.toml
 COPY uncertainty_rl/__init__.py /opt/uncertainty_rl_pkg/uncertainty_rl/__init__.py
 COPY uncertainty_rl/utils/ /opt/uncertainty_rl_pkg/uncertainty_rl/utils/
