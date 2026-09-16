@@ -22,11 +22,10 @@ services:
       - ROS_DOMAIN_ID=42
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - PYTHONUNBUFFERED=1
-      # Training and CARLA share one GPU; CARLA leaks VRAM over long runs, so the
-      # caching allocator can fragment and a later allocation lands on a bad
-      # address (CUDA "illegal memory access" at the next sync). expandable
-      # segments let the allocator grow/shrink contiguous regions instead of
-      # fragmenting, reducing that failure mode at near-zero speed cost.
+      # Training and CARLA share one GPU and CARLA leaks VRAM over long runs, so
+      # the caching allocator fragments and a later allocation lands on a bad
+      # address (CUDA "illegal memory access"). Expandable segments grow and
+      # shrink contiguous regions instead, at near-zero speed cost.
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
     networks:
       - uncertainty-rl-network
