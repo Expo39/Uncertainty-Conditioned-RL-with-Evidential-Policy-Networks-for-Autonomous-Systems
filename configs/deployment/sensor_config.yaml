@@ -1,11 +1,6 @@
-# Sensor configuration shared between simulation and real-vehicle deployment.
-#
-# This file contains physical sensor specifications and mount positions that
-# are identical in CARLA and on the real vehicle. It is the single source of
-# truth for anything describing the physical sensor suite.
-#
-# Mount values are nominal design positions taken from the vehicle drawing,
-# refined against the site survey once the vehicle is instrumented.
+# Single source of truth for the physical sensor suite, identical in CARLA and
+# on the real vehicle. Mount values are nominal design positions from the
+# vehicle drawing, refined against the site survey once instrumented.
 
 sensors:
   imu:
