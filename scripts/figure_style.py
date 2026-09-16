@@ -2,15 +2,9 @@
 @file figure_style.py
 @brief House style for every rendered figure: rcParams, palette and legends.
 
-Single source of truth for figure appearance across scripts/, so every figure
-shares one font, palette and legend treatment. Appearance only - this module
-never re-bins, re-orders, filters or converts units, so a restyled figure
-plots exactly the numbers it plotted before.
-
-    fs.apply(); fig, ax = plt.subplots(figsize=fs.WIDE)
-    ax.plot(x, y, label=fs.arm_label(arm), **fs.arm_kw(arm))
-    fs.grid(ax); fs.legend_strip(fig, ax, side="below")
-    fs.save(fig, out_dir / "ablation_by_condition")
+Single source of truth for figure appearance across scripts/. Appearance
+only - never re-bins, re-orders, filters or converts units, so a restyled
+figure plots exactly the numbers it plotted before.
 """
 
 from pathlib import Path

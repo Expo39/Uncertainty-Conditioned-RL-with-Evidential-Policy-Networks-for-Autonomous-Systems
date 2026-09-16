@@ -326,8 +326,7 @@ docker-inspect-dryrun: ## Full training pipeline in windowed CARLA, built identi
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
-	@# Clean stale signal files from previous runs to prevent the ros2-bridge
-	@# from processing leftover initial_pose or ekf_state data on startup.
+	@# Stale signal files would be read as this run's data on bridge startup.
 	rm -f outputs/initial_pose.json outputs/ekf_state.json outputs/ekf_state.json.tmp 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \
@@ -343,8 +342,7 @@ docker-inspect-eval-dryrun: ## Manually drive a named eval condition in windowed
 	$(DOCKER_COMPOSE) down 2>/dev/null || true
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-ros2-inspect uncertainty-rl-training-inspect-eval-dryrun 2>/dev/null || true
 	docker network prune -f 2>/dev/null || true
-	@# Clean stale signal files from previous runs to prevent the ros2-bridge
-	@# from processing leftover initial_pose or ekf_state data on startup.
+	@# Stale signal files would be read as this run's data on bridge startup.
 	rm -f outputs/initial_pose.json outputs/ekf_state.json outputs/ekf_state.json.tmp 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) EPISODES=$(INSPECT_EPISODES) \

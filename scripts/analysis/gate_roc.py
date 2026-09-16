@@ -2,23 +2,9 @@
 @file gate_roc.py
 @brief Compare an EKF-std safety gate against an evidential-epistemic gate.
 
-Host-side, read-only diagnostic that asks the safety question behind the
-ablation: if the vehicle aborts (hands off) when a scalar uncertainty signal
-exceeds a threshold, which signal separates the failures from the successes
-better? Two candidate signals, both already logged per episode in
-episode_records.csv:
-
-  - EKF position std (ekf_std_pos_max_m): available to EVERY arm, since the EKF
-    always runs. This is the gate a covariance-blind system could still build.
-  - Evidential epistemic (max_epistemic): available only to evidential arms
-    (output_uncertainty, full_method). This is the policy's own confidence.
-
-For each signal we sweep the abort threshold and trace the trade-off between
-correctly aborting before a failure (collision / out_of_bounds / near_miss /
-stuck) and needlessly aborting an episode that would have succeeded. The area
-under that curve (AUC) is the single comparison number: a higher-AUC signal is
-the better safety gate. Writes CSVs only. Pure pandas / numpy on the host .venv.
-Run via `make analyse-gate` (never python directly).
+Which separates failures from successes better as a handoff threshold: EKF
+position std (every arm) or evidential epistemic (evidential arms only)?
+Sweeps the threshold, reports failure-catch vs false-abort AUC.
 """
 
 from __future__ import annotations

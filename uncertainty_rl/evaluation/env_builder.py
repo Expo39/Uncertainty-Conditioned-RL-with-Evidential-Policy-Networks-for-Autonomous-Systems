@@ -2,13 +2,9 @@
 @file env_builder.py
 @brief Maps an eval condition to a CARLA env (the condition -> env contract).
 
-This is the single source of truth for how an eval_config.yaml condition becomes
-a running environment: it scales the sensor noise, pins occupancy / floor plan /
-GNSS tier, and builds the env through the SHARED training factory so evaluation
-inherits the exact dynamics the policy trained under. build_eval_env_factory()
-returns the bare (unwrapped) factory; make_eval_env() adds the SafetyWrapper +
-DummyVecEnv the headless sweep needs. Kept separate from evaluate.py so the
-eval-dryrun inspector and the sweep share one definition of the scenario.
+Built through the SHARED training factory so evaluation inherits the exact
+trained dynamics. build_eval_env_factory() returns the bare factory;
+make_eval_env() adds the SafetyWrapper + DummyVecEnv.
 """
 
 import os

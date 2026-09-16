@@ -2,15 +2,9 @@
 @file test_curriculum_invariants.py
 @brief Structural invariants for the single-phase ADR curriculum stage files.
 
-CPU-only, no CARLA / ROS 2 / GPU - parses YAML only. Encodes the non-negotiable
-"all observation channels live in every stage" rule so a future edit that
-re-degenerates a channel (the original Stage 1 -> 2 failure mode) fails CI:
-  - covariance channel: the GNSS Markov chain is enabled and non-degenerate, so
-    mid-episode drift is always on (the process is stage-invariant - not a stage key);
-  - LiDAR channel: bay_occupancy_max > 0 and LiDAR noise enabled;
-  - target-pose channel: the bay set spans >= 2 approach orientations.
-Also checks the per-policy override blocks are allowlisted and agree on every
-schedule except the entropy coefficient (the documented evidential ent_coef split).
+CPU-only, parses YAML only. Encodes the "all observation channels live in
+every stage" rule so a future edit cannot silently re-degenerate a channel,
+and checks per-policy override blocks agree except the entropy coefficient.
 """
 
 from pathlib import Path

@@ -2,12 +2,9 @@
 @file _discovery.py
 @brief Shared locator for per-run eval CSVs under the nested results tree.
 
-evaluate.py writes each run to
-<results_root>/<baseline>/<leaf>/<wrapper_variant>/<name>.csv (older runs wrote
-one level shallower, <baseline>/<leaf>/<name>.csv). For uncertainty/behaviour
-reads, without_wrapper is preferred over with_wrapper since the wrapper caps
-throttle and forces stops, corrupting the free-running signal. Single source
-of truth for this matching so a future layout change is a one-file fix.
+without_wrapper is preferred over with_wrapper since the wrapper caps
+throttle and forces stops, corrupting the free-running signal. Single
+source of truth so a layout change is a one-file fix.
 """
 
 from __future__ import annotations

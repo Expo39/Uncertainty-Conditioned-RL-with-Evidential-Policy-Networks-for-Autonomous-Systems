@@ -3,9 +3,8 @@
 @brief ROS 2 node that stamps realistic covariance and injects Gaussian noise
        onto the CARLA IMU topic.
 
-The CARLA bridge publishes sensor_msgs/Imu with zero covariance throughout, and
-robot_localization reads that as an infinitely reliable sensor: the EKF state
-pins to the IMU measurement and its uncertainty never grows between GNSS fixes.
+CARLA publishes sensor_msgs/Imu with zero covariance, which
+robot_localization reads as infinitely reliable, pinning the EKF state.
 """
 
 import json

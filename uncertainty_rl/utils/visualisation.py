@@ -2,9 +2,8 @@
 @file visualisation.py
 @brief Atomic JSON writer for the detachable 2D bird's-eye visualiser.
 
-VisStateWriter snapshots environment state to a caller-supplied path each step,
-for the detachable visualiser (scripts/visualise/visualiser.py) to render via
-Pygame. Writes go to a sibling .tmp file and are moved into place with
+VisStateWriter snapshots environment state to a caller-supplied path each
+step. Writes go to a sibling .tmp file and are moved into place with
 os.replace, so a concurrent reader never observes a half-written frame.
 """
 

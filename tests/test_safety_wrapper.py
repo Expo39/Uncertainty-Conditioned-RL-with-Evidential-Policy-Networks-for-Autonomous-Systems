@@ -2,10 +2,7 @@
 @file test_safety_wrapper.py
 @brief Unit tests for the SafetyWrapper Gymnasium wrapper.
 
-CPU-only, no CARLA or ROS 2 required. The underlying env is mocked so all tests run
-without a live simulation. The wrapper hands off (full stop) when the TOTAL predictive
-uncertainty (epistemic + aleatoric) reaches a single threshold; see
-documentation/detailed_notes/epistemic_aleatoric_disentanglement.md.
+CPU-only with a mocked env, so these run without a live simulation.
 """
 
 from typing import Any, Dict, Optional, Tuple

@@ -2,19 +2,9 @@
 @file calibration.py
 @brief Is the EKF covariance fed to the policy an HONEST uncertainty signal?
 
-Host-side, read-only diagnostic that answers the precondition for the whole
-input-covariance hypothesis: does the EKF's PREDICTED uncertainty (the std the policy
-observes) actually track its ACTUAL error (ground truth minus EKF estimate)? If
-high std coincides with large error, the covariance carries real, actionable
-information and conditioning on it is justified; if std and error are
-uncorrelated, the policy would be conditioning on noise.
-
-Reads calibration_records.csv (per-step predicted std vs actual GT-EKF error,
-written by uncertainty_rl/evaluation/evaluate.py for every arm - ground truth is
-reward-only and never observed). Reports the std-vs-error correlation overall and
-per GNSS condition, a binned error-vs-std table (does mean error rise across std
-bins?). Writes CSVs only - the figure is drawn by analysis/figures/. Pure pandas / numpy on
-the host .venv. Run via `make analyse-calibration` (never python directly).
+Does the EKF's PREDICTED std track its ACTUAL error (ground truth minus EKF
+estimate)? Reports the std-vs-error correlation overall and per condition.
+Run via `make analyse-calibration`.
 """
 
 from __future__ import annotations

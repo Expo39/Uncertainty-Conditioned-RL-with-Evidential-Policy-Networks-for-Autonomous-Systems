@@ -1,13 +1,10 @@
 """
 @file gnss_noise_relay.py
 @brief ROS 2 node that injects per-episode GNSS noise, projects to local XY,
-       and publishes Odometry with Doppler-style velocity + COG heading for
-       the robot_localisation EKF.
+       and publishes Odometry with Doppler-style velocity + COG heading.
 
-Velocity and heading are derived from the CLEAN (pre-noise) fix and then
-noised per tier, rather than differenced from the noisy position. Without
-this the tiers would leave a clean dead-reckoning channel the policy could
-exploit to sidestep the position uncertainty entirely.
+Velocity/heading come from the CLEAN fix, then noised per tier, so the
+tiers cannot leave a clean dead-reckoning channel to exploit.
 """
 
 import json

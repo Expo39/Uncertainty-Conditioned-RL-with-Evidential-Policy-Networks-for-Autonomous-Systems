@@ -2,11 +2,9 @@
 @file test_covariance_subscriber.py
 @brief Unit tests for the file-based covariance subscriber.
 
-Tests cover JSON file reading, seq-based staleness guard, cache invalidation,
-get_latest_uncertainty(), get_latest_pose(), get_latest_state(), and has_data
-- all without requiring ROS 2 or rclpy.  The _CovarianceSubscriber is
-file-based and has no ROS 2 dependency; tests construct it via __new__ to
-bypass __init__.
+Covers JSON file reading, seq-based staleness guard, cache invalidation, and
+the get_latest_*/has_data accessors, all without ROS 2 or rclpy. Tests
+construct _CovarianceSubscriber via __new__ to bypass __init__.
 """
 
 import json

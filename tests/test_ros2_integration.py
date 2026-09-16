@@ -2,11 +2,8 @@
 @file test_ros2_integration.py
 @brief Integration tests for ROS 2 covariance pipeline.
 
-These tests require the full Docker stack (CARLA + ros2-bridge + training)
-to be running. They are marked with @pytest.mark.integration and skipped
-in CI where Docker containers are not available.
-
-Run with: pytest -m integration tests/test_ros2_integration.py
+Require the full Docker stack (CARLA + ros2-bridge + training). Marked
+@pytest.mark.integration and skipped in CI where Docker is unavailable.
 """
 
 import numpy as np

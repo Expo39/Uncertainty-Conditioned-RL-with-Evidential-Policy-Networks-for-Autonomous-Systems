@@ -2,29 +2,15 @@
 @file build.py
 @brief Single entry point for every pooled figure.
 
-    python scripts/analysis/figures/build.py --all
-    python scripts/analysis/figures/build.py --only gate_roc ekf_calibration
+Analysis modules compute statistics and write CSVs; this file only draws them
+(house style in scripts/figure_style.py), so a figure can be redrawn without
+moving a reported number.
 
-The split this file sits on: the analysis modules (scripts/analysis/*.py)
-compute statistics and write CSVs; this file reads those CSVs and draws them;
-scripts/figure_style.py holds the one house style. Computing a number and
-drawing it change for different reasons, so they stay apart.
-
-Everything here is presentation. No figure recomputes a statistic, re-bins,
-re-sorts or filters beyond the headline scope, so any figure can be redrawn at
-any time without moving a headline metric.
-
-Figure inventory, id -> source:
-
-  ekf_sawtooth          a logged demo trace
-  lot_layouts           the generated layout YAMLs
-  training_curves       exported TensorBoard scalars (make training-curves)
-  ablation_by_condition pooled_condition_summary.csv
-  degradation_tiers     raw per-episode + per-step records
-  behaviour_by_std      raw per-episode records, three varying conditions
-  ekf_calibration       raw calibration records, vanilla arm
-  seed_robustness       seed_robustness.csv
-  gate_roc              raw episode + per-step records
+Figure -> source: ekf_sawtooth (demo trace), lot_layouts (layout YAMLs),
+training_curves (TensorBoard export), ablation_by_condition
+(pooled_condition_summary.csv), degradation_tiers/behaviour_by_std/gate_roc
+(raw records), ekf_calibration (calibration records), seed_robustness
+(seed_robustness.csv).
 """
 
 from __future__ import annotations
