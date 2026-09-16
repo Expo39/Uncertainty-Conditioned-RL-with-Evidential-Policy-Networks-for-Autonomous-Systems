@@ -253,15 +253,15 @@ docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make 
 	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo uncertainty-rl-ros2-inspect 2>/dev/null || true
 
 
-docker-test: ## Run full test suite inside container 
+docker-test: ## Run full test suite inside container
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short
 
-docker-test-unit: ## Run unit tests inside container 
+docker-test-unit: ## Run unit tests inside container
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "not integration"
 
-docker-test-integration: ## Run integration tests inside container 
+docker-test-integration: ## Run integration tests inside container
 	@bash scripts/multi_workers/ensure_stack.sh
 	$(DOCKER_COMPOSE) exec training pytest $(TESTS_DIR) -v --tb=short -m "integration"
 
@@ -273,7 +273,7 @@ WORKER ?= 0
 docker-shell-ros2: ## Interactive shell in ROS 2 bridge for a worker. Usage: make docker-shell-ros2 [WORKER=0]
 	docker exec -it uncertainty-rl-ros2-$(WORKER) /bin/bash
 
-docker-shell-ros2-inspect: ## Interactive shell in ROS 2 inspect container 
+docker-shell-ros2-inspect: ## Interactive shell in ROS 2 inspect container
 	$(DOCKER_COMPOSE_INSPECT) exec ros2-bridge-inspect /bin/bash
 
 docker-logs: ## Follow logs from training stack containers (training, tensorboard)

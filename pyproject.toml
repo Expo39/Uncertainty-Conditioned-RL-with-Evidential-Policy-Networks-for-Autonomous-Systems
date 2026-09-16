@@ -28,19 +28,17 @@ dependencies = [
     "pygame==2.6.1",
     "seaborn==0.13.2",
     "pandas==2.2.2",
-    # numpy 1.24.4 has no cp312 wheel (Requires-Python <3.12) and its sdist build
-    # fails on Python 3.12's setuptools. The training image is Python 3.10 (NGC
-    # base) and the ros2-bridge image is Python 3.12 (Jazzy/Noble), so the pin is
-    # split by interpreter: 1.24.4 where it has wheels, 1.26.4 (oldest with a
-    # cp312 wheel, also pandas 2.2's py3.12 floor) on 3.12. They are ABI-separate
-    # processes communicating over DDS, so the two numpy versions never interact.
+    # Split by interpreter because 1.24.4 has no cp312 wheel and its sdist fails
+    # on 3.12 setuptools: the training image is 3.10, ros2-bridge is 3.12. The
+    # two are ABI-separate processes talking over DDS, so the versions never
+    # interact. 1.26.4 is the oldest cp312 wheel and pandas 2.2's 3.12 floor.
     "numpy==1.24.4; python_version < '3.12'",
     "numpy==1.26.4; python_version >= '3.12'",
 ]
 
 [project.optional-dependencies]
 # Training deps - installed only inside the Docker training container via
-# pip install -e ".[training]". 
+# pip install -e ".[training]".
 # torch/sb3/gymnasium pull in CUDA and must never run through make install.
 training = [
     # Pinned to exact versions for reproducible builds (working training image).
