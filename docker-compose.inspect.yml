@@ -80,7 +80,11 @@ services:
     command: >
       python scripts/visualise/demo_drive.py
       --checkpoint ${CHECKPOINT:-checkpoints/final_model}
+      --env-config configs/deployment/sim/env_config.yaml
       --train-config configs/train_config.yaml
+      ${DEMO_BASELINE_ARG:-}
+      ${DEMO_STAGE_ARG:-}
+      ${DEMO_TIER_ARG:-}
       --render
     deploy:
       resources:

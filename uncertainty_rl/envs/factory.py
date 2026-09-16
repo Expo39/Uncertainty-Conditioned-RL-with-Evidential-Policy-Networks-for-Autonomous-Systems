@@ -108,6 +108,10 @@ def make_env(
             vis_output_path=vis_path,
             bay_margin=bay_margin,
             actuator_model=config.get("actuator_model", None),
+            # Only set for a windowed demo drive: "human" makes render() move the
+            # CARLA spectator to follow the ego. Unset (None) in training and
+            # evaluation, where render() is never called.
+            render_mode=config.get("render_mode", None),
         )
         return env
 

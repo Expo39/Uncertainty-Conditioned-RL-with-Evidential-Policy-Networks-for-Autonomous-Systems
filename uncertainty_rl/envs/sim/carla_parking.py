@@ -79,6 +79,13 @@ logger = logging.getLogger(__name__)
 # Trail length for debug overlays and vis state
 _TRAJECTORY_MAXLEN = 50
 
+# Chase-camera placement for render_mode="human" (windowed demo only). Far
+# enough back to keep the target bay and its neighbours in frame while the car
+# manoeuvres, angled down so the bay markings stay readable.
+_SPECTATOR_BACK_M = 12.0
+_SPECTATOR_UP_M = 6.0
+_SPECTATOR_PITCH_DEG = -18.0
+
 # Re-export geometry helpers so existing imports from this module still work
 __all__ = [
     "CARLAParkingEnv",
@@ -2515,10 +2522,23 @@ class CARLAParkingEnv(gym.Env):
             if self.vehicle is not None:
                 transform = self.vehicle.get_transform()
                 spectator = self.world.get_spectator()
+                # Chase camera: behind and above the ego, looking down at it. A
+                # top-down view would only duplicate the 2D bird's-eye viewer,
+                # whereas the 3D window earns its place by showing the vehicle
+                # against the lot. Offsets are in metres.
+                yaw_rad = math.radians(transform.rotation.yaw)
+                offset = carla.Location(
+                    x=-_SPECTATOR_BACK_M * math.cos(yaw_rad),
+                    y=-_SPECTATOR_BACK_M * math.sin(yaw_rad),
+                    z=_SPECTATOR_UP_M,
+                )
                 spectator.set_transform(
                     carla.Transform(
-                        transform.location + carla.Location(z=50),
-                        carla.Rotation(pitch=-90),
+                        transform.location + offset,
+                        carla.Rotation(
+                            pitch=_SPECTATOR_PITCH_DEG,
+                            yaw=transform.rotation.yaw,
+                        ),
                     )
                 )
         elif self.render_mode == "rgb_array":
