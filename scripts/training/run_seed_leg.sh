@@ -27,9 +27,6 @@ set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 # Seeds to run, in order. Done work is skipped, so listing an already-finished
 # seed is a cheap no-op. The file is left on the LAST seed when the leg ends.
 SEEDS=(42 123 7)
@@ -49,10 +46,6 @@ PER_STEP_CAP=440
 LAYOUT=rectangle
 AGENT_CONFIG=configs/deployment/agent_config.yaml
 EVAL_ROOT=outputs/raw/evaluation_results
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 # @brief Run a command, or just print it when DRY_RUN=1.
 run() {
@@ -89,12 +82,9 @@ complete_leaf() {
     return 0  # nothing complete -> empty stdout
 }
 
-# @brief The leaf the chain should use after a stage: the real complete leaf if
-#        one exists on disk, else a placeholder (only meaningful under DRY_RUN,
-#        where a stage that "would run" has not actually written a leaf). Using
-#        the real leaf when present keeps DRY_RUN skip decisions identical to a
-#        real run - the placeholder appears only for stages a real run would
-#        genuinely train next.
+# @brief The leaf the chain uses after a stage: the real complete leaf if one is
+#        on disk, else a placeholder. Preferring the real leaf keeps DRY_RUN skip
+#        decisions identical to a real run.
 # @param $1 arm, $2 stage, $3 seed.
 resume_leaf() {
     local arm="$1" stage="$2" seed="$3" real
@@ -120,9 +110,7 @@ is_edl() {
     return 1
 }
 
-# ---------------------------------------------------------------------------
 # Main: per seed -> train all arms/stages -> eval final stage -> suite tables.
-# ---------------------------------------------------------------------------
 echo "=================================================================="
 echo " Multi-seed leg: SEEDS=${SEEDS[*]}  arms=${ARMS[*]}  stages=${STAGES[*]}"
 echo " Eval: stage ${EVAL_STAGE} only, PER_STEP_CAP=${PER_STEP_CAP}"
@@ -213,15 +201,10 @@ for SEED in "${SEEDS[@]}"; do
     echo "################## SEED ${SEED} COMPLETE ##################"
 done
 
-# ---------------------------------------------------------------------------
 # Cross-seed suite: pool EVERY seed's stage-EVAL_STAGE eval into the seed-robust
-# headline tables (pooled bootstrap contrast + per-seed mean/range). Gated on the
-# full SEEDS x ARMS matrix being evaluated so a partial leg never aggregates half
-# the data. Host-side and cheap, so it always re-runs and overwrites in place once
-# complete (like the per-seed suite tables). FINAL_LEAF holds only the LAST seed's
-# leaves (it is declared inside the per-seed loop), so completeness is recomputed
-# here in a fresh double loop.
-# ---------------------------------------------------------------------------
+# headline tables. Gated on the full SEEDS x ARMS matrix being evaluated so a
+# partial leg never aggregates half the data; FINAL_LEAF only holds the last
+# seed's leaves, so completeness is recomputed here in a fresh double loop.
 missing=()
 for SEED in "${SEEDS[@]}"; do
     for arm in "${ARMS[@]}"; do

@@ -12,10 +12,6 @@ during make generate-layouts) where the carla package is not installed.
 
 from typing import Dict, Tuple
 
-# ---------------------------------------------------------------------------
-# Bay and lot feature colours (hex, matplotlib-compatible)
-# ---------------------------------------------------------------------------
-
 HEX_PERP_BAY = "#0000DC"  # Blue
 HEX_ANGLED_BAY = "#FFD700"  # Yellow
 HEX_PARALLEL_BAY = "#B400FF"  # Violet
@@ -34,17 +30,12 @@ HEX_STATIC_VEHICLE = "#FF9000"  # Orange (parked NPC vehicles)
 HEX_PATROL_VEHICLE = "#FF3030"  # Red (moving patrol NPC)
 HEX_CONE = "#FF6600"  # Orange-red (perimeter cones)
 
-# Bay type lookup (hex, for matplotlib)
 BAY_HEX: Dict[str, str] = {
     "perpendicular": HEX_PERP_BAY,
     "angled": HEX_ANGLED_BAY,
     "parallel": HEX_PARALLEL_BAY,
     "motorcycle": HEX_MOTORCYCLE_BAY,
 }
-
-# ---------------------------------------------------------------------------
-# Sensor overlay colours (hex, used by inspect_sensors.py via hex_to_carla_color)
-# ---------------------------------------------------------------------------
 
 HEX_SENSOR_IMU = "#FFDC00"  # Yellow
 HEX_SENSOR_GNSS = "#FF00FF"  # Magenta (RTK antenna)
@@ -53,11 +44,6 @@ HEX_SENSOR_LIDAR_3D = "#00FF50"  # Green (sensor mount dot)
 HEX_SENSOR_CAMERA = "#FF0080"  # Hot pink/orange (g=0 avoids CARLA yellow shift)
 HEX_SENSOR_FOV_LIDAR = "#FF0000"  # Pure red (LiDAR FOV arc, 2D and 3D)
 HEX_SENSOR_FOV_BLIND = "#505050"  # Dark grey (LiDAR blind sector arc)
-
-
-# ---------------------------------------------------------------------------
-# Conversion helpers
-# ---------------------------------------------------------------------------
 
 
 def hex_to_rgb(hex_colour: str) -> Tuple[int, int, int]:

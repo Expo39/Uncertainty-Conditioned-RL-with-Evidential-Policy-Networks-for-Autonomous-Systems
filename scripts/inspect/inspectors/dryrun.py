@@ -37,20 +37,12 @@ from uncertainty_rl.utils.constants import (
 )
 from uncertainty_rl.utils.geometry import wrap_angle_symmetric
 
-# ---------------------------------------------------------------------------
-# ANSI colour constants
-# ---------------------------------------------------------------------------
-
 _ANSI_WHITE = "\033[97m"
 _ANSI_YELLOW = "\033[33m"
 _ANSI_RED = "\033[31m"
 _ANSI_CYAN = "\033[36m"
 _ANSI_GREEN = "\033[32m"
 _ANSI_RESET = "\033[0m"
-
-# ---------------------------------------------------------------------------
-# Keyboard controller for manual dryrun mode
-# ---------------------------------------------------------------------------
 
 
 class KeyboardController:
@@ -166,11 +158,6 @@ class KeyboardController:
                 pass
 
 
-# ---------------------------------------------------------------------------
-# Dry-run inspector
-# ---------------------------------------------------------------------------
-
-
 class DryRunInspector(_Inspector):
     """
     @class DryRunInspector
@@ -221,10 +208,6 @@ class DryRunInspector(_Inspector):
         self._keyboard: Optional[KeyboardController] = (
             KeyboardController() if manual else None
         )
-
-    # -----------------------------------------------------------------------
-    # Spectator placement
-    # -----------------------------------------------------------------------
 
     def place_spectator(self) -> None:
         """
@@ -328,10 +311,6 @@ class DryRunInspector(_Inspector):
                 )
             )
 
-    # -----------------------------------------------------------------------
-    # Observation logging
-    # -----------------------------------------------------------------------
-
     def _print_obs(
         self,
         obs: Any,
@@ -342,21 +321,11 @@ class DryRunInspector(_Inspector):
         """
         @brief Print key observation values to the console for diagnosis.
 
-        WHITE = model inputs, YELLOW = CARLA ground truth, RED = EKF diagnostic.
-
-        The obs layout depends on the env's ablation flags, so indices are computed
-        from include_covariance / include_obstacle_obs rather than hardcoded - the
-        dryrun shows exactly what the policy receives at train time. With covariance
-        off (vanilla_ppo / output_uncertainty baselines) the obs carries no std_*
-        block, so the cov line and the EKF-std diagnostic are suppressed.
-
-        Layout: [speed, vyaw] (+[std_x, std_y, std_yaw] if include_covariance)
-        + [dx, dy, dyaw] (+5 hemispheric obstacle dims if include_obstacle_obs).
-
-        Every WHITE line shows the NORMALISED values exactly as the model
-        receives them (the env returns the obs already scaled by the
-        constants.py OBS_*_SCALE divisors and clipped to +/-OBS_NORM_CLIP),
-        followed by the descaled physical equivalent in brackets.
+        WHITE = model inputs (normalised value, physical equivalent in
+        brackets), YELLOW = CARLA ground truth, RED = EKF diagnostic. Obs
+        indices are computed from include_covariance / include_obstacle_obs
+        (not hardcoded), so the cov/obstacle rows are suppressed for baselines
+        that omit those blocks - the dryrun shows exactly what trains.
 
         @param obs: Normalised observation array from env.step() or env.reset().
         @param step: Current step within the episode.
@@ -505,10 +474,6 @@ class DryRunInspector(_Inspector):
 
         print("\n" + "\n".join(lines))
 
-    # -----------------------------------------------------------------------
-    # Overlay drawing
-    # -----------------------------------------------------------------------
-
     def _draw_overlays(self, life_time: float) -> None:
         """
         @brief Draw target bay highlight and lot geometry in the CARLA window.
@@ -528,10 +493,6 @@ class DryRunInspector(_Inspector):
             show_pedestrians=self._env._pedestrian_spawn_prob > 0.0,
             oob_inflation_margin=self._env._oob_inflation_margin,
         )
-
-    # -----------------------------------------------------------------------
-    # Run loop
-    # -----------------------------------------------------------------------
 
     def run(self) -> None:
         """

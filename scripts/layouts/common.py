@@ -42,11 +42,6 @@ def _bay_legend_colour(bay_type: str) -> str:
     return BAY_HEX.get(bay_type, "grey")
 
 
-# ---------------------------------------------------------------------------
-# World-frame transformation
-# ---------------------------------------------------------------------------
-
-
 def to_world_frame(
     local_layout: Dict[str, Any],
     origin_x: float,
@@ -159,11 +154,6 @@ def to_world_frame(
     }
 
 
-# ---------------------------------------------------------------------------
-# YAML output
-# ---------------------------------------------------------------------------
-
-
 def write_layout_yaml(
     shape: str,
     origin_x: float,
@@ -216,11 +206,6 @@ def write_layout_yaml(
         )
 
     print(f"  Written: {output_path}")
-
-
-# ---------------------------------------------------------------------------
-# Bird's-eye PNG plot
-# ---------------------------------------------------------------------------
 
 
 def plot_layout(
@@ -493,17 +478,13 @@ def plot_layout(
     )
     fs.grid(ax)
 
-    # Pin the data limits to the lot extent (plus a fixed margin) so the saved
-    # canvas is well-defined. Legend handles such as the pedestrian-zone
-    # FancyBboxPatch carry a data-space footprint at (0, 0); without explicit
-    # limits, bbox_inches="tight" expands the figure to enclose that footprint
-    # and produces a runaway multi-gigapixel PNG. Fixed limits + a fixed bbox
-    # avoid that entirely. The Y axis is left inverted (set above).
-    #
-    # The padding clears the soft OOB skirt (which extends oob_inflation_margin
-    # beyond the lot) with extra headroom, so the dashed boundary is never drawn
-    # against the axis edge.
+    # Pin the data limits to the lot extent: legend handles such as the
+    # pedestrian-zone FancyBboxPatch carry a data-space footprint at (0, 0),
+    # and without explicit limits bbox_inches="tight" expands the figure to
+    # enclose it, producing a runaway multi-gigapixel PNG.
     pad = 5.0
+    # Clears the soft OOB skirt (extends oob_inflation_margin beyond the lot)
+    # with headroom, so the dashed boundary is never drawn at the axis edge.
     if oob_inflation_margin is not None:
         pad = oob_inflation_margin + 5.0
     xs = [p[0] for p in corner_pts]

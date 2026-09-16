@@ -34,11 +34,6 @@ def _read_live_tier() -> str:
         return "unknown"
 
 
-# ---------------------------------------------------------------------------
-# Base class: CARLA connection + tick loop
-# ---------------------------------------------------------------------------
-
-
 class _Inspector:
     """
     @class _Inspector
@@ -63,10 +58,6 @@ class _Inspector:
         """
         self._env = env
         self._duration = duration
-
-    # -----------------------------------------------------------------------
-    # Spectator helpers
-    # -----------------------------------------------------------------------
 
     def _place_spectator_birds_eye(
         self,
@@ -141,10 +132,6 @@ class _Inspector:
                 carla.Rotation(pitch=-20.0, yaw=look_yaw, roll=0.0),
             )
         )
-
-    # -----------------------------------------------------------------------
-    # Tick loop
-    # -----------------------------------------------------------------------
 
     def run(self) -> None:
         """@brief Run the synchronous tick loop for ``self._duration`` seconds."""

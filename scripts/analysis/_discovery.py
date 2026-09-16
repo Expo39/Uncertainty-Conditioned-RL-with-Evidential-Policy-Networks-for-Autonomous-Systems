@@ -3,15 +3,11 @@
 @brief Shared locator for per-run eval CSVs under the nested results tree.
 
 evaluate.py writes each run to
-<results_root>/<baseline>/<leaf>/<wrapper_variant>/<name>.csv, where
-wrapper_variant is "without_wrapper" or "with_wrapper" (see
-uncertainty_rl/evaluation/evaluate.py). Older runs wrote one level shallower
-(<baseline>/<leaf>/<name>.csv). The analysis scripts (calibration, gate_roc,
-ablation) all need to find these CSVs, map each back to its arm
-(baseline) name, and - for any uncertainty/behaviour reading - prefer the
-without_wrapper variant, since the wrapper caps throttle and forces stops,
-corrupting the free-running signal. This module is the single source of truth
-for that matching so a future layout change is a one-file fix.
+<results_root>/<baseline>/<leaf>/<wrapper_variant>/<name>.csv (older runs wrote
+one level shallower, <baseline>/<leaf>/<name>.csv). For uncertainty/behaviour
+reads, without_wrapper is preferred over with_wrapper since the wrapper caps
+throttle and forces stops, corrupting the free-running signal. Single source
+of truth for this matching so a future layout change is a one-file fix.
 """
 
 from __future__ import annotations
@@ -30,15 +26,8 @@ _VARIANT_PREFERENCE: List[str] = ["without_wrapper", "with_wrapper"]
 
 def _arm_of(csv_path: Path, results_root: Path) -> Optional[str]:
     """
-    @brief Recover the arm (baseline) name for a discovered CSV.
-    @param csv_path: Path to a matched per-run CSV.
-    @param results_root: The evaluation_results root the glob ran from.
-    @return The baseline directory name (immediate child of results_root), or
-            None if the path does not sit under results_root.
-
-    The arm is always the FIRST path component under results_root regardless of
-    how many levels deep the CSV is, so this is robust to both the two-level
-    (legacy) and three-level (wrapper-variant) layouts.
+    @brief Arm (baseline) name for a discovered CSV: the first path component
+           under results_root, valid for both the two- and three-level layouts.
     """
     try:
         rel = csv_path.relative_to(results_root)
@@ -52,15 +41,10 @@ def arm_leaf_subpath(csv_path: Path, results_root: Path) -> Path:
     @brief The <baseline>/<leaf> sub-path of a discovered per-run CSV.
     @param csv_path: Path to a matched per-run CSV.
     @param results_root: The evaluation_results root the glob ran from.
-    @return Path("<baseline>/<leaf>") so a per-arm analysis can mirror the eval's
-            nesting in its own output dir. Falls back to Path() if the CSV does
-            not sit under results_root.
-
-    Per-arm analyses (calibration, handover timing) write under
-    <output_dir>/<baseline>/<leaf>/ so re-running on a different arm or checkpoint
-    never overwrites a previous result - mirroring how the evals themselves nest.
-    The leaf is the SECOND component (the wrapper variant, if present, is dropped
-    so without_/with_wrapper analyses of the same run share a leaf dir).
+    @return Path("<baseline>/<leaf>"), so per-arm output mirrors the eval's own
+            nesting; Path() if the CSV does not sit under results_root.
+    @note The wrapper-variant component, if present, is dropped so without_/
+          with_wrapper analyses of the same run share one leaf dir.
     """
     try:
         rel = csv_path.relative_to(results_root)
@@ -76,17 +60,9 @@ def seed_roots(results_root: Path) -> List[Path]:
     """
     @brief The per-seed sub-roots under an output root, for cross-seed pooling.
     @param results_root: A root that may CONTAIN seed_<N>/ children, e.g.
-           outputs/raw/evaluation_results (whose per-seed trees are
-           outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/...).
-    @return Sorted list of the seed_<N> child directories. If the root has no
-            seed_*/ children (a single tree with no seed nesting, or a root
-            already pinned to one seed), the singleton [results_root] is returned
-            so a caller pools "one seed" transparently (pool of one).
-
-    The cross-seed aggregator loops this and calls the existing per-seed discovery
-    (discover_records / discover_arm_csvs) on each returned root, reading the seed
-    LABEL from the directory name rather than re-parsing a CSV path - so the seed
-    is always known from the loop, never recovered from a flat path list.
+           outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/...
+    @return Sorted seed_<N> child directories, or [results_root] if none exist
+            (so a caller pools "one seed" transparently).
     """
     seeds = sorted(p for p in results_root.glob("seed_*") if p.is_dir())
     return seeds if seeds else [results_root]
@@ -95,15 +71,9 @@ def seed_roots(results_root: Path) -> List[Path]:
 def _variant_rank(csv_path: Path, preferred: Optional[str] = None) -> int:
     """
     @brief Sort key ranking the preferred wrapper variant first, others last.
-    @param csv_path: Path to a matched per-run CSV.
-    @param preferred: Variant to rank first ("without_wrapper" by default, or
-           "with_wrapper" for analyses like handover timing that need the wrapper
-           to have fired). None uses the module default order.
-    @return Index into the (reordered) variant preference list; len() otherwise.
-
-    The variant is the CSV's parent directory name when the three-level layout
-    is in use; for the legacy two-level layout it is the leaf (never a known
-    variant), so it ranks last - which is correct, there is nothing to prefer.
+    @note Legacy two-level paths have no variant parent dir, so they rank last
+          by falling through to len(_VARIANT_PREFERENCE) - correctly, since
+          there is nothing to prefer.
     """
     order = _VARIANT_PREFERENCE
     if preferred in _VARIANT_PREFERENCE:
@@ -119,8 +89,6 @@ def _variant_rank(csv_path: Path, preferred: Optional[str] = None) -> int:
 def _leaf_stage(leaf_name: str) -> Optional[str]:
     """
     @brief Curriculum stage of a run leaf, from its <stage>_<seed>_<timestamp> name.
-    @param leaf_name: The run directory name, e.g. "2_42_20062026-0451".
-    @return The leading stage component ("2"), or None if the name has no "_".
     """
     head = leaf_name.split("_", 1)[0]
     return head if head else None
@@ -139,22 +107,12 @@ def discover_records(
     @param results_root: outputs/raw/evaluation_results.
     @param name: CSV file name to match (e.g. "calibration_records.csv").
     @param arm: Optional baseline name to restrict to; None = any arm.
-    @param prefer_variant: Wrapper variant to return first. Default
-           "without_wrapper" (free-running policy - uncertainty/behaviour reads);
-           pass "with_wrapper" for handover-timing, which needs the wrapper fired.
-    @param leaf: Optional checkpoint leaf (run dir) to PIN to, e.g.
-           "1_42_19062026-0120". When given, only that run's CSVs match - so
-           analysis never silently reads a different checkpoint when several
-           exist. When None, every leaf matches and the newest mtime wins.
-    @param stage: Optional curriculum stage to restrict to (e.g. "1"), matched
-           against the leaf's leading <stage>_ component. Keeps a cross-arm read
-           apples-to-apples when arms sit at different stages; None = any stage.
+    @param prefer_variant: Variant to rank first; default "without_wrapper".
+    @param leaf: Optional checkpoint leaf to pin to; None matches any leaf.
+    @param stage: Optional curriculum stage to restrict to; None = any stage.
     @return Matching paths sorted by (variant preference, mtime descending).
-            Empty if none match.
-
-    Globs the two-level and three-level layouts and concatenates them. The
-    variant preference dominates the sort so the preferred variant is returned
-    ahead of the other even if the other is marginally newer.
+    @note Globs both the two-level and three-level layouts; variant preference
+          dominates the sort, so it wins even over a marginally newer file.
     """
     base = arm if arm else "*"
     run = leaf if leaf else "*"
@@ -187,18 +145,13 @@ def discover_arm_csvs(
     @brief Map each arm to its best per-run CSV of the given name.
     @param results_root: outputs/raw/evaluation_results.
     @param name: CSV file name to match (e.g. "episode_records.csv").
-    @param prefer_variant: Wrapper variant to prefer per arm (see discover_records).
-    @param leaf: Optional checkpoint leaf to pin to. Cross-arm callers (ablation)
-           usually leave this None, since each arm has its own leaf; pin only when
-           analysing a single arm's specific run.
-    @param stage: Optional curriculum stage to restrict to (e.g. "1"), so a
-           cross-arm read compares arms at the SAME stage instead of each arm's
-           newest leaf (which may sit at different stages); None = any stage.
-    @return Mapping arm name -> chosen CSV path (preferred variant, then most
-            recent). One entry per arm.
-
-    For each arm the first hit in discover_records order wins, so the preferred
-    variant is chosen when present.
+    @param prefer_variant: Variant to prefer per arm (see discover_records).
+    @param leaf: Optional checkpoint leaf to pin to; None leaves each arm free
+           to use its own leaf.
+    @param stage: Optional curriculum stage, so a cross-arm read compares arms
+           at the same stage rather than each arm's own newest leaf.
+    @return Mapping arm name -> chosen CSV path. One entry per arm, taken as the
+            first hit in discover_records order.
     """
     chosen: Dict[str, Path] = {}
     for path in discover_records(
@@ -227,9 +180,6 @@ def stage_leaf(
     @param variant: Wrapper variant directory beneath the leaf.
     @return Path to <results_root>/<seed>/<arm>/<stage>_*/<variant>.
     @throws FileNotFoundError If no leaf for that stage exists.
-
-    The figures and the pooled tables all read one stage across every arm and
-    seed, so the leaf lookup lives here rather than being rewritten per module.
     """
     arm_dir = results_root / seed / arm
     if not arm_dir.is_dir():
@@ -259,12 +209,8 @@ def pooled_frame(
     @param variant: Wrapper variant to read.
     @param usecols: Optional column subset, for the wide per-step files.
     @return One frame with "arm" and "seed" columns added. Missing seed/arm
-            combinations are skipped rather than raising, so a partial tree
-            still yields what it has.
+            combinations are skipped rather than raising.
     @throws FileNotFoundError If no combination yielded a file.
-
-    Pooling is the common shape of every cross-seed read; keeping it here means
-    a figure and the table that quotes it cannot pool differently.
     """
     import pandas as pd
 
