@@ -240,6 +240,14 @@ docker-covariance-probe: ## Causal probe - does the policy USE the covariance in
 docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make docker-eval-visualise-3d [BASELINE=full_method] [CHECKPOINT=6_42_22062026-1502] [STAGE=6] [GNSS_TIER=fixed|float|standalone|degraded]
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|'),$(error No display attached!)))
 	@echo "Demo drive 3D: checkpoint=$(CHECKPOINT_NAME), stage=$(if $(STAGE),$(STAGE),<base>), gnss_tier=$(if $(GNSS_TIER),$(GNSS_TIER),<sampled>)"
+	@# A training stack left running holds the GPU and the compose project's
+	@# containers, so bringing the demo profile up beside it kills both servers
+	@# (exit 137). Tear the whole stack down first, exactly as eval-visualise-2d
+	@# does. This WILL stop a training run in progress.
+	@echo "NOTE: this stops any running training stack before starting the demo."
+	$(WORKERS_DOWN)
+	$(DOCKER_COMPOSE) down --remove-orphans
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo 2>/dev/null || true
 	xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) CHECKPOINT=$(CHECKPOINT_MODEL) \
 		DEMO_BASELINE_ARG="$(if $(BASELINE),--baseline $(BASELINE_YAML),)" \
@@ -247,6 +255,9 @@ docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make 
 		DEMO_TIER_ARG="$(if $(GNSS_TIER),--gnss-tier $(GNSS_TIER),)" \
 		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --abort-on-container-exit
 	xhost -local:docker 2>/dev/null || true
+	@# The demo container outlives an aborted server and hangs at "Driving.",
+	@# so clear it here rather than leaving it for the next run to trip over.
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo 2>/dev/null || true
 
 # ----------------------------------------------------------------------
 # Docker: Testing & Linting
