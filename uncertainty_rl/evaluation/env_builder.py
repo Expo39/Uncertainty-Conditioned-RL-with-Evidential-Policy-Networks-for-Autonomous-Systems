@@ -133,21 +133,15 @@ def build_eval_env_factory(
         "bay_occupancy_min": bay_occupancy,
         "bay_occupancy_max": bay_occupancy,
         "floor_plans": floor_plans,
-        # Pin the lot per condition. Training pins fixed_floor_plan via the
-        # stage files (rectangle in every stage), which the stage-less eval
-        # merge never applies; without the pin the env SAMPLES among non-OOD
-        # plans, leaking the held-out trapezoid into every rectangle condition.
-        # Fixed selection also bypasses the ood eligibility filter, so the
-        # irregular_a conditions are loadable.
+        # The stage-less eval merge never applies the stage files' pin, so
+        # without this the env samples among non-OOD plans and leaks the
+        # held-out trapezoid into every rectangle condition. Fixed selection
+        # also bypasses the ood filter, making irregular_a loadable.
         "fixed_floor_plan": condition.get("floor_plan", "rectangle"),
-        # Episode START tier: match training, which since the Markov redesign
-        # SAMPLES the start tier from the init weights in gnss_noise_profiles.yaml
-        # (no curriculum stage sets fixed_gnss_tier) and lets the chain wander
-        # from there. So the default here is None - the anchor runs the exact
-        # training process (weighted random start + drift), not a forced clean
-        # start, which would make eval easier than training. Honoured only if a
-        # config still sets fixed_gnss_tier; irrelevant when held_gnss_tier
-        # overrides (a held tier suppresses both the sampler and the drift).
+        # None by default so eval samples the start tier from the profile init
+        # weights exactly as training does; a forced clean start would make eval
+        # easier than training. Ignored when held_gnss_tier is set, which
+        # suppresses both the sampler and the drift.
         "fixed_gnss_tier": base_scenarios.get("fixed_gnss_tier", None),
     }
 
@@ -163,24 +157,19 @@ def build_eval_env_factory(
     # Ignored downstream when a held tier is set (a held tier suppresses drift).
     degrade_one_way: bool = bool(condition.get("degrade_one_way", False))
 
-    # Compression factor on the one-way drift schedule. The native chain reaches
-    # the worst tier after ~27 s in expectation while an episode runs ~17 s, so
-    # at 1.0 most episodes end before the crossing and the handover-latency
-    # sample is small. Raising it shortens the walk without altering the tier
-    # ladder or the one-way ratchet. Ignored unless degrade_one_way is set.
+    # Compression factor on the one-way drift schedule: at 1.0 the native chain
+    # reaches the worst tier (~27 s expectation) after most ~17 s episodes end,
+    # so raising it shortens the walk (without altering the tier ladder) to grow
+    # the handover-latency sample. Ignored unless degrade_one_way is set.
     degrade_rate_scale: float = float(condition.get("degrade_rate_scale", 1.0))
 
     # SafetyWrapper threshold from agent_config.yaml (merged into env_config).
     handoff_threshold: float = float(_ec.get("safety_handoff_threshold", 1.2))
 
-    # Build the env through the shared factory so evaluation inherits the EXACT
-    # dynamics the policy was trained with - action_repeat (decision = N ticks),
-    # max_ego_speed_ms (speed governor), carla_timestep, and the actuator slew /
-    # brake model. Constructing CARLAParkingEnv directly here once silently
-    # dropped these kwargs, leaving the policy stepped at the wrong rate with no
-    # rate limiter and a too-high speed cap - it failed every episode. The
-    # condition-scaled sensor noise overrides the base config, and the per-bay
-    # / occupancy / tier pins from parking_config replace the env's scenarios.
+    # Must go through the shared factory, not a direct CARLAParkingEnv call:
+    # evaluation has to inherit the EXACT trained dynamics (action_repeat,
+    # max_ego_speed_ms, carla_timestep, actuator slew/brake model). Dropping any
+    # of these steps the policy at the wrong rate and it fails every episode.
     eval_config_dict: Dict[str, Any] = {
         **_ec,
         "parking_scenarios": parking_config,
