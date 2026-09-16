@@ -176,11 +176,10 @@ obs, reward, terminated, truncated, info = env.step(action)
 | [`configs/layouts/*.yaml`](../../configs/layouts/) | Floor plan geometry (corners, bays, spawn, patrol, zones) |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | Structural dimensions and success thresholds |
 
-<!-- gif:placeholder name="parking_episode" caption="Bird's-eye view of a parking episode under RTK float conditions" -->
-![Parking episode placeholder](../../docs/media/parking_episode.gif)
-
 ## See also
 
+- [scripts/visualise/README.md](../../scripts/visualise/README.md) - the 2D viewer, with a
+  clip of an episode driven under the GNSS tier drift this env applies
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [networks/README.md](../networks/README.md) - evidential actor that consumes this observation
 - [ros2/README.md](../ros2/README.md) - EKF covariance extraction pipeline
