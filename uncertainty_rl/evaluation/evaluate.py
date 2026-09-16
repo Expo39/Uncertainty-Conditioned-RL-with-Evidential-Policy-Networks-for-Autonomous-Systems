@@ -2,9 +2,8 @@
 @file evaluate.py
 @brief Evaluation script for trained agents across physical conditions.
 
-This module provides comprehensive evaluation of trained agents under varying
-physical conditions (sensor noise, traffic density) that produce different
-EKF uncertainty levels.
+Evaluates trained agents under varying physical conditions (sensor noise,
+traffic density) that produce different EKF uncertainty levels.
 """
 
 import argparse
@@ -80,20 +79,16 @@ def evaluate_agent(
     @param n_episodes: Number of evaluation episodes.
     @param deterministic: Use deterministic actions.
     @param render: Render episodes.
-    @param bay_tracker: Optional per-bay success tracker. When supplied, each
-           terminated episode is recorded against its target bay so the caller
-           can dump a per-bay success CSV across the whole condition sweep.
+    @param bay_tracker: Optional per-bay success tracker, recorded against
+           each episode's target bay for the caller to dump per condition.
     @param near_miss_threshold: Final position error (m) separating near_miss
            from stuck for timed-out episodes (see _classify_outcome).
     @return EvaluationMetrics object with results.
 
-    @note For EvidentialPPO models, uses get_action_with_uncertainty() to
-          collect per-step epistemic and aleatoric uncertainty estimates.
-          Success is determined from the environment's info dict (set by
-          CARLAParkingEnv.step()) rather than re-computing from final state.
-          EKF localisation stds are read from the per-step info (the EKF runs
-          for every baseline), so the uncertainty-gating analysis covers the
-          no-covariance arms too.
+    @note Success comes from the environment's info dict, not recomputed from
+          final state. EKF stds are read from per-step info for every
+          baseline (the EKF always runs), so uncertainty-gating analysis
+          covers the no-covariance arms too.
     """
     metrics = EvaluationMetrics()
 
@@ -106,25 +101,23 @@ def evaluate_agent(
     # head - the TRUE predicted outcome variance (confidence signal), un-floored,
     # so it can fall below the training-time sampling-std floor.
     ep_action_std: List[float] = []
-    # Optional capture of real (normalised) observations for the on-manifold
-    # covariance probe (scripts/analysis/covariance_probe.py --real-obs).
-    # Off by default; enabled by the EVAL_DUMP_OBS env var (a positive integer
-    # cap on how many observations to keep). Captured across all conditions so
-    # the probe sees the full eval-state distribution.
+    # Real (normalised) observations for the on-manifold covariance probe
+    # (scripts/analysis/covariance_probe.py --real-obs), captured across all
+    # conditions so the probe sees the full eval-state distribution.
+    # EVAL_DUMP_OBS caps how many observations to keep; 0 disables capture.
     _obs_cap = int(os.environ.get("EVAL_DUMP_OBS", "0") or "0")
     captured_obs: List[np.ndarray] = []
     # Per-step EKF calibration pairs (predicted std vs actual GT-EKF error),
     # collected for every baseline so the calibration analysis covers the
     # no-covariance arms too. Always on (cheap; one small dict per step).
     calibration_pairs: List[Dict[str, Any]] = []
-    # Per-step uncertainty trace for evidential heads. The per-step gating
-    # analysis needs epistemic[t]/aleatoric[t] at matched states (e.g. the first
-    # few steps, before policies diverge) to test instantaneous response rather
-    # than the time-averaged episode aggregate. EVAL_PER_STEP_CAP bounds how many
-    # leading steps per episode are kept (0 disables); the early steps are the
-    # informative ones for novelty, so capping the head of each episode keeps the
-    # file small without losing the matched-state window.
+    # Per-step uncertainty trace for evidential heads: the gating analysis needs
+    # epistemic[t]/aleatoric[t] at matched states to test instantaneous response
+    # rather than the time-averaged episode aggregate.
     per_step_records: List[Dict[str, Any]] = []
+    # Leading steps per episode to keep (0 disables); early steps are the
+    # informative ones for novelty, so capping the head keeps the file small
+    # without losing the matched-state window.
     _per_step_cap = int(os.environ.get("EVAL_PER_STEP_CAP", "0") or "0")
 
     episode_rewards = np.empty(n_episodes, dtype=np.float64)
@@ -181,11 +174,10 @@ def evaluate_agent(
             next_obs, reward, done, infos = env.step(action)
             return next_obs, float(reward[0]), done, infos
 
-        # The standard Gaussian policy's only confidence signal: exp(log_std),
-        # a learned state-INDEPENDENT parameter in SB3 PPO. Recorded per
-        # episode so the calibration analysis can show in-data that it carries
-        # no per-state information (a constant column), in contrast to the
-        # evidential head's state-conditional uncertainty.
+        # The standard Gaussian policy's only confidence signal: exp(log_std), a
+        # state-INDEPENDENT parameter in SB3 PPO, unlike the evidential head's
+        # state-conditional uncertainty. Recorded per episode so the
+        # calibration analysis shows in-data that it is a constant column.
         _log_std = getattr(getattr(model, "policy", None), "log_std", None)
         const_action_std = (
             float(_log_std.detach().exp().mean().item())
@@ -211,19 +203,17 @@ def evaluate_agent(
         # runs; include_covariance only controls whether the policy SEES them.
         ep_std_pos: List[float] = []
         ep_std_yaw: List[float] = []
-        # Handover-timing trace. handoff_step = first decision the SafetyWrapper
-        # triggered a full-stop handoff; degraded_onset_step = first decision the
-        # GNSS tier reached the degraded multiplier (the drift crossing, per
-        # episode). Both are step indices, NaN if the event never occurred; the
-        # latency and its onset regime (spawn vs mid-episode switch) are derived
+        # Handover-timing trace: step indices, NaN if the event never occurred.
+        # Latency and onset regime (spawn vs mid-episode switch) are derived
         # downstream from the condition, which this loop does not know.
+        # First decision the SafetyWrapper triggered a full-stop handoff.
         handoff_step: float = float("nan")
+        # First decision the GNSS tier reached degraded (the drift crossing).
         degraded_onset_step: float = float("nan")
-        # Caution-behaviour trace: per-step speed (while MOVING, so the terminal
-        # park-stop does not drag the mean to zero), yaw-rate magnitude, brake
-        # command, and action jerk (||cmd_t - cmd_{t-1}||). Aggregated per episode
-        # and binned against EKF std downstream to test whether the policy drives
-        # more cautiously as localisation uncertainty rises.
+        # Caution-behaviour trace, binned against EKF std downstream to test
+        # whether the policy drives more cautiously as uncertainty rises.
+        # Speed while MOVING only, so the terminal park-stop does not drag
+        # the mean toward zero.
         ep_speed_moving: List[float] = []
         ep_abs_vyaw: List[float] = []
         ep_brake: List[float] = []
@@ -241,11 +231,10 @@ def evaluate_agent(
             _std_x = float(_info0.get("ekf_std_x", float("nan")))
             _std_y = float(_info0.get("ekf_std_y", float("nan")))
             _std_yaw = float(_info0.get("ekf_std_yaw", float("nan")))
-            # Calibration pairs: the EKF's PREDICTED uncertainty (std) against its
-            # ACTUAL error (ground truth minus EKF estimate). gt_* / ekf_* are in
-            # the info for every baseline (GT is reward-only, never observed), so
-            # this measures whether the covariance fed to the policy is honest -
-            # the precondition for conditioning on it being justified at all.
+            # Calibration pairs: the EKF's PREDICTED std against its ACTUAL error
+            # (ground truth minus EKF estimate) - whether the covariance fed to
+            # the policy is honest, the precondition for conditioning on it.
+            # gt_* / ekf_* are in the info for every baseline (GT is reward-only).
             _gt_x = float(_info0.get("gt_x", float("nan")))
             _gt_y = float(_info0.get("gt_y", float("nan")))
             _gt_yaw = float(_info0.get("gt_yaw", float("nan")))
@@ -346,11 +335,10 @@ def evaluate_agent(
                     }
                 )
             if done[0]:
-                # DummyVecEnv.step() returns (obs, rewards, dones, infos) - 4 elements.
-                # On the terminal step DummyVecEnv has already auto-reset the
-                # wrapped env, so read the terminal info from terminal_info when
-                # present (Gymnasium auto-reset stashes the pre-reset info there)
-                # and fall back to the live info dict otherwise.
+                # DummyVecEnv has already auto-reset the wrapped env on the
+                # terminal step, so read terminal_info (Gymnasium auto-reset
+                # stashes the pre-reset info there), falling back to the live
+                # info dict when absent.
                 terminal_info = infos[0].get("terminal_info", infos[0])
                 episode_success = bool(terminal_info.get("success", False))
                 success_flags[episode] = episode_success
@@ -461,19 +449,15 @@ def evaluate_across_conditions(
     @param eval_config_path: Path to evaluation configuration file.
     @param env_config_path: Path to environment config (sensors, parking scenarios).
     @param train_config_path: Path to training config (shared hyperparameters).
-    @param n_episodes: Episodes per condition. 0 means read from eval_config
-        (n_episodes key), falling back to 100.
-    @param output_dir: Root results directory; this run writes into the
-        <baseline>/<leaf> subdirectory underneath it.
-    @param baseline_path: Baseline config naming the evaluated ablation cell. Its
-        include_covariance / include_obstacle_obs / policy_type drive the obs shape
-        and model class. None defaults to the full method (DEFAULT_BASELINE).
-    @param condition_names: If given, restrict the sweep to the conditions whose
-        name is in this list (order follows eval_config). None or empty evaluates
-        every condition in eval_config.
+    @param n_episodes: Episodes per condition; 0 reads eval_config, else 100.
+    @param output_dir: Root results directory; writes into <baseline>/<leaf>.
+    @param baseline_path: Baseline config naming the evaluated ablation cell;
+        drives obs shape and model class. None defaults to the full method.
+    @param condition_names: Restrict the sweep to these condition names, in
+        eval_config order. None or empty evaluates every condition.
     @return Tuple of (results DataFrame, resolved run output directory).
-    @warning Raises ValueError if any requested condition name is absent from
-        eval_config, so a typo fails loudly rather than silently evaluating nothing.
+    @warning Raises ValueError if a requested condition name is absent from
+        eval_config, so a typo fails loudly rather than evaluating nothing.
     """
     from uncertainty_rl.training.train_ppo import (
         DEFAULT_BASELINE,
@@ -482,7 +466,6 @@ def evaluate_across_conditions(
     )
     from uncertainty_rl.utils.config_merge import apply_baseline
 
-    # Load configurations
     with open(eval_config_path, "r") as f:
         eval_config: Dict[str, Any] = yaml.safe_load(f)
 
@@ -517,17 +500,15 @@ def evaluate_across_conditions(
     # Timeout episodes closer than this (m) to the bay are near_miss, else stuck.
     near_miss_threshold = float(eval_config.get("near_miss_threshold_m", 1.5))
 
-    # Load model
     logger.info("Loading model from %s...", "/".join(Path(model_path).parts[-3:]))
-    # Load model: use EvidentialPPO when the baseline specifies policy_type=evidential
-    # so that isinstance(model, EvidentialPPO) is True and uncertainty is collected.
+    # EvidentialPPO when the baseline specifies policy_type=evidential, so
+    # isinstance(model, EvidentialPPO) is True and uncertainty is collected.
     policy_type = baseline_cfg.get("policy_type", "evidential")
     if policy_type == "evidential":
         model: PPO = EvidentialPPO.load(model_path)
     else:
         model = PPO.load(model_path)
 
-    # Load normalisation statistics if available
     vec_normalize_path = os.path.join(os.path.dirname(model_path), "vec_normalize.pkl")
 
     results = []
@@ -550,23 +531,21 @@ def evaluate_across_conditions(
         )
     deterministic: bool = eval_config.get("deterministic", True)
 
-    # Per-bay success accounting. Each condition gets its own tracker dumped to
-    # outputs/raw/bay_successes/eval/seed_<N>/<baseline>/<leaf>/<condition>/, mirroring
-    # the training tree, because a bay's success at RTK-fixed and RTK-degraded are
-    # distinct questions and must not be conflated. The leaf is the checkpoint's
-    # parent directory name (<stage>_<seed>_<timestamp>); the baseline comes from
-    # the evaluated baseline config, falling back to the checkpoint's grandparent
-    # so the path is unambiguous even for ad-hoc checkpoints. The seed_<N> segment
-    # is parsed from the leaf (single source of truth) so a second seed's bay
-    # successes never overwrite the first's; an unparseable leaf falls back to
-    # seed_unknown.
+    # Per-bay success accounting, one tracker per condition: a bay's success
+    # at RTK-fixed and RTK-degraded are distinct questions, not conflated.
+    # Leaf is the parent directory name (<stage>_<seed>_<timestamp>), falling
+    # back to a timestamp for an ad-hoc checkpoint with no such parent.
     _eval_leaf = Path(model_path).parent.name or datetime.now(_LOCAL_TZ).strftime(
         "%d-%m-%Y-%H%M%S"
     )
+    # Falls back to the checkpoint's grandparent so the path stays unambiguous
+    # even for a checkpoint outside the baseline-config tree.
     _eval_baseline = baseline_cfg.get(
         "baseline_name", Path(model_path).parent.parent.name
     )
     _eval_run_name = f"{_eval_baseline}/{_eval_leaf}"
+    # Parsed from the leaf (single source of truth) so a second seed's bay
+    # successes never overwrite the first's.
     _leaf_fields = _eval_leaf.split("_")
     _eval_seed = _leaf_fields[1] if len(_leaf_fields) >= 2 else "unknown"
     _bay_eval_root = (
@@ -593,17 +572,14 @@ def evaluate_across_conditions(
         logger.info("Evaluating condition: %s - %s", name, description)
         bay_tracker = BaySuccessTracker()
 
-        # Create environment for this condition
         base_env = make_eval_env(condition, eval_config, base_sensors, env_config)
         eval_env: Union[DummyVecEnv, VecNormalize] = base_env
 
-        # Apply normalisation if available
         if vec_normalize_exists:
             eval_env = VecNormalize.load(vec_normalize_path, base_env)
             eval_env.training = False
             eval_env.norm_reward = False
 
-        # Evaluate
         metrics = evaluate_agent(
             model=model,
             env=eval_env,
@@ -629,7 +605,6 @@ def evaluate_across_conditions(
             },
         )
 
-        # Accumulate per-episode records across the sweep (one tidy table).
         for record in metrics.episode_records:
             episode_rows.append({"condition": name, **record})
 
@@ -650,7 +625,6 @@ def evaluate_across_conditions(
         for rec in metrics.per_step_records:
             per_step_rows.append({**rec, "condition": name})
 
-        # Store results: merge metrics dict with condition metadata in one pass
         optional_fields = (
             {"floor_plan": condition["floor_plan"]} if "floor_plan" in condition else {}
         )
@@ -683,13 +657,10 @@ def evaluate_across_conditions(
             metrics.average_steps,
         )
 
-        # Clean up
         eval_env.close()
 
-    # Create DataFrame
     df = pd.DataFrame(results)
 
-    # Save results
     os.makedirs(run_output_dir, exist_ok=True)
     csv_path = os.path.join(run_output_dir, "evaluation_results.csv")
     df.to_csv(csv_path, index=False)

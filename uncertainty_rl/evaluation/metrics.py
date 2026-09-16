@@ -2,11 +2,8 @@
 @file metrics.py
 @brief Evaluation metrics container and per-episode outcome taxonomy.
 
-Holds the data model the evaluation loop fills in (EvaluationMetrics) and the
-single-episode failure-mode classifier (_classify_outcome). Kept separate from
-the orchestration in evaluate.py so the metric schema and taxonomy - the parts
-the downstream calibration analysis depends on - can be read and tested in
-isolation, without importing torch / stable-baselines3.
+Kept separate from the orchestration in evaluate.py so the metric schema and
+taxonomy can be read and tested without importing torch / stable-baselines3.
 """
 
 from dataclasses import dataclass, field
@@ -21,12 +18,8 @@ class EvaluationMetrics:
     @class EvaluationMetrics
     @brief Container for evaluation metrics.
 
-    Fields cover per-condition success rate, reward, step counts, final-state
-    pose errors (one entry per episode, read from the terminal info), per-step
-    evidential uncertainty estimates (evidential policy only), the per-episode
-    outcome taxonomy counts, and the full per-episode records that downstream
-    calibration analysis (uncertainty-vs-outcome, abort-threshold sweeps)
-    consumes via episode_records.csv.
+    Per-condition aggregates plus the full per-episode records that the
+    downstream calibration analysis consumes via episode_records.csv.
     """
 
     success_rate: float = 0.0
@@ -48,12 +41,10 @@ class EvaluationMetrics:
     # dict per decision, for the honesty-of-the-covariance analysis. Populated
     # for every baseline (ground truth is reward-only, never in the obs).
     calibration_pairs: List[Dict[str, Any]] = field(default_factory=list)
-    # Per-step uncertainty trace (one dict per decision: step index within the
-    # episode, epistemic, aleatoric, EKF stds). Populated only for evidential
-    # heads, capped per episode by EVAL_PER_STEP_CAP. Lets the per-step gating
-    # analysis test whether epistemic[t] tracks the instantaneous situation
-    # rather than drifting with episode length (a real-time handoff needs the
-    # former). @see evaluate_agent.
+    # Per-step uncertainty trace, evidential heads only, capped per episode by
+    # EVAL_PER_STEP_CAP: lets the gating analysis test whether epistemic[t]
+    # tracks the instantaneous situation rather than drifting with episode
+    # length. @see evaluate_agent.
     per_step_records: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -121,13 +112,9 @@ def _classify_outcome(
     @return One of: "success", "collision", "out_of_bounds", "handoff",
             "near_miss", "stuck".
 
-    Priority: a collision or run-off is reported as such even if a safety
-    handoff fired on the same step - the physical outcome outranks the
-    intervention. Handoff (SafetyWrapper truncation on high epistemic
-    uncertainty) is its own class: the vehicle stopped deliberately, which
-    the safety analysis must not conflate with a blocked or imprecise park.
-    Remaining timeouts split on the final position error: close misses are
-    precision shortfalls, far ones blocked or abandoned approaches.
+    A collision or run-off outranks a same-step safety handoff, since the
+    physical outcome outranks the intervention. Handoff is its own class so
+    a deliberate stop is not conflated with a blocked or imprecise park.
     """
     if terminal_info.get("success", False):
         return "success"
