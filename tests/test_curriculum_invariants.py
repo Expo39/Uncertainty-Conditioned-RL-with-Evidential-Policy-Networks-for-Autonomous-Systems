@@ -110,7 +110,7 @@ def test_start_tier_sampled_and_spawns_fixed(n: int) -> None:
     weights, not pinned. The Markov redesign removed fixed_gnss_tier from every stage
     so episodes can begin in any fix state (the realistic arrival case) and the chain
     wanders from there; a stage that re-pins it would make eval easier than training
-    and re-introduce the stale-anchor bug. @see configs/CLAUDE.md, MEMORY.md."""
+    and re-introduce the stale-anchor bug."""
     cfg = _stage(n)
     assert "fixed_gnss_tier" not in cfg.get(
         "parking_scenarios", {}
