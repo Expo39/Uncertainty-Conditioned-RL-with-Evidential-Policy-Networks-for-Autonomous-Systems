@@ -111,10 +111,6 @@ class FrameRecorder:
         self._frames_written: int = 0
         self._failed: bool = False
 
-    # -----------------------------------------------------------------------
-    # Properties
-    # -----------------------------------------------------------------------
-
     @property
     def is_recording(self) -> bool:
         """@brief True while the encoder is running and healthy."""
@@ -133,10 +129,6 @@ class FrameRecorder:
     def elapsed(self) -> float:
         """@brief Seconds of wall-clock time since start(), 0.0 when stopped."""
         return time.monotonic() - self._start_time if self._proc is not None else 0.0
-
-    # -----------------------------------------------------------------------
-    # Lifecycle
-    # -----------------------------------------------------------------------
 
     def start(self) -> None:
         """

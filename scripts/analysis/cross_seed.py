@@ -5,25 +5,22 @@
 Host-side, read-only aggregator that turns the SEPARATE per-seed result trees
 (outputs/raw/evaluation_results/seed_42/..., seed_123/..., seed_7/...) into the
 seed-robust statements the analysis needs. A cross-arm difference on a single
-seed is "indistinguishable from seed luck" (Henderson et al. 2017), so this script
-produces two complementary reads side by side:
+seed is indistinguishable from seed luck, so this script produces two
+complementary reads side by side:
 
-  - POOLED: concatenate every seed's per-episode records into one sample and run
-    the EXISTING, already-reviewed statistics (the ablation bootstrap contrast, the
-    gate ROC AUC, the calibration rank correlation) on that ~3x larger pool. This
-    is the precision-of-effect headline (CIs over the largest n the plan wants).
-  - PER-SEED ROBUSTNESS: per arm, the mean and [min, max] of each metric ACROSS
-    seeds. This is the honest cross-seed-stability check - the "mean and range"
-    the curriculum plan mandates - because a bootstrap on a fixed pool of three
-    runs cannot manufacture the variability of a fourth (it under-represents the
-    between-seed variance). The pooled CI is optimistic; the range keeps it honest.
+  - POOLED: concatenate every seed's per-episode records into one sample and
+    run the EXISTING statistics (the ablation bootstrap contrast, the gate ROC
+    AUC, the calibration rank correlation) on that ~3x larger pool - the
+    precision-of-effect headline (CIs over the largest n the plan wants).
+  - PER-SEED ROBUSTNESS: per arm, the mean and [min, max] of each metric
+    ACROSS seeds - the honest cross-seed-stability check, since a bootstrap on
+    a fixed pool of seeds under-represents the between-seed variance the
+    pooled CI cannot see.
 
-The statistics are NOT re-implemented: the four per-analysis modules expose pure
-DataFrame functions (they take a frame, never re-glob), so a pooled frame carrying
-an extra "seed" column flows through them untouched. This file only adds the
-pooling seam (read each CSV once, concat, label the seed) and the robustness
-groupby. Writes CSVs only. Pure pandas / numpy on the host .venv - no scipy, matching
-the sibling scripts. Run via `make analyse-cross-seed` (never python directly).
+The statistics are NOT re-implemented: the four per-analysis modules expose
+pure DataFrame functions, so a pooled frame carrying an extra "seed" column
+flows through them untouched. This file only adds the pooling seam and the
+robustness groupby. Run via `make analyse-cross-seed` (never python directly).
 
 @see scripts/analysis/ablation.py (the pooled contrast / caution stats).
 @see scripts/analysis/_discovery.py (seed_roots - the per-seed sub-root locator).
@@ -36,8 +33,8 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Optional
 
-# Make the repo root importable so the shared helpers resolve when this file is run
-# directly (the sibling analysers do the same; importing them mutates sys.path and
+# Make the repo root importable so the shared helpers resolve when this file is
+# run directly (python scripts/analysis/cross_seed.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
@@ -81,11 +78,8 @@ HANDOVER_ARM = "full_method"
 def _seed_label(seed_root: Path) -> int:
     """
     @brief The integer seed of a seed_<N> sub-root (42 for ".../seed_42").
-    @param seed_root: A directory from seed_roots; either a seed_<N> child or the
-           bare results root when there is no seed nesting (pool of one).
-    @return The parsed seed integer, or -1 for a root that is not named seed_<N>
-            (the single-tree fallback - a sentinel so a lone unlabelled tree still
-            pools cleanly and is visibly distinct in per-seed tables).
+    @return The parsed seed, or -1 for an unlabelled root (pool-of-one fallback,
+            kept visibly distinct in per-seed tables).
     """
     name = seed_root.name
     if name.startswith("seed_") and name[len("seed_") :].isdigit():
@@ -96,19 +90,10 @@ def _seed_label(seed_root: Path) -> int:
 def _pool_episodes(results_root: Path, stage: str) -> pd.DataFrame:
     """
     @brief Concatenate every seed's per-arm episode_records into one tidy frame.
-    @param results_root: Root holding seed_<N>/<baseline>/<leaf>/... (or a single
-           tree with no seed nesting - then the pool is that one tree).
-    @param stage: Curriculum stage to pin every arm to (e.g. "6"), matched against
-           the leaf's leading <stage>_ component so the pool is apples-to-apples.
-    @return Long-form per-episode frame with the ordered "arm" Categorical (on
-            _ARM_ORDER) and a numeric "success" column - both set by _load_records
-            per seed - plus a "seed" column added afterwards (inert to every stat
-            function downstream).
-
-    Each seed's CSV is read exactly ONCE via the existing per-seed discovery and
-    loader, so the arm Categorical / success coercion the plot + summary helpers
-    rely on are preserved; the Categorical is re-asserted on the pooled frame so a
-    seed missing an arm cannot silently change the dtype.
+    @return Long-form frame with the ordered "arm" Categorical, a numeric
+            "success" column, and an added "seed" column.
+    @note The Categorical is re-asserted on the pooled frame so a seed missing
+          an arm cannot silently change the dtype.
     """
     frames: List[pd.DataFrame] = []
     for seed_root in seed_roots(results_root):
@@ -131,15 +116,8 @@ def _pool_episodes(results_root: Path, stage: str) -> pd.DataFrame:
 
 def _pool_gate(results_root: Path, stage: str) -> pd.DataFrame:
     """
-    @brief Pool the gate frame (handoff dropped, is_failure added) across seeds.
-    @param results_root: Root holding seed_<N>/... (or a single tree).
-    @param stage: Curriculum stage to pin each arm to.
-    @return Concatenated gate frame ready for _evaluate_signals; empty frame if no
-            seed yields scorable episodes.
-
-    Reuses gate_roc._load per seed (it drops "handoff" episodes and adds the
-    is_failure label), so the pooled frame matches exactly what _evaluate_signals
-    expects - the AUC is then scored over every seed's episodes at once.
+    @brief Pool the gate frame (handoff dropped, is_failure added) across seeds,
+           via gate_roc._load per seed, ready for _evaluate_signals.
     """
     frames: List[pd.DataFrame] = []
     for seed_root in seed_roots(results_root):
@@ -163,23 +141,13 @@ def _pool_single_csv(
 ) -> pd.DataFrame:
     """
     @brief Pool a per-run single CSV (not arm-mapped) across seeds, tagged by seed.
-    @param results_root: Root holding seed_<N>/... (or a single tree).
-    @param name: CSV file name (e.g. "calibration_records.csv").
-    @param prefer_variant: Wrapper variant to prefer per seed (see _discovery).
     @param arm: Baseline to pin to.
-    @param stage: Curriculum stage to pin to. Both MUST be given for any quoted
-           quantity - see below.
+    @param stage: Curriculum stage to pin to.
     @return Concatenated frame with an added "seed" column; empty if none found.
-
-    Used for the calibration (without_wrapper) and handover (with_wrapper) pools,
-    which read one CSV per arm/leaf rather than an arm map.
-
-    The arm and stage MUST both be pinned for any quantity that is quoted.
-    discover_records orders by mtime within a variant, so an unpinned read
-    silently follows whichever file was written last - re-running an analysis,
-    or merely copying the tree, can change which run the pooled statistic
-    describes. A seed may hold several stages of the same arm, and the arms
-    differ from each other, so either omission moves the value.
+    @warning arm and stage should both be pinned for any quoted quantity:
+             discover_records otherwise falls back to whichever file has the
+             newest mtime, so an unpinned read can silently change which run a
+             reported statistic describes.
     """
     frames: List[pd.DataFrame] = []
     for seed_root in seed_roots(results_root):
@@ -199,10 +167,6 @@ def _pool_single_csv(
 def _per_seed_summary(pooled: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Per (arm, condition, seed) success rate, mean pos error and episode count.
-    @param pooled: The pooled per-episode frame from _pool_episodes.
-    @return Tidy frame - one row per arm x condition x seed - the raw material for
-            the seed-robustness range. Derived from the SAME in-memory pool (no
-            second pass over disk).
     """
     grouped = pooled.groupby(["arm", "condition", "seed"], observed=True)
     return grouped.agg(
@@ -214,12 +178,9 @@ def _per_seed_summary(pooled: pd.DataFrame) -> pd.DataFrame:
 
 def _seed_robustness(per_seed: pd.DataFrame) -> pd.DataFrame:
     """
-    @brief Per (arm, condition) mean and [min, max] across seeds - the range check.
-    @param per_seed: The per (arm, condition, seed) table from _per_seed_summary.
-    @return Frame with success_rate and pos_error mean/min/max/range across seeds,
-            plus how many seeds contributed. The range is the honest answer to the
-            seed-luck objection: an effect smaller than the cross-seed range is not
-            robust, whatever the pooled CI says.
+    @brief Per (arm, condition) mean and [min, max] across seeds - the range
+           check: an effect smaller than the range is not robust, whatever the
+           pooled CI says.
     """
     grouped = per_seed.groupby(["arm", "condition"], observed=True)
     out = grouped.agg(
@@ -239,17 +200,12 @@ def _seed_robustness(per_seed: pd.DataFrame) -> pd.DataFrame:
 def _per_seed_contrasts(pooled: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Each covariance contrast's success/pos-error delta computed PER seed.
-    @param pooled: The pooled per-episode frame from _pool_episodes.
-    @return Frame - one row per (pair, condition, seed) - of the treatment minus
-            control success delta (pp) and position-error delta (m) within that
-            seed, then a "mean_across_seeds" aggregate per (pair, condition).
-
-    This is the mean-of-per-seed-deltas that sits beside the pooled bootstrap
-    delta: agreement means the effect is consistent whether episodes are pooled or
-    seeds are averaged (they can differ when seeds have unequal episode counts -
-    pooling weights by episodes, this weights seeds equally). No bootstrap here -
-    a single seed's episode count does not warrant a within-seed CI; the point
-    delta is the quantity, and its spread across seeds is the robustness signal.
+    @return Frame, one row per (pair, condition, seed): the treatment minus
+            control success delta (pp) and position-error delta (m).
+    @note No bootstrap here - a single seed's episode count does not warrant a
+          within-seed CI. Feeds _seed_robustness_contrasts for the cross-seed
+          mean/range, which can differ from the pooled delta since pooling
+          weights by episode while this weights every seed equally.
     """
     rows: List[Dict[str, object]] = []
     seeds = sorted(pooled["seed"].unique())
@@ -282,11 +238,8 @@ def _per_seed_contrasts(pooled: pd.DataFrame) -> pd.DataFrame:
 
 def _seed_robustness_contrasts(per_seed_contrasts: pd.DataFrame) -> pd.DataFrame:
     """
-    @brief Per (pair, condition) mean and [min, max] of the per-seed contrast delta.
-    @param per_seed_contrasts: The per-seed delta frame from _per_seed_contrasts.
-    @return Frame with the success and pos-error delta mean/min/max across seeds -
-            reported beside the pooled bootstrap delta so a reviewer sees both the
-            episode-pooled effect and its seed-to-seed spread.
+    @brief Per (pair, condition) mean and [min, max] of the per-seed contrast
+           delta, reported beside the pooled bootstrap delta.
     """
     if per_seed_contrasts.empty:
         return pd.DataFrame()
@@ -306,14 +259,10 @@ def _seed_robustness_contrasts(per_seed_contrasts: pd.DataFrame) -> pd.DataFrame
 def _handover_table(pooled_wrapper: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Per-condition handover-timing table over the pooled with_wrapper frame.
-    @param pooled_wrapper: Pooled episode_records (with_wrapper) from _pool_single_csv.
     @return Per-condition regime / handoff fraction / latency table, or empty if
             the frame lacks the handoff_step column (no wrapper-on eval pooled).
-
-    Re-implements handover_timing.analyse's inline aggregation (which is not
-    exposed as a function) on the pool, reusing the imported _latency and _REGIME.
-    The switch-regime latency may be empty (degraded_onset_step is structurally not
-    yet recorded); the handoff FRACTION is meaningful regardless.
+    @note Mirrors handover_timing.analyse's inline aggregation (not exposed as a
+          function there) on the pool, reusing the imported _latency and _REGIME.
     """
     if pooled_wrapper.empty or "handoff_step" not in pooled_wrapper.columns:
         return pd.DataFrame()
@@ -392,8 +341,7 @@ def analyse(
     @param slope_clean: Degradation-slope start condition (cleanest GNSS tier).
     @param slope_degraded: Degradation-slope end condition (worst GNSS tier).
     @param keep_held_tiers: Retain the held-tier conditions and the degradation
-           slope they define. Default False drops them from EVERY pool (episodes,
-           gate, calibration), matching the five reported conditions.
+           slope they define; default False drops them from every pool.
     """
     out_dir = out_dir / "all_seeds" / f"stage{stage}"
     out_dir.mkdir(parents=True, exist_ok=True)

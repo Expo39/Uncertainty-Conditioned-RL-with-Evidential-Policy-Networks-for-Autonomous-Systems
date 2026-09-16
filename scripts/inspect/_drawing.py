@@ -32,16 +32,8 @@ from scripts.colours import (
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.geometry import inflate_polygon, zone_bbox
 
-# ---------------------------------------------------------------------------
-# Dot-drawing constants
-# ---------------------------------------------------------------------------
-
 _DOT_SPACING: float = 0.4  # metres between adjacent dot centres (layout lines)
 _ARC_SPACING: float = 0.3  # metres between dot centres on FOV arcs
-
-# ---------------------------------------------------------------------------
-# Derived colour constants
-# ---------------------------------------------------------------------------
 
 _COL_IMU = hex_to_carla_color(HEX_SENSOR_IMU)
 _COL_GNSS = hex_to_carla_color(HEX_SENSOR_GNSS)
@@ -69,11 +61,6 @@ _BAY_TYPE_COLOURS: Dict[str, Any] = {
 _GNSS_LABELS: Dict[str, str] = {
     "gnss": "GNSS",
 }
-
-
-# ---------------------------------------------------------------------------
-# Layout overlay drawing functions
-# ---------------------------------------------------------------------------
 
 
 def _draw_dotted_segment(
@@ -300,11 +287,6 @@ def _draw_layout_overlays(
                 _draw_dotted_segment(
                     debug, wx, wy, nx, ny, z + 0.2, _COL_PATROL, 0.04, life_time
                 )
-
-
-# ---------------------------------------------------------------------------
-# Sensor overlay drawing functions
-# ---------------------------------------------------------------------------
 
 
 def _draw_sensor_dot(

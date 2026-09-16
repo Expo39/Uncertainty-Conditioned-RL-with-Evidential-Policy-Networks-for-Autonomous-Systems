@@ -11,11 +11,6 @@ from uncertainty_rl.utils.geometry import point_in_polygon
 Point = Tuple[float, float]
 
 
-# ---------------------------------------------------------------------------
-# Bay-dimension constants (German EAR 05) and structural defaults
-# ---------------------------------------------------------------------------
-
-
 BAY_DIMS: Dict[str, Dict[str, float]] = {
     "perpendicular": {"width": 3.1, "depth": 5.7, "aisle": 6.0},
     "angled": {"width": 3.1, "depth": 5.85, "aisle": 3.6},
@@ -30,11 +25,6 @@ WALL_GAP: float = 0.5
 # Default width and end-margin of a pedestrian strip alongside an aisle face.
 PED_STRIP: float = 3.0
 PED_MARGIN: float = 0.5
-
-
-# ---------------------------------------------------------------------------
-# Bay rectangle primitive (used by validators, BayGroup.bbox, and warn helpers)
-# ---------------------------------------------------------------------------
 
 
 def _bay_corners(
@@ -67,11 +57,6 @@ def _yaw_to_normal(yaw_deg: float) -> Point:
     """
     rad = math.radians(yaw_deg)
     return (math.cos(rad), math.sin(rad))
-
-
-# ---------------------------------------------------------------------------
-# Validators (called automatically inside LotBuilder.build())
-# ---------------------------------------------------------------------------
 
 
 def validate_bays_in_polygon(
@@ -150,11 +135,6 @@ def warn_narrow_corridors(
                     f" ({b['local_x']:.1f}, {b['local_y']:.1f}) "
                     f"is {gap:.2f} m (min {min_width:.1f} m)."
                 )
-
-
-# ---------------------------------------------------------------------------
-# BayGroup - a placed row of bays plus geometry summary
-# ---------------------------------------------------------------------------
 
 
 class BayGroup:

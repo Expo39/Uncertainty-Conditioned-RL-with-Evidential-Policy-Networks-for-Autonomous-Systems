@@ -49,10 +49,6 @@ class LiveInspector(_Inspector):
         self._sensors: List[Any] = []
         self._lidar_logged: bool = False
 
-    # -----------------------------------------------------------------------
-    # Sensor spawning
-    # -----------------------------------------------------------------------
-
     def _spawn_sensors(self) -> None:
         """
         @brief Spawn the 2D LiDAR sensor on the ego vehicle.
@@ -99,10 +95,6 @@ class LiveInspector(_Inspector):
         lidar_actor.listen(self._on_lidar)
         self._sensors.append(lidar_actor)
 
-    # -----------------------------------------------------------------------
-    # Sensor data callbacks
-    # -----------------------------------------------------------------------
-
     def _on_lidar(self, lidar_data: Any) -> None:
         """
         @brief LiDAR data callback - draws each hit point as a red debug dot.
@@ -136,10 +128,6 @@ class LiveInspector(_Inspector):
                 life_time=life,
             )
 
-    # -----------------------------------------------------------------------
-    # Spectator placement
-    # -----------------------------------------------------------------------
-
     def place_spectator(self) -> None:
         """
         @brief Position the spectator in birds-eye view 80 m above the ego vehicle.
@@ -150,10 +138,6 @@ class LiveInspector(_Inspector):
         cx, cy, sz = vt.location.x, vt.location.y, vt.location.z
         self._place_spectator_birds_eye(cx, cy, sz, 80.0)
         print("Spectator: birds-eye view (80 m).")
-
-    # -----------------------------------------------------------------------
-    # Main run loop
-    # -----------------------------------------------------------------------
 
     def _draw_overlays(self, life_time: float) -> None:
         """

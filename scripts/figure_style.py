@@ -2,20 +2,14 @@
 @file figure_style.py
 @brief House style for every rendered figure: rcParams, palette and legends.
 
-Single source of truth for figure appearance across scripts/. Nothing else sets
-rcParams, picks a colour, or builds a legend by hand, so every figure shares one
-font, palette and legend treatment.
+Single source of truth for figure appearance across scripts/, so every figure
+shares one font, palette and legend treatment. Appearance only - this module
+never re-bins, re-orders, filters or converts units, so a restyled figure
+plots exactly the numbers it plotted before.
 
-Appearance only - this module never re-bins, re-orders, filters or converts
-units, so a restyled figure plots exactly the numbers it plotted before.
-
-    from scripts import figure_style as fs
-
-    fs.apply()
-    fig, ax = plt.subplots(figsize=fs.WIDE)
+    fs.apply(); fig, ax = plt.subplots(figsize=fs.WIDE)
     ax.plot(x, y, label=fs.arm_label(arm), **fs.arm_kw(arm))
-    fs.grid(ax)
-    fs.legend_strip(fig, ax, side="below")
+    fs.grid(ax); fs.legend_strip(fig, ax, side="below")
     fs.save(fig, out_dir / "ablation_by_condition")
 """
 
@@ -27,17 +21,9 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Output
-# ---------------------------------------------------------------------------
-
 # PNG everywhere, well above screen resolution so the raster survives printing.
 EXT = ".png"
 DPI = 400
-
-# ---------------------------------------------------------------------------
-# Identity: arms, conditions, tiers
-# ---------------------------------------------------------------------------
 
 # (key, label, colour, marker, linestyle). The key is the raw string in the
 # CSVs; the label is what a reader sees. No raw key may reach a rendered
@@ -99,10 +85,6 @@ AXIS_LABEL: Dict[str, str] = {
     "abs_err_yaw": "absolute heading error (rad)",
 }
 
-# ---------------------------------------------------------------------------
-# Palette and geometry
-# ---------------------------------------------------------------------------
-
 ACCENT = "#c44e52"  # single highlighted series (binned mean, trend line)
 ACCENT_ALT = "#4c72b0"  # second series on a twin axis
 SCATTER = "#4c72b0"  # dense scatter clouds
@@ -153,11 +135,6 @@ def apply() -> None:
             "savefig.bbox": "tight",
         }
     )
-
-
-# ---------------------------------------------------------------------------
-# Label helpers - raw CSV key to reader-facing text
-# ---------------------------------------------------------------------------
 
 
 def _label(table: Dict[str, str], key: str) -> str:
@@ -224,11 +201,6 @@ def arm_palette(arms: Optional[Iterable[str]] = None) -> Dict[str, str]:
     return {k: ARM_COLOUR.get(str(k), MUTED) for k in keys}
 
 
-# ---------------------------------------------------------------------------
-# Axes furniture
-# ---------------------------------------------------------------------------
-
-
 def grid(ax: Any, axis: str = "both") -> None:
     """
     @brief Apply the house grid, drawn behind the data.
@@ -288,15 +260,9 @@ def note(ax: Any, text: str, corner: str = "right", y: float = 0.94) -> Any:
     )
 
 
-# ---------------------------------------------------------------------------
-# Legends
-#
-# Exactly two formats, both OUTSIDE the plotting area, at most one per figure.
-# Placement may vary to dodge the traces; nothing else may. Both read frame,
-# font, padding and handle length from _LEGEND_KW so they cannot drift apart -
-# do not pass styling overrides at the call site.
-# ---------------------------------------------------------------------------
-
+# Exactly two legend formats, both OUTSIDE the plotting area, at most one per
+# figure. Both read frame, font, padding and handle length from _LEGEND_KW so
+# they cannot drift apart - do not pass styling overrides at the call site.
 _LEGEND_KW: Dict[str, Any] = dict(
     fontsize=FS_LEGEND,
     frameon=True,

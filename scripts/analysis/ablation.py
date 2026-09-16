@@ -4,17 +4,15 @@
 
 Host-side, read-only diagnostic that loads every ablation arm's per-episode
 records (outputs/raw/evaluation_results/<baseline>/<leaf>/episode_records.csv),
-attaches the arm name from the directory tree, joins on condition, and computes
-the contrasts in the headline set:
+attaches the arm name from the directory tree, joins on condition, and computes:
 
   - Per-condition success rate and final position error for each arm.
-  - The covariance contrast deltas with bootstrap confidence intervals:
-    input_uncertainty - vanilla_ppo (standard heads, covariance on/off) and
-    full_method - output_uncertainty (evidential heads, covariance on/off).
-  - A single "degradation slope" per arm: how far success falls and position
-    error grows from the cleanest GNSS tier (rtk_fixed) to the worst (degraded).
-    The hypothesis is that the covariance arms degrade more gracefully (shallower
-    slope), so this is the headline number.
+  - The covariance contrast deltas with bootstrap CIs: input_uncertainty -
+    vanilla_ppo (standard heads) and full_method - output_uncertainty
+    (evidential heads), each covariance on/off.
+  - The GNSS degradation slope per arm: success/position-error change from the
+    cleanest GNSS tier (rtk_fixed) to the worst (degraded); a shallower slope
+    is the hypothesised covariance-arm advantage.
 """
 
 from __future__ import annotations
@@ -54,24 +52,16 @@ _CONTRAST_PAIRS: List[Tuple[str, str, str]] = [
 _SLOPE_CLEAN_CONDITION = "gnss_fixed"
 _SLOPE_DEGRADED_CONDITION = "gnss_degraded"
 
-# Held-tier conditions dropped from every summary and figure by default. Each pins
-# one GNSS fix state for the whole episode, so neither degrades WITHIN an episode
-# and the contrast between them is a between-condition difference rather than
-# degradation any arm rides through. The EKF also suppresses a static raw fault,
-# so the two do not separate at the policy's input (reported sigma p50 ~0.016 m in
-# both) and the resulting "slope" is flat by construction - see
-# documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md. The live anchor
-# chain (banded by true error) and the one-way drift carry the genuine
-# graceful-degradation evidence, so the analysis keeps five conditions, not
-# seven. Pass --keep-held-tiers to restore the old seven-condition behaviour.
+# Held-tier conditions dropped from every summary and figure by default: each
+# pins one GNSS fix state for the whole episode, so the EKF suppresses the
+# static raw fault and the "slope" between them is flat by construction (see
+# documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md).
 _HELD_TIER_CONDITIONS: List[str] = ["gnss_fixed", "gnss_degraded"]
 
-# Computed and kept in the raw CSVs, but outside the headline condition set.
 # lidar_degraded corrupts only the obstacle channel: the EKF never consumes
-# LiDAR, so the localisation std stays pinned at its RTK-fixed floor and the
+# LiDAR, so localisation std stays pinned at its RTK-fixed floor and the
 # condition carries no localisation-uncertainty signal for the headline
-# figures to read. drop_unreported() applies this at the figure boundary; the
-# analysis CSVs keep the column so the condition remains inspectable.
+# figures (dropped by drop_unreported() at the figure boundary only).
 _UNREPORTED_CONDITIONS: List[str] = ["lidar_degraded"]
 
 # Conditions whose GNSS tier varies WITHIN an episode. The behaviour and
@@ -95,20 +85,8 @@ def _discover_arm_csvs(
     results_root: Path, leaf: Optional[str] = None, stage: Optional[str] = None
 ) -> Dict[str, Path]:
     """
-    @brief Find each ablation arm's episode_records.csv under the nested tree.
-    @param results_root: outputs/raw/evaluation_results (the <baseline>/<leaf> root).
-    @param leaf: Optional checkpoint leaf to pin to (single-arm runs); None lets
-           each arm's newest run win.
-    @param stage: Optional curriculum stage (e.g. "1") so the cross-arm contrast
-           compares arms at the SAME stage rather than each arm's newest leaf
-           (which may differ - e.g. full_method at stage 2 vs others at stage 1).
-    @return Mapping arm name -> path to its episode_records.csv. Per arm the
-            without_wrapper variant (free-running policy - the caution/precision
-            reads) is preferred, then the most recent leaf.
-
-    The arm name is the first path component under the root (the baseline
-    directory); discover_arm_csvs handles both the two-level (legacy) and
-    three-level (wrapper-variant) layouts. Only the known ablation arms are kept.
+    @brief Find each known ablation arm's episode_records.csv, preferring the
+           without_wrapper variant, restricted to arms in _ARM_ORDER.
     """
     return {
         arm: path
@@ -151,16 +129,12 @@ def drop_held_tiers(
 ) -> pd.DataFrame:
     """
     @brief Drop the held-tier conditions from any frame carrying a "condition" column.
-    @param records: Any per-episode / per-step frame with a "condition" column;
-           frames without one (or empty frames) are returned untouched.
+    @param records: Any per-episode / per-step frame; passed through untouched if
+           it has no "condition" column or is empty.
     @param conditions: Condition names to drop; None uses _HELD_TIER_CONDITIONS.
-    @return A copy with those conditions removed, or the input frame unchanged when
-            there is nothing to drop.
-
-    Applied at every load boundary (episode records, gate frame, calibration
-    records) so the held tiers cannot reach a summary or figure by any path. Kept as
-    one public helper rather than inline masks so cross_seed.py filters the pooled
-    frames identically.
+    @return A copy with those conditions removed.
+    @note Applied at every load boundary so the held tiers cannot reach a summary
+          or figure by any path; kept public so cross_seed.py filters identically.
     """
     if conditions is None:
         conditions = _HELD_TIER_CONDITIONS
@@ -174,14 +148,12 @@ def drop_unreported(
 ) -> pd.DataFrame:
     """
     @brief Drop conditions outside the headline set from any "condition" frame.
-    @param records: Any frame with a "condition" column; frames without one
-           (or empty frames) are returned untouched.
+    @param records: Any frame; passed through untouched if it has no "condition"
+           column or is empty.
     @param conditions: Condition names to drop; None uses _UNREPORTED_CONDITIONS.
-    @return A copy with those conditions removed, or the input unchanged.
-
-    Sibling of drop_held_tiers(), applied at the FIGURE boundary rather than
-    the analysis boundary: the pooled CSVs keep every condition so each stays
-    inspectable, while the figures show only the headline set.
+    @return A copy with those conditions removed.
+    @note Applied at the FIGURE boundary, not the analysis boundary: the pooled
+          CSVs keep every condition inspectable; figures show only the headline set.
     """
     if conditions is None:
         conditions = _UNREPORTED_CONDITIONS
@@ -195,14 +167,12 @@ def keep_varying(
 ) -> pd.DataFrame:
     """
     @brief Restrict a frame to the conditions whose GNSS tier varies in-episode.
-    @param records: Any frame with a "condition" column; frames without one
-           (or empty frames) are returned untouched.
+    @param records: Any frame; passed through untouched if it has no "condition"
+           column or is empty.
     @param conditions: Conditions to keep; None uses _VARYING_CONDITIONS.
     @return A copy holding only those conditions.
-
-    The behaviour-vs-std and calibration readings both need uncertainty that
-    moves while the vehicle drives; a pinned tier gives no within-episode
-    variation to correlate against.
+    @note A pinned tier gives no within-episode variation for the behaviour-vs-std
+          and calibration readings to correlate against.
     """
     if conditions is None:
         conditions = _VARYING_CONDITIONS
@@ -236,15 +206,9 @@ def _bootstrap_delta_ci(
 ) -> Tuple[float, float, float]:
     """
     @brief Bootstrap the (treatment - control) difference of a per-episode metric.
-    @param treat: Per-episode values for the covariance-on arm.
-    @param control: Per-episode values for the matched covariance-off arm.
-    @param statistic: "mean" (e.g. success fraction or position error mean).
-    @param rng: Seeded NumPy generator for reproducibility.
     @return Tuple (point_estimate, ci_low, ci_high) at the 95% percentile level.
-
-    Treatment and control are resampled independently (the arms are evaluated on
-    separate episode draws, so this is a two-sample difference, not paired).
-    NaNs (e.g. position error on a handed-off episode) are dropped per arm first.
+    @note Treatment and control are resampled independently - a two-sample
+          difference, not paired, since the arms ran on separate episode draws.
     """
     treat = treat[~np.isnan(treat)]
     control = control[~np.isnan(control)]
@@ -262,15 +226,9 @@ def _bootstrap_delta_ci(
 def _contrast_table(records: pd.DataFrame, seed: int) -> pd.DataFrame:
     """
     @brief Covariance contrast deltas with bootstrap CIs, per condition.
-    @param records: Tidy per-episode frame.
-    @param seed: Bootstrap RNG seed.
-    @return DataFrame with one row per (pair, condition): the success-rate delta
-            (percentage points) and position-error delta (m), each with a 95% CI
-            and a "significant" flag (CI excludes zero).
-
-    A positive success delta or a negative position-error delta favours the
-    covariance arm. Significance is the CI not straddling zero - the formal
-    statement that covariance helped at that condition.
+    @return DataFrame with one row per (pair, condition): success-rate delta
+            (pp) and position-error delta (m), each with a 95% CI and a
+            "significant" flag (CI excludes zero).
     """
     rng = np.random.default_rng(seed)
     rows: List[Dict[str, object]] = []
@@ -330,13 +288,9 @@ def _degradation_slope(
     @param degraded_condition: Slope-end condition name (worst held GNSS tier).
     @return DataFrame, one row per arm: success at the clean and degraded held
             tiers, the drop (percentage points), and the position-error growth (m).
-
-    Both endpoint conditions must be present (the held-tier GNSS axis). A smaller
-    success drop and smaller position-error growth mean a more graceful
-    degradation - the property the covariance arms are claimed to have. The
-    endpoints default to the occupancy-0.5 cell but can be pointed at the
-    empty-lot cell (gnss_empty_fixed -> gnss_empty_degraded), where the
-    intermediate EKF error is not swallowed by neighbours and the slope is clean.
+    @note A smaller success drop and smaller position-error growth mean a more
+          graceful degradation - the property the covariance arms are claimed
+          to have. Both endpoint conditions must be present.
     """
     pivot = summary.pivot_table(
         index="arm", columns="condition", values="success_rate", observed=True
@@ -372,17 +326,7 @@ def _degradation_slope(
 def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
     """
     @brief Final pos-error and approach speed per EKF-std bin, per arm.
-    @param records: Tidy per-episode frame from _load_records.
-    @return DataFrame: per (arm, std_bin) the mean final position error and mean
-            final speed, with the std-bin range.
-
-    The mechanism behind the outcome gap: binning episodes by their EKF position
-    std (ekf_std_pos_mean_m, logged for every arm) and reading off how each arm
-    behaves. The claim is that as std rises, the covariance arm holds its final
-    position error roughly flat (it compensates), while the blind arm's error
-    grows; the covariance arm may also slow down (emergent caution). Speed and
-    error are per-episode finals, so this is a behavioural cross-section, not a
-    causal per-step trace - that is what the calibration analysis covers.
+    @note Per-episode finals, not a per-step trace - calibration.py covers that.
     """
     std_col = "ekf_std_pos_mean_m"
     if std_col not in records.columns:
@@ -420,12 +364,10 @@ def _behaviour_by_std(records: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# Caution metrics and the direction that means "more conservative as std rises".
-# Sign is the EXPECTED sign of the Spearman(metric, EKF std) for a cautious
-# policy: brake should rise (+1), speed / yaw-rate / jerk should fall (-1). The
-# cross-arm DIFFERENCE in these slopes (covariance arm minus blind arm) is the
-# causal test: caution attributable to SEEING the covariance, not to the episode
-# merely being harder (which the blind arm also experiences).
+# Expected sign of Spearman(metric, EKF std) for a cautious policy: brake
+# should rise (+1), speed / yaw-rate / jerk should fall (-1). The cross-arm
+# DIFFERENCE in these slopes is the causal test for caution attributable to
+# SEEING the covariance, not to the episode merely being harder.
 _CAUTION_DIRECTION: List[Tuple[str, int]] = [
     ("mean_brake_cmd", +1),
     ("mean_speed_moving_ms", -1),
@@ -436,15 +378,8 @@ _CAUTION_DIRECTION: List[Tuple[str, int]] = [
 
 def _caution_slopes(records: pd.DataFrame) -> pd.DataFrame:
     """
-    @brief Per-arm Spearman of each caution metric against EKF position std.
-    @param records: Tidy per-episode frame from _load_records.
-    @return DataFrame: one row per (arm, metric) with the rank correlation, its
-            expected cautious sign, whether the sign matches, and n. Empty if the
-            caution columns are absent (older CSVs).
-
-    A negative speed/yaw/jerk slope and a positive brake slope mean the arm drives
-    more conservatively as localisation uncertainty rises. This is the WITHIN-arm
-    read; the cross-arm difference (_caution_contrast) is the causal claim.
+    @brief Per-arm Spearman of each caution metric against EKF position std -
+           the WITHIN-arm read; _caution_contrast is the cross-arm causal claim.
     """
     std_col = "ekf_std_pos_mean_m"
     metrics = [m for m, _ in _CAUTION_DIRECTION if m in records.columns]
@@ -475,16 +410,8 @@ def _caution_slopes(records: pd.DataFrame) -> pd.DataFrame:
 
 def _caution_levels(records: pd.DataFrame) -> pd.DataFrame:
     """
-    @brief Per-arm ABSOLUTE caution level and the precision/success payoff.
-    @param records: Tidy per-episode frame from _load_records.
-    @return DataFrame: one row per arm with mean approach speed, mean brake,
-            success rate, median final pos error, and collision rate. Empty if
-            the caution columns are absent.
-
-    The slope (_caution_slopes) measures how behaviour CHANGES with std; this
-    measures the baseline LEVEL. A covariance arm that drives slower overall is
-    only "cautious" rather than "undertrained" if the slowness buys accuracy -
-    higher success and lower final pos error - so those are analysed alongside.
+    @brief Per-arm absolute caution level (speed, brake) and its precision/
+           success payoff, distinguishing cautious from merely undertrained.
     """
     if "mean_speed_moving_ms" not in records.columns:
         return pd.DataFrame()
@@ -507,17 +434,9 @@ def _caution_levels(records: pd.DataFrame) -> pd.DataFrame:
 
 def _caution_contrast(slopes: pd.DataFrame) -> pd.DataFrame:
     """
-    @brief Cross-arm caution-slope difference for each covariance contrast pair.
-    @param slopes: Per-(arm, metric) slope table from _caution_slopes.
-    @return DataFrame: per (pair, metric) the treatment slope, control slope, and
-            their difference oriented so POSITIVE = the covariance arm is more
-            cautious than its blind control. Empty if either arm is missing.
-
-    This is the causal claim for "input uncertainty makes the car conservative":
-    the covariance arm (treatment) should show a stronger cautious slope than the
-    matched no-covariance arm (control). Difference is signed by the metric's
-    expected direction so a positive value always means "covariance => more
-    caution", whichever metric.
+    @brief Cross-arm caution-slope difference per contrast pair: the causal
+           claim that seeing the covariance, not a harder episode, drives
+           caution. Positive means the covariance arm is more cautious.
     """
     if slopes.empty:
         return pd.DataFrame()
@@ -533,9 +452,8 @@ def _caution_contrast(slopes: pd.DataFrame) -> pd.DataFrame:
             c = by_arm_metric.get((control_arm, metric))
             if t is None or c is None:
                 continue
-            # Orient by expected direction: positive difference = treatment more
-            # cautious. For a "down" metric (exp=-1) a more-negative treatment
-            # slope is more cautious, so multiply the raw (t - c) by exp.
+            # Multiply by exp so positive always means "treatment more cautious"
+            # (for a "down" metric, exp=-1 flips a more-negative slope positive).
             diff = (t - c) * direction[metric]
             rows.append(
                 {
@@ -573,9 +491,8 @@ def analyse(
            each arm's newest run win.
     @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
            same stage; None uses each arm's newest leaf (may mix stages).
-    @param keep_held_tiers: Retain the held-tier conditions (_HELD_TIER_CONDITIONS)
-           and the degradation slope they define. Default False drops them, which
-           is what is analysed; True restores the old seven-condition run.
+    @param keep_held_tiers: Retain the held-tier conditions and the degradation
+           slope they define; default False drops them (the five-condition set).
     """
     # Nest by stage (or pinned leaf) so STAGE=1 and STAGE=2 runs never overwrite
     # each other; an unpinned mixed-stage run lands in "latest".
@@ -653,12 +570,8 @@ def _print_headline(
 ) -> None:
     """
     @brief Console summary of the two claims: covariance contrast + slope.
-    @param contrasts: Contrast table from _contrast_table.
-    @param slope: Slope table from _degradation_slope.
-    @param slope_clean: Slope-start condition name (for the missing-data hint).
-    @param slope_degraded: Slope-end condition name (for the missing-data hint).
-    @param held_tiers_kept: Whether the held tiers were retained. False makes an
-           empty slope report as deliberately skipped rather than as missing data.
+    @param held_tiers_kept: False reports an empty slope as deliberately
+           skipped rather than as missing data.
     """
     print("\n=== Covariance contrast (treatment - control), 95% bootstrap CI ===")
     if contrasts.empty:
@@ -700,13 +613,8 @@ def _print_headline(
 
 def _print_caution(slopes: pd.DataFrame, contrast: pd.DataFrame) -> None:
     """
-    @brief Console summary of the caution-vs-uncertainty result.
-    @param slopes: Per-(arm, metric) slope table from _caution_slopes.
-    @param contrast: Cross-arm difference table from _caution_contrast.
-
-    Two reads: WITHIN-arm (does each arm drive more cautiously as std rises?) and
-    CROSS-arm (is the caution stronger for the covariance arm - the causal claim).
-    The cross-arm block is empty until both arms of a pair are evaluated.
+    @brief Console summary of the caution-vs-uncertainty result: within-arm
+           slopes, then the cross-arm causal contrast.
     """
     print("\n=== Caution vs EKF std: within-arm slopes (Spearman) ===")
     if slopes.empty:
@@ -746,13 +654,8 @@ def _print_caution(slopes: pd.DataFrame, contrast: pd.DataFrame) -> None:
 
 def _print_caution_levels(levels: pd.DataFrame) -> None:
     """
-    @brief Console summary of absolute caution LEVEL and its accuracy payoff.
-    @param levels: Per-arm level table from _caution_levels.
-
-    Speed-vs-std SLOPE can be flat even when an arm drives cautiously at a low
-    baseline; this shows the absolute speed/brake level alongside success and
-    pos-error so a slower arm can be read as cautious (slower AND more accurate)
-    rather than merely undertrained (slower AND worse).
+    @brief Console summary of absolute caution LEVEL and its accuracy payoff -
+           distinguishes a slower-but-more-accurate arm from an undertrained one.
     """
     print("\n=== Caution LEVEL (absolute) + accuracy payoff ===")
     if levels.empty:
