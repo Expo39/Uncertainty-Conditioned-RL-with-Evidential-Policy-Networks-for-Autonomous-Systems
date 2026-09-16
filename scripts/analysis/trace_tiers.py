@@ -37,14 +37,9 @@ import numpy as np
 import pandas as pd
 
 # Upper edges (inclusive) of the GNSS-tier bands, in metres of TRUE localisation
-# error ||ekf_xy - gt_xy||. Boundaries follow the tiers' metric_stddev_m
-# (rtk_fixed 0.020, rtk_float 0.360, standalone 1.802, degraded 5.0).
-#
-# @warning Band on TRUE error, NOT on the reported EKF std: the EKF posterior std
-# (obs features 2-4) is heavily damped by IMU + process-model fusion and saturates
-# around ~1.3 m even when the estimate is 10 m off truth, so it badly understates the
-# tier and mislabels genuinely-degraded episodes. The true error (from the trace's
-# gt_x/y and ekf_x/y) is the faithful tier proxy.
+# error ||ekf_xy - gt_xy|| (thresholds follow metric_stddev_m: 0.020 / 0.360 /
+# 1.802 / 5.0 for rtk_fixed / rtk_float / standalone / degraded).
+# @warning NOT the reported EKF std, which saturates ~1.3 m and mislabels tiers.
 _BAND_EDGES_M: List[Tuple[str, float]] = [
     ("fixed (<=0.36)", 0.36),
     ("float (<=1.80)", 1.80),

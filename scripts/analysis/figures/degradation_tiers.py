@@ -37,20 +37,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from scripts import figure_style as fs  # noqa: E402
 
 # Episodes are banded into equal-population terciles of their MEAN true
-# localisation error ||ekf_xy - gt_xy|| under the anchor chain. Mean (not the
-# per-episode maximum) is the faithful notion of how hard localisation typically
-# was: banding on the max rewards a single transient covariance spike and yields a
-# non-monotone axis. The fixed-integer tier is not a band here because the live
-# chain almost never holds cm-level accuracy for a whole episode (see caption); the
-# terciles instead partition the realised difficulty into low / medium / high.
+# localisation error ||ekf_xy - gt_xy|| under the anchor chain (mean, not
+# max, so one transient spike cannot make the axis non-monotone). Terciles
+# stand in for the fixed-integer tier, which the chain rarely holds all episode.
 _BAND_LABELS = ["low", "medium", "high"]
 
 _ARMS = ["vanilla_ppo", "input_uncertainty", "output_uncertainty", "full_method"]
 _SEEDS = ["seed_42", "seed_123", "seed_7"]
 
-# Four distinct, colour-blind-safe, print-friendly hues (Okabe-Ito derived).
-# full_method carries the eye (heavy blue line); the three baselines each get a
-# clearly separated hue + marker + linestyle so they never blur together.
 # Draw order only: colour, marker and linestyle come from figure_style so this
 # figure shares one palette with every other plot. full_method sits on top so
 # the headline trace is never hidden behind a baseline.

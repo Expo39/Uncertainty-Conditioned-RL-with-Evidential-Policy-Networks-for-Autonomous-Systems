@@ -4,13 +4,10 @@
 
 Tails outputs/vis_history.jsonl and renders each frame as it arrives using
 Pygame. Creates outputs/.vis_active so the environment starts writing frames;
-removing it (on window close) stops the env writing.
-
-The display is built for demonstration as well as debugging: the GNSS fix-state
-tier drives a colour-coded panel, an uncertainty ring around the ego vehicle
-scaled to that tier's 1-sigma position noise, and a scrolling timeline so the
-mid-episode transitions between tiers are visible rather than easily missed.
-Optional MP4 recording (@see recorder.FrameRecorder) captures the window.
+removing it (on window close) stops the env writing. The GNSS fix-state tier
+drives a colour-coded panel and an uncertainty ring around the ego vehicle
+scaled to that tier's 1-sigma position noise. Optional MP4 recording
+(@see recorder.FrameRecorder) captures the window.
 """
 
 import json
@@ -42,10 +39,6 @@ from scripts.visualise.gnss_tiers import (
 )
 from scripts.visualise.recorder import FrameRecorder
 
-# ---------------------------------------------------------------------------
-# Colour palette (converted once at import time)
-# ---------------------------------------------------------------------------
-
 _C_LOT = hex_to_rgb(HEX_LOT)
 _C_LOT_EDGE = (153, 153, 153)
 _C_TARGET_BAY = hex_to_rgb(HEX_TARGET_BAY)
@@ -70,10 +63,6 @@ _C_LEGEND_TEXT = (50, 50, 50)
 _RING_ALPHA = 55
 _RING_EDGE_ALPHA = 170
 
-# ---------------------------------------------------------------------------
-# Bay colour/linewidth lookup
-# ---------------------------------------------------------------------------
-#
 # Every layout in this project is perpendicular-only, so the angled/parallel
 # entries never fire in practice; they are kept so a future layout renders
 # correctly rather than falling back to the perpendicular style.
@@ -84,14 +73,9 @@ _BAY_STYLE: Dict[str, Tuple[Any, int]] = {
 }
 _BAY_STYLE_DEFAULT: Tuple[Any, int] = (_C_PERP_BAY, 2)
 
-# ---------------------------------------------------------------------------
-# Layout constants
-# ---------------------------------------------------------------------------
-#
 # Font sizes and the legend width are multiplied by the UI scale at startup
 # (see _Layout), so the whole interface can be enlarged for a projector or a
 # recording with a single --ui-scale value.
-
 _UI_SCALE_DEFAULT = 1.5
 
 _MAP_W = 900
@@ -100,12 +84,10 @@ _BASE_HUD_FONT = 13
 _BASE_LABEL_FONT = 12
 _BASE_TIER_FONT = 21
 
-# Map area height. The HUD is drawn in a band BELOW the map, not overlaid on it.
-#
-# _MAP_H is only the INITIAL height (used for the waiting splash). Once the
-# first frame arrives, _compute_viewport() resizes the map area to the lot's
-# aspect ratio so a wide-and-short lot does not leave a tall empty strip.
-# _MAP_H_MAX caps the height so a tall lot cannot exceed the screen.
+# Map area height (HUD is drawn in a band BELOW the map, not overlaid on it).
+# _MAP_H is only the INITIAL height (used for the waiting splash); once the
+# first frame arrives, _compute_viewport() resizes it to the lot's aspect
+# ratio. _MAP_H_MAX caps it so a tall lot cannot exceed the screen.
 _MAP_H = 600
 _MAP_H_MIN = 300
 _MAP_H_MAX = 900
@@ -145,11 +127,9 @@ class _Layout:
         self.legend_w = self.scaled(_BASE_LEGEND_W)
         self.window_w = _MAP_W + self.legend_w
 
-        # HUD band, top to bottom: the tier block (card + accuracy line) and
-        # three status bars (context, speed/action, and the debug line written
-        # only when debug=True in env_config.yaml). Sized from font metrics, and
-        # always reserving the debug bar, so nothing is clipped at any scale or
-        # in either debug mode.
+        # HUD band height: sized from font metrics and always reserving the
+        # debug bar (shown only when debug=True in env_config.yaml), so
+        # nothing is clipped at any scale or in either debug mode.
         self.bar_pitch = self.hud_font + 8
         self.tier_block_h = self.tier_font + self.hud_font + 12
         self.hud_band_h = self.tier_block_h + 3 * self.bar_pitch + self.scaled(12)
@@ -163,11 +143,6 @@ class _Layout:
         @return Scaled size, at least 1.
         """
         return max(1, int(round(base * self.scale)))
-
-
-# ---------------------------------------------------------------------------
-# Geometry helpers
-# ---------------------------------------------------------------------------
 
 
 def _rot_corners(
@@ -245,11 +220,6 @@ def _draw_arrow_head(
     left = (int(end[0] - ux * size + uy * half), int(end[1] - uy * size - ux * half))
     right = (int(end[0] - ux * size - uy * half), int(end[1] - uy * size + ux * half))
     pygame.draw.polygon(surface, colour, [end, left, right])
-
-
-# ---------------------------------------------------------------------------
-# Static scene surface
-# ---------------------------------------------------------------------------
 
 
 def _build_static_surface(
@@ -336,11 +306,6 @@ def _build_static_surface(
             pygame.draw.polygon(surf, _C_STATIC_VEHICLE, spts)
 
     return surf
-
-
-# ---------------------------------------------------------------------------
-# Main visualiser class
-# ---------------------------------------------------------------------------
 
 
 class LiveVisualiser:
@@ -439,10 +404,6 @@ class LiveVisualiser:
             "monospace", self._layout.tier_font, bold=True
         )
 
-    # -----------------------------------------------------------------------
-    # Entry point
-    # -----------------------------------------------------------------------
-
     def run(self) -> None:
         """@brief Open the Pygame window and enter the main loop."""
         self._exit_requested = False
@@ -466,10 +427,6 @@ class LiveVisualiser:
             except OSError:
                 pass
             pygame.quit()
-
-    # -----------------------------------------------------------------------
-    # Recording
-    # -----------------------------------------------------------------------
 
     def _toggle_recording(self) -> None:
         """
@@ -506,10 +463,6 @@ class LiveVisualiser:
             print("Recording stopped before any frame was written.")
         self._recorder = None
 
-    # -----------------------------------------------------------------------
-    # Main loop
-    # -----------------------------------------------------------------------
-
     def _run_loop(self) -> None:
         """
         @brief Read new JSONL frames and render them as fast as they arrive.
@@ -538,8 +491,8 @@ class LiveVisualiser:
                 self._draw_waiting()
                 time.sleep(_POLL_SLEEP)
             else:
-                # Data stream temporarily dry - hold last frame, don't flicker.
-                # Still offer the surface to the recorder so a paused stream
+                # Data stream dry - hold the last frame rather than flicker,
+                # but still offer it to the recorder so a paused stream
                 # records as a still rather than compressing video time.
                 self._capture_frame()
                 time.sleep(_POLL_SLEEP)
@@ -550,10 +503,6 @@ class LiveVisualiser:
         """@brief Offer the current window to the recorder, if active."""
         if self._recorder is not None:
             self._recorder.capture(self._screen)
-
-    # -----------------------------------------------------------------------
-    # Event handling
-    # -----------------------------------------------------------------------
 
     def _handle_events(self) -> None:
         """@brief Process Pygame event queue."""
@@ -573,10 +522,6 @@ class LiveVisualiser:
                     )
                     self._static_episode_id = None  # Force static surface rebuild
                     self._vis_trail_episode_id = None  # Force trail reset
-
-    # -----------------------------------------------------------------------
-    # JSONL ingestion
-    # -----------------------------------------------------------------------
 
     def _read_new_frames(self) -> List[Dict[str, Any]]:
         """
@@ -617,10 +562,6 @@ class LiveVisualiser:
             pass
         return frames
 
-    # -----------------------------------------------------------------------
-    # Viewport
-    # -----------------------------------------------------------------------
-
     def _compute_viewport(self, state: Dict[str, Any]) -> None:
         """
         @brief Compute origin and scale so the lot fits inside the map viewport.
@@ -649,8 +590,8 @@ class LiveVisualiser:
         self._scale = usable_w / span[0]
         needed_h = int(span[1] * self._scale) + 2 * _MARGIN_PX
         new_map_h = max(_MAP_H_MIN, min(_MAP_H_MAX, needed_h))
-        # If a tall lot was clamped, fall back to the fit-both scale so it is
-        # not cropped at the bottom.
+        # When a tall lot hits the height clamp, fall back to the fit-both
+        # scale so it is not cropped at the bottom.
         usable_h = new_map_h - 2 * _MARGIN_PX
         self._scale = min(self._scale, usable_h / span[1])
         self._origin = mn
@@ -670,12 +611,8 @@ class LiveVisualiser:
             (self._layout.window_w, self._window_h), flags
         )
         self._trail_surf = pygame.Surface((_MAP_W, self._map_h), pygame.SRCALPHA)
-        # The static surface was sized to the old height - force a rebuild.
+        # Force a static-surface rebuild: it is sized to the map height.
         self._static_episode_id = None
-
-    # -----------------------------------------------------------------------
-    # Drawing
-    # -----------------------------------------------------------------------
 
     def _draw_waiting(self) -> None:
         """
@@ -876,10 +813,6 @@ class LiveVisualiser:
         )
         self._screen.blit(ring, (centre[0] - radius_px, centre[1] - radius_px))
 
-    # -----------------------------------------------------------------------
-    # HUD
-    # -----------------------------------------------------------------------
-
     def _draw_hud_band(
         self,
         state: Dict[str, Any],
@@ -986,10 +919,6 @@ class LiveVisualiser:
                 self._hud_font.render(accuracy, True, _C_HUD_TEXT), (pad, y)
             )
         return y + self._layout.hud_font + 8
-
-    # -----------------------------------------------------------------------
-    # Legend
-    # -----------------------------------------------------------------------
 
     def _draw_legend(self) -> None:
         """

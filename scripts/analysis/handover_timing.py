@@ -39,11 +39,10 @@ import pandas as pd  # noqa: E402
 
 from scripts.analysis._discovery import arm_leaf_subpath, discover_records  # noqa: E402
 
-# Per-condition onset regime. switch = degradation arrives mid-episode (latency is
-# measured after the drift crossing); spawn = degraded/novel from step 0 (latency
-# from spawn); none = clean, no handover expected. Conditions absent from this map
-# default to "spawn" - the safe reading for any new standing condition. Names match
-# configs/eval_config.yaml.
+# Per-condition onset regime: switch = degradation arrives mid-episode (latency
+# measured after the drift crossing); spawn = degraded/novel from step 0; none =
+# clean, no handover expected. Unlisted conditions default to "spawn" - the safe
+# reading for a new standing condition. Names match configs/eval_config.yaml.
 _REGIME: Dict[str, str] = {
     "gnss_degrade_one_way": "switch",
     "gnss_degraded": "spawn",

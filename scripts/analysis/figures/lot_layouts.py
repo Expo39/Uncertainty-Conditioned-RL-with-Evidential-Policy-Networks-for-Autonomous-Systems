@@ -6,12 +6,10 @@ Reads the generated layout YAMLs (already world-frame) and draws them as two
 panels of a single figure. Presentation only: no geometry is recomputed, so
 bays, spawns and lot corners are exactly what generate_layouts.py wrote.
 
-Why one figure rather than two subfigures. The panels previously sat side by
-side at 0.48\\linewidth each, which scaled fs.FS_LEGEND (8.5 pt) down to
-roughly 3.5 pt on the page and duplicated the legend. Drawing both lots in one
-\\textwidth figure keeps the house font sizes at their intended print size and
-leaves exactly one legend, per the figure_style rule that a figure carries at
-most one.
+Both lots are drawn as one \\textwidth figure rather than two subfigures at
+0.48\\linewidth each: a narrower subfigure would scale fs.FS_LEGEND (8.5 pt)
+down to an illegible size on the page and would need a legend per panel,
+against the figure_style rule that a figure carries at most one.
 
 Both panels share one data extent (the larger lot's padded span, centred on
 each lot), so the two outlines print at the same metres-per-inch and occupy
@@ -185,9 +183,8 @@ def render(out) -> Path:
     handles.append(
         mpatches.Patch(facecolor=HEX_LOT, edgecolor="black", label="Lot boundary")
     )
-    # Marker key for the spawn triangle, which is no longer labelled in place.
-    # The arrow points along the spawn heading, so the entry names both the
-    # position and the orientation it encodes.
+    # Legend key for the spawn triangle: the arrow points along the spawn
+    # heading, so the entry names both the position and orientation it encodes.
     handles.append(
         Line2D(
             [0],

@@ -2,9 +2,8 @@
 @file irregular_a.py
 @brief Irregular seven-sided parking lot floor plan (OOD, ~85x50 m).
 
-The notch and central obstacle have been removed. The bottom boundary is now
-a single straight wall from P0 to P1. A single cluster of perpendicular bays
-runs along the bottom wall.
+The bottom boundary is a single straight wall from P0 to P1, with a single
+cluster of perpendicular bays running along it.
 """
 
 import math
@@ -73,7 +72,7 @@ def generate() -> Dict[str, Any]:
         start_along=diag_wall_len - end_clearance - 10 * perp_spacing - 5.0,
     )
 
-    # Top-flat back-to-back perp rows (bays at the P4-near end removed)
+    # Top-flat perp row, packed away from the P4-near end
     top_flat_back = lot.row_along_perimeter(
         bay_type="perpendicular",
         n=4,

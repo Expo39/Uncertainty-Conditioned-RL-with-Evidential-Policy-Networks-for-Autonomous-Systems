@@ -134,11 +134,7 @@ def _parse_args() -> argparse.Namespace:
 
 # Trace CSV column order. One row per POLICY DECISION: env.step() spans the
 # full action_repeat tick window and returns one real transition per decision,
-# so every logged row carries real state. Columns cover parking quality
-# (speed, position and orientation error), the post-clamp commands actually
-# delivered to CARLA, the total reward, the episode outcome, and the
-# evidential policy uncertainty (epistemic and aleatoric, mean over action
-# axes) - the calibration signal that is the point of the project.
+# so every logged row carries real state.
 _TRACE_COLUMNS = [
     "step",
     # Episode routing, constant per episode but logged per row so each trace is
@@ -174,22 +170,18 @@ _TRACE_COLUMNS = [
     "ekf_std_x",
     "ekf_std_y",
     "ekf_std_yaw",
-    # LIVE GNSS fix-state tier for this step (the actual Markov-chain state
-    # driving the injected noise, from info["gnss_tier"], which the env reads
-    # back from the relay each tick) and its noise multiplier vs rtk_fixed.
-    # This is the FAITHFUL tier label: the reported ekf_std saturates and
-    # cannot be used to recover the tier post hoc. Empty string on steps with
-    # no active tier (e.g. CI/test fallback).
+    # Live GNSS fix-state tier (info["gnss_tier"]) and its noise multiplier vs
+    # rtk_fixed - the faithful tier label, since the reported ekf_std saturates
+    # and cannot be used to recover the tier post hoc. Empty on steps with no
+    # active tier (e.g. CI/test fallback).
     "gnss_tier",
     "gnss_multiplier",
 ]
 
 
-# Overlay redraw cadence. CARLA debug primitives persist until they expire, so
-# the lifetime must NOT outlive the redraw interval by much: a lifetime long
-# enough to span an episode leaves the previous episode's target bay painted
-# green over the new one. Redrawing often with a slightly longer lifetime keeps
-# the overlay flicker-free while stale primitives clear within half a second.
+# CARLA debug primitives persist until they expire, so the lifetime must NOT
+# outlive the redraw interval by much - otherwise the previous episode's
+# target bay stays painted green over the new one.
 # Mirrors scripts/inspect/inspectors/base.py (_REDRAW_INTERVAL / _OVERLAY_LIFE).
 _OVERLAY_REDRAW_S = 3.0
 _OVERLAY_LIFETIME_S = 3.5
@@ -210,17 +202,13 @@ def _make_env(
     @brief Create the CARLA parking environment from environment config.
     @param env_config: Parsed environment configuration dictionary.
     @param held_gnss_tier: If set, the gnss_noise_profiles.yaml tier name to hold
-           for the whole drive (no per-episode sampling, no Markov drift), so the
-           localisation uncertainty is a fixed controlled level. None runs the
-           normal training noise process.
+           for the whole drive (no per-episode sampling, no Markov drift). None
+           runs the normal training noise process.
     @return Vectorised environment.
 
-    The success acceptance margin is read from the (stage-merged) env_config
-    `bay_margin`, exactly as training does - so the demo scores the policy under
-    the SAME criterion it was trained at. With --stage N the stage's looser
-    margin applies (e.g. Stage 1's -0.75); with no stage the base env_config
-    value (the strict -0.25) applies. No hardcoded margin, so the demo success
-    cannot silently diverge from the training success metric.
+    Reads the success acceptance margin from the (stage-merged) env_config
+    `bay_margin`, exactly as training does, so the demo scores the policy
+    under the same criterion it was trained at.
     """
     # Env vars override config (e.g. CARLA_HOST=carla-server-demo for 3D view).
     host_override = os.environ.get("CARLA_HOST")
@@ -337,11 +325,10 @@ def main() -> None:
     """
     args = _parse_args()
 
-    # Load configs. load_env_config merges sensor/agent/env + the stage difficulty.
-    # Difficulty lives only in the stage files and obs/policy flags only in the
-    # baseline files, so the demo resolves the same defaults as training: stage 1
-    # and full_method when the flags are omitted. The demo must match the geometry
-    # AND obs shape the checkpoint was trained at - a mismatch is a hard shape error.
+    # load_env_config merges sensor/agent/env + the stage difficulty; difficulty
+    # lives only in the stage files and obs/policy flags only in the baseline
+    # files, so the demo resolves the same defaults as training when the flags
+    # are omitted. The demo must match the checkpoint's obs shape exactly.
     from uncertainty_rl.training.train_ppo import (
         DEFAULT_BASELINE,
         DEFAULT_STAGE,
@@ -415,21 +402,16 @@ def main() -> None:
 
     episode = 0
 
-    # Output dirs mirror the checkpoint tree and add a per-demo-run level:
-    # <baseline>/<checkpoint_leaf>/<demo_stamp>/. The checkpoint leaf carries the
-    # TRAINING run identity (stage + seed + training timestamp), so repeated demos
-    # of the same checkpoint group under one folder, each run in its own
-    # <demo_stamp> subfolder (so two runs of the same checkpoint never collide).
-    # The baseline and leaf come from the checkpoint's <baseline>/<leaf> path; a
-    # bare checkpoint with no such structure falls back to a flat <demo_stamp>/.
-    # Written under outputs/ (the rw-mounted volume) so they survive --rm exit.
+    # Output dirs mirror the checkpoint tree plus a per-demo-run level:
+    # <baseline>/<checkpoint_leaf>/<demo_stamp>/, so repeated demos of the same
+    # checkpoint group under one folder and never collide with each other.
     # Local wall-clock time (container runs UTC); Europe/Malta is DST-aware.
     run_stamp = datetime.now(ZoneInfo("Europe/Malta")).strftime("%d-%m-%Y-%H%M%S")
     _ckpt_leaf = Path(args.checkpoint).parent.name
     _ckpt_baseline = Path(args.checkpoint).parent.parent.name
-    # A real training leaf ends in the <DDMMYYYY-HHMM> stamp (both the current
-    # <stage>_<seed>_<stamp> and the legacy seed<N>_<stamp> forms); trial_<N> and
-    # bare paths do not, so they fall back to a flat <demo_stamp>/.
+    # A real training leaf ends in the <DDMMYYYY-HHMM> stamp - both the current
+    # <stage>_<seed>_<stamp> and the older seed<N>_<stamp> forms match; trial_<N>
+    # and bare paths do not, so they fall back to a flat <demo_stamp>/.
     if _ckpt_baseline and re.search(r"\d{8}-\d{4}$", _ckpt_leaf):
         _run_subtree = Path(_ckpt_baseline) / _ckpt_leaf / run_stamp
     else:
@@ -445,10 +427,9 @@ def main() -> None:
         print(f"Trace logging enabled: {trace_dir}/episode_<N>.csv")
 
     # Per-bay success accounting, mirroring the evaluate.py eval tree so any
-    # visualiser-driven run (2D or 3D) leaves a bay_successes.csv. The demo runs
-    # a single fixed condition, so unlike evaluate.py there is no per-condition
-    # split - one tracker for the whole run, dumped in the finally block (the
-    # demo loops until Ctrl+C, so the dump must survive interruption).
+    # visualiser-driven run (2D or 3D) leaves a bay_successes.csv. One tracker
+    # for the whole run (the demo has no per-condition split), dumped in the
+    # finally block so a Ctrl+C stop still flushes it.
     bay_tracker = BaySuccessTracker()
     bay_dir = Path("outputs") / "raw" / "bay_successes" / "eval" / _run_subtree
 
@@ -538,21 +519,19 @@ def main() -> None:
                 infos = cast(List[Dict[str, Any]], step_result[3])
                 steps += 1
 
-                # Every env.step() is one policy decision carrying real state.
                 # The VecEnv wrapper can inject its own keys
                 # (terminal_observation, TimeLimit.truncated) into the dict, so
                 # key on "pos_error", which only the env's own info carries,
                 # to log exactly one row per policy decision.
                 info0 = infos[0]
-                # The target bay id and spawn id are written per row in the
-                # episode CSV (see _TRACE_COLUMNS), so run_info.txt no longer
-                # carries per-episode bay info - it holds only run-level header.
+                # Target bay id and spawn id are logged per row here; the
+                # run_info.txt this run also writes carries only run-level
+                # fields (checkpoint, demo_run, episodes_completed).
                 if trace_writer is not None and "pos_error" in info0:
-                    # action is shape (1, 3): [steer, throttle, brake]. The env
-                    # exposes the post-clamp commands actually delivered to
-                    # CARLA (rate-limited and brake-overrides-throttle applied)
-                    # as steer_cmd / throttle_cmd / brake_cmd - those, not the
-                    # policy's raw pre-clamp output, describe what the car did.
+                    # steer_cmd / throttle_cmd / brake_cmd are the post-clamp
+                    # commands actually delivered to CARLA (rate-limited,
+                    # brake-overrides-throttle applied) - not the policy's raw
+                    # pre-clamp output, so these describe what the car did.
                     trace_writer.writerow(
                         [
                             steps,
@@ -596,15 +575,10 @@ def main() -> None:
                         _draw_demo_overlays(env)
                         next_overlay_redraw = time.monotonic() + _OVERLAY_REDRAW_S
 
-                # Pace the loop to wall-clock time so the drive is watchable.
-                # CARLA runs in synchronous mode, where world.tick() advances
-                # physics instantly - without this sleep the episode would play
-                # back many times faster than real time.
-                #
-                # One env.step() covers action_repeat ticks, so the wall-clock
-                # budget is carla_timestep * action_repeat (default 0.05 * 4 =
-                # 0.2 s). Budgeting a single timestep here played the drive back
-                # at action_repeat times real speed.
+                # Pace the loop to wall-clock time so the drive is watchable:
+                # CARLA's synchronous mode advances physics instantly, so
+                # without this sleep the episode plays back many times faster.
+                # The budget is the whole action_repeat window, not one tick.
                 if args.realtime and not paced_in_env:
                     elapsed = time.monotonic() - step_start
                     remaining = step_wall_seconds - elapsed

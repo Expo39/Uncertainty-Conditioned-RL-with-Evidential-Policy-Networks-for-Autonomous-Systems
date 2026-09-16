@@ -69,9 +69,8 @@ _TIER_FLOOR_M = {
 
 # FALLBACK ONLY. Upper edges (inclusive) for reconstructing the tier from TRUE
 # localisation error ||ekf_xy - gt_xy|| when the trace lacks a gnss_tier column.
-# This reconstruction is noisy near the edges (true error jitters across a
-# threshold between corrections) and is a last resort; the faithful signal is the
-# logged gnss_tier column. Boundaries sit at the tier metric_stddev_m.
+# Noisy near the edges (true error jitters across a threshold between
+# corrections); the logged gnss_tier column is the faithful signal.
 _TIER_EDGES: List[Tuple[str, float]] = [
     ("rtk_fixed", 0.36),
     ("rtk_float", 1.80),
@@ -79,8 +78,6 @@ _TIER_EDGES: List[Tuple[str, float]] = [
     ("degraded", float("inf")),
 ]
 
-# Ordered severity ramp (fixed -> degraded). Doubles as a status palette; validated
-# colourblind-safe on adjacent pairs. Kept light so the foreground line stays dominant.
 # Bands shorter than this are merged into the preceding tier (legibility of the
 # background only; the sigma_x curve is never smoothed).
 MIN_RUN_TICKS = 2
@@ -166,7 +163,7 @@ def _resolve_tiers(df: pd.DataFrame) -> Tuple[np.ndarray, bool]:
 
 
 def _style() -> None:
-    """@brief Restrained, print-friendly rcParams; serif to sit beside LaTeX body text."""
+    """@brief Restrained rcParams; serif to sit beside LaTeX body text."""
     fs.apply()
 
 
@@ -232,15 +229,10 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     ax.set_ymargin(0.0)
     ax.set_ylim(0.0, float(np.nanmax(sigma_x)) * 1.20)
 
-    # Callout. The y-axis already shows the plateau height, so the label only
-    # states the defensible FACT: reported sigma_x stays near 1 m in the worst
-    # tier, below the true localisation error it experiences there. Pooled over
-    # the whole run's degraded ticks, reported sigma_x is median ~0.9 m (p90
-    # ~1.1, max ~1.2) while the true error is median ~1.4 m (p90 ~5 m), so it is
-    # consistently the smaller of the two. Deliberately NOT phrased as "below the
-    # raw 5 m injection floor" (that invites "the filter is fusing correctly, as
-    # intended") and NOT quoting a per-episode peak (sigma_x reaches ~1.24 m
-    # elsewhere, so a single peak would misrepresent the ceiling).
+    # Callout: the y-axis already shows the plateau height, so the label states
+    # only the defensible FACT that reported sigma_x stays near 1 m in the
+    # worst tier, below the true error it experiences there (pooled over the
+    # run's degraded ticks: sigma_x median ~0.9 m vs true error median ~1.4 m).
     peak_i = int(np.nanargmax(sigma_x))
     peak_sigma = float(sigma_x[peak_i])
     # Anchor the leader on the plateau, and drop the text into the empty band
@@ -252,6 +244,10 @@ def plot(trace_csv: Path, out_pdf: Path) -> None:
     anchor_sigma = float(sigma_x[mid_i])  # land the leader on the plateau curve
     text_t = anchor_t
     text_y = peak_sigma * 0.55
+    # Not phrased as "below the raw 5 m injection floor": that invites reading
+    # it as "the filter is fusing correctly, as intended". Not a per-episode
+    # peak either: sigma_x reaches ~1.24 m elsewhere, which would misrepresent
+    # the ceiling this callout is making a claim about.
     ax.annotate(
         f"reported $\\sigma_x$ stays near 1 m in {fs.tier_label(worst)},\n"
         "below the true error it experiences",
