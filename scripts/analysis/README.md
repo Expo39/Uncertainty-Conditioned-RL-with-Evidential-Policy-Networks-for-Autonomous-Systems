@@ -117,7 +117,5 @@ Single source of truth for locating per-run CSVs under the nested `<baseline>/<l
 ## See also
 
 - [scripts/README.md](../README.md) - all Make targets overview
-- [scripts/analysis/CLAUDE.md](CLAUDE.md) - the local working contract for this directory
 - [uncertainty_rl/evaluation/](../../uncertainty_rl/evaluation/) - `evaluate.py`, the condition sweep that writes the CSVs these scripts consume
 - [configs/eval_config.yaml](../../configs/eval_config.yaml) - the eval conditions
-- [scripts/diagnostics/CLAUDE.md](../diagnostics/CLAUDE.md) - TensorBoard + Markov diagnostics (the other host-side analysis tools)

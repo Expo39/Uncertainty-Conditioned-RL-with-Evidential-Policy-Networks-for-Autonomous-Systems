@@ -21,7 +21,7 @@ Three containers (see `docker-compose.yml`): **carla-server** (CARLA 0.9.16 head
 bind-mounted for hot-reload. Training requires the full stack - there is no standalone
 mode.
 
-## Core standards (full detail in root CLAUDE.md)
+## Core standards
 
 - British English everywhere (`localisation`, `behaviour`, `normalise_observations`).
 - Doxygen docstrings only (`@file`/`@brief`/`@param`/`@return`); never Google/NumPy/reST.
