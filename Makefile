@@ -73,7 +73,23 @@ FPS    ?= 15
 # record-screen parameters. The CARLA server window is launched at 800x600
 # (docker-compose.inspect.yml), so that is the default capture region; OFFSET is
 # its top-left corner on the X display (xwininfo -name CarlaUE4).
-DURATION ?= 30
+# Empty DURATION records until Ctrl+C, which is usually what you want: start the
+# capture, drive until the interesting bit is done, then stop. Set a number of
+# seconds for an unattended capture.
+DURATION ?=
+# Capture encoding. ultrafast + a high CRF keeps the encoder well ahead of the
+# capture rate: a slow preset cannot sustain a 4K desktop in real time (medium
+# manages only ~1.2x on an idle machine, and CARLA is competing for the same
+# GPU), so x11grab silently drops frames and the recording stutters even though
+# the simulator looked smooth. Quality barely matters here - the clip is scaled
+# down to ~800 px for the README anyway.
+REC_PRESET ?= ultrafast
+REC_CRF    ?= 23
+# Downscale at capture time. A 4K desktop grab is far more pixels than a README
+# clip needs (the GIF ends up ~800 px wide), and scaling here keeps the encoder
+# comfortably ahead of the capture rate so no frames are dropped. Height drives
+# it; width follows the window's aspect ratio.
+REC_HEIGHT ?= 720
 REGION   ?= 800x600
 OFFSET   ?= 0,0
 OUT      ?=
@@ -246,18 +262,22 @@ docker-eval-visualise-3d: ## Load checkpoint + CARLA 3D chase view. Usage: make 
 	@# session ending used to kill the whole demo with exit 137). The demo CARLA
 	@# runs on its own port range, so it coexists with the training stack - but
 	@# both want the GPU, so stop a training RUN first if one is in progress.
-	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo 2>/dev/null || true
-	xhost +local:docker 2>/dev/null || true
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo uncertainty-rl-ros2-inspect 2>/dev/null || true
+	@# Grant on the RESOLVED display: this shell may have DISPLAY unset (the
+	@# value is globbed from /tmp/.X11-unix), and a bare xhost would then target
+	@# the wrong display, leaving CARLA unable to map its window (it opens the
+	@# window once at startup, so a late grant does not help).
+	DISPLAY=$(_DISPLAY) xhost +local:docker 2>/dev/null || true
 	DISPLAY=$(_DISPLAY) CHECKPOINT=$(CHECKPOINT_MODEL) \
 		DEMO_BASELINE_ARG="$(if $(BASELINE),--baseline $(BASELINE_YAML),)" \
 		DEMO_STAGE_ARG="$(if $(STAGE),--stage $(STAGE),)" \
 		DEMO_TIER_ARG="$(if $(GNSS_TIER),--gnss-tier $(GNSS_TIER),)" \
 		$(DOCKER_COMPOSE_INSPECT) --profile demo up --build --force-recreate \
-			--abort-on-container-exit carla-server-demo checkpoint-demo
-	xhost -local:docker 2>/dev/null || true
+			--abort-on-container-exit carla-server-demo ros2-bridge-inspect checkpoint-demo
+	DISPLAY=$(_DISPLAY) xhost -local:docker 2>/dev/null || true
 	@# The demo container outlives an aborted server and hangs at "Driving.",
 	@# so clear it here rather than leaving it for the next run to trip over.
-	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo 2>/dev/null || true
+	docker rm -f uncertainty-rl-carla-demo uncertainty-rl-checkpoint-demo uncertainty-rl-ros2-inspect 2>/dev/null || true
 
 # ----------------------------------------------------------------------
 # Docker: Testing & Linting
@@ -581,45 +601,114 @@ eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: 
 		DEMO_VIS_FLAGS="$(_VIS_FLAGS)" \
 		bash scripts/visualise/eval_visualise_2d.sh
 
-clip: ## Cut a GIF/MP4 from a recording. Usage: make clip VIDEO=outputs/recordings/<stamp>.mp4 START=00:05 END=00:20 [FORMAT=gif] [WIDTH=800] [FPS=15]
+clip: ## Cut a GIF/MP4 from the newest recording (or VIDEO=<path>). Usage: make clip START=00:05 END=00:20 [VIDEO=...] [FORMAT=gif] [WIDTH=800] [FPS=15] [OUT=docs/media/<name>.gif]
 	@$(MAKE) --no-print-directory check-host-deps
-	@if [ -z "$(VIDEO)" ]; then \
-		echo "Set VIDEO=outputs/recordings/<stamp>.mp4"; exit 1; fi
-	@if [ ! -f "$(VIDEO)" ]; then echo "No such video: $(VIDEO)"; exit 1; fi
+	@# VIDEO defaults to the newest recording, so the usual "record then cut"
+	@# flow needs no filename lookup: the timestamped names are awkward to type
+	@# and nearly always the one just captured.
+	$(eval _VIDEO := $(if $(VIDEO),$(VIDEO),$(shell ls -t $(RECORD_DIR)/*.mp4 2>/dev/null | head -1)))
+	@if [ -z "$(_VIDEO)" ]; then \
+		echo "No recordings in $(RECORD_DIR)/ - set VIDEO=<path>.mp4"; exit 1; fi
+	@if [ ! -f "$(_VIDEO)" ]; then echo "No such video: $(_VIDEO)"; exit 1; fi
+	@if [ -z "$(VIDEO)" ]; then echo "Using newest recording: $(_VIDEO)"; fi
 	@if [ -z "$(START)" ] || [ -z "$(END)" ]; then \
 		echo "Set START and END (MM:SS or seconds), e.g. START=00:05 END=00:20"; exit 1; fi
-	@mkdir -p $(dir $(VIDEO))
-	$(eval _CLIP_OUT := $(basename $(VIDEO))_$(subst :,,$(START))-$(subst :,,$(END)).$(FORMAT))
+	@mkdir -p $(dir $(_VIDEO))
+	$(eval _CLIP_OUT := $(if $(OUT),$(OUT),$(basename $(_VIDEO))_$(subst :,,$(START))-$(subst :,,$(END)).$(FORMAT)))
 	@# -ss/-to before -i seeks on keyframes (fast); re-encoding keeps the cut
 	@# frame-accurate. GIF uses the two-pass palette pipeline, which is far
 	@# better than a naive conversion on flat vector-style graphics.
 	@if [ "$(FORMAT)" = "gif" ]; then \
-		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(VIDEO)" \
+		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(_VIDEO)" \
 			-vf "fps=$(FPS),scale=$(WIDTH):-1:flags=lanczos,split[a][b];[a]palettegen[p];[b][p]paletteuse" \
 			"$(_CLIP_OUT)"; \
 	else \
-		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(VIDEO)" \
+		ffmpeg -hide_banner -loglevel error -y -ss $(START) -to $(END) -i "$(_VIDEO)" \
 			-vf "scale=$(WIDTH):-2:flags=lanczos" -c:v libx264 -crf 18 -pix_fmt yuv420p \
 			"$(_CLIP_OUT)"; \
 	fi
 	@echo "Wrote $(_CLIP_OUT) ($$(du -h '$(_CLIP_OUT)' | cut -f1))"
 
-record-screen: ## Screen-record a window region to MP4 (for the CARLA 3D / inspector views). Usage: make record-screen [DURATION=30] [REGION=800x600] [OFFSET=0,0] [OUT=...]
+record-screen: ## Screen-record the CARLA window to MP4 until Ctrl+C. Usage: make record-screen [DURATION=30] [REC_HEIGHT=720] [REGION=WxH] [OFFSET=X,Y] [OUT=...]
 	@$(MAKE) --no-print-directory check-host-deps
 	@# The CARLA 3D window and every inspector overlay are drawn by the CARLA
 	@# server itself (server-side debug API), not by a pygame surface we own -
 	@# so unlike the 2D viewer they cannot record themselves. x11grab captures
-	@# them from the host X display instead. Find the window offset with:
-	@#   xwininfo -name CarlaUE4   (reads "Absolute upper-left X/Y")
+	@# them from the host X display instead.
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))
 	@if [ -z "$(_DISPLAY)" ]; then echo "No display attached!"; exit 1; fi
+	@# Locate the CARLA window automatically. Matching on the WM class, not the
+	@# title: CARLA titles its window "CarlaUE4  " with trailing spaces, so
+	@# `xwininfo -name CarlaUE4` fails outright. Explicit REGION/OFFSET win, so
+	@# a non-CARLA capture still works.
+	$(eval _WIN := $(shell DISPLAY=$(_DISPLAY) xwininfo -root -tree 2>/dev/null | grep -m1 CarlaUE4-Linux-Shipping))
+	$(eval _AUTO_REGION := $(shell echo '$(_WIN)' | awk '{print $$(NF-1)}' | grep -oE '^[0-9]+x[0-9]+'))
+	$(eval _AUTO_OFFSET := $(shell echo '$(_WIN)' | awk '{print $$NF}' | tr '+' ' ' | awk 'NF>=2 {print $$1","$$2}'))
+	@# Both must be detected together, or fall back to both defaults: a detected
+	@# region with an empty offset yields "-i :1+," which ffmpeg cannot parse.
+	$(eval _REGION := $(if $(and $(_AUTO_REGION),$(_AUTO_OFFSET)),$(_AUTO_REGION),$(REGION)))
+	$(eval _OFFSET := $(if $(and $(_AUTO_REGION),$(_AUTO_OFFSET)),$(_AUTO_OFFSET),$(OFFSET)))
+	@if [ -z "$(_REGION)" ] || [ -z "$(_OFFSET)" ]; then \
+		echo "Could not resolve a capture region. Is the CARLA window open?"; \
+		echo "  Pass one explicitly: make record-screen REGION=1920x1080 OFFSET=0,0"; \
+		exit 1; \
+	fi
 	@mkdir -p $(RECORD_DIR)
 	$(eval _SCREEN_OUT := $(if $(OUT),$(OUT),$(RECORD_DIR)/screen-$(shell date +%d-%m-%Y-%H%M%S).mp4))
-	@echo "Recording $(REGION) at +$(OFFSET) on $(_DISPLAY) for $(DURATION)s -> $(_SCREEN_OUT)"
+	@echo "Recording $(_REGION) at +$(_OFFSET) on $(_DISPLAY)$(if $(DURATION), for $(DURATION)s, until Ctrl+C) -> $(_SCREEN_OUT)"
+	@# libx264 needs even dimensions and a window is rarely even (the CARLA
+	@# window measures 3774x2091), so pad up rather than fail with a 0-byte file.
+	@# Fragmented MP4: a plain MP4 writes its index (the moov atom) only when
+	@# encoding ends, so ANY abrupt stop leaves an unplayable file. Fragments
+	@# write the index incrementally, so the recording stays valid even if
+	@# ffmpeg is killed outright - which is what makes "record until Ctrl+C"
+	@# safe. The trap below still forwards a single clean SIGINT so the normal
+	@# path finalises tidily.
+	@# Ctrl+C must stop the recording AND end the target. Two things make that
+	@# reliable: ffmpeg runs in the foreground with the terminal attached (so the
+	@# interrupt reaches it - do NOT background it under `set -m`, which leaves it
+	@# with no controlling terminal and kills x11grab instantly, and do NOT
+	@# redirect stdin from /dev/null, which detaches it so Ctrl+C never arrives),
+	@# and the exit status is re-raised as a real SIGINT so make stops too rather
+	@# than treating the interrupt as a completed step. The fragmented container
+	@# keeps whatever was captured valid either way. The remux runs in THIS shell,
+	@# not a later recipe line: Ctrl+C aborts the target, so a separate line would
+	@# be skipped on exactly the path that needs it most.
 	@ffmpeg -hide_banner -loglevel error -y -f x11grab \
-		-video_size $(REGION) -framerate $(REC_FPS) -i "$(_DISPLAY)+$(OFFSET)" \
-		-t $(DURATION) -c:v libx264 -preset medium -crf 18 -pix_fmt yuv420p \
-		"$(_SCREEN_OUT)"
+		-video_size $(_REGION) -framerate $(REC_FPS) -i "$(_DISPLAY)+$(_OFFSET)" \
+		$(if $(DURATION),-t $(DURATION),) \
+		-vf "scale=-2:$(REC_HEIGHT),pad=ceil(iw/2)*2:ceil(ih/2)*2" \
+		-c:v libx264 -preset $(REC_PRESET) -crf $(REC_CRF) -tune zerolatency \
+		-threads 0 -pix_fmt yuv420p \
+		-movflags +frag_keyframe+empty_moov+default_base_moof \
+		"$(_SCREEN_OUT)"; rc=$$?; \
+	if [ ! -s "$(_SCREEN_OUT)" ]; then \
+		echo "Recording failed - no data captured (ffmpeg exit $$rc)."; exit 1; \
+	fi; \
+	if [ $$rc -ne 0 ] && [ $$rc -ne 255 ] && \
+	   ! xwininfo -root -tree 2>/dev/null | grep -q CarlaUE4-Linux-Shipping; then \
+		echo ""; \
+		echo "NOTE: the CARLA window disappeared, so the capture ended early."; \
+		echo "  Stop the recording (Ctrl+C here) BEFORE stopping the demo."; \
+		echo ""; \
+	fi; \
+	echo "Recording stopped."; \
+	echo "Finalising..."; \
+	if ffmpeg -hide_banner -loglevel error -y -i "$(_SCREEN_OUT)" -c copy \
+		-movflags +faststart "$(_SCREEN_OUT).tmp.mp4" 2>/dev/null \
+		&& [ -s "$(_SCREEN_OUT).tmp.mp4" ]; then \
+		mv -f "$(_SCREEN_OUT).tmp.mp4" "$(_SCREEN_OUT)"; \
+	else \
+		rm -f "$(_SCREEN_OUT).tmp.mp4"; \
+	fi
+	@# Prove the result is readable before claiming success, so a broken capture
+	@# is reported now rather than discovered when a player refuses to open it.
+	@if ! ffprobe -v error -show_entries format=duration -of csv=p=0 \
+		"$(_SCREEN_OUT)" >/dev/null 2>&1; then \
+		echo "WARNING: $(_SCREEN_OUT) is not readable - the capture was cut"; \
+		echo "  short before any video was written. Record again."; \
+		exit 1; \
+	fi
 	@echo "Wrote $(_SCREEN_OUT) ($$(du -h '$(_SCREEN_OUT)' | cut -f1))"
 	@echo "Cut a GIF with: make clip VIDEO=$(_SCREEN_OUT) START=00:02 END=00:12"
 
