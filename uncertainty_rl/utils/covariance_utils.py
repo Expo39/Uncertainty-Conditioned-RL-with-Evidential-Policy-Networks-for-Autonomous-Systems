@@ -1,9 +1,6 @@
 """
 @file covariance_utils.py
 @brief Shared utilities for EKF covariance matrix extraction.
-
-This module provides common functions for extracting uncertainty features
-from EKF covariance matrices for use in RL state representations.
 """
 
 from typing import List, cast
@@ -52,15 +49,10 @@ def validate_covariance_matrix(cov_matrix: np.ndarray) -> bool:
     @param cov_matrix: Covariance matrix to validate.
     @return: True if valid, False otherwise.
 
-    A valid covariance matrix must be:
-    1. Symmetric: C = C^T
-    2. Positive semi-definite: all eigenvalues >= 0
-
-    Positive semi-definiteness is tested via the symmetric eigenvalue
-    decomposition rather than Cholesky factorisation. Cholesky requires
-    strict positive-definiteness and so rejects valid PSD matrices with
-    zero eigenvalues (e.g. an EKF reporting zero covariance before any
-    measurement update).
+    @note PSD is tested via the symmetric eigenvalue decomposition rather than
+          Cholesky factorisation. Cholesky requires strict positive-definiteness
+          and so rejects valid PSD matrices with zero eigenvalues (e.g. an EKF
+          reporting zero covariance before any measurement update).
     """
     if cov_matrix.shape[0] != cov_matrix.shape[1]:
         return False
@@ -76,9 +68,8 @@ def make_diagonal_covariance(diag: List[float]) -> List[float]:
     """
     @brief Build a flat 36-element ROS covariance array from a 6-element diagonal.
 
-    ROS nav_msgs/Odometry pose.covariance is a row-major 6x6 matrix stored as
-    a flat list of 36 floats. This helper constructs that array from the six
-    diagonal variance values, leaving all off-diagonal elements as zero.
+    @note ROS nav_msgs/Odometry pose.covariance is a row-major 6x6 matrix stored
+          as a flat list of 36 floats.
 
     @param diag: Six diagonal variance values [var_x, var_y, var_z,
                  var_roll, var_pitch, var_yaw].

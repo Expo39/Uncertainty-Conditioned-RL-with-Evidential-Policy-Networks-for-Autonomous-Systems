@@ -12,11 +12,10 @@ here so the precedence is defined once.
 
 from typing import Any, Dict, FrozenSet
 
-# Keys a baseline override file (configs/baselines/*.yaml) is permitted to set.
-# A baseline is an ablation cell, so it may only change the observation/policy
-# configuration and its output dirs - never a hyperparameter or env setting.
-# Mirrors the stage `training_overrides` allowlist in train_ppo.py: anything
-# outside this set fails loud rather than silently reshaping the run.
+# Keys a baseline override file (configs/baselines/*.yaml) may set. A baseline is
+# an ablation cell, so it may only change the observation/policy configuration,
+# never a hyperparameter or env setting. Mirrors the stage `training_overrides`
+# allowlist in train_ppo.py: anything else fails loud, not silently.
 BASELINE_KEYS: FrozenSet[str] = frozenset(
     {
         "baseline_name",
@@ -37,9 +36,7 @@ def deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]
     @note A nested dict on both sides is merged key-by-key rather than replaced
           wholesale, so a higher-precedence file can override a single key inside
           a shared block (e.g. env_config adding ros2.carla_recovery without
-          dropping ros2.covariance_timeout from agent_config). A plain
-          {**base, **override} would discard every base key under any block the
-          override also defines.
+          dropping ros2.covariance_timeout from agent_config).
     """
     for key, value in override.items():
         if key in base and isinstance(base[key], dict) and isinstance(value, dict):

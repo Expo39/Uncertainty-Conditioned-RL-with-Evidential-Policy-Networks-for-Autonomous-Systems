@@ -16,10 +16,6 @@ class ActuatorMap:
     @brief Single-actuator mapping from policy output to physical command.
     """
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     def __init__(self, params: Dict[str, Any]) -> None:
         """
         @brief Construct from a parameter dict (one actuator block in the YAML).
@@ -58,10 +54,6 @@ class ActuationCalibration:
     @brief Maps policy [steering, throttle, brake] outputs to physical commands.
     """
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     def __init__(
         self,
         steering: Optional[ActuatorMap] = None,
@@ -90,11 +82,9 @@ class ActuationCalibration:
     def from_config(cls, config_path: str) -> "ActuationCalibration":
         """
         @brief Load calibration from a YAML file.
-
-        Returns identity calibration if the file is absent or unpopulated.
-
         @param config_path: Path to actuation_calibration.yaml.
-        @return ActuationCalibration instance.
+        @return ActuationCalibration instance, or an identity calibration if the
+                file is absent or unpopulated.
         """
         try:
             import yaml

@@ -2,10 +2,9 @@
 @file logging.py
 @brief Per-step debug diagnostics for CARLAParkingEnv.
 
-Provides DebugLogger, a zero-overhead debug helper that emits structured
-per-step log lines and a compact debug dict for the visualiser HUD.
-All methods are no-ops when debug=False so there is no cost during normal
-training runs. SB3's built-in logger handles training metrics.
+DebugLogger emits structured per-step log lines and a compact debug dict for the
+visualiser HUD. All methods are no-ops when debug=False so there is no cost
+during normal training runs. SB3's built-in logger handles training metrics.
 """
 
 import logging
@@ -20,10 +19,6 @@ class DebugLogger:
     @class DebugLogger
     @brief Per-step debug diagnostics for CARLAParkingEnv.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(self, debug: bool = False) -> None:
         """
@@ -67,11 +62,11 @@ class DebugLogger:
                             or None when covariance is disabled.
         @param obstacle_dist: Distance to nearest obstacle from LiDAR (metres).
         @param ekf_drift: Distance between EKF filtered position and CARLA
-                          ground truth (metres). Non-zero indicates localisation
-                          error - key signal for sim-to-real debugging.
-        @param lidar_points: Number of points in the latest LiDAR scan. Zero
-                             indicates the sensor has not ticked yet or returned
-                             no returns (e.g. open area, sensor failure).
+                          ground truth (metres) - the localisation error, the key
+                          signal for sim-to-real debugging.
+        @param lidar_points: Number of points in the latest LiDAR scan. Zero means
+                             the sensor has not ticked yet or saw nothing (open
+                             area, sensor failure).
         """
         if not self._debug:
             return
@@ -123,12 +118,9 @@ class DebugLogger:
     def step_debug_dict(self) -> Dict[str, Any]:
         """
         @brief Return the debug dict from the most recent log_step() call.
-
-        Returns an empty dict when debug=False or before the first step so that
-        consumers can safely do ``frame.get('debug', {})``.
-
         @return Dict with keys: pos_err, yaw_err_deg, speed, reward, cov_rms,
-                obs_dist, ekf_drift, lidar_pts, steer, throttle, brake.
+                obs_dist, ekf_drift, lidar_pts, steer, throttle, brake; empty
+                when debug=False or before the first step.
         """
         if not self._debug:
             return {}
