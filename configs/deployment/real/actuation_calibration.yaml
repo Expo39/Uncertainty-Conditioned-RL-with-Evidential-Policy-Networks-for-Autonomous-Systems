@@ -1,13 +1,9 @@
-# Actuation calibration for sim-to-real transfer.
+# Maps normalised policy output [steering, throttle, brake] to physical actuator
+# commands. Steering is bipolar [-1, 1]; throttle and brake are separate
+# non-negative axes [0, 1]. No reverse gear.
 #
-# Maps the policy's normalised action output [steering, throttle, brake] to
-# physical actuator commands on the real vehicle. Steering is bipolar [-1, 1];
-# throttle and brake are separate non-negative axes [0, 1]. No reverse gear.
-#
-# Ships with identity mappings (unit gain, zero deadband and bias): the policy
-# command passes through unchanged. Each vehicle's response curve is measured at
-# the test site and the per-axis terms set from it, since the mapping is a
-# property of the specific drive-by-wire hardware rather than of the policy.
+# Ships as an identity mapping. The per-axis terms come from the vehicle's
+# measured response curve, being a property of its drive-by-wire hardware.
 
 calibration:
   steering:

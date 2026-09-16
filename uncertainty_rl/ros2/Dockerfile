@@ -1,12 +1,5 @@
-# Dockerfile
 # @file uncertainty_rl/ros2/Dockerfile
-# @brief ROS 2 Jazzy container with CARLA bridge and robot_localisation for EKF.
-#
-# Components:
-# - ROS 2 Jazzy base
-# - CARLA ROS bridge
-# - robot_localisation package for EKF covariance output
-# - Python dependencies for covariance extraction
+# @brief ROS 2 Jazzy container with the CARLA bridge and robot_localization EKF.
 
 ARG ROS_DISTRO=jazzy
 FROM ros:${ROS_DISTRO}-ros-base-noble

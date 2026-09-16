@@ -4,24 +4,13 @@
 #        through the full curriculum (resume-chained), then evaluate the FINAL
 #        stage and generate the evaluation-suite tables.
 #
-# IDEMPOTENT: every step checks for its own completion marker on disk and skips
-# work already done, so a crashed run is resumed simply by re-running this script
-# - it picks up at the first unfinished stage/eval. A training stage is "done"
-# only if its checkpoint leaf has a final_model.zip; a partial leaf (e.g. from a
-# CARLA timeout) lacks one and is retrained. An eval is "done" if its
-# evaluation_results.csv exists.
+# IDEMPOTENT: re-running resumes at the first unfinished step. A stage counts as
+# done only if its leaf holds final_model.zip, so a partial leaf is retrained.
 #
-# The seed is the single source of truth in agent_config.yaml. This script
-# OVERWRITES that one line per seed (and leaves it on the last seed of the list),
-# so the in-container training/noise processes pick up the active seed. Run leaves
-# are <stage>_<seed>_<timestamp>, routing the per-seed output trees (seed_<N>/)
-# automatically.
-#
-# Does NOT build images - run `make docker-build-no-cache` first.
-#
-# DRY_RUN=1 prints every command (and skip decisions) without executing.
-#
-# @warning Long-running (days). Run in a detachable session (tmux/screen).
+# @warning OVERWRITES the seed line in agent_config.yaml per seed, leaving it on
+#          the last of the list, so in-container processes pick up the active
+#          seed. Long-running (days) - use tmux. Build images first. DRY_RUN=1
+#          prints commands and skip decisions without executing.
 
 set -euo pipefail
 

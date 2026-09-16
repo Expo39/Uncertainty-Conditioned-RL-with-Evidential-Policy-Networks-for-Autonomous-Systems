@@ -1,13 +1,7 @@
-# Agent configuration shared between simulation and real-vehicle deployment.
-#
-# This file contains all non-sensor parameters that are identical in CARLA
-# simulation and on the real vehicle. It is the single source of truth for
-# agent behaviour, observation flags, ROS 2 pipeline settings, safety policy
-# parameters, and deployment flags.
+# Non-sensor parameters identical in CARLA simulation and on the real vehicle.
 
-# Master RNG seed: single source of truth for the whole experiment, seeds
-# training and the separate-process GNSS/IMU noise relays. Nothing else
-# carries a seed.
+# Master RNG seed for the whole experiment: seeds training and the
+# separate-process GNSS/IMU noise relays. Nothing else carries a seed.
 seed: 7  # Change this one line to run a new seed.
 
 # Policy safety parameters: hard speed governor (throttle is cut at or above

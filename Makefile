@@ -595,23 +595,10 @@ record-screen: ## Screen-record the CARLA window to MP4 until Ctrl+C. Usage: mak
 	@mkdir -p $(RECORD_DIR)
 	$(eval _SCREEN_OUT := $(if $(OUT),$(OUT),$(RECORD_DIR)/screen-$(shell date +%d-%m-%Y-%H%M%S).mp4))
 	@echo "Recording $(_REGION) at +$(_OFFSET) on $(_DISPLAY)$(if $(DURATION), for $(DURATION)s, until Ctrl+C) -> $(_SCREEN_OUT)"
-	@# libx264 needs even dimensions and a window is rarely even (the CARLA
-	@# window measures 3774x2091), so pad up rather than fail with a 0-byte file.
-
-	@# Fragmented MP4: a plain MP4 writes its index (the moov atom) only when
-	@# encoding ends, so ANY abrupt stop leaves an unplayable file. Fragments
-	@# write the index incrementally, so an ffmpeg kill mid-recording still
-	@# leaves a valid file - what makes "record until Ctrl+C" safe.
-
-	@# ffmpeg runs in the foreground with the terminal attached so Ctrl+C
-	@# reaches it directly: do NOT background it under `set -m` (leaves it with
-	@# no controlling terminal, killing x11grab instantly) and do NOT redirect
-	@# stdin from /dev/null (detaches it so Ctrl+C never arrives).
-
-	@# The exit status is re-raised as a real SIGINT so make stops too, rather
-	@# than treating the interrupt as a completed step. The remux runs in THIS
-	@# shell, not a later recipe line, since Ctrl+C aborts the target and a
-	@# separate line would be skipped on exactly the path that needs it most.
+	@# Foreground with the terminal attached, so Ctrl+C reaches ffmpeg directly;
+	@# backgrounding or redirecting stdin detaches it and kills x11grab. `pad`
+	@# rounds up because libx264 needs even dimensions; the fragmented-MP4
+	@# movflags write the index incrementally so a Ctrl+C still leaves it playable.
 	@ffmpeg -hide_banner -loglevel error -y -f x11grab \
 		-video_size $(_REGION) -framerate $(REC_FPS) -i "$(_DISPLAY)+$(_OFFSET)" \
 		$(if $(DURATION),-t $(DURATION),) \
@@ -733,13 +720,10 @@ restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-wor
 	tar -xzf project_configs.tar.gz
 	@echo "Restored configs from project_configs.tar.gz"
 
-# checkpoints/, logs/ and outputs/ are gitignored and represent GPU time that
-# cannot be regenerated on a fresh clone. The archive lands in the repo root,
-# which `make clean` and `make clean-all` never touch, so a backup survives
-# the very targets that delete what it holds.
-
-# Trees holding irreplaceable run output. outputs/ goes in whole: its raw/
-# tier costs simulation time, and the derived tiers are small enough to carry.
+# Gitignored trees holding GPU time that a fresh clone cannot regenerate. The
+# archive lands in the repo root, which `make clean` never touches, so a backup
+# survives the very targets that delete what it holds. outputs/ goes in whole:
+# raw/ costs simulation time and the derived tiers are small enough to carry.
 RESULTS_TREES = checkpoints logs outputs
 RESULTS_ARCHIVE ?= project_results.tar.gz
 

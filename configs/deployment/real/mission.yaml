@@ -1,17 +1,9 @@
-# Real-world mission configuration.
+# Real-world mission configuration, set before each mission.
 #
-# Set target_bay_id to the bay the vehicle should park in before each mission.
-# The ID must match the 'id' field of a bay in the chosen layout YAML.
-#
-# Procedure:
-#   1. Open the bird's-eye PNG in outputs/raw_derived/layouts/<layout_name>.png
-#      to find the bay ID you want (printed on each bay in the image).
-#   2. Set target_bay_id below to that ID.
-#   3. Set layout_file to the matching layout YAML path.
-#   4. Restart the deployment process.
+# Bay IDs are printed on each bay in the layout PNG under
+# outputs/raw_derived/layouts/; changes take effect on deployment restart.
 
-# Bay to park in; set for the site before each mission.
-# IDs take the form <bay_type>_<index>, e.g. "perpendicular_12".
+# Must match a bay 'id' in the layout file below, e.g. "perpendicular_12".
 target_bay_id: "B01"
 
 # Layout YAML that defines the lot geometry and bay positions.

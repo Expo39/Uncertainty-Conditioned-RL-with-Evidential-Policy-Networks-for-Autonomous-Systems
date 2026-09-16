@@ -23,13 +23,10 @@ SUCCESS_DWELL_STEPS = 5
 # |margin| metres. Training/tuning instead read per-stage `bay_margin`.
 STRICT_BAY_MARGIN = -0.25
 
-# Corridor reward shaping (not success criteria), expressed in the BAY FRAME
-# rather than as a radial distance: the bay depth axis is a centreline the car is
-# rewarded for joining (cross-track -> 0), squaring to (heading, 180-deg
-# symmetric because bays are open / back-to-back) and advancing along.
-
-# Cross-track reference (metres): half-width of the approach corridor. The
-# `on_line` factor is 1 on the centreline and ramps to 0 at this offset.
+# Corridor shaping works in the BAY FRAME, not radially: the depth axis is a
+# centreline the car joins, squares to (180-deg symmetric, bays being open) and
+# advances along. Half-width (metres) of that corridor; the `on_line` factor is
+# 1 on the centreline and ramps to 0 here.
 CORRIDOR_HALF_WIDTH = 2.0
 
 # Along-track reference (metres): depth scale over which the `near_depth` factor
