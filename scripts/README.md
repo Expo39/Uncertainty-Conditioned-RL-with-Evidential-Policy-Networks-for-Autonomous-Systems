@@ -103,7 +103,7 @@ The env writes frames only when `outputs/.vis_active` exists (created by the vis
 
 ### `colours/`
 
-Single source of truth for all visualisation colours (bay types, pedestrian zones, patrol path, lot boundary, ego vehicle, actor overlays). Import from here; never hardcode hex values in any script.
+Single source of truth for all visualisation colours (bay types, pedestrian zones, patrol path, lot boundary, ego vehicle, actor overlays). Import from here, and never hardcode hex values in any script.
 
 ```python
 from scripts.colours import HEX_EGO, HEX_TARGET_BAY, BAY_HEX
@@ -115,11 +115,14 @@ See `scripts/colours/__init__.py` for the full palette reference.
 
 Shell helpers invoked inside the training container.
 
-- `train.sh` - runs `train_ppo.py` with ROS 2 / DDS noise filtered from stderr; forwards extra arguments to the Python script.
+- `train.sh` - runs `train_ppo.py` with ROS 2 and DDS noise filtered from stderr, forwarding extra arguments to the Python script.
+- `tune.sh` - the same wrapper for `tune_hyperparams.py`, invoked by `make docker-tune`.
+- `run_seed_leg.sh` - the multi-seed orchestrator behind `make run-seed-leg`. Trains every arm through every stage, evaluates the final stage, and writes the suite tables. It is idempotent, skipping completed work so a crashed leg resumes on re-run.
 
 ```bash
 make docker-train        # Full training run
 make docker-train-short  # 10k step smoke-test
+make run-seed-leg        # Every arm and stage, then eval. Long-running; use tmux
 ```
 
 ### `multi_workers/`
@@ -150,28 +153,25 @@ make tb-scalars LOG=logs/<baseline>/<leaf> ARGS="--match success --last 10"
 Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the reported input-covariance and uncertainty results. Run only after an eval has written results under `outputs/raw/evaluation_results/<baseline>/<leaf>/`.
 
 ```bash
-make analyse-ablation                                                  # Cross-arm covariance contrast + degradation slope
-make analyse-calibration ARM=full_method                              # Is the EKF covariance an honest signal?
-make analyse-gate                                                      # EKF-std vs evidential-epistemic safety-gate ROC
-make docker-covariance-probe BASELINE=full_method CHECKPOINT=<leaf>   # Causal "does the policy use covariance?" probe
-make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/<baseline>/<leaf>/without_wrapper  # Epistemic-vs-aleatoric separation
-make handover-timing ARM=full_method                                  # Handover timing vs degradation onset
+make analyse-ablation          # Cross-arm covariance contrast + degradation slope
+make analyse-cross-seed        # Pool every seed into the headline + per-seed robustness
+make analysis-bundle           # Assemble the curated outputs/main_analysis/ set
 ```
 
-Host-side scripts are read-only - they consume the eval CSVs and write report files/figures only. See [analysis/README.md](analysis/README.md) for the per-script reference and CSV schema.
+Host-side scripts are read-only, consuming the eval CSVs and writing report files only. The remaining targets, the per-script reference and the CSV schema are in [analysis/README.md](analysis/README.md).
 
 ### `analysis/figures/`
 
 Every rendered figure. Presentation only: these modules read CSVs and draw them, and never recompute a statistic, so a figure can be redrawn at any time without moving a reported number.
 
-- `build.py` - the pooled figure set (`f5`-`f19`), one entry point for all of them.
-- `run_figures.py` - the per-run panels (`evaluation_plots.png`, `failure_modes.png`), rebuilt from a run's `evaluation_results.csv`.
-- [`../figure_style.py`](figure_style.py) - the one house style. Every figure imports it; nothing sets rcParams, picks a colour, or builds a legend by hand.
+- `build.py` - the pooled figure set, one entry point for all of them. Figures are addressed by name, the nine ids being `ablation_by_condition`, `behaviour_by_std`, `degradation_tiers`, `ekf_calibration`, `ekf_sawtooth`, `gate_roc`, `lot_layouts`, `seed_robustness` and `training_curves`.
+- `run_figures.py` - the per-run panels, rebuilt from a run's `evaluation_results.csv`.
+- [`figure_style.py`](figure_style.py) - the one house style. Every figure imports it, and nothing sets rcParams, picks a colour, or builds a legend by hand.
 
 ```bash
-make figures                 # All figures into outputs/raw_derived/figures
+make figures                 # Every figure, into outputs/main_analysis/figures
 make figures FIG=gate_roc    # A single figure, by id
-make run-figures             # Per-run panels for every run under outputs/
+make run-figures             # Per-run panels, into outputs/raw_derived/per_run_figures
 make run-figures RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/without_wrapper
 ```
 

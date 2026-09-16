@@ -1,7 +1,7 @@
 # Layout Builder DSL Reference
 
 Reference for `scripts/layouts/builder.py` - the declarative DSL used by every
-floor plan module. Floor plans import only from this file; `common.py` is the
+floor plan module. Floor plans import only from this file, and `common.py` is the
 engine (world-frame transform, YAML output, PNG plot) and is never imported
 directly by floor plan modules.
 
@@ -38,7 +38,7 @@ def generate():
 
     # Place bays.
     perp_row = lot.row_along_perimeter("perpendicular", n=12, wall=0)
-    par_row = lot.row_along_perimeter("parallel", n=4, wall=2, bay_angle_deg=90.0)
+    far_row = lot.row_along_perimeter("perpendicular", n=4, wall=2)
 
     # Spawns: exactly one primary, at least one extra.
     lot.spawn(x=-2.0, y=22.5, yaw_deg=0.0, primary=True)
@@ -46,7 +46,7 @@ def generate():
 
     # Patrol path.
     patrol = PatrolPath()
-    y_aisle = patrol.aisle_y(below=perp_row, above=par_row)
+    y_aisle = patrol.aisle_y(below=perp_row, above=far_row)
     patrol.add(0.0, y_aisle)
     lot.set_patrol(patrol)
 
@@ -62,7 +62,7 @@ def generate():
 
 | Name | Value | Purpose |
 |------|------:|---------|
-| `BAY_DIMS` | dict | Width / depth / aisle for `perpendicular`, `angled`, `parallel`. |
+| `BAY_DIMS` | dict | Width / depth / aisle for `perpendicular` and `angled`. |
 | `BAYS_PER_TYPE` | `5` | Reference target for bay counts per type per layout. |
 | `WALL_GAP` | `0.5` | Default minimum clearance from any bay corner to the perimeter. |
 | `PED_STRIP` | `3.0` | Default width of a pedestrian zone strip. |
@@ -72,9 +72,12 @@ def generate():
 
 | Bay type | width (m) | depth (m) | aisle (m) |
 |----------|----------:|----------:|----------:|
-| `perpendicular` | 2.5 | 5.0 | 6.0 |
-| `angled` | 2.5 | 5.4 | 3.6 |
-| `parallel` | 2.5 | 6.0 | 4.0 |
+| `perpendicular` | 3.1 | 5.7 | 6.0 |
+| `angled` | 3.1 | 5.85 | 3.6 |
+
+These two are the only registered types. Parallel bays are out of scope, since bay
+geometry is not the experimental variable, and passing `bay_type="parallel"` raises. A
+one-off bay with custom dimensions can still be placed through `place_bay`.
 
 ---
 
@@ -89,13 +92,10 @@ Returns the default along-wall clearance for the first angled bay: the distance 
 | `lot` | `LotBuilder` instance (provides `dims` and `wall_gap`). |
 | `angle_deg` | Bay angle relative to the inward wall normal (degrees). Default 45.0. |
 
-### `validate_bays_in_polygon(bays, corners, shape_name, margin=0.05)`
+### `validate_bays_in_polygon` and `warn_narrow_corridors`
 
-Raises `ValueError` if any bay corner lies outside the (slightly expanded) lot polygon. Called automatically by `LotBuilder.build()`.
-
-### `warn_narrow_corridors(bays, shape_name, min_width=6.0)`
-
-Prints a warning for each pair of facing bays separated by less than `min_width` (EAR 05 minimum = 6 m). Non-fatal; called automatically by `LotBuilder.build()`.
+Both are exported at module level and both run automatically inside
+`LotBuilder.build()`. See [Validation](#validation) for their signatures and behaviour.
 
 ---
 
@@ -148,8 +148,8 @@ Place a row along an arbitrary wall segment (perimeter or interior).
 | Parameter | Description |
 |-----------|-------------|
 | `wall_p0`, `wall_p1` | Wall endpoints. |
-| `bay_angle_deg` | Bay yaw relative to inward normal: `0` = perpendicular (back to wall); `+/-45` = angled; `+/-90` = parallel-to-wall; `180` = head-in. |
-| `side` | `"ccw"` for walls in CCW polygon order; `"cw"` if traversing in reverse. |
+| `bay_angle_deg` | Bay yaw relative to inward normal: `0` is perpendicular (back to wall), `+/-45` angled, `+/-90` parallel-to-wall, and `180` head-in. |
+| `side` | `"ccw"` for walls in CCW polygon order, or `"cw"` when traversing in reverse. |
 | `start_along` | Distance from `wall_p0` to first bay centre. Defaults to natural corner clearance. |
 | `pack_from` | `"start"` (from `wall_p0`) or `"end"` (from `wall_p1`). |
 | `centred` | `True` ignores `start_along` and centres the cluster in the wall span. |
@@ -160,7 +160,7 @@ Wrapper around `row_along_wall` that takes a perimeter wall index. Inward direct
 
 #### `row_along_obstacle_face(bay_type, n, obstacle, face, bay_angle_deg=180.0, centred=True, start_along=None, pack_from="start", bay_extras=None)`
 
-Place a row alongside one face of an axis-aligned interior obstacle. `obstacle` is `(x_min, x_max, y_min, y_max)`; `face` is `"north"`, `"south"`, `"east"`, or `"west"`. Default `bay_angle_deg=180` = head-in parking (bay nose toward obstacle).
+Place a row alongside one face of an axis-aligned interior obstacle. `obstacle` is `(x_min, x_max, y_min, y_max)`, and `face` is `"north"`, `"south"`, `"east"`, or `"west"`. Default `bay_angle_deg=180` = head-in parking (bay nose toward obstacle).
 
 #### `facing_row(twin, gap, n=None, bay_extras=None)`
 
@@ -174,7 +174,7 @@ Place a single bay at `(x, y)`. Custom `bay_type` (e.g. `"motorcycle"`) is allow
 
 #### `spawn(x, y, yaw_deg, primary=False)`
 
-Add a spawn transform. Exactly one `primary=True` spawn is required (entrance gate); at least one extra (`primary=False`) is mandatory.
+Add a spawn transform. Exactly one `primary=True` spawn is required (entrance gate), and at least one extra (`primary=False`) is mandatory.
 
 ### Pedestrian zones, patrol, obstacles
 
@@ -208,7 +208,7 @@ Returned by every bay-placement method. Exposes the placed bays plus geometry me
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `bay_type` | `str` | One of `perpendicular`, `angled`, `parallel`, or a custom name. |
+| `bay_type` | `str` | `perpendicular` or `angled`, or a custom name when the dimensions are given explicitly through `place_bay`. |
 | `bays` | `List[Dict]` | Underlying bay dicts in placement order. |
 | `count` | `int` | Number of bays. |
 | `direction` | `(dx, dy)` | Unit vector along which successive bays advance. |
@@ -318,7 +318,7 @@ flowchart LR
 
 All coordinates are in **local frame** - a right-handed math frame with Y-up, yaw CCW-positive, and origin at the lot's `(0, 0)` corner. The orchestrator `generate_layouts.py` applies rotation and translation via `common.to_world_frame` and converts to **CARLA's left-handed frame** (Y rightward, yaw CW-positive) by negating Y and yaw.
 
-`ORIGIN_X` / `ORIGIN_Y` constants in floor plan modules are in **CARLA frame** (left-handed). Never write CARLA-frame coordinates into a `LotBuilder` call; work in local frame and let the orchestrator transform.
+`ORIGIN_X` / `ORIGIN_Y` constants in floor plan modules are in **CARLA frame** (left-handed). Never write CARLA-frame coordinates into a `LotBuilder` call. Work in local frame and let the orchestrator transform.
 
 Bay yaw conventions (local frame):
 
@@ -360,8 +360,8 @@ scripts/layouts/
 |-- README.md            # scripts/layouts/ onboarding and usage guide
 |-- __init__.py          # package marker
 |-- floor_plans/
-    |-- rectangle.py     # training layout (47 bays)
+    |-- rectangle.py     # training layout (47 perpendicular + 2 motorcycle)
     |-- trapezoid.py     # OOD evaluation layout (39 bays)
-    +-- irregular_a.py   # OOD evaluation layout (36 bays)
+    +-- irregular_a.py   # OOD evaluation layout (30 bays)
 
 ```

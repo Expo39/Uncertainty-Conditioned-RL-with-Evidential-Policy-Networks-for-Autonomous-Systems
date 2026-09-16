@@ -3,7 +3,7 @@
 Every workflow in this project goes through a `make` target - never call `docker
 compose`, `pytest`, `python`, or the linters directly. All commands run from the
 repository root. GPU-dependent targets require the full Docker stack (CARLA + ROS 2 +
-training containers); the column in each table marks which.
+training containers), and the column in each table marks which.
 
 Two conventions run through the whole reference:
 
@@ -12,9 +12,9 @@ Two conventions run through the whole reference:
   (or `trial_<N>` for tuning). You pass only the names -
   `BASELINE=input_uncertainty CHECKPOINT=seed42_11062026-0628` - and the recipes
   reconstruct the full `checkpoints/<baseline>/<leaf>/` paths. `BASELINE` defaults to
-  `full_method`; the seed and timestamp are recoverable from the leaf name alone.
+  `full_method`, and the seed and timestamp are recoverable from the leaf name alone.
 - **Every run is staged and baselined.** Omitting `STAGE` defaults to stage 1 (the
-  curriculum head); omitting `BASELINE` defaults to `full_method`. No value falls back to
+  curriculum head), and omitting `BASELINE` defaults to `full_method`. No value falls back to
   a hidden Python default - see [configs/README.md](configs/README.md) for the merge
   precedence chain.
 
@@ -50,7 +50,7 @@ automatically on first use (`make install`).
 
 After editing any file **COPYed** into an image - anything under `uncertainty_rl/ros2/`
 or any `Dockerfile` - rebuild with a no-cache target. Plain `make docker-build` uses the
-layer cache and can silently serve a stale image; it is only safe for `pyproject.toml` or
+layer cache and can silently serve a stale image. It is only safe for `pyproject.toml` or
 bind-mounted file changes.
 
 | Command | Purpose |
@@ -69,7 +69,7 @@ bind-mounted file changes.
 
 The full stack is N CARLA env workers (read from `parallel_workers` in
 `train_config.yaml`) plus the training stack. The worker scripts under
-`scripts/multi_workers/` bring those up and down; the `make` targets call them for you.
+`scripts/multi_workers/` bring those up and down, and the `make` targets call them for you.
 
 | Command | Purpose | GPU? |
 |---------|---------|------|
@@ -138,7 +138,7 @@ baseline and tunes structural PPO parameters only.
 
 | Command | Purpose | GPU? |
 |---------|---------|------|
-| `make docker-tune [STAGE=4] [BASELINE=full_method] [LAYOUT=rectangle]` | Run the Optuna study | Yes |
+| `make docker-tune [STAGE=1] [BASELINE=vanilla_ppo] [LAYOUT=rectangle]` | Run the Optuna study. Stage 1 is the recommended tuning stage, being the only one whose ~100k-step trial budget yields a non-zero success-rate objective | Yes |
 
 > **Further reading:** [uncertainty_rl/training/README.md](uncertainty_rl/training/README.md) - Optuna search space, trial budget, callbacks. [configs/training/README.md](configs/training/README.md) - study settings.
 
@@ -148,9 +148,9 @@ baseline and tunes structural PPO parameters only.
 
 | Command | Purpose | GPU? |
 |---------|---------|------|
-| `make docker-eval [BASELINE=vanilla_ppo] [CHECKPOINT=<leaf>] [LAYOUT=rectangle]` | Run the full condition sweep; writes raw CSVs to `outputs/raw/evaluation_results/` | Yes |
+| `make docker-eval [BASELINE=vanilla_ppo] [CHECKPOINT=<leaf>] [LAYOUT=rectangle]` | Run the full condition sweep, writing raw CSVs to `outputs/raw/evaluation_results/` | Yes |
 | `make docker-eval-visualise-3d [BASELINE=...] [CHECKPOINT=<leaf>]` | Load a checkpoint with a live CARLA 3D spectator view (needs a display) | Yes |
-| `make eval-visualise-2d [BASELINE=...] [CHECKPOINT=<leaf>] [LAYOUT=rectangle] [STAGE=N] [REALTIME=false]` | Start a checkpoint demo drive and open the 2D bird's-eye viewer | No (viewer); Yes (CARLA) |
+| `make eval-visualise-2d [BASELINE=...] [CHECKPOINT=<leaf>] [LAYOUT=rectangle] [STAGE=N] [REALTIME=false]` | Start a checkpoint demo drive and open the 2D bird's-eye viewer | No for the viewer, yes for CARLA |
 
 The 9 conditions span nominal GNSS (RTK fixed, empty lot) through to worst-case
 (degraded fix state, high IMU noise, OOD layout).
@@ -211,7 +211,7 @@ floor plan geometry in `scripts/layouts/floor_plans/*.py`.
 ## Results Analysis
 
 Run these after an evaluation has written `outputs/raw/evaluation_results/`. They read
-raw CSVs and write derived ones; none of them needs a GPU or the simulator.
+raw CSVs and write derived ones. None of them needs a GPU or the simulator.
 
 | Command | Purpose | GPU? |
 |---------|---------|------|
@@ -239,7 +239,7 @@ The single-seed targets (`analyse-ablation`, `analyse-gate`, `analyse-calibratio
 `handover-timing`) are debugging aids: `analyse-cross-seed` recomputes the same
 statistics over the pooled sample and is what the headline set reads.
 
-> **Further reading:** [scripts/analysis/README.md](scripts/analysis/README.md) - per-script reference and CSV schema. The `outputs/` tier layout is in the [main README](README.md#results-layout).
+> **Further reading:** [scripts/analysis/README.md](scripts/analysis/README.md) - per-script reference and CSV schema. The `outputs/` tier layout is in [USAGE.md](USAGE.md#results-layout).
 
 ---
 
@@ -256,7 +256,7 @@ statistics over the pooled sample and is what the headline set reads.
 | `make backup-configs` | Pack all `CLAUDE.md`, `TODO.md`, and `documentation/` into `project_configs.tar.gz` |
 | `make restore-configs` | Restore those files from `project_configs.tar.gz` |
 | `make backup-results [RESULTS_ARCHIVE=...]` | Archive `checkpoints/`, `logs/` and `outputs/` into `project_results.tar.gz` (multi-GB) |
-| `make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]` | Restore those trees; refuses to overwrite unless `FORCE=1` |
+| `make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]` | Restore those trees, refusing to overwrite unless `FORCE=1` |
 | `make list-results-archive [RESULTS_ARCHIVE=...]` | List the archive contents without extracting |
 | `make help` | Print a one-line summary of every target |
 
@@ -275,7 +275,7 @@ The archive is written to the repo root, which neither `make clean` nor `make cl
 touches - so a backup survives the very targets that delete what it holds. It is
 gitignored (`project_results*.tar.gz`), so it will never be committed.
 
-Restoring refuses to clobber existing trees; move them aside or pass `FORCE=1`:
+Restoring refuses to clobber existing trees, so move them aside or pass `FORCE=1`:
 
 ```bash
 make restore-results          # fails if checkpoints/ logs/ outputs/ already exist

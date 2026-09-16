@@ -9,8 +9,9 @@ spawn into.
 > `make generate-layouts` from the floor plan modules in
 > [`scripts/layouts/floor_plans/`](../../scripts/layouts/floor_plans/). A hand-edit is lost
 > the next time anyone regenerates, and the only durable source of truth is the Python
-> module. The sole exception is the `origin.x` / `origin.y` block, which is re-measured
-> against CARLA (see below).
+> module. This holds for the `origin` block too: when a lot is re-anchored against a
+> CARLA measurement, the new value is written to the module's `ORIGIN_X` / `ORIGIN_Y`
+> constants and the layout regenerated. See [Regenerating](#regenerating).
 
 ## Files
 
@@ -31,13 +32,13 @@ present appear.
 | Key | Type | Meaning |
 |-----|------|---------|
 | `floor_plan` | str | Layout name, matching the file stem |
-| `ood` | bool | True for `trapezoid` and `irregular_a` (excluded from training, evaluation-only); only `rectangle` is trained on |
+| `ood` | bool | True for `trapezoid` and `irregular_a` (excluded from training, evaluation-only). Only `rectangle` is trained on |
 | `origin` | `{x, y, z, heading_deg}` | Lot origin in the CARLA world frame - the only block re-measured by hand |
 | `spawn_transform` | `{x, y, z, yaw_deg}` | Primary spawn pose (exactly one) |
 | `extra_spawn_transforms` | list of `{x, y, z, yaw_deg}` | Additional spawns for varied approach angles (at least one) |
 | `corners` | list of `{x, y}` | Perimeter polygon vertices, CCW order |
 | `bays` | list of bay dicts | One entry per bay (see below) |
-| `patrol_waypoints` | list of `{x, y}` | Ordered NPC patrol loop (kept for tooling; dynamic actors are out of scope) |
+| `patrol_waypoints` | list of `{x, y}` | Ordered NPC patrol loop (kept for tooling, though dynamic actors are out of scope) |
 | `pedestrian_zones` | list of `{centre_x, centre_y, half_width, half_height}` | Axis-aligned walkway rectangles |
 | `obstacles` | list of `{centre_x, centre_y, half_width, half_height}` | Static interior obstacle rectangles (empty for all current layouts) |
 
@@ -50,8 +51,8 @@ present appear.
 | `x, y, z` | float | Bay centre in the CARLA world frame |
 | `yaw_deg` | float | Bay nose direction (the heading a parked car faces) |
 | `width, depth` | float | Bay footprint - perpendicular 3.1 x 5.7 m |
-| `always_empty` | bool | Motorcycle bays only; marks the bay as never a parking target |
-| `occupant` | str | Motorcycle bays only; cosmetic label for the spawned prop |
+| `always_empty` | bool | Motorcycle bays only, marking the bay as never a parking target |
+| `occupant` | str | Motorcycle bays only, a cosmetic label for the spawned prop |
 
 The active target set is the `perpendicular` bays, optionally narrowed per curriculum stage
 by `allowed_bay_ids`. Motorcycle bays are decorative markers - the agent is never asked to

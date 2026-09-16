@@ -14,14 +14,14 @@ Detachable 2D bird's-eye Pygame visualiser for CARLA parking training and evalua
 
 > `make eval-visualise-2d` tears the whole Docker stack down before it starts
 > (workers and compose, orphans included), so it **will stop a training run in
-> progress**. `TRACE=false` only suppresses the demo's own CSVs; it does not make
+> progress**. `TRACE=false` only suppresses the demo's own CSVs and does not make
 > the target read-only.
 
 ## How it works
 
 The environment appends one JSON line per step to `outputs/vis_history.jsonl` (via `_write_vis_state()` in `carla_parking.py`) whenever the signal file `outputs/.vis_active` exists. The visualiser creates that file on start and removes it on close, so the env only writes frames while the window is open.
 
-The visualiser tails the JSONL file in real time, groups lines into episodes, and renders each frame with Pygame. The static scene (lot boundary, bay outlines, parked vehicles) is pre-rendered to a surface once per episode and blitted; only dynamic elements (ego, patrol NPCs, pedestrians, trail) are redrawn each frame.
+The visualiser tails the JSONL file in real time, groups lines into episodes, and renders each frame with Pygame. The static scene (lot boundary, bay outlines, parked vehicles) is pre-rendered to a surface once per episode and blitted, so only dynamic elements (ego, patrol NPCs, pedestrians, trail) are redrawn each frame.
 
 ```mermaid
 sequenceDiagram
@@ -36,11 +36,12 @@ sequenceDiagram
     V->>E: remove outputs/.vis_active, delete JSONL
 ```
 
-The end of one episode, with the GNSS fix state recovering as the car closes on the bay:
-the panel climbs degraded (red) to standalone (orange) to RTK float (amber) to RTK fixed
-(green), and the car parks once localisation is trustworthy again. The Markov chain is
-neighbour-only, so a recovery never skips a rung - the float step here lasts a few tenths
-of a second.
+Reading the tier panel: its colour tracks the live fix state, climbing from degraded in
+red through standalone in orange and RTK float in amber to RTK fixed in green. The ring
+drawn around the car is the tier's configured 1-sigma noise, not the EKF's live
+covariance, so it overstates the posterior separation between tiers. The clip below shows
+one such recovery, and the [root README](../../README.md#demonstrations) describes the
+episode it comes from.
 
 <p align="center">
   <img src="../../docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded to RTK fixed" width="620">
@@ -75,7 +76,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 | `target_bay` | dict | `{x, y, yaw, width, depth, bay_type, bay_id}` |
 | `bays` | list | All bay dicts in the current layout |
 | `corners` | list | Lot perimeter polygon vertices `[{x, y}, ...]` |
-| `end_reason` | str | Last frame only: `"success"`, `"collision"`, `"out_of_bounds"`, or `"timeout"`. Written for downstream consumers; the viewer does not render it |
+| `end_reason` | str | Last frame only: `"success"`, `"collision"`, `"out_of_bounds"`, or `"timeout"`. Written for downstream consumers, and not rendered by the viewer |
 | `debug` | dict | Optional: per-step diagnostics from `DebugLogger.step_debug_dict()` |
 
 ## Layers drawn (back to front)
@@ -94,7 +95,7 @@ Each line is a complete frame dict. All coordinates are in CARLA world frame.
 
 Both the card and the ring are driven by `configs/deployment/sim/gnss_noise_profiles.yaml` via `gnss_tiers.py` - nothing about the tiers is hardcoded in the viewer. Each tier contributes its `metric_stddev_m`, which sets both the ring radius and the accuracy figure on the card. Severity follows declaration order in the YAML, best fix first, and drives the green-amber-orange-red ramp. Adding a tier to the YAML is enough to make it render.
 
-The card is always filled, so a tier change reads as a colour change within a fixed shape rather than as a panel appearing and disappearing. The accuracy figure is stated once, as `Position known to +/- X m (1-sigma)`; the tier's YAML `description` is deliberately not drawn, since it restates the same number and changes too fast to read on video.
+The card is always filled, so a tier change reads as a colour change within a fixed shape rather than as a panel appearing and disappearing. The accuracy figure is stated once, as `Position known to +/- X m (1-sigma)`. The tier's YAML `description` is deliberately not drawn, since it restates the same number and changes too fast to read on video.
 
 ### Episode number
 
@@ -104,6 +105,7 @@ The HUD context line omits the episode number by default, since it is run bookke
 
 | Key | Action |
 |-----|--------|
+| R | Toggle MP4 recording, equivalent to starting with `--record` |
 | F | Toggle fullscreen |
 | ESC / Q | Exit (removes signal file) |
 
@@ -112,7 +114,7 @@ The HUD context line omits the episode number by default, since it is run bookke
 | File | Purpose |
 |------|---------|
 | `visualiser.py` | `LiveVisualiser` class + CLI entry point (`python scripts/visualise/visualiser.py`) |
-| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection. Per-decision trace logging is on by default: each episode is written to `outputs/raw/demo_traces/<baseline>/<checkpoint_leaf>/<DD-MM-YYYY-HHMMSS>/episode_<N>.csv` with one row per policy decision (intermediate `action_repeat` ticks are skipped, so no all-zero filler rows). Alongside the step/reward/success columns it carries the delivered `*_cmd` commands (post-clamp, as actually applied to CARLA), the ground-truth and EKF pose columns, the live `gnss_tier` / `gnss_multiplier`, and `epistemic` / `aleatoric` (the evidential policy uncertainty, mean over action axes; `NaN` for a non-evidential policy). See `_TRACE_COLUMNS` for the authoritative list. Written under `outputs/` because that is the directory bind-mounted into the demo container. Pass `--no-trace` (or `TRACE=false`) to disable. |
+| `demo_drive.py` | Loads a checkpoint and drives deterministic CARLA episodes for visual inspection. Per-decision trace logging is on by default: each episode is written to `outputs/raw/demo_traces/<baseline>/<checkpoint_leaf>/<DD-MM-YYYY-HHMMSS>/episode_<N>.csv` with one row per policy decision (intermediate `action_repeat` ticks are skipped, so no all-zero filler rows). Alongside the step/reward/success columns it carries the delivered `*_cmd` commands (post-clamp, as actually applied to CARLA), the ground-truth and EKF pose columns, the live `gnss_tier` / `gnss_multiplier`, and `epistemic` / `aleatoric` (the evidential policy uncertainty, mean over action axes, and `NaN` for a non-evidential policy). See `_TRACE_COLUMNS` for the authoritative list. Written under `outputs/` because that is the directory bind-mounted into the demo container. Pass `--no-trace` (or `TRACE=false`) to disable. |
 | `gnss_tiers.py` | Loads GNSS tier presentation data (sigma, description, severity colour) from the profiles YAML, so no tier detail is hardcoded in the viewer |
 | `recorder.py` | `FrameRecorder` - pipes rendered frames to `ffmpeg` as raw RGB to produce an MP4. Emits on a wall-clock accumulator at a fixed rate, so playback speed is truthful even though the viewer's loop is uncapped |
 | `eval_visualise_2d.sh` | Orchestration for `make eval-visualise-2d`: starts the demo container detached, streams its logs with a `[demo]` prefix, runs the viewer in the foreground, and stops the demo with SIGTERM on exit so it flushes its eval `bay_successes.csv` before the container is removed. |
@@ -122,7 +124,7 @@ The HUD context line omits the episode number by default, since it is run bookke
 
 | Component | Size |
 |-----------|------|
-| Map viewport | 900 px wide; height is fitted to the lot's aspect ratio, clamped to 300-900 px |
+| Map viewport | 900 px wide, with height fitted to the lot's aspect ratio, clamped to 300-900 px |
 | Legend panel | `160 x UI_SCALE` px wide (240 px at the default scale) |
 | HUD band | Below the map, sized from the font metrics |
 | FPS cap | 120 Hz |
@@ -137,5 +139,5 @@ Pygame, numpy and PyYAML, all installed in the project `.venv/` (via `make insta
 
 - [scripts/README.md](../README.md) - all Make targets overview
 - `scripts/colours/__init__.py` - colour palette reference
-- [scripts/analysis/README.md](../evaluation/README.md) - eval analysis tooling that consumes the demo/eval CSVs
+- [scripts/analysis/README.md](../analysis/README.md) - eval analysis tooling that consumes the demo/eval CSVs
 - [uncertainty_rl/envs/README.md](../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that writes the JSONL frames

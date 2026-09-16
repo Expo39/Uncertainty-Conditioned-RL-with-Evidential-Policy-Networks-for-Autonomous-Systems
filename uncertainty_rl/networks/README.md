@@ -7,7 +7,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 - NIG evidential actor outputs four parameters per action dimension: $\gamma$ (mean), $\nu$, $\alpha$, $\beta$.
 - Aleatoric uncertainty (data noise): $\beta / (\alpha - 1)$. Action std uses $\sqrt{\text{aleatoric}}$ only.
 - Epistemic uncertainty (model confidence): $\beta / (\nu(\alpha - 1))$. Not added to action noise.
-- Softplus-clamped NIG parameters with an aleatoric floor and ceiling enforced before the sqrt in the action distribution (the floor stops the action std collapsing; the ceiling caps it at the action half-range).
+- Softplus-clamped NIG parameters with an aleatoric floor and ceiling enforced before the sqrt in the action distribution (the floor stops the action std collapsing, and the ceiling clamps the variance at 1.0).
 - Two actor modes: flat MLP or dual-encoder (state and covariance through separate pathways before fusion).
 - Evidential loss applies to the actor only. Critic is a standard Gaussian MLP.
 - Prior-anchoring quadratic-ratio regularisation (RL-stable, replaces the Amini 2020 supervised term).
@@ -47,7 +47,7 @@ flowchart TB
 
 > In dual-encoder mode the observation is split into two blocks. The
 > covariance block (`obs[:, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM +
-> COVARIANCE_FEATURES_DIM]`) flows into the uncertainty encoder; the rest
+> COVARIANCE_FEATURES_DIM]`) flows into the uncertainty encoder, and the rest
 > of the observation (speed, yaw rate, relative target pose, LiDAR
 > clearances) flows into the state encoder. Both encoders feed a shared
 > fusion MLP before the `EvidentialLayer` head. The actor works on the
@@ -84,14 +84,14 @@ on its own pathway lets the network learn an uncertainty-conditioned response (d
 conservatively when `std_*` is high) while the navigation block carries the where-to-go
 signal.
 
-**Off by default; opt-in.** `use_uncertainty_conditioning` is `false` in
+**Off by default, opt-in.** `use_uncertainty_conditioning` is `false` in
 `train_config.yaml` - the main 2x2 ablation deliberately keeps it off so the covariance
 enters identically (as plain obs features) for both the standard and evidential heads,
 isolating the head as the only difference. The dual-encoder is a separate architectural
 variant you enable explicitly.
 
 **Requires `include_covariance = True`.** The split assumes the covariance block sits at
-indices `[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`; with covariance
+indices `[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`. With covariance
 absent from the observation those indices hold navigation features instead. `train_ppo.py`
 enforces this: if `use_uncertainty_conditioning=True` is requested without
 `include_covariance`, it logs a warning and forces the flag back to `False` rather than
@@ -149,29 +149,50 @@ action, uncertainty_dict = net.get_action(obs_tensor)
 
 The activation, offset, and clamp constants for $\gamma, \nu, \alpha, \beta$
 live in `EvidentialLayer.forward()` and `EvidentialDistribution.proba_distribution()`.
-They are tuned to keep the head in a well-behaved region for RL training -
-in particular the alpha offset keeps `alpha - 1` bounded away from zero so
-the aleatoric variance cannot diverge. See the source files and
+They are tuned to keep the head in a well-behaved region for RL training. In
+particular the offset of 1.5, rather than the usual 1.0, keeps `alpha - 1 >= 0.5`
+by construction, so the aleatoric variance cannot diverge. See the source files and
 [docs/detailed_notes/networks/evidential_nig_initialisation.md](../../docs/detailed_notes/networks/evidential_nig_initialisation.md)
 for the derivation.
 
 ## Evidential regularisation
 
-**Prior-anchoring quadratic-ratio penalty** applied to $\nu, \alpha, \beta$:
+**Prior-anchoring quadratic-ratio penalty** applied to $\alpha$ and $\beta$ only:
 
 ```math
-\mathcal{L}_{\text{reg}} = \left\langle (\nu/\nu_0 - 1)^2 + (\alpha/\alpha_0 - 1)^2 + (\beta/\beta_0 - 1)^2 \right\rangle
+\mathcal{L}_{\text{reg}} = \left\langle (\alpha/\alpha_0 - 1)^2 + (\beta/\beta_0 - 1)^2 \right\rangle
 ```
 
-The priors $\nu_0, \alpha_0, \beta_0$ are derived from the bias initialisation in
-`EvidentialLayer.__init__`. The total training loss is:
+The penalty is zero at the prior, with a restoring gradient growing linearly with
+distance. The priors match the bias initialisation in `EvidentialLayer.__init__` plus
+the offsets, giving $\alpha_0 = 2.741$ and $\beta_0 = 0.693$. $\nu$ is excluded here and
+left to the evidence term below.
+
+The full training loss carries five terms beyond the PPO surrogate:
 
 ```math
-\mathcal{L} = \mathcal{L}_{\text{PPO}} + \lambda_{\text{reg}} \cdot \mathcal{L}_{\text{reg}}
+\mathcal{L} = \mathcal{L}_{\text{policy}}
+  + c_2 \mathcal{L}_{\text{entropy}}
+  + c_1 \mathcal{L}_{\text{value}}
+  + \lambda_{\text{reg}}(t) \mathcal{L}_{\text{reg}}
+  + \lambda_{\text{evidence}}(t) \mathcal{L}_{\text{evidence}}
+  + \lambda_{\nu} \mathcal{L}_{\nu\text{-anchor}}
 ```
 
-$\lambda_{\text{reg}}$ is linearly annealed from $0$ over `lambda_reg_warmup_steps` (both in
-`configs/train_config.yaml` under `evidential`).
+$\lambda_{\text{reg}}$ and $\lambda_{\text{evidence}}$ are annealed linearly from $0$
+over their own warmup step counts, all configured in `configs/train_config.yaml` under
+`evidential`.
+
+The last two act on $\nu$ in opposition: an advantage-gated accrual term that raises
+$\nu$ for well-predicted actions, against a log-space anchor pulling it back toward its
+sub-unit prior. $\gamma$ is detached in the accrual term, so PPO retains sole ownership
+of the action mean.
+
+> **Both $\lambda_{\text{evidence}}$ and $\lambda_{\nu}$ are `0.0` in the shipped
+> configuration and were inactive in the reported experiments**, which therefore ran
+> three active terms. RL supplies no ground-truth action target, so neither term can
+> make $\nu$ state-dependent, and neither can disentangle epistemic from aleatoric.
+> They are retained for that experiment alone.
 
 **Why not the supervised term?**
 
@@ -185,30 +206,34 @@ bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiri
 
 ## Actor modes
 
-Both modes share the same `EvidentialLayer` head and standard critic; they differ only in
-how the actor consumes the observation. See [the dual-encoder section](#dual-encoder-actor-use_uncertainty_conditioning--true)
-for the full wiring.
+Both modes share the same `EvidentialLayer` head and standard critic, differing only in
+how the actor consumes the observation. The wiring is described under
+[Dual-encoder actor](#dual-encoder-actor-use_uncertainty_conditioning-true) above.
 
 | `use_uncertainty_conditioning` | Actor class | Observation routed to actor | Requires |
 |-------------------------------|-------------|------------------------------|----------|
 | `False` | Flat MLP + `EvidentialLayer` | Full observation via the shared MLP extractor latent | - |
-| `True` | `UncertaintyConditionedActor` | Raw observation, split: covariance block to the uncertainty encoder, remaining blocks (speed, yaw rate, relative target pose, LiDAR clearances) to the state encoder; MLP extractor policy branch bypassed | `include_covariance = True` |
+| `True` | `UncertaintyConditionedActor` | Raw observation, split: covariance block to the uncertainty encoder, remaining blocks (speed, yaw rate, relative target pose, LiDAR clearances) to the state encoder, with the MLP extractor policy branch bypassed | `include_covariance = True` |
 
 ## TensorBoard logs (evidential-specific)
 
 | Tag | Expression logged |
 |-----|------------------|
 | `train/evidential_reg_loss` | Mean prior-anchoring penalty |
+| `train/evidence_loss` | Mean advantage-gated evidence-accrual term |
+| `train/nu_anchor_loss` | Mean log-space $\nu$ anchor |
 | `train/epistemic_uncertainty` | $\langle \beta / (\nu(\alpha - 1)) \rangle$ |
 | `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$ |
 | `train/lambda_reg` | Current annealed $\lambda_{\text{reg}}$ |
+| `train/lambda_evidence` | Current annealed $\lambda_{\text{evidence}}$ |
+| `train/lambda_nu_anchor` | Configured $\lambda_{\nu}$ |
 | `train/ent_coef` | Current value of the linear ent_coef decay schedule |
 
 ## Configuration keys consumed
 
 | Config file | Keys |
 |-------------|------|
-| [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, `evidential.lambda_reg`, `evidential.lambda_reg_warmup_steps`, `evidential.aleatoric_floor`, `evidential.use_uncertainty_conditioning` |
+| [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, and under `evidential`: `lambda_reg`, `lambda_reg_warmup_steps`, `lambda_evidence`, `lambda_evidence_warmup_steps`, `lambda_nu_anchor`, `aleatoric_floor`, `use_uncertainty_conditioning` |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM`, `ACTION_DIM` |
 
 ### On plotting epistemic against aleatoric
@@ -222,19 +247,15 @@ epistemic = beta / (nu * (alpha - 1)) = aleatoric / nu
 
 so they are one scalar under two names, separating only as far as `nu` varies across
 states. RL supplies no ground-truth action target, so `nu` has no well-posed training
-signal and collapses to a state-independent constant; `corr(epistemic, aleatoric)` stays
-around 0.9 in every run. Plotting the two channels side by side would imply a separation
-that is documented as absent, which is the overclaim an examiner would refute. This is a
-finished negative result, not a missing figure.
+signal and collapses to a state-independent constant, leaving
+`corr(epistemic, aleatoric)` around 0.9 in every run. Plotting the two channels side by
+side would imply a separation documented as absent. This is a finished negative result
+rather than a missing figure.
 @see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md`.
 
-The defensible figure is `gate_roc` - the evidential epistemic scored as a safety gate
-against the EKF position std, which is the comparison the contribution actually rests on:
-
-```bash
-make analyse-gate STAGE=6
-make figures FIG=gate_roc      # -> outputs/main_analysis/figures/gate_roc.png
-```
+The defensible alternative is `gate_roc`, which scores the evidential uncertainty as a
+safety gate against the EKF position std. Its AUC figures and regeneration recipe are in
+[evaluation/README.md](../evaluation/README.md#on-illustrating-the-safety-handoff).
 
 ## See also
 

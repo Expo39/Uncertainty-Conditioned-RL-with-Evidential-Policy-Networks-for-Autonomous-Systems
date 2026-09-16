@@ -20,22 +20,14 @@ Loaded by `CARLAParkingEnv`, `lot_inspector.py`, `demo_drive.py`, and
 Do not mix RL training hyperparameters here - those belong in
 [`configs/train_config.yaml`](../../train_config.yaml).
 
-**Config loading chain** (`train_ppo.py`):
-
-```
-deployment/sensor_config.yaml   (physical sensor specs)
-         +
-deployment/agent_config.yaml    (observation flags, safety params)
-         +
-deployment/sim/env_config.yaml  (CARLA-specific, wins on conflict)
-         =
-merged env config passed to CARLAParkingEnv
-```
+`env_config.yaml` sits third in the merge, so it wins over the sensor and agent configs
+and is in turn overridden by the selected curriculum stage. The full precedence chain is
+documented in [configs/README.md](../../README.md#how-configs-are-loaded).
 
 ### Key sections
 
 The file is organised into these blocks. Read the YAML directly for the live
-values; they change as the project iterates and stage-specific overrides
+values, which change as the project iterates as stage-specific overrides
 come and go.
 
 | Block | What it controls |
@@ -43,12 +35,17 @@ come and go.
 | `carla_host`, `carla_port`, `town` | CARLA connection |
 | `carla_timestep`, `max_steps`, `action_repeat` | Simulation timing |
 | `no_rendering_mode`, `map_load_sleep` | CARLA runtime behaviour |
-| `carla_sensors.imu`, `carla_sensors.gnss`, `carla_sensors.lidar` | Sensor specs (noise injected by relay nodes for IMU and GNSS) |
-| `parking_scenarios.fixed_*` | When set, force a named floor plan / bay / GNSS tier every episode (curriculum overrides). Comment out for random sampling. |
-| `parking_scenarios.bay_occupancy_*` | Per-episode parked-vehicle density |
+| `carla_sensors.imu`, `carla_sensors.gnss`, `carla_sensors.lidar` | CARLA spawn keys. Range, channels and field of view come from `sensor_config.yaml`, and IMU and GNSS noise is injected by the relay nodes |
 | `parking_scenarios.num_patrol_vehicles_max`, `patrol_*` | NPC patrol vehicles |
 | `parking_scenarios.pedestrian_*` | NPC pedestrians |
 | `parking_scenarios.floor_plans` | Layout-file paths and OOD flags |
+| `gnss_datum_lat`, `gnss_datum_lon` | Flat-earth projection datum for the GNSS relay |
+| `ros2.*`, `ros2.carla_recovery` | Shared file paths and the CARLA reconnection policy |
+| `inspect.dryrun_action`, `debug` | Inspector dry-run command and per-step debug logging |
+
+The per-stage difficulty knobs (`fixed_floor_plan`, `fixed_target_bay_id`,
+`allowed_bay_ids`, `bay_occupancy_min/max` and the top-level `bay_margin`) are **not**
+in this file. They are owned by the curriculum stage files.
 
 Real LiDAR-noise parameters under `carla_sensors.lidar.noise` are documented
 in [`docs/detailed_notes/localisation/sensor_noise_models.md`](../../../docs/detailed_notes/localisation/sensor_noise_models.md).
@@ -60,17 +57,19 @@ in [`docs/detailed_notes/localisation/sensor_noise_models.md`](../../../docs/det
 Defines the RTK fix-state tiers sampled per episode to vary GNSS noise and
 drive EKF covariance variation - the primary uncertainty source in training.
 
-The tiers (e.g. `rtk_fixed`, `rtk_float`, `standalone`, `degraded`), their
-position-stddev values, and per-tier sampling weights live in the YAML
-itself. The sampling weights change as the curriculum progresses, so read
-the live file rather than relying on a snapshot in this README.
+The four tiers (`rtk_fixed`, `rtk_float`, `standalone`, `degraded`), their
+position-stddev values and their sampling weights live in the YAML itself. Read the live
+file rather than relying on a snapshot in this README.
 
-At eval time, `held_gnss_tier` in `configs/eval_config.yaml` overrides
-the per-episode sampling to hold a named fix-state tier (e.g. `rtk_float`) for
-each evaluation condition. The curriculum sets `parking_scenarios.fixed_gnss_tier: rtk_fixed` in
-every stage as the per-episode START tier; the mid-episode Markov chain (always on) then
-wanders from there. The chain is fixed and stage-invariant - the GNSS degradation process
-is the same in every stage, not a ramped curriculum axis.
+The start tier of each episode is drawn from those weights. `fixed_gnss_tier` is
+deliberately omitted from every curriculum stage, so no stage pins the start tier, and a
+CI test enforces that omission. The always-on Markov chain then wanders from the sampled
+start. The chain is stage-invariant, so the GNSS degradation process is identical in
+every stage rather than being a ramped curriculum axis.
+
+At eval time, `held_gnss_tier` in `configs/eval_config.yaml` overrides the sampling to
+hold one named tier for the whole episode, and `degrade_one_way` instead forces a
+one-way drift that never recovers. The two are alternatives, never combined.
 
 The file also defines a `transition_matrix` block: a per-step Markov chain
 over the tiers used by `GnssNoiseRelayNode` when

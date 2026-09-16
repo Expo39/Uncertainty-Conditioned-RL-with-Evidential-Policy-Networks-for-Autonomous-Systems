@@ -21,7 +21,7 @@ on the real vehicle.
 |--------|-----------|-------|
 | IMU | `sensors.imu.mount` | Mount position in vehicle body frame (x, y, z). |
 | RTK-GNSS | `sensors.gnss.mount` | Antenna mount position. |
-| 2D LiDAR | `sensors.lidar` | Range (25 m), FOV (270 deg), frequency (15 Hz), mount position. |
+| 2D LiDAR | `sensors.lidar` | Range (25 m), FOV (270 deg), frequency (15 Hz), a single channel, and mount position. |
 
 > **Warning**: All mount values are unmeasured placeholders until filled in at the test site.
 
@@ -31,21 +31,26 @@ Behaviour settings that must match the trained policy. Check these before every 
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `baseline` | `configs/baselines/full_method.yaml` | Names the baseline the deployed checkpoint was trained as; its `include_covariance` / `include_obstacle_obs` / `policy_type` (the obs shape and policy class) are read from there. Must match the checkpoint. |
-| `max_ego_speed_ms` | `6.0` | Hard speed cap (m/s). |
-| `safety_handoff_threshold` | `1.2` | TOTAL uncertainty (epistemic+aleatoric) at/above which the vehicle full-stops and hands off; calibrate per checkpoint to the clean-condition total upper tail. |
+| `seed` | `7` | The master RNG seed, and the single source of truth for the whole experiment. It seeds training and the separate-process GNSS and IMU noise relays alike, and nothing else in the tree carries a seed. Change this one line to run a new seed. |
+| `baseline` | `configs/baselines/full_method.yaml` | Names the baseline the deployed checkpoint was trained as. Its `include_covariance`, `include_obstacle_obs` and `policy_type`, being the obs shape and policy class, are read from there and must match the checkpoint. |
+| `max_ego_speed_ms` | `6.0` | Hard speed cap in m/s. Throttle is cut at or above it, brake is unaffected. |
+| `actuator_model.*` | see YAML | Per-axis slew limits in normalised action units per decision, plus the brake-overrides-throttle threshold. Applied before the action reaches CARLA or the vehicle. |
+| `safety_handoff_threshold` | `1.2` | Total uncertainty, being epistemic plus aleatoric, at or above which the vehicle full-stops and hands off. Calibrate per checkpoint against the calm-condition upper tail. |
+| `ros2.*` | see YAML | Covariance topic and timeouts, EKF convergence timeout, and whether `/set_pose` is published at each reset. |
 | `real_world_datum` / `actuation_calibration` | paths | Real-vehicle datum and calibration files loaded by the deployment path. |
 
 ## Config loading chain
 
-`load_env_config()` in `train_ppo.py` merges all three files automatically (lower priority listed first):
+`load_env_config()` merges the three deployment files and then the selected curriculum
+stage, lower priority first:
 
 ```
-sensor_config.yaml  ->  agent_config.yaml  ->  sim/env_config.yaml
-                                                (env_config wins on conflict)
+sensor_config.yaml  ->  agent_config.yaml  ->  sim/env_config.yaml  ->  curriculum stage
 ```
 
-The merged result is passed directly to `CARLAParkingEnv`.
+The merged result is passed to `CARLAParkingEnv`. This sits inside the full precedence
+chain, which continues with `train_config.yaml` and the baseline overlay and is
+documented in [configs/README.md](../README.md#how-configs-are-loaded).
 
 ## See also
 

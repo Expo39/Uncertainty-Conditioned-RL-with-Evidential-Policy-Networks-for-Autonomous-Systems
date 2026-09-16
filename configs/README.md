@@ -50,24 +50,25 @@ unified env config passed to `CARLAParkingEnv`. `merge_configs()` then layers
 **One value, one place.** A config value lives in exactly one file - never repeated
 down the chain. The two exceptions are deliberate:
 - **Curriculum stages** each spell out the *full* difficulty key set (`use_extra_spawns`,
-  `bay_margin`, `fixed_floor_plan`, `fixed_gnss_tier` (= `rtk_fixed` start tier),
-  `bay_occupancy_min/max`, `lidar noise.enabled`, `allowed_bay_ids`) plus two per-policy
-  schedule blocks
+  `bay_margin`, `fixed_floor_plan`, `bay_occupancy_min/max`, `lidar noise.enabled`,
+  `allowed_bay_ids`) plus two per-policy schedule blocks
   (`standard_overrides` / `evidential_overrides`). These knobs are NOT in `env_config` -
-  they are owned by the stages.
-- **Baselines** each set the ablation cell flags (`include_covariance`,
-  `include_obstacle_obs`, `policy_type`, dirs). These are NOT in `train_config` /
-  `agent_config` - they are owned by the baselines.
+  they are owned by the stages. `fixed_gnss_tier` is deliberately omitted throughout, so
+  the start tier is sampled rather than pinned.
+- **Baselines** each set the ablation cell flags (`baseline_name`, `include_covariance`,
+  `include_obstacle_obs`, `policy_type`). These are NOT in `train_config` /
+  `agent_config` - they are owned by the baselines. Output directories are derived in
+  code from `baseline_name` rather than set per baseline.
 
 **Every run is staged and baselined.** Difficulty lives only in stages and obs/policy
 flags only in baselines, so a run must pick one of each. Omitting `--stage` defaults to
-stage 1 (the curriculum head); omitting `--baseline` defaults to the full method
+stage 1 (the curriculum head), and omitting `--baseline` defaults to the full method
 (`baselines/full_method.yaml`). No value falls back to a hidden Python default. Real
 deployment is the same: `agent_config.yaml` names the deployed `baseline:` to get the
 obs flags.
 
 The merge is implemented once in `uncertainty_rl/utils/config_merge.py`
-(`deep_merge`, `apply_baseline`, `BASELINE_KEYS`); every consumer (`train_ppo.py`,
+(`deep_merge`, `apply_baseline`, `BASELINE_KEYS`), and every consumer (`train_ppo.py`,
 `tune_hyperparams.py`, `evaluate.py`, `demo_drive.py`, `lot_inspector.py`,
 `inference_loop.py`) calls it - no hand-rolled overlays. `evaluate.py` also reads
 connection/timing/ROS 2 from the merged env config, so evaluation runs the exact
@@ -77,9 +78,9 @@ environment training used.
 
 | File | Purpose | Consumed by |
 |------|---------|-------------|
-| `train_config.yaml` | PPO hyperparameters, evidential settings, training schedule | `train_ppo.py`, `tune_hyperparams.py` |
-| `eval_config.yaml` | Evaluation condition sweep (noise tiers, traffic, OOD layouts) + episode count; connection/timing come from env_config | `evaluate.py` |
-| `ros2_config.yaml` | EKF node params, GNSS relay settings, topic names | `carla_bridge.launch.py`, ROS 2 nodes |
+| `train_config.yaml` | PPO hyperparameters, evidential settings, training schedule | `train_ppo.py`, `tune_hyperparams.py`, `evaluate.py` (base noise) |
+| `eval_config.yaml` | Evaluation condition sweep (fix-state tiers, LiDAR noise, bay occupancy, OOD layout) and episode count. Connection and timing come from env_config | `evaluate.py` |
+| `ros2_config.yaml` | EKF node params, GNSS relay settings, topic names | `carla_bridge.launch.py`, `real_vehicle.launch.py`, ROS 2 nodes |
 
 **Never add a new YAML to `configs/` root.** Use an appropriate subfolder.
 

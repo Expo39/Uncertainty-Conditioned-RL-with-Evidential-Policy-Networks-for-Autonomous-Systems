@@ -21,23 +21,20 @@ flowchart TB
         DU["make docker-test-unit\n(unit tests in container)"]
         DI["make docker-test-integration\n(integration tests in container)"]
         DF["make docker-test\n(full suite in container)"]
-        DV["make docker-test-unit\n(unit tests in container)"]
     end
 
     UNIT --> DU
-    VERIFY --> DV
 ```
 
 ## Running
 
 ```bash
-# CPU-only (no Docker needed - same checks run in CI)
-make test-unit         # Unit tests only
-make verify            # Unit tests + lint + typecheck + import sanity
+# Unit tests. Use the container: torch is not installed in the host .venv, so
+# `make test-unit` fails on the host with ModuleNotFoundError.
+make docker-test-unit          # Unit tests in container (no GPU required)
 
-# Inside Docker (no GPU required for unit tests)
-make docker-test-unit          # Unit tests in container
-make docker-test-unit          # Unit tests in container
+# Host-side checks. These mirror CI exactly and run NO tests.
+make verify                    # lint + typecheck + import sanity
 
 # Full stack (Docker + GPU machine)
 make docker-test-integration   # Integration tests (needs CARLA + ROS 2)
@@ -50,7 +47,7 @@ make docker-test               # Full suite (unit + integration)
 
 | File | What it covers |
 |------|---------------|
-| `conftest.py` | Shared fixtures: state tensors, config dicts, uncertainty states |
+| `conftest.py` | Shared fixtures: `state_batch`, `single_state`, `train_config`, `eval_config` |
 | `test_evidential_policy.py` | `EvidentialLayer`, `EvidentialPolicyNetwork`, `UncertaintyConditionedActor`: output shapes, NIG constraints, uncertainty positivity |
 | `test_carla_parking.py` | `CARLAParkingEnv` obs/action shapes, geometry helpers (`point_in_polygon`, `yaw_from_quaternion`, `wrap_angle_symmetric`), `build_observation`, `extract_obstacle_features`, `load_floor_plan`, `wait_for_ekf`, bay sampling, reward, `VisStateWriter` |
 | `test_covariance_utils.py` | `extract_2d_covariance_features`, `validate_covariance_matrix`, `get_covariance_dimension`, `make_diagonal_covariance` |
@@ -68,6 +65,12 @@ make docker-test               # Full suite (unit + integration)
 | `test_curriculum_invariants.py` | Curriculum stage invariants: every obs channel live in every stage, architecture keys constant, one axis ramps per stage |
 | `test_gnss_noise_relay.py` | `GnssNoiseRelayNode`: Doppler-style velocity / COG model, tier defaults, course-noise helper, and the `gnss_noise_profiles.yaml` mirror invariant |
 | `test_observation_norm.py` | `normalise_observation`: fixed physical-range scaling, bounds, channel alignment |
+| `test_cross_seed.py` | `scripts/analysis/cross_seed.py`: the pooled aggregator across seeds |
+| `test_cross_seed_discovery.py` | `seed_roots()` in `_discovery.py`: locating the per-seed sub-roots |
+| `test_gnss_tiers.py` | The visualiser's GNSS tier presentation loader |
+| `test_recorder.py` | The visualiser's MP4 `FrameRecorder` |
+
+The last four cover `scripts/`, not the `uncertainty_rl` package.
 
 ### Integration tests (Docker + GPU - `@pytest.mark.integration`)
 
@@ -75,14 +78,22 @@ make docker-test               # Full suite (unit + integration)
 |------|---------------|
 | `test_ros2_integration.py` | EKF covariance arrival within timeout, dimension check (3-element vector), non-zero uncertainty in `_get_state()`, EKF pose vs CARLA ground truth (4 tests) |
 
+`test_carla_parking.py` straddles both tiers: it is listed above as a unit test, but one
+of its cases carries `@pytest.mark.integration` and so is excluded from unit runs.
+
 ## Key fixture constants
+
+These are the constants defined in `conftest.py` itself.
 
 | Constant | Value | Description |
 |----------|-------|-------------|
-| `TOTAL_OBS_DIM` | 13 | speed + vyaw + std_x/y/yaw + dx/dy/dyaw + 5 LiDAR obstacle features |
-| `ACTION_DIM` | 3 | Steering, throttle, brake (separate non-negative throttle and brake axes) |
+| `STATE_DIM` | 15 | A small arbitrary state dimension for the network fixtures. Deliberately **not** the 13-dim env observation, which keeps unit tests fast and independent of the ablation flags |
 | `BATCH_SIZE` | 8 | Default batch size for tensor fixtures |
-| `HIDDEN_DIMS` | [64, 64] | Default network architecture for test policies |
+| `HIDDEN_DIMS` | [64, 64] | Default network architecture for test policies, smaller than production |
+
+Tests that need the real observation dimension call `compute_obs_dim()` directly rather
+than reading a fixture. The structural constants themselves (`TOTAL_OBS_DIM`,
+`ACTION_DIM` and the rest) live in `uncertainty_rl/utils/constants.py`.
 
 ## Coverage map
 
@@ -92,8 +103,8 @@ make docker-test               # Full suite (unit + integration)
 | `networks/sb3_integration.py` | `test_sb3_integration.py` |
 | `envs/sim/carla_parking.py` | `test_carla_parking.py` |
 | `envs/sim/helpers/_sensor_manager.py` | `test_lidar_noise.py` |
-| `envs/_covariance_subscriber.py` | `test_covariance_subscriber.py` |
-| `envs/_safety_wrapper.py` | `test_safety_wrapper.py` |
+| `envs/covariance_subscriber.py` | `test_covariance_subscriber.py` |
+| `envs/safety_wrapper.py` | `test_safety_wrapper.py` |
 | `training/train_ppo.py` | `test_train_ppo.py` |
 | `training/tune_hyperparams.py` | `test_tune_hyperparams.py` |
 | `evaluation/evaluate.py` | `test_evaluation.py` |
@@ -105,6 +116,10 @@ make docker-test               # Full suite (unit + integration)
 | `ros2/.../sensor_relay/gnss_noise_relay.py` | `test_gnss_noise_relay.py` |
 | `configs/baselines/*.yaml` | `test_baseline_configs.py` |
 | `configs/deployment/sim/curriculum/*.yaml` | `test_curriculum_invariants.py` |
+| `scripts/analysis/cross_seed.py` | `test_cross_seed.py` |
+| `scripts/analysis/_discovery.py` | `test_cross_seed_discovery.py` |
+| `scripts/visualise/gnss_tiers.py` | `test_gnss_tiers.py` |
+| `scripts/visualise/recorder.py` | `test_recorder.py` |
 | ROS 2 EKF pipeline | `test_ros2_integration.py` |
 
 ## See also

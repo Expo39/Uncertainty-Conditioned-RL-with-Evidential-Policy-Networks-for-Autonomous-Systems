@@ -17,13 +17,13 @@ make docker-inspect INSPECT_LAYOUT=rectangle  # Verify geometry in CARLA
 Every bay is **perpendicular** - angled, parallel, and motorcycle-drivable bays are out
 of scope (bay geometry is not the experimental variable). The two motorcycle bays in the
 rectangle are `always_empty` markers, never parking targets. Bay counts are taken from the
-generated `configs/layouts/*.yaml`; regenerate after any module change.
+generated `configs/layouts/*.yaml`, so regenerate after any module change.
 
 | Layout | File | Polygon | Bays | OOD | World origin (CARLA) |
 |--------|------|---------|------|-----|----------------------|
 | `rectangle` | `floor_plans/rectangle.py` | 65 x 42.5 m axis-aligned | 47 perpendicular + 2 motorcycle | No | x=2.0, y=22.5, z=0.3 |
-| `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=50 m | 39 perpendicular | No | x=0.0, y=30.0, z=0.3 |
-| `irregular_a` | `floor_plans/irregular_a.py` | five-sided, ~62 x 50 m | 36 perpendicular | Yes | x=-3.0, y=25.0, z=0.3 |
+| `trapezoid` | `floor_plans/trapezoid.py` | front=60, rear=40, depth=50 m | 39 perpendicular | Yes | x=0.0, y=30.0, z=0.3 |
+| `irregular_a` | `floor_plans/irregular_a.py` | five-sided, 62 x 50 m | 30 perpendicular | Yes | x=-3.0, y=25.0, z=0.3 |
 
 ---
 
@@ -43,7 +43,7 @@ corner. Three spawns give varied approach angles during training.
 | Bottom wall (west) | Perpendicular | 8 | Starts two bay-widths in from the left corner |
 | Bottom wall (east cluster) | Perpendicular | 5 | Inset 7 m from the bottom-right corner |
 | Right wall | Perpendicular | 9 | Clears the bottom row's corner footprint |
-| Motorcycle corner (`always_empty`) | Motorcycle | 2 | Bottom-left, backs to the left wall; never a target |
+| Motorcycle corner (`always_empty`) | Motorcycle | 2 | Bottom-left, backs to the left wall, never a target |
 
 **Total: 47 perpendicular bays + 2 motorcycle.**
 
@@ -102,7 +102,7 @@ right clusters.
 
 Never sampled during training - held out for out-of-distribution evaluation only. The OOD
 feature is the diagonal top wall (P2->P3): the agent has only seen axis-aligned and tapered
-walls. The earlier notch and central obstacle have been removed; the bottom boundary is a
+walls. The earlier notch and central obstacle have been removed, and the bottom boundary is a
 single straight wall and every bay is perpendicular.
 
 **Perimeter vertices (local frame, CCW):**
@@ -122,14 +122,13 @@ single straight wall and every bay is perpendicular.
 | Bottom wall | Perpendicular | 8 | Single centred cluster |
 | Left wall | Perpendicular | 4 | Packed from the bottom corner upward |
 | Diagonal top wall (P2->P3) | Perpendicular | 10 | Hugging the P3 end |
-| Top-flat wall (P3->P4), back row | Perpendicular | 6 | Packed from the right |
-| Top-flat wall, facing row | Perpendicular | 4 | Back-to-back across a 6 m aisle |
+| Top-flat wall (P3->P4) | Perpendicular | 4 | Packed from the right, with the bays at the P4-near end removed |
 | Right wall (P1->P2) | Perpendicular | 4 | Centred |
 
-**Total: 36 perpendicular bays.**
+**Total: 30 perpendicular bays.**
 
 **Spawns:**
-- S1 (primary): left wall mid-height, local (x=3.0, y=25.0), facing +X
+- S1 (primary): left wall mid-height, local (x=3.0, y=35.0), facing +X
 - S2: diagonal top wall at x~57, facing inward perpendicular to the wall slope
 - S3: bottom wall right section, local (x=45.0, y=5.0), facing +Y
 
@@ -150,8 +149,8 @@ footprint. See [BUILDER.md](BUILDER.md) for the full method reference.
 |--------|------|-------------|
 | `BAY_DIMS` | dict | Per-type bay footprint and aisle width: perpendicular (3.1 x 5.7 m, aisle 6.0 m), angled (3.1 x 5.85 m, aisle 3.6 m). `WALL_GAP` (0.5 m) is the minimum clearance from any bay corner to the perimeter |
 | `LotBuilder` | class | Top-level builder: define polygon, place bays, add spawns/zones/patrol/obstacles, call `build()` |
-| `BayGroup` | class | Returned by every row method; exposes `.bbox`, `.nose_y`, `.back_y`, `.nose_x`, `.back_x` for zone/patrol alignment |
-| `PedestrianZone` | class | Axis-aligned zone; construct via `along_row()`, `between_rows()`, `beside_wall()`, or explicit bounds |
+| `BayGroup` | class | Returned by every row method, exposing `.bbox`, `.nose_y`, `.back_y`, `.nose_x`, `.back_x` for zone/patrol alignment |
+| `PedestrianZone` | class | Axis-aligned zone, constructed via `along_row()`, `between_rows()`, `beside_wall()`, or explicit bounds |
 | `PatrolPath` | class | Ordered waypoints with `aisle_y()`, `aisle_x()`, `add_diag_from_prev()` helpers |
 
 ### `common.py`
@@ -191,6 +190,6 @@ After any change to a floor plan module, re-run `make generate-layouts LAYOUT=<n
 
 - [BUILDER.md](BUILDER.md) - full `LotBuilder`, `BayGroup`, `PedestrianZone`, `PatrolPath` method reference
 - [scripts/inspect/README.md](../inspect/README.md) - CARLA geometry verification
-- [scripts/analysis/README.md](../evaluation/README.md) - eval analysis tooling (covariance / gate / uncertainty claims)
+- [scripts/analysis/README.md](../analysis/README.md) - eval analysis tooling (covariance / gate / uncertainty claims)
 - [configs/layouts/README.md](../../configs/layouts/README.md) - pre-computed YAML schema reference
 - [uncertainty_rl/envs/README.md](../../uncertainty_rl/envs/README.md) - `CARLAParkingEnv` that consumes the YAML files
