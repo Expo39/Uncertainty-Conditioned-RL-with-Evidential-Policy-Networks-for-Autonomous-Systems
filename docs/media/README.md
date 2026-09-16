@@ -59,11 +59,6 @@ Two things are needed, and **both** matter:
    two-panel plots here are about 1:1) need the narrower end of that range, since width
    drives height too; a wide, short figure can take 700-760.
 
-   To place two assets side by side, put both `<img>` tags in one `<p align="center">`
-   and pick widths that make their RENDERED HEIGHTS match, or the pair looks ragged:
-   for heights to match at `h`, each width is `w = original_width * h / original_height`.
-   The root README pairs a 620x362 clip at 336 px with an 800x549 one at 286 px, both
-   landing on 196 px tall and 622 px wide in total.
 
 Keep the full-resolution original in `outputs/` - that is the one to cite in the
 dissertation, where a fixed `\includegraphics` width makes the DPI an asset rather than a
@@ -125,7 +120,7 @@ tables.
 
 | Name | Caption | Shown in |
 |------|---------|----------|
-| `carla_3d` | **Present.** Chase view across two consecutive episodes, each parking into its own highlighted target bay | `README.md` |
+| `carla_3d` | **Present.** Chase view across an episode boundary, parking into a different highlighted bay each time | `README.md` |
 | `visualiser_2d` | **Present.** Parking as the GNSS fix state climbs degraded -> standalone -> float -> RTK fixed | `README.md`, `scripts/visualise/README.md` |
 | `baseline_comparison` | Vanilla PPO vs full method side by side under degraded GNSS | `uncertainty_rl/evaluation/README.md` |
 | `inspect_layout` | Layout inspector showing bay outlines, patrol path, and pedestrian zones | `scripts/inspect/README.md` |

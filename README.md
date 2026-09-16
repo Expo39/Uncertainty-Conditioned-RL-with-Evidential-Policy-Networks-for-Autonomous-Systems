@@ -73,22 +73,24 @@ flowchart TB
 
 ## Demos
 
-The same policy from two views: the CARLA chase camera on the left, the 2D bird's-eye
-viewer on the right.
+The evidential policy parking in CARLA, followed by a chase camera. The clip spans an
+episode boundary - the car sits parked, the episode resets, and it drives to a different
+target bay and parks again. The overlays are the layout inspector's own: blue bay
+outlines, with each episode's target bay highlighted green.
 
 <p align="center">
-  <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="336">
-  <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="286">
+  <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="820">
 </p>
 
-**Left** - two consecutive episodes in CARLA: the car parks, the episode resets, and it
-drives to a different bay. The overlays are the layout inspector's own: blue bay outlines,
-with each episode's target bay highlighted green.
+The 2D bird's-eye viewer at the end of an episode. The GNSS fix state climbs back up the
+ladder as the car closes on the bay - degraded (red) to standalone (orange) to RTK float
+(amber) to RTK fixed (green) - and the car parks once localisation is trustworthy again.
+The chain is neighbour-only, so a recovery never skips a rung; here the float step lasts a
+few tenths of a second.
 
-**Right** - the end of one episode in the 2D viewer, with the GNSS fix state climbing back
-up the ladder as the car closes on the bay: degraded (red) to standalone (orange) to RTK
-float (amber) to RTK fixed (green). The chain is neighbour-only, so a recovery never skips
-a rung.
+<p align="center">
+  <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
+</p>
 
 > The ring around the car is the tier's **configured** 1-sigma GNSS noise, not the EKF's
 > live covariance estimate. Degraded injects zero-mean 5 m noise, but the fused estimate
