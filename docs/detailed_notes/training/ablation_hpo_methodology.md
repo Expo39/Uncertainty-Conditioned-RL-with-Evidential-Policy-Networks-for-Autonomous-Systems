@@ -17,11 +17,15 @@ run later, and the fairness constraints it would have to satisfy.
 
 ## The tension
 
-- A FAIR ablation needs each baseline to perform at its own best, so a measured
-  gap reflects the method and not unlucky tuning of one condition.
-- But if you tune one configuration and apply those hyperparameters to all four,
-  whichever configuration you tuned on gets an implicit advantage - the "shared
-  hyperparameters overfit to one ablation" problem.
+Established practice is to optimise each method under comparison separately, since
+values that suit one method rarely suit another. An ablation inverts that requirement:
+the arms differ by one component at a time, and every other variable is held constant so
+the measured gap can be attributed to that component. Tuning per arm would add the
+configuration to the list of things that differ.
+
+The conflict is resolved in favour of the controlled comparison, because the
+contribution rests on the ablation. The cost is that each arm is ranked at one operating
+point rather than at its best, which is stated as a limitation rather than hidden.
 
 ## What the literature says
 
@@ -30,10 +34,12 @@ recommendations matter here:
 
 1. **Tune each algorithm individually** rather than forcing a single shared
    hyperparameter set, because the hyperparameter landscape differs by algorithm and a
-   shared set disadvantages whichever configuration it was not tuned for.
+   shared set disadvantages whichever configuration it was not tuned for. This addresses
+   comparisons between algorithms; it does not carry over to an ablation, where adding a
+   per-arm search would confound the variable under test.
 2. **Separate tuning seeds from evaluation seeds.** The optimum can overfit to the
    tuning seed, so reporting on held-out seeds prevents that overfitting from inflating
-   results. This is the single most important control.
+   results. This control applies whenever tuning happens at all.
 
 Henderson et al. [2] show that hyperparameters and random seeds swing RL results
 dramatically, and recommend reporting mean and variance across multiple seeds with
@@ -41,18 +47,21 @@ significance testing rather than the best run.
 
 ## If tuning were run
 
-Neither option below was taken; Section 3.8.1 records why. Were tuning run later, two
-exist.
+No tuning was run; Section 3.8.1 records why. Were it run later, only one option
+preserves the ablation.
 
-Tuning the vanilla baseline once and sharing that set to all four arms is the
-conservative choice: the set is optimised for the weakest arm, so it biases against the
-method, and a win under it cannot be attributed to favourable tuning. Tuning each arm
-separately follows Eimer et al. [1] and gives every condition its own best chance, but
-costs roughly four times as much and reintroduces the "tuned for your own method"
-objection that sharing removes.
+Tuning the vanilla baseline once and sharing that set to all four arms keeps the
+configuration constant across the comparison, so it stays a held variable rather than
+becoming a fifth free one. It is also conservative in direction: the set is optimised
+for the weakest arm, so it biases against the method, and a win under it cannot be
+attributed to favourable tuning.
 
-Either way the fairness control is the same and non-negotiable: tuning seeds disjoint
-from evaluation seeds [1], with multi-seed reporting [2].
+Tuning each arm separately follows the general advice of Eimer et al. [1], but that
+advice addresses comparisons between algorithms, not an ablation in which every other
+variable is pinned. Applied here it would confound the result, as set out below.
+
+Whichever is used, tuning seeds must stay disjoint from evaluation seeds [1], with
+multi-seed reporting [2].
 
 ### One set for the whole curriculum
 
@@ -100,15 +109,21 @@ Architecture-defining settings are NOT tuned and NOT varied: `net_arch`,
 `activation`, `policy_type` (except where it IS the ablation), observation/action
 dims, `include_covariance` / `include_obstacle_obs` (except where they ARE the
 ablation). These define the ablation itself; tuning them would confound the
-comparison. Resume across phases also requires them constant.
+comparison. Resume across stages also requires them constant, as the saved weights
+would not otherwise load.
 
-### Why tune per-baseline does NOT reintroduce unfairness
+### Why per-baseline tuning introduces bias
 
-Tuning each baseline to its own optimum is the opposite of unfair: it gives every
-condition its best chance, so the comparison is "best vanilla PPO against best full
-method", not "full method against a handicapped baseline". The fairness control is the
-seed separation, which stops any baseline from winning by overfitting hyperparameters to
-the seeds it is scored on.
+Tuning each arm separately is the standard advice outside an ablation, and it is the
+wrong move inside one. The four arms isolate the actor head and the covariance gate by
+holding every other variable constant. A separate search per arm makes the configuration
+a fifth variable, so any measured difference becomes partly attributable to the four
+searches converging unevenly rather than to the architecture under test. Seed separation
+does not rescue this: it controls overfitting to the seeds an arm is scored on, not the
+confound introduced by four independent searches.
+
+This is why the reported experiments are untuned, and why per-arm tuning would not be
+the default even with unlimited compute.
 
 ## References
 
