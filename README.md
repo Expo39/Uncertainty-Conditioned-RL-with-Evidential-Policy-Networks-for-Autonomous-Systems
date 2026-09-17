@@ -53,6 +53,11 @@ back up the hierarchy as the vehicle closes on the bay, passing from degraded in
 through standalone in orange and RTK float in amber to RTK fixed in green. Transitions
 are permitted only between neighbouring tiers, so a recovery never skips a rung.
 
+The conditioned behaviour is legible in the telemetry beneath the lot. Under the degraded
+tier the vehicle brakes and holds station rather than commit to a bay it cannot locate,
+and the approach is resumed once the fix recovers to float and then fixed. No such
+withholding is scripted anywhere in the reward, as noted under [Results](#results).
+
 <p align="center">
   <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
 </p>
