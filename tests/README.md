@@ -4,7 +4,7 @@ pytest suite for `uncertainty_rl`. Two tiers: CPU-only unit tests (no CARLA, no 
 
 ## At a glance
 
-- Unit tests run on any machine - the env falls back to `carla = None` and `_ROS2_AVAILABLE = False`, returning zero uncertainty features
+- Unit tests run on any machine: the env import falls back to `carla = None`, and the EKF subscriber reads JSON files rather than DDS, so it simply reports no data when the stack is absent
 - Integration tests require the full three-tier Docker stack (CARLA + ROS 2 + training container)
 - All tests use the shared fixtures in `conftest.py`
 
@@ -14,7 +14,7 @@ pytest suite for `uncertainty_rl`. Two tiers: CPU-only unit tests (no CARLA, no 
 flowchart TB
     subgraph local["Local / CI (no GPU)"]
         UNIT["make test-unit\n(unit tests, -m 'not integration')"]
-        VERIFY["make verify\n(unit + lint + typecheck + sanity)"]
+        VERIFY["make verify\n(lint + typecheck + sanity, no tests)"]
     end
 
     subgraph docker["Docker (GPU machine)"]
@@ -52,8 +52,8 @@ make docker-test               # Full suite (unit + integration)
 | `test_carla_parking.py` | `CARLAParkingEnv` obs/action shapes, geometry helpers (`point_in_polygon`, `yaw_from_quaternion`, `wrap_angle_symmetric`), `build_observation`, `extract_obstacle_features`, `load_floor_plan`, `wait_for_ekf`, bay sampling, reward, `VisStateWriter` |
 | `test_covariance_utils.py` | `extract_2d_covariance_features`, `validate_covariance_matrix`, `get_covariance_dimension`, `make_diagonal_covariance` |
 | `test_sb3_integration.py` | SB3 + evidential policy: policy construction, forward pass, action sampling, actor wiring |
-| `test_evaluation.py` | `EvaluationMetrics` container and aggregation, `_scale_sensor_noise` (no CARLA connection) |
-| `test_covariance_subscriber.py` | `_CovarianceSubscriber`: JSON file reading, mtime staleness guard, `invalidate()`, `get_latest_uncertainty()`, `get_latest_pose()`, `has_data` |
+| `test_evaluation.py` | `EvaluationMetrics` container and aggregation, the `_classify_outcome` failure taxonomy, and `_scale_sensor_noise` (no CARLA connection) |
+| `test_covariance_subscriber.py` | `_CovarianceSubscriber`: JSON file reading, the seq-based staleness guard (mtime only skips a re-parse), `invalidate()`, `get_latest_uncertainty()`, `get_latest_pose()`, `has_data` |
 | `test_train_ppo.py` | `linear_schedule`, `EnvDiagnosticsCallback`, `make_env` helpers (no CARLA required) |
 | `test_tune_hyperparams.py` | Optuna sampling, `apply_best_params`, `TrialEvalCallback` (no CARLA or GPU required) |
 | `test_safety_wrapper.py` | `SafetyWrapper.apply()`, `step()`, `reset()`, `get_episode_safety_stats()` |
@@ -77,8 +77,9 @@ The last four cover `scripts/`, not the `uncertainty_rl` package.
 |------|---------------|
 | `test_ros2_integration.py` | EKF covariance arrival within timeout, dimension check (3-element vector), non-zero uncertainty in `_get_state()`, EKF pose vs CARLA ground truth (4 tests) |
 
-`test_carla_parking.py` straddles both tiers: it is listed above as a unit test, but one
-of its cases carries `@pytest.mark.integration` and so is excluded from unit runs.
+`test_carla_parking.py` straddles both tiers: it is listed above as a unit test, but its
+`TestGymnasiumAPIContract` class carries `@pytest.mark.integration`, so those six cases
+need a live CARLA server and are excluded from unit runs.
 
 ## Key fixture constants
 
@@ -106,7 +107,7 @@ than reading a fixture. The structural constants themselves (`TOTAL_OBS_DIM`,
 | `envs/safety_wrapper.py` | `test_safety_wrapper.py` |
 | `training/train_ppo.py` | `test_train_ppo.py` |
 | `training/tune_hyperparams.py` | `test_tune_hyperparams.py` |
-| `evaluation/evaluate.py` | `test_evaluation.py` |
+| `evaluation/evaluate.py`, `metrics.py`, `env_builder.py` | `test_evaluation.py` |
 | `utils/covariance_utils.py` | `test_covariance_utils.py` |
 | `utils/logging.py` | `test_debug_logger.py` |
 | `utils/actuation_calibration.py` | `test_actuation_calibration.py` |
