@@ -43,7 +43,7 @@ git clone <repo-url>
 cd Uncertainty-Conditioned-RL-with-Evidential-Policy-Networks-for-Autonomous-Systems
 make docker-build            # first build - bakes ROS 2 nodes into images (~15-20 min)
 make docker-up               # start CARLA + ROS 2 + training stack
-make docker-ps               # verify all three services are healthy
+make docker-ps               # training container status (docker ps shows the workers too)
 ```
 
 > **Build cache.** The ROS 2 node sources are COPYed into the `ros2-bridge` image
@@ -56,17 +56,26 @@ make docker-ps               # verify all three services are healthy
 
 ## Container Architecture
 
-Three containers are orchestrated through `docker-compose.yml`:
+Three containers make up the stack, split across two compose files. `make docker-up`
+brings up both: `scripts/multi_workers/workers_up.sh` starts the environment workers
+from `docker-compose.env_workers.yml`, then `docker-compose.yml` starts the training
+container.
 
-| Container | Image Base | Contents |
-|-----------|-----------|----------|
-| `carla-server` | CARLA 0.9.16 | Headless simulation with GPU passthrough |
-| `ros2-bridge` | ROS 2 Jazzy | CARLA bridge, `robot_localization` EKF, noise relay nodes |
-| `training` | NGC PyTorch 24.10 | Stable-Baselines3, evidential networks, rclpy (Humble) |
+| Container | Image Base | Compose file | Contents |
+|-----------|-----------|--------------|----------|
+| `carla-server` | CARLA 0.9.16 | `env_workers` | Headless simulation with GPU passthrough |
+| `ros2-bridge` | ROS 2 Jazzy (Noble) | `env_workers` | CARLA bridge, `robot_localization` EKF, noise relay nodes |
+| `training` | NGC PyTorch 24.10 | `docker-compose.yml` | Stable-Baselines3, evidential networks, rclpy (Humble) |
+
+`docker-compose.yml` also defines a `demo` service, used by the visualisation targets,
+and a `tensorboard` service. `docker-compose.inspect.yml` adds the windowed-CARLA
+inspect stack, which the `docker-inspect*` targets bring up separately.
 
 The two ROS 2 distributions differ because the NGC PyTorch base image is built on
 Ubuntu 22.04, which carries Humble, whereas the bridge runs on Ubuntu 24.04 and
-carries Jazzy. DDS is distribution-agnostic, so the two communicate without a shim.
+carries Jazzy. Rather than subscribe across that boundary, the bridge writes EKF state
+to `ekf_state.json` on a shared volume and the training container reads it, which
+sidesteps cross-distro serialisation differences entirely.
 
 Code directories are bind-mounted. Edits made on the host are reflected immediately
 inside the containers.
@@ -141,7 +150,7 @@ to load.
 ## Verifying an Installation
 
 ```bash
-make docker-ps            # all three services healthy
+make docker-ps            # training container status
 make docker-test-unit     # unit tests, inside the container
 make verify               # lint + typecheck + import, exactly what CI runs
 make docker-train-short   # 10k-step smoke test across the full stack
