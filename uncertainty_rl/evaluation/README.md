@@ -4,7 +4,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 ## At a glance
 
-- 7 conditions are defined: 6 de-confounded single-factor conditions plus one mid-episode degradation condition. Each de-confounded condition varies exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors). The analysis scripts then drop the two held-tier conditions by default, leaving the 5 retained conditions that the tables report, of which the headline figure draws 4
+- 4 conditions, each varying exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors): a reference pair, a generalisation probe and a within-episode drift condition
 - Base noise from `env_config.yaml`, with per-condition multipliers applied by `_scale_sensor_noise()`. LiDAR noise is always enabled at eval, matching the training realism floor
 - Success is the geometric criterion evaluated at `STRICT_BAY_MARGIN`, defined in [utils/README.md](../utils/README.md#the-success-criterion)
 - `n_episodes = 200` per condition in `eval_config.yaml`, falling back to 100 when the key is unset, with deterministic (mean) actions. Pooling three seeds gives the 600 episodes per condition behind the reported results
@@ -64,71 +64,49 @@ flowchart TB
 
 ## Evaluation conditions
 
-De-confounded sweep: every condition varies exactly ONE factor against the
-in-distribution anchor (rectangle lot, bay occupancy 0.5, no dynamic actors).
-The GNSS level is set by `held_gnss_tier`, which names one fix-state tier from
-`configs/deployment/sim/gnss_noise_profiles.yaml` and HOLDS it for the whole episode by
-suppressing the relay's Markov drift through the per-episode `hold_tier` flag, so the
-level is a clean independent variable. There is no GNSS noise multiplier. Only
-`lidar_noise_multiplier` scales a sensor stddev directly. The held conditions still go through the
-exact per-episode publish training uses (tier signal + GNSS datum re-latch),
-which is why no condition needs a separate code path. The anchor leaves the flag
-off and runs the training noise process itself (per-episode tier sampling +
-mid-episode Markov drift). The exact list lives in `configs/eval_config.yaml`.
+Four conditions are reported, each varying exactly ONE factor against the
+in-distribution anchor (rectangle lot, bay occupancy 0.5, no dynamic actors) so any
+difference is attributable to that factor. They group into a reference pair, a
+generalisation probe and a within-episode drift condition. The exact list lives in
+`configs/eval_config.yaml`.
 
-### Anchor (training noise process, rectangle)
+Two mechanisms set the condition. `held_gnss_tier` names one fix-state tier from
+`configs/deployment/sim/gnss_noise_profiles.yaml` and holds it for the whole episode by
+suppressing the relay's Markov drift through the per-episode `hold_tier` flag. Leaving
+the flag off instead runs the training noise process itself (per-episode tier sampling
+plus mid-episode Markov drift). There is no GNSS noise multiplier; only
+`lidar_noise_multiplier` scales a sensor stddev directly. Every condition goes through
+the same per-episode publish training uses (tier signal + GNSS datum re-latch), so none
+needs a separate code path.
 
-The two anchor conditions both run the full training GNSS process (per-episode
-tier sampling + mid-episode Markov drift), differing only in occupancy. The
-empty-lot control removes the LiDAR neighbour-car crutch so the policy must park
-on localisation alone - the `anchor` / `anchor_empty` pair isolates how much the
-policy leans on neighbours versus localisation.
+### Reference pair (training noise process, rectangle)
+
+Both run the full training GNSS process, differing only in occupancy. The empty-lot
+control removes the LiDAR neighbour-car crutch so the policy must park on localisation
+alone, which isolates how much it leans on neighbours versus localisation.
 
 | Condition | GNSS | Bay occ. | Notes |
 |-----------|------|----------|-------|
-| `anchor_deployment` | training Markov process | 0.5 | The deployment condition |
+| `anchor_deployment` | training Markov process | 0.5 | In-distribution reference |
 | `anchor_empty` | training Markov process | 0.0 | No-obstacle control (LiDAR sees nothing) |
 
-### GNSS axis - degradation-slope endpoints (occupancy 0.5, rectangle)
-
-Hold one RTK fix-state tier constant all episode (`held_gnss_tier`, bypassing the
-Markov chain) so the localisation level is a controlled independent variable. Only
-the slope ENDPOINTS are kept: the intermediate float/standalone tiers (~0.36/0.47 m
-EKF error) sit inside the bay's lateral slack at occupancy 0.5, so the covariance
-arms and the blind arms are indistinguishable there.
-
-| Condition | Held tier | Approx. noise | Notes |
-|-----------|-----------|---------------|-------|
-| `gnss_fixed` | `rtk_fixed` | ~0.02 m | Clean baseline (slope start) |
-| `gnss_degraded` | `degraded` | ~5.0 m | Worst tier, with safety handoff expected (slope end) |
-
-### LiDAR axis (GNSS held at RTK fixed, occupancy 0.5, rectangle)
-
-Degrades only the obstacle channel (obs 8-12). The EKF fuses GNSS + IMU and
-never consumes LiDAR, so the localisation stds stay at the RTK-fixed floor:
-an EKF-std safety gate is structurally blind to this condition, while the
-evidential head sees the corrupted obstacle features.
-
-| Condition | LiDAR mult | Approx. noise | Notes |
-|-----------|------------|---------------|-------|
-| `lidar_degraded` | 25.0x | 0.5 m 1-sigma | EKF-blind sensor degradation |
-
-### OOD layout generalisation (GNSS held at RTK fixed, occupancy 0.5)
+### Generalisation probe (occupancy 0.5)
 
 Training uses the `rectangle` floor plan only, so `irregular_a` (five-sided lot with
-a diagonal top wall) is the designated OOD layout. Held at RTK fixed so the only
-OOD factor is the layout - isolating generalisation from localisation degradation.
+a diagonal top wall) is the designated OOD layout. Held at RTK fixed so geometry is the
+only OOD factor, isolating generalisation from localisation degradation.
 
 | Condition | Floor plan | Held tier |
 |-----------|-----------|-----------|
 | `ood_irregular_rtk_fixed` | `irregular_a` | `rtk_fixed` |
 
-### Mid-episode degradation (occupancy 0.5, rectangle)
+### Within-episode drift (occupancy 0.5, rectangle)
 
-Unlike the held-tier conditions, this one starts clean and drifts one-way into the
-degraded tier mid-episode (`degrade_one_way`, never recovering). It is the causal
-test for handover TIMING: does the controller hand over soon AFTER the localisation
-crosses into the degraded regime, rather than from the spawn? See
+This condition starts clean and drifts one-way into the degraded tier mid-episode
+(`degrade_one_way`, never recovering), which is the ecologically valid form of
+degradation: a fix is lost during a manoeuvre rather than being absent from the start.
+It is the causal test for handover TIMING: does the controller hand over soon AFTER the
+localisation crosses into the degraded regime, rather than from the spawn? See
 `scripts/analysis/handover_timing.py` (switch regime).
 
 | Condition | GNSS | Bay occ. | Notes |
@@ -189,19 +167,14 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 
 ## Results by condition
 
-Success rate (top) and mean final position error (bottom) for each arm, per reported
+Success rate (top) and mean final position error (bottom) for each arm, per
 condition. `full_method` leads on success in every condition that any arm solves, and all four
 arms score 0% on `ood_irregular_rtk_fixed`, which is why that group is empty in the top
 panel and appears only in the position-error panel below.
 
 <p align="center">
-  <img src="../../docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the reported evaluation conditions" width="620">
+  <img src="../../docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the four evaluation conditions" width="620">
 </p>
-
-`configs/eval_config.yaml` defines seven conditions. The analyses drop the two held tiers
-(`gnss_fixed`, `gnss_degraded` - each pins one fix state for a whole episode, so the slope
-between them is flat by construction) and the figures additionally drop `lidar_degraded`,
-leaving the four shown.
 
 To regenerate:
 
@@ -232,6 +205,29 @@ The wrapper itself remains correct as a *controller*: a severity-graded response
 signal (total uncertainty), not two signals claimed to be different kinds of uncertainty.
 @see the uncertainty-channels section of the dissertation
 (`docs/AntonioGaldes_Dissertation.pdf`), which reports the gate AUC results.
+
+## Conditions held for future analysis
+
+`configs/eval_config.yaml` defines three further conditions beyond the four above. The
+sweep runs them and writes their per-episode records, but the analysis scripts exclude
+them from the summaries and figures, so they carry no reported result. They are retained
+because the data is already collected and each answers a question outside the scope of
+this work.
+
+| Condition | What it varies | Why it is not reported |
+|-----------|----------------|------------------------|
+| `gnss_fixed` | Holds `rtk_fixed` all episode | A pinned tier gives no within-episode variation, and the EKF suppresses the static raw fault, so the slope against `gnss_degraded` is flat by construction |
+| `gnss_degraded` | Holds `degraded` all episode | As above; the pair was intended as slope endpoints, which the flat slope makes uninformative |
+| `lidar_degraded` | Obstacle channel at 25x noise (obs 8-12) | The EKF never consumes LiDAR, so localisation std stays pinned at the RTK-fixed floor and the condition carries no localisation-uncertainty signal |
+
+`lidar_degraded` is the most useful of the three for later work: it is the one condition
+where an EKF-std safety gate is structurally blind while the evidential head still sees
+corrupted features, which makes it the natural test for whether a policy-side uncertainty
+signal adds anything a covariance gate cannot provide.
+
+The exclusions are `drop_unreported()` and `keep_varying()` in
+`scripts/analysis/ablation.py`, both of which take an explicit condition list, so a later
+analysis can opt these back in without touching the sweep.
 
 ## See also
 
