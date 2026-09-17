@@ -22,13 +22,13 @@ from centimetres to metres during a manoeuvre. The pose estimate remains availab
 plausible throughout, so a vehicle with no channel to carry that change commits to the
 manoeuvre regardless.
 
-Two mechanisms are examined on a PPO parking agent, one supplying uncertainty and the
-other allowing the actor to use it. On the input side, an EKF fusing RTK-GNSS with an
-IMU passes its posterior covariance into the observation. On the output side, that
-signal is consumed by an evidential Normal-Inverse-Gamma actor head, which produces
-per-action epistemic and aleatoric estimates in a single forward pass. Training runs in
-CARLA under an always-on GNSS fix-state Markov chain, and the reward pays for the
-outcome alone. Uncertainty is thus observed but never rewarded, so any
+Two mechanisms are examined on a PPO [1] parking agent, one supplying uncertainty and
+the other allowing the actor to use it. On the input side, an EKF [2] fusing RTK-GNSS
+with an IMU passes its posterior covariance into the observation. On the output side,
+that signal is consumed by an evidential Normal-Inverse-Gamma actor head [3], which
+produces per-action epistemic and aleatoric estimates in a single forward pass. Training
+runs in CARLA [4] under an always-on GNSS fix-state Markov chain, and the reward pays
+for the outcome alone. Uncertainty is thus observed but never rewarded, so any
 uncertainty-dependent behaviour must emerge on its own.
 
 ---
@@ -171,6 +171,10 @@ bay parking. CARLA ground truth is used for reward computation alone and is neve
 observable to the agent, which keeps the observation path identical between simulation
 and a real vehicle. The evidential head is applied to the actor alone, not the critic.
 
+PPO is trained through Stable-Baselines3 [5], and the filter is the `robot_localization`
+implementation [2]. The ablation and seed protocol follow the reporting practice
+recommended for RL comparisons [6].
+
 ---
 
 ## Repository map
@@ -186,8 +190,22 @@ uncertainty_rl/       Main package
 configs/              YAML only, nothing hardcoded in source
 scripts/              Layout generation, inspectors, visualiser, analysis
 tests/                Unit and integration tiers
-docs/                 Dissertation PDF, technical notes, media
+docs/                 Dissertation PDF, detailed notes, media
+  detailed_notes/       Implementation notes keyed to dissertation sections
 ```
+
+### What `docs/detailed_notes/` is
+
+The dissertation is the canonical account of the design and its justification. The
+detailed notes are the implementation layer beneath it: the index layouts, parameter
+provenance, runtime configuration and code maps that a reader needs in order to work on
+the source, but which would bloat the dissertation or an inline comment.
+
+Each note names the dissertation section that owns its topic and records only what that
+section leaves out, so the two are complements rather than copies. Where a note and the
+dissertation ever disagree, the dissertation is correct and the note is stale. A per-file
+index, with the canonical section for each, is in
+[docs/detailed_notes/README.md](docs/detailed_notes/README.md).
 
 ---
 
@@ -226,8 +244,41 @@ make docker-train STAGE=1 BASELINE=full_method
 | CARLA inspector modes, CLI flags | [scripts/inspect/README.md](scripts/inspect/README.md) |
 | 2D visualiser, JSONL schema, Pygame controls | [scripts/visualise/README.md](scripts/visualise/README.md) |
 | Sim deployment config files and their consumers | [configs/deployment/sim/README.md](configs/deployment/sim/README.md) |
-| Technical notes index (NIG init, obs space, EKF, layouts) | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
+| Detailed notes index, with the canonical dissertation section for each | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/BUILDER.md](scripts/layouts/BUILDER.md) |
+
+---
+
+## References
+
+[1] J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov, "Proximal policy
+    optimization algorithms," 2017, arXiv:1707.06347. [Online]. Available:
+    https://arxiv.org/abs/1707.06347
+
+[2] T. Moore and D. Stouch, "A generalized extended Kalman filter implementation for the
+    Robot Operating System," in *Intelligent Autonomous Systems 13 (IAS-13)*, vol. 302,
+    Cham, Switzerland: Springer, 2015, pp. 335-348,
+    doi: [10.1007/978-3-319-08338-4_25](https://doi.org/10.1007/978-3-319-08338-4_25).
+
+[3] A. Amini, W. Schwarting, A. Soleimany, and D. Rus, "Deep evidential regression," in
+    *Advances in Neural Information Processing Systems*, vol. 33, 2020, pp. 14927-14937.
+
+[4] A. Dosovitskiy, G. Ros, F. Codevilla, A. Lopez, and V. Koltun, "CARLA: An open urban
+    driving simulator," in *Proc. 1st Annual Conf. Robot Learning (CoRL)*, vol. 78,
+    PMLR, 2017, pp. 1-16.
+
+[5] A. Raffin, A. Hill, A. Gleave, A. Kanervisto, M. Ernestus, and N. Dormann,
+    "Stable-Baselines3: Reliable reinforcement learning implementations," *Journal of
+    Machine Learning Research*, vol. 22, no. 268, pp. 1-8, 2021. [Online]. Available:
+    http://jmlr.org/papers/v22/20-1364.html
+
+[6] P. Henderson, R. Islam, P. Bachman, J. Pineau, D. Precup, and D. Meger, "Deep
+    reinforcement learning that matters," in *Proc. AAAI Conf. Artificial Intelligence*,
+    2018, pp. 3207-3214,
+    doi: [10.1609/aaai.v32i1.11694](https://doi.org/10.1609/aaai.v32i1.11694).
+
+The full bibliography is in the dissertation,
+[docs/AntonioGaldes_Dissertation.pdf](docs/AntonioGaldes_Dissertation.pdf).
 
 ---
 
