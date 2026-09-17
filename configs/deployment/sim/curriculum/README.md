@@ -45,7 +45,9 @@ Design rules behind the table:
   (`../gnss_noise_profiles.yaml`) is fixed and identical across stages, so the
   covariance features never degenerate, occupancy is always above 0 so LiDAR carries
   signal, and every bay set spans multiple approach orientations so `dx/dy/dyaw` vary.
-  `tests/test_curriculum_invariants.py` enforces this in CI.
+  `tests/test_curriculum_invariants.py` asserts all of this; it parses YAML only, so it
+  needs no torch, but it runs under `make docker-test-unit` rather than in CI (CI runs
+  lint, typecheck and an import check only).
 - **One axis's range ramps per stage** (bays with a co-tightening margin in 1-4,
   occupancy in 5-6), so a stall is attributable to the axis that moved.
 - **Stage 1 carries the only from-scratch skill**: its four bays already span all three
@@ -97,8 +99,8 @@ Keys are allowlisted - `stage_timesteps`, `learning_rate`, `learning_rate_final`
 architectural key (`net_arch`, `activation`, `policy_type`, `include_covariance`,
 `include_obstacle_obs`, and hence the observation and action dimensions), so a stage can
 never change the policy shape and break weight loading on resume. No stage file sets any
-of them; `tests/test_curriculum_invariants.py` mirrors the allowlist and fails CI if one
-appears.
+of them; `tests/test_curriculum_invariants.py` mirrors the allowlist and fails under
+`make docker-test-unit` if one appears.
 
 Only `stage_timesteps`, `learning_rate(_final)` and `ent_coef(_final)` are actually set;
 the remaining allowlisted keys stay at their `train_config.yaml` values in every stage.
