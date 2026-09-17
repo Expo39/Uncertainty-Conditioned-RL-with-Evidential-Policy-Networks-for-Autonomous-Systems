@@ -7,7 +7,6 @@ Main Python package. Trains, evaluates, and deploys an uncertainty-conditioned R
 - Continuous observation comprising EKF speed and yaw rate, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance features. Observation flags toggle the covariance and obstacle blocks, and the active dimension is computed at runtime by `compute_obs_dim()` in [`envs/_parking_core.py`](envs/_parking_core.py) from the structural constants in [`utils/constants.py`](utils/constants.py).
 - Continuous action space `[steering, throttle, brake]` with no reverse gear, covering forward perpendicular bay parking only. See [envs/README.md](envs/README.md#action-space).
 - PPO with a Normal-Inverse-Gamma evidential actor head and a standard MLP critic.
-- Optional dual-encoder path that processes state and covariance features separately before fusion.
 - A seven-condition evaluation sweep, varying the GNSS fix state, LiDAR noise, bay occupancy and floor plan one factor at a time. The conditions are listed in [`configs/eval_config.yaml`](../configs/eval_config.yaml).
 - Sim-to-real capable, since all observations come from the EKF and LiDAR rather than CARLA ground truth.
 
@@ -15,7 +14,7 @@ Main Python package. Trains, evaluates, and deploys an uncertainty-conditioned R
 
 | Subpackage | Responsibility |
 |-----------|---------------|
-| `networks/` | Evidential deep learning policy: NIG distributions, EvidentialPPO, dual-encoder actor |
+| `networks/` | Evidential deep learning policy: NIG distributions, EvidentialPPO, NIG actor head |
 | `envs/` | CARLA Gymnasium parking environment with real EKF covariance in observations |
 | `training/` | PPO training loop and Optuna hyperparameter tuning |
 | `evaluation/` | Condition sweep across GNSS degradation scenarios |
@@ -92,7 +91,7 @@ values rather than relying on this list.
 
 ## See also
 
-- [networks/README.md](networks/README.md) - NIG actor, dual-encoder, EvidentialPPO
+- [networks/README.md](networks/README.md) - NIG actor, EvidentialPPO
 - [envs/README.md](envs/README.md) - Gymnasium env, observation space, reward function
 - [training/README.md](training/README.md) - training loop, Optuna tuning
 - [evaluation/README.md](evaluation/README.md) - condition degradation sweep

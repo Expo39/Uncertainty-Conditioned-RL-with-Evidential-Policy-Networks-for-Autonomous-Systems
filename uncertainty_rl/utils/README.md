@@ -196,5 +196,5 @@ from uncertainty_rl.utils import (
 
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [envs/README.md](../envs/README.md) - `CARLAParkingEnv` which consumes most of these utilities
-- [networks/README.md](../networks/README.md) - evidential policy that uses `VEHICLE_STATE_DIM` and `COVARIANCE_FEATURES_DIM` for dual-encoder slicing
+- [networks/README.md](../networks/README.md) - evidential policy built on these dimension constants
 - [scripts/visualise/README.md](../../scripts/visualise/README.md) - the visualiser that reads `VisStateWriter` output

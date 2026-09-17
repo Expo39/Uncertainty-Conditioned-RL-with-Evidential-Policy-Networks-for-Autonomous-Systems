@@ -8,7 +8,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 - Aleatoric uncertainty (data noise): $\beta / (\alpha - 1)$. Action std uses $\sqrt{\text{aleatoric}}$ only.
 - Epistemic uncertainty (model confidence): $\beta / (\nu(\alpha - 1))$. Not added to action noise.
 - Softplus-clamped NIG parameters with an aleatoric floor and ceiling enforced before the sqrt in the action distribution (the floor stops the action std collapsing, and the ceiling clamps the variance at 1.0).
-- Two actor modes: flat MLP or dual-encoder (state and covariance through separate pathways before fusion).
+- The actor is a flat MLP over the full observation.
 - Evidential loss applies to the actor only. Critic is a standard Gaussian MLP.
 - Prior-anchoring quadratic-ratio regularisation (RL-stable, replaces the Amini 2020 supervised term).
 
@@ -26,77 +26,36 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 flowchart TB
     OBS["obs"]
 
-    subgraph flat["Flat mode  (use_uncertainty_conditioning = False)"]
-        F1["MLP extractor\nfull obs"] --> EL1["EvidentialLayer"]
-    end
-
-    subgraph dual["Dual-encoder mode  (use_uncertainty_conditioning = True)"]
-        SE["state encoder\nobs minus covariance block"] --> CAT["concat + fusion MLP"]
-        UE["uncertainty encoder\nCOVARIANCE_FEATURES_DIM block"] --> CAT
-        CAT --> EL2["EvidentialLayer"]
-    end
-
-    OBS --> flat
-    OBS --> dual
+    OBS --> F1["MLP extractor\nfull obs"]
+    F1 --> EL1["EvidentialLayer"]
     EL1 --> NIG["NIG params\ngamma  nu  alpha  beta"]
-    EL2 --> NIG
     NIG --> ACT["sampled action\nstd = sqrt(beta / (alpha - 1))"]
     NIG --> REG["prior-anchoring regulariser"]
     OBS --> CRIT["critic MLP  (full obs)  ->  value"]
 ```
 
-> In dual-encoder mode the observation is split into two blocks. The
-> covariance block (`obs[:, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM +
-> COVARIANCE_FEATURES_DIM]`) flows into the uncertainty encoder, and the rest
-> of the observation (speed, yaw rate, relative target pose, LiDAR
-> clearances) flows into the state encoder. Both encoders feed a shared
-> fusion MLP before the `EvidentialLayer` head. The actor works on the
-> **raw observation** - the dual-encoder bypasses the SB3 MLP extractor's
-> policy branch entirely. The critic is unchanged: it still consumes the
-> full observation through the MLP extractor's value branch.
+> The covariance features enter as ordinary observation dimensions, alongside
+> speed, yaw rate, the relative target pose and the LiDAR clearances. The
+> critic consumes the same full observation through the MLP extractor's value
+> branch.
 
-## Dual-encoder actor (`use_uncertainty_conditioning = True`)
+## Unused capability: `use_uncertainty_conditioning`
 
-This is the architecture that realises the project's central idea on the policy side:
-the covariance block (the EKF's "how sure am I about where I am?") enters through a
-**dedicated pathway** so it can modulate the action without being mixed into the
-navigation features early on.
+`UncertaintyConditionedActor` routes the covariance block through its own encoder before
+fusing it with the navigation features, rather than letting it enter as plain observation
+features. It is implemented and unit-tested but **was never used**:
+`use_uncertainty_conditioning` is `false` in `train_config.yaml` and no reported result
+enables it.
 
-**Wiring** (in `EvidentialActorCriticPolicy._build` / `_get_nig_from_obs`):
+The flag is off because the 2x2 ablation requires the covariance to enter identically for
+the standard and evidential heads, leaving the head as the only difference between arms.
+A dedicated pathway on one side would confound that comparison, so it is a separate
+architectural variant rather than part of the method under test.
 
-- The observation is split directly, not via the MLP extractor's `policy_net`:
-  - **Navigation-state block** = `cat(obs[:, :VEHICLE_STATE_DIM], obs[:, cov_end:])` -
-    speed and yaw rate (before the covariance) concatenated with the relative target bay
-    pose and the LiDAR clearances (after it). Width `obs_dim - COVARIANCE_FEATURES_DIM`.
-  - **Covariance block** = `obs[:, VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`
-    (`std_x, std_y, std_yaw`). Width `COVARIANCE_FEATURES_DIM`.
-- Each block goes through its own encoder (`Linear -> ReLU -> LayerNorm`) to `hidden_dim // 2`.
-  The two halves are concatenated to `hidden_dim` and passed through the fusion MLP, then
-  the shared `EvidentialLayer` head emits the NIG parameters.
-- `hidden_dim` is taken from `self.mlp_extractor.latent_dim_pi`, so **`net_arch` in
-  `train_config.yaml` controls both encoders symmetrically** - there is no separate
-  encoder-width knob.
-
-**Why split rather than concatenate everything?** The covariance is a *confidence* input
-that should modulate the action, not stand in for the goal-direction signal. An actor that
-could not see `dx / dy / dyaw` would have no way to drive to the bay. Keeping the covariance
-on its own pathway lets the network learn an uncertainty-conditioned response (drive more
-conservatively when `std_*` is high) while the navigation block carries the where-to-go
-signal.
-
-**Off by default, opt-in.** `use_uncertainty_conditioning` is `false` in
-`train_config.yaml` - the main 2x2 ablation deliberately keeps it off so the covariance
-enters identically (as plain obs features) for both the standard and evidential heads,
-isolating the head as the only difference. The dual-encoder is a separate architectural
-variant you enable explicitly.
-
-**Requires `include_covariance = True`.** The split assumes the covariance block sits at
-indices `[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`. With covariance
-absent from the observation those indices hold navigation features instead. `train_ppo.py`
-enforces this: if `use_uncertainty_conditioning=True` is requested without
-`include_covariance`, it logs a warning and forces the flag back to `False` rather than
-build a mis-indexed actor. Of the 2x2 baselines, only `input_uncertainty` and `full_method`
-carry covariance, so only those two can use the dual-encoder.
+It also requires `include_covariance = True`, since the split assumes the covariance sits
+at `[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`. `train_ppo.py`
+enforces this, logging a warning and forcing the flag back to `False` rather than building
+a mis-indexed actor.
 
 ## NIG uncertainty decomposition
 
@@ -203,17 +162,6 @@ of the action mean.
 In RL there are no ground-truth action targets. $|\text{action} - \gamma|$ is policy sampling
 noise, not prediction error, so this term grows unboundedly. The prior-anchoring penalty is
 bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiring target labels.
-
-## Actor modes
-
-Both modes share the same `EvidentialLayer` head and standard critic, differing only in
-how the actor consumes the observation. The wiring is described under
-[Dual-encoder actor](#dual-encoder-actor-use_uncertainty_conditioning-true) above.
-
-| `use_uncertainty_conditioning` | Actor class | Observation routed to actor | Requires |
-|-------------------------------|-------------|------------------------------|----------|
-| `False` | Flat MLP + `EvidentialLayer` | Full observation via the shared MLP extractor latent | - |
-| `True` | `UncertaintyConditionedActor` | Raw observation, split: covariance block to the uncertainty encoder, remaining blocks (speed, yaw rate, relative target pose, LiDAR clearances) to the state encoder, with the MLP extractor policy branch bypassed | `include_covariance = True` |
 
 ## TensorBoard logs (evidential-specific)
 

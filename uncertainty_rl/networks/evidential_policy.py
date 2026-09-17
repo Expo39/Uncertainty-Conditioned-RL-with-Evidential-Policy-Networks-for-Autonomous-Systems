@@ -241,11 +241,16 @@ class EvidentialPolicyNetwork(nn.Module):
 class UncertaintyConditionedActor(nn.Module):
     """
     @class UncertaintyConditionedActor
-    @brief Dual-encoder actor: separate state and uncertainty pathways, then fusion.
+    @brief Actor with separate state and uncertainty pathways, then fusion.
 
     The EKF covariance gets its own encoder so the actor can learn a caution
     response to localisation uncertainty rather than treating it as one more
     undistinguished input feature.
+
+    @note Unused. `use_uncertainty_conditioning` is false, because the 2x2
+          ablation needs the covariance to enter identically for the standard
+          and evidential heads; a dedicated pathway on one side would confound
+          the head as the only difference between arms.
     """
 
     def __init__(

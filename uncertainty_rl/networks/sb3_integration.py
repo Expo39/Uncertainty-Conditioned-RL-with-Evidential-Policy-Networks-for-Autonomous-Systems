@@ -252,9 +252,10 @@ class EvidentialActorCriticPolicy(ActorCriticPolicy):
         @param lr_schedule: Learning rate schedule.
         @param lambda_reg: Evidential regularisation weight.
         @param aleatoric_floor: Exploration floor passed to EvidentialDistribution.
-        @param use_uncertainty_conditioning: If True, use the dual-encoder actor.
+        @param use_uncertainty_conditioning: If True, use UncertaintyConditionedActor.
                Requires include_covariance=True in the env config, or the
                covariance block is absent from the indices the split assumes.
+               Unused; see that class for why it stays off.
         @see EvidentialDistribution for the aleatoric_floor rationale.
         """
         self.lambda_reg = lambda_reg
