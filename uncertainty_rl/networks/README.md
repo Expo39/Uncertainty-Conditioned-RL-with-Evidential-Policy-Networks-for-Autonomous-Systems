@@ -251,7 +251,8 @@ signal and collapses to a state-independent constant, leaving
 `corr(epistemic, aleatoric)` around 0.9 in every run. Plotting the two channels side by
 side would imply a separation documented as absent. This is a finished negative result
 rather than a missing figure.
-@see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md`.
+@see the uncertainty-channels section of the dissertation
+(`docs/AntonioGaldes_Dissertation.pdf`).
 
 The defensible alternative is `gate_roc`, which scores the evidential uncertainty as a
 safety gate against the EKF position std. Its AUC figures and regeneration recipe are in

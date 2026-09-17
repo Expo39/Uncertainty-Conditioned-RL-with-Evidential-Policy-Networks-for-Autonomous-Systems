@@ -230,8 +230,8 @@ make figures FIG=gate_roc      # -> outputs/main_analysis/figures/gate_roc.png
 
 The wrapper itself remains correct as a *controller*: a severity-graded response off one
 signal (total uncertainty), not two signals claimed to be different kinds of uncertainty.
-@see `documentation/detailed_notes/epistemic_aleatoric_disentanglement.md` and the gate AUC
-table in `outputs/main_analysis/summaries/gate_auc.csv`.
+@see the uncertainty-channels section of the dissertation
+(`docs/AntonioGaldes_Dissertation.pdf`), which reports the gate AUC results.
 
 ## See also
 
