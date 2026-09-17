@@ -232,7 +232,7 @@ make docker-train STAGE=1 BASELINE=full_method
 | Day-to-day operation | [USAGE.md](USAGE.md) |
 | All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
 | Python package overview, subpackage map | [uncertainty_rl/README.md](uncertainty_rl/README.md) |
-| Evidential NIG networks, dual-encoder actor, loss design | [uncertainty_rl/networks/README.md](uncertainty_rl/networks/README.md) |
+| Evidential NIG networks, actor head, loss design | [uncertainty_rl/networks/README.md](uncertainty_rl/networks/README.md) |
 | Observation space, reward function, action space, env config | [uncertainty_rl/envs/README.md](uncertainty_rl/envs/README.md) |
 | PPO training loop, Optuna tuning, callbacks | [uncertainty_rl/training/README.md](uncertainty_rl/training/README.md) |
 | Evaluation conditions, metrics, result plots | [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md) |

@@ -500,7 +500,7 @@ def main() -> None:
                 if is_evidential and _get_action is not None:
                     # Move the observation onto the model's device: the model
                     # may load onto CUDA while th.as_tensor(obs) defaults to
-                    # CPU, which crashes the dual-encoder actor's first matmul.
+                    # CPU, which crashes the actor's first matmul.
                     obs_tensor = th.as_tensor(obs).to(model.device)
                     action_tensor, unc = _get_action(obs_tensor, deterministic=True)
                     action = action_tensor.cpu().numpy()

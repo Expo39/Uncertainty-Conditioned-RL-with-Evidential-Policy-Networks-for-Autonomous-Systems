@@ -98,7 +98,7 @@ The loss these coefficients weight, and the full set of terms, are given in
 
 | `policy_type` | Agent | Policy | Observation routed to actor |
 |---------------|-------|--------|------------------------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full obs in flat mode, or full obs split into a navigation block (everything bar the covariance) and the covariance block in dual-encoder mode |
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full observation, with the covariance entering as ordinary observation dimensions |
 | `"standard"` | `ScheduledEntCoefPPO` | `LayerNormActorCriticPolicy` | Full obs |
 
 `include_covariance` and `include_obstacle_obs` flags (set per baseline) control
