@@ -374,7 +374,7 @@ figures: ## Regenerate the analysed-data figures into outputs/main_analysis/figu
 	$(PYTHON) scripts/analysis/figures/build.py \
 		$(if $(filter command line,$(origin FIG)),--only $(FIG),--all)
 
-run-figures: ## Redraw the per-run eval panels into outputs/raw_derived/figures/per_run. Usage: make run-figures [RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/without_wrapper]
+run-figures: ## Redraw the per-run eval panels into outputs/raw_derived/per_run_figures. Usage: make run-figures [RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/without_wrapper]
 	$(call ensure-venv)
 	$(PYTHON) $(SCRIPTS_DIR)/analysis/figures/run_figures.py \
 		--root $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \

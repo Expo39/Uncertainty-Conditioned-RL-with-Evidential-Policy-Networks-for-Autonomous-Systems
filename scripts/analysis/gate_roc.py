@@ -190,7 +190,7 @@ def analyse(
             "better\n  abort signal than the EKF covariance gate a blind system could "
             "build."
         )
-    print(f"\nTable and figure written to {out_dir}")
+    print(f"\nTable written to {out_dir}")
 
 
 def main() -> None:
