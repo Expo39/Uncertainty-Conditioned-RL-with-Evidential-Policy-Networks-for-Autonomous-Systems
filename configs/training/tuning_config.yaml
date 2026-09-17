@@ -1,5 +1,8 @@
 # Hyperparameter Tuning Configuration
 # Optuna study settings and search space bounds for PPO + evidential policy networks.
+#
+# NEVER RUN. Every reported result uses the committed defaults in train_config.yaml;
+# tuning per arm would add a fifth variable to the 2x2 ablation. Retained for future work.
 
 study_name: "uncertainty_rl_tuning"  # Per-baseline runs suffix this with the baseline name.
 storage_path: "logs/tuning/optuna_study.db"  # SQLite for resume. Per-baseline runs suffix the filename.

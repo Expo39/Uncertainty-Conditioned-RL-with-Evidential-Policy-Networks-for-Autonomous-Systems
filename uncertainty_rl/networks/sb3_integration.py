@@ -595,6 +595,10 @@ class EvidentialPPO(PPO):
 
     log_prob already carries the Gaussian approximation, so this class only adds
     the penalties on the evidence parameters and the uncertainty logging.
+
+    @note Only the prior-anchoring term (lambda_reg) was active in the reported
+          runs, giving a four-term loss. The nu-directed terms are guarded on
+          non-zero weights and stayed at 0.0 throughout.
     """
 
     def __init__(
@@ -618,12 +622,15 @@ class EvidentialPPO(PPO):
                from 0, letting the NLL settle before regularisation fires.
         @param lambda_evidence: Weight of the nu-only advantage-gated evidence term,
                which gives epistemic its state-dependence. 0.0 disables it.
+               Unused: held at 0.0 for every reported run, since RL supplies no
+               action target to make nu state-dependent.
         @param lambda_evidence_warmup_steps: Environment steps over which
                lambda_evidence anneals from 0, so PPO settles gamma first.
         @param lambda_nu_anchor: Restoring force pulling nu toward its sub-1 prior.
                The evidence term can only RAISE nu, so without this nu passes 1
                everywhere and epistemic collapses to a fixed fraction of aleatoric.
-               0.0 (default) leaves nu unanchored.
+               0.0 (default) leaves nu unanchored. Unused, as it is only needed
+               when lambda_evidence is active.
         @param aleatoric_floor: Floor on the sampling std, preventing exploration
                collapse. @see EvidentialDistribution.
         """

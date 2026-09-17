@@ -5,6 +5,10 @@
 Uses TPESampler (multivariate) and MedianPruner to search STRUCTURAL PPO
 params only - learning_rate/ent_coef are stage-owned schedules. Evaluates
 env/success_rate, with mean_progress_reward as an early tiebreaker.
+
+@note Never run. Every reported result uses the committed defaults in
+      train_config.yaml, because tuning per arm would make the configuration a
+      fifth variable in the 2x2 ablation. Retained for future work.
 """
 
 import argparse

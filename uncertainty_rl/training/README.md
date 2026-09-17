@@ -51,10 +51,14 @@ flowchart TB
 
 ## Configuration
 
-All training hyperparameters are tuneable and live in
+All training hyperparameters live in
 [`configs/train_config.yaml`](../../configs/train_config.yaml). Read that
-file directly for the live values - it changes as the project iterates,
-and the Optuna tuner writes back into it.
+file directly for the live values.
+
+The committed values were fixed before the ablation began and applied identically to
+every arm and seed; no hyperparameter search was run for any reported result. Tuning per
+arm would have made the configuration a fifth experimental variable and confounded the
+2x2 comparison.
 
 The structural choices that must stay stable across resumes
 (`net_arch`, `activation`, `policy_type`, `include_covariance`,
@@ -88,10 +92,10 @@ warmup window to avoid destabilising early training:
 \lambda_{\text{reg}}(t) = \lambda_{\text{reg}} \cdot \min\!\left(1,\; \frac{t}{t_{\text{warmup}}}\right)
 ```
 
-$\lambda_{\text{evidence}}$ follows the same ramp over its own warmup window, while
-$\lambda_{\nu}$ is not annealed. Both are `0.0` in the shipped configuration.
+The target is 0.02 over the first 50,000 decisions of each stage, so the batch averages
+stabilise under PPO before the anchor takes effect.
 
-The loss these coefficients weight, and the full set of terms, are given in
+The loss this coefficient weights is given in
 [networks/README.md](../networks/README.md#evidential-regularisation).
 
 ## Policy type switching
@@ -131,6 +135,9 @@ make docker-tune                                                    # Optuna hyp
 ```
 
 ## Hyperparameter tuning (Optuna)
+
+> **Never run.** No reported result used this pipeline; every arm and seed trained on the
+> committed defaults. It is retained for future work.
 
 TPE sampler + MedianPruner study. The full study configuration and search-space
 bounds live in [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml).
