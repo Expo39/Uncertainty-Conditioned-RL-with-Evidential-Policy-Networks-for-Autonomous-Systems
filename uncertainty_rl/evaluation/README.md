@@ -206,29 +206,6 @@ signal (total uncertainty), not two signals claimed to be different kinds of unc
 @see the uncertainty-channels section of the dissertation
 (`docs/AntonioGaldes_Dissertation.pdf`), which reports the gate AUC results.
 
-## Conditions held for future analysis
-
-`configs/eval_config.yaml` defines three further conditions beyond the four above. The
-sweep runs them and writes their per-episode records, but the analysis scripts exclude
-them from the summaries and figures, so they carry no reported result. They are retained
-because the data is already collected and each answers a question outside the scope of
-this work.
-
-| Condition | What it varies | Why it is not reported |
-|-----------|----------------|------------------------|
-| `gnss_fixed` | Holds `rtk_fixed` all episode | A pinned tier gives no within-episode variation, and the EKF suppresses the static raw fault, so the slope against `gnss_degraded` is flat by construction |
-| `gnss_degraded` | Holds `degraded` all episode | As above; the pair was intended as slope endpoints, which the flat slope makes uninformative |
-| `lidar_degraded` | Obstacle channel at 25x noise (obs 8-12) | The EKF never consumes LiDAR, so localisation std stays pinned at the RTK-fixed floor and the condition carries no localisation-uncertainty signal |
-
-`lidar_degraded` is the most useful of the three for later work: it is the one condition
-where an EKF-std safety gate is structurally blind while the evidential head still sees
-corrupted features, which makes it the natural test for whether a policy-side uncertainty
-signal adds anything a covariance gate cannot provide.
-
-The exclusions are `drop_unreported()` and `keep_varying()` in
-`scripts/analysis/ablation.py`, both of which take an explicit condition list, so a later
-analysis can opt these back in without touching the sweep.
-
 ## See also
 
 - [uncertainty_rl/README.md](../README.md) - package overview
