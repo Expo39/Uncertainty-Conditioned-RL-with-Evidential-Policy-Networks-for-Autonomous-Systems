@@ -166,4 +166,4 @@ make docker-train-short   # 10k-step smoke test across the full stack
 | ROS 2 node changes have no effect | The layer cache served a stale image. Rebuild with `make docker-build-no-cache`. |
 | `nvidia-smi` fails inside a container | The NVIDIA Container Toolkit is not configured. Repeat step 2. |
 | The environment blocks awaiting the EKF | `ros2-bridge` is unhealthy. Inspect `make docker-logs-ros2`. |
-| Weights fail to load on a stage resume | An architectural setting was changed between stages. See the note above. |
+| Weights fail to load on a stage resume | An architectural setting (`net_arch`, `activation`, `policy_type`, `include_covariance`, `include_obstacle_obs`) changed between stages. These must stay identical across the whole chain. |
