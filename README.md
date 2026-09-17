@@ -38,20 +38,20 @@ unprompted.
 
 ## Demonstrations
 
-The evidential policy is shown parking in CARLA, followed by a chase camera. An episode
-boundary is spanned by the clip, so the vehicle is seen at rest, the episode is reset,
-and a different target bay is then approached. Bays are outlined in blue and the
-episode's target in green.
+The recording below follows the evidential policy through two consecutive episodes from a
+chase camera. The vehicle first comes to rest in its target bay, the episode is then
+reset, and a second bay is approached. Bays are outlined in blue and the active target in
+green.
 
 <p align="center">
   <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="820">
 </p>
 
-The 2D bird's-eye viewer is shown below. The GNSS fix state is seen climbing back up the
-ladder as the vehicle closes on the bay, passing from degraded in red through standalone
-in orange and RTK float in amber to RTK fixed in green. Transitions are permitted only
-between neighbouring tiers, so a recovery never skips a rung. The viewer itself is
-documented in [scripts/visualise/README.md](scripts/visualise/README.md).
+The second recording comes from a 2D bird's-eye viewer, documented in
+[scripts/visualise/README.md](scripts/visualise/README.md). The GNSS fix state climbs
+back up the hierarchy as the vehicle closes on the bay, passing from degraded in red
+through standalone in orange and RTK float in amber to RTK fixed in green. Transitions
+are permitted only between neighbouring tiers, so a recovery never skips a rung.
 
 <p align="center">
   <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
