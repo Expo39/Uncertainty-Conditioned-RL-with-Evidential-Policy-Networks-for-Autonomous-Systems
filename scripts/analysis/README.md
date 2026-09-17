@@ -38,7 +38,8 @@ fix state for the whole episode, so neither degrades *within* an episode and the
 "slope" between them is a between-condition difference rather than degradation any
 arm rides through. The EKF also suppresses a static raw fault, so the two do not
 separate at the policy's input and the slope is flat by construction (see
-`documentation/detailed_notes/degraded_gnss_is_not_a_blackout.md`). Every table and
+the degradation section of the dissertation, `docs/AntonioGaldes_Dissertation.pdf`).
+Every table and
 analysis therefore covers the **five** retained conditions. The
 graceful-degradation evidence instead comes from the live anchor chain banded by true
 error (`scripts/analysis/figures/degradation_tiers.py`) and the one-way drift. Pass
