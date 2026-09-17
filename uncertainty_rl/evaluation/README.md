@@ -138,7 +138,7 @@ from uncertainty_rl.evaluation import (
 )
 
 df, run_output_dir = evaluate_across_conditions(
-    model_path="checkpoints/full_method/seed42_12062026-0536/final_model",
+    model_path="checkpoints/full_method/6_42_12062026-0536/final_model",
     eval_config_path="configs/eval_config.yaml",
     env_config_path="configs/deployment/sim/env_config.yaml",
     train_config_path="configs/train_config.yaml",

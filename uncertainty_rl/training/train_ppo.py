@@ -101,7 +101,7 @@ def _short_path(path: str) -> str:
     @brief Trim a run path to its trailing <baseline>/<leaf>[/file] tail for display.
     @param path: A checkpoint, log, or model path under one of the output roots.
     @return The last up-to-three path components joined with "/", so log lines
-            show e.g. "full_method/seed42_11062026-0628/final_model" rather than
+            show e.g. "full_method/6_42_11062026-0628/final_model" rather than
             the full path. Shortening is cosmetic only; callers keep the original
             path for filesystem operations.
     """

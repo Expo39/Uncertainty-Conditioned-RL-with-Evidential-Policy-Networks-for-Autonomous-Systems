@@ -103,7 +103,7 @@ Detachable 2D bird's-eye visualiser and checkpoint demo driver. The viewer runs 
 ```bash
 make visualise                                                   # Live 2D view during training
 make eval-visualise-2d                                           # Checkpoint + headless CARLA + 2D view
-make eval-visualise-2d BASELINE=full_method CHECKPOINT=seed42_11062026-0628  # Custom checkpoint (bare names)
+make eval-visualise-2d BASELINE=full_method CHECKPOINT=6_42_11062026-0628  # Custom checkpoint (bare names)
 make docker-eval-visualise-3d                                    # Checkpoint + CARLA 3D spectator view
 ```
 

@@ -129,7 +129,7 @@ Training via Make:
 
 ```bash
 make docker-train STAGE=1 BASELINE=full_method                       # curriculum head (random init)
-make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=seed42_11062026-0628  # resume next stage (bare leaf name)
+make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=6_42_11062026-0628  # resume next stage (bare leaf name)
 make docker-train-short                                              # short smoke-test
 make docker-tune                                                    # Optuna hyperparameter search
 ```
