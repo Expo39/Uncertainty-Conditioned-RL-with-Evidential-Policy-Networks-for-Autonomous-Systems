@@ -1,27 +1,19 @@
 # Ablation Study and Hyperparameter Optimisation Methodology
 
-> **Updated 8 June 2026 - single-phase curriculum.** The 2-phase (clean -> noisy) framing
-> below is superseded. HPO now runs AFTER the curriculum validates on vanilla (post-stage-6
-> checkpoint) and tunes STRUCTURAL PPO params only (`n_steps`, `batch_size`, `n_epochs`,
-> `clip_range`, `gae_lambda`, `gamma`, `vf_coef`, `max_grad_norm`) - NOT `learning_rate`/
-> `ent_coef`, which are stage-owned per-policy (`standard_overrides`/`evidential_overrides`)
-> schedules. The fairness arguments (vanilla-and-share, disjoint tuning/eval seeds) are
-> unchanged. Canonical: `documentation/detailed_notes/ablation_hpo_methodology.md` and
-> `documentation/CURRICULUM_PLAN.md`.
+> **No HPO was run for the reported experiments.** Every arm and seed uses the
+> committed defaults in `configs/train_config.yaml`. The tuning pipeline described
+> below is retained for future work and produced no reported result.
 
-Extracted from the training and tuning pipeline (`training/train_ppo.py`, `training/tune_hyperparams.py`). This document explains how hyperparameter tuning is performed for the four ablation baselines, and why, grounded in the RL methodology literature.
+Extracted from the training and tuning pipeline (`training/train_ppo.py`,
+`training/tune_hyperparams.py`).
 
-## The four ablation baselines
+Section 3.8 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
+the ablation itself - the four arms, the seed matrix and, in Section 3.8.1, the decision
+to fix hyperparameters rather than tune them. The search space and Optuna machinery are
+in `hyperparameter_search.md`.
 
-The contribution is tested as a 2x2 matrix (input uncertainty x output
-uncertainty):
-
-1. Vanilla PPO - no covariance obs, standard Gaussian actor.
-2. Input-uncertainty only - covariance obs, standard actor.
-3. Output-uncertainty only - no covariance obs, evidential actor.
-4. Full method - covariance obs + evidential actor.
-
-The variable under test is the architecture/observation, NOT the hyperparameters.
+This note records only what neither covers: the protocol that would apply if tuning were
+run later, and the fairness constraints it would have to satisfy.
 
 ## The tension
 
@@ -33,134 +25,74 @@ The variable under test is the architecture/observation, NOT the hyperparameters
 
 ## What the literature says
 
-- **Eimer, Lindauer and Raileanu, "Hyperparameters in Reinforcement Learning and
-  How To Tune Them", ICML 2023 (arXiv:2306.01324)** - the current best-practice
-  reference for HPO in RL. Two recommendations matter here:
-  1. **Tune each algorithm individually** rather than forcing a single shared
-     hyperparameter set, because the hyperparameter landscape differs by
-     algorithm and a shared set disadvantages whichever configuration it was not
-     tuned for.
-  2. **Separate tuning seeds from testing (evaluation) seeds.** The optimum can
-     overfit to the tuning seed; reporting on held-out seeds prevents that
-     overfitting from inflating results. This is the single most important
-     control.
-- **Henderson et al., "Deep Reinforcement Learning that Matters", AAAI 2018
-  (arXiv:1709.06560)** - hyperparameters and random seeds swing RL results
-  dramatically; report mean +/- variance across MULTIPLE seeds with significance
-  testing, never cherry-pick the best run.
+Eimer et al. [1] is the current best-practice reference for HPO in RL, and two of its
+recommendations matter here:
 
-## Decision for this project
+1. **Tune each algorithm individually** rather than forcing a single shared
+   hyperparameter set, because the hyperparameter landscape differs by algorithm and a
+   shared set disadvantages whichever configuration it was not tuned for.
+2. **Separate tuning seeds from evaluation seeds.** The optimum can overfit to the
+   tuning seed, so reporting on held-out seeds prevents that overfitting from inflating
+   results. This is the single most important control.
 
-**Primary protocol (MSc timeline): tune the vanilla PPO baseline once and share
-that single set to all four baselines**, with strict tuning/evaluation seed
-separation, reported across multiple held-out seeds. This satisfies the
-fair-comparison requirement (Henderson et al.: baselines must be tuned to the
-greatest extent possible) by tuning the WEAKEST baseline to its best, and it is the
-conservative, unattackable choice: the shared set is optimised for vanilla PPO, so
-it biases AGAINST the method. If the full method still wins on hyperparameters
-tuned for the baseline, nobody can object that the method was favoured by tuning.
-It is also the cheapest - one study, not four.
+Henderson et al. [2] show that hyperparameters and random seeds swing RL results
+dramatically, and recommend reporting mean and variance across multiple seeds with
+significance testing rather than the best run.
 
-**Stretch goal (compute permitting): tune each of the four baselines separately
-(one Optuna study per baseline).** This is the modern best practice under Eimer et
-al. (individualised tuning) - it gives every condition its own best chance. But it
-costs ~4x as much and is rhetorically WEAKER than vanilla-and-share: per-baseline
-tuning reintroduces the "you tuned for your own method" objection that
-vanilla-and-share removes outright. Promote per-baseline tuning to primary only if
-the vanilla-tuned set visibly handicaps a baseline.
+## If tuning were run
 
-**Fallback within the primary protocol:** if the evidential baselines
-(output-uncertainty, full-method) are unstable under vanilla's tuned learning rate
-- evidential losses can need a gentler LR - tune those two separately. Trigger this
-only on observed instability in the shared-hyperparameter run; do not pre-pay for
-it.
+Neither option below was taken; Section 3.8.1 records why. Were tuning run later, two
+exist.
 
-Whichever is chosen, the fairness control is the SAME and non-negotiable: tuning
-seeds disjoint from evaluation seeds (Eimer et al.), with multi-seed reporting
-(Henderson et al.).
+Tuning the vanilla baseline once and sharing that set to all four arms is the
+conservative choice: the set is optimised for the weakest arm, so it biases against the
+method, and a win under it cannot be attributed to favourable tuning. Tuning each arm
+separately follows Eimer et al. [1] and gives every condition its own best chance, but
+costs roughly four times as much and reintroduces the "tuned for your own method"
+objection that sharing removes.
 
-### The mid-run-change problem (why ONE set for the whole curriculum)
+Either way the fairness control is the same and non-negotiable: tuning seeds disjoint
+from evaluation seeds [1], with multi-seed reporting [2].
 
-A hyperparameter set must be FIXED for the entire A -> B curriculum run of a given
-baseline. You do NOT train Phase A on one set and then "continue the model with
-updated hyperparameters" for Phase B - that is an incoherent mixed schedule (the
-final model would have used defaults for A and tuned params for B), and network
-architecture cannot change on resume at all (weights would not load). So the
-question is not "tune A then tune B" - it is "obtain ONE set per baseline and run
-the whole curriculum on it."
+### One set for the whole curriculum
 
-The cost-efficient way to obtain that one set is to **tune on the cheaper clean
-Phase A as a proxy**, then apply it across the whole run. The justification has TWO
-distinct parts - keep them separate and do not let the citation carry the second:
+A hyperparameter set must be fixed for a baseline's entire six-stage chain. Training
+early stages on one set and resuming later stages on another is an incoherent mixed
+schedule, and architectural settings cannot change on resume at all because the saved
+weights would not load. The question is therefore not "tune per stage" but "obtain one
+set per baseline and run the whole chain on it".
 
-1. **The principle (from the literature):** multi-fidelity HPO legitimately tunes
-   on a cheaper proxy task to reduce cost (the Hyperband / successive-halving
-   lineage; and RL-HPO best practice, Eimer et al. 2023). This supports "tuning on
-   a cheap proxy is a recognised technique" - NOTHING more. No external paper says
-   "tune on the clean phase" or "Phase A and B are the same task"; those are claims
-   about THIS environment, not the literature.
-2. **Why the clean phase is a GOOD proxy here (from THIS project's config, not a
-   citation):** in the restructured design, Phase A and Phase B differ ONLY by
-   sensor-noise injection. Verified against the configs - the toggles that change
-   between phases are exactly: `fixed_gnss_tier` (removed in B),
-   `lidar.noise.enabled`, `enable_gnss_noise`, `enable_markov_transitions`,
-   `enable_gnss_anisotropy`, `enable_imu_noise` (all false in A, true in B).
-   Everything else is identical across both phases: layout, random bays/spawns
-   (`use_extra_spawns`), 0.8 bay occupancy, parked cars, reward, and architecture.
-   Patrol vehicles and pedestrians are off in BOTH (out of scope). So the
-   optimisation landscape differs between A and B only in input-signal QUALITY,
-   which makes the clean phase a high-fidelity, low-cost proxy for tuning. This
-   claim is evidenced by the config table, which the report should SHOW, not
-   by any cited paper.
-
-Defensible sentence for the report: "Tuning is performed on the clean phase,
-which differs from the noisy phase only by sensor-noise injection (Table X); the
-geometry, obstacles, reward and architecture are identical, so the clean phase is
-a low-cost, high-fidelity proxy for the noisy optimisation landscape. Multi-fidelity
-HPO on a cheaper proxy is a standard technique [Li 2017 Hyperband lineage;
-Eimer 2023]."
+Tuning would run at stage 1 on the vanilla config, as a low-cost proxy for the full
+chain. Multi-fidelity HPO on a cheaper proxy is a recognised technique, from the
+successive-halving and Hyperband lineage [3] to RL-specific practice [1]. That principle
+is all the literature supplies; the claim that stage 1 is a good proxy here rests on
+this project's configs, where the stages differ only in the range of one axis, not in
+reward, architecture or observation.
 
 ### Protocol
 
-1. **Establish the task works first - on vanilla PPO.** Prove the clean Phase A
-   curriculum on the VANILLA PPO baseline first, on the committed
-   `train_config.yaml` defaults (vanilla is the pathfinder - simplest agent, so a
-   stall is unambiguously an env/reward bug, not an evidential interaction). Do NOT
-   tune before the task is learnable - tuning a broken pipeline optimises noise. If
-   Phase A will not converge on defaults, that is an environment/reward problem,
-   not a tuning problem.
-2. **Tune ONCE, on the vanilla baseline, on the clean Phase A task** (cheap - no
-   noise pipeline per Optuna trial; reduced timesteps as a multi-fidelity proxy).
-   Run `make docker-tune STAGE=4 BASELINE=configs/baselines/vanilla_ppo.yaml` - the
-   `BASELINE=` is mandatory: omitting it tunes the `train_config.yaml` defaults,
-   which are the FULL METHOD config, not vanilla. The per-baseline path leaves
-   `train_config.yaml` untouched and writes to
-   `logs/tuning/results/best_params_vanilla_ppo.yaml`; for share-from-vanilla,
-   manually copy those values into `train_config.yaml` once (no auto-promotion flag
-   by design). All four baselines then inherit that shared set. (Stretch goal if
-   compute allows: one study per baseline. Fallback: tune the two evidential
-   baselines separately only if they are unstable under vanilla's tuned LR.)
-3. **Seed separation:** tuning studies use dedicated tuning seeds; final training +
-   evaluation use a DISJOINT set of evaluation seeds never seen during tuning.
-4. **Retrain the WHOLE A -> B curriculum** for each baseline with the single fixed
-   shared set, on the evaluation seeds. One set, entire run - no mid-run change.
-5. **Report** mean +/- std (or CI) across evaluation seeds per baseline, with a
-   significance test between the full method and each baseline. Report the tuning
-   budget (trials, search space, seeds).
+1. **Establish the task works first, on vanilla PPO**, using the committed
+   `train_config.yaml` defaults. Vanilla is the pathfinder: a stall is then
+   unambiguously an env or reward bug rather than an evidential interaction. Tuning a
+   pipeline that does not yet learn optimises noise.
+2. **Tune once, on the vanilla baseline at stage 1.** `BASELINE=` is mandatory;
+   omitting it tunes the `train_config.yaml` defaults, which are the full-method
+   config. The per-baseline path leaves `train_config.yaml` untouched and writes to
+   `logs/tuning/results/`. Promotion into `train_config.yaml` is manual by design.
+3. **Seed separation:** tuning uses a dedicated seed, disjoint from the evaluation
+   seeds, so a tuned optimum cannot overfit the seeds it is scored on.
+4. **Retrain the whole chain** for each baseline on the single fixed set.
+5. **Report** mean and spread across evaluation seeds per baseline, with the tuning
+   budget (trials, search space, seeds) stated.
 
-### The honest caveat (state it, do not hide it)
+### The honest caveat
 
-Hyperparameters tuned on the clean phase MAY be slightly suboptimal for the noisy
-phase. Two mitigations: (a) PPO hyperparameters (learning rate, clip range, GAE
-lambda, entropy coef) mainly govern OPTIMISATION STABILITY, which transfers across
-noise levels far better than task-specific quantities; (b) every baseline gets the
-SAME treatment, so any mild suboptimality is UNIFORM across the ablation - it
-cannot bias the relative comparison, which is the contribution. The alternative
-(tune on the full A -> B task with each Optuna trial running the whole curriculum)
-is more faithful but multiplies tuning cost by the full curriculum length x4
-baselines - infeasible on a single GPU for an MSc timeline. Tuning on the clean
-proxy is the coherent, affordable, citable choice; full-task tuning is the
-documented (compute-permitting) alternative.
+A set tuned at stage 1 may be slightly suboptimal at later stages. Two mitigations:
+PPO's structural parameters mainly govern optimisation stability, which transfers
+across stages better than task-specific quantities; and every baseline receives the
+same treatment, so any mild suboptimality is uniform across the ablation and cannot
+bias the relative comparison. Tuning each trial over a full chain would be more
+faithful but is infeasible on a single GPU within an MSc timeline.
 
 ### What stays fixed across ALL baselines and both phases
 
@@ -172,8 +104,23 @@ comparison. Resume across phases also requires them constant.
 
 ### Why tune per-baseline does NOT reintroduce unfairness
 
-Tuning each baseline to its own optimum is the OPPOSITE of unfair: it gives every
-condition its best chance, so the comparison is "best vanilla PPO vs best full
-method", not "full method vs a handicapped baseline". The fairness control is the
-seed separation (tuning != evaluation seeds), which stops any baseline from
-winning by overfitting hyperparameters to the seeds it is scored on.
+Tuning each baseline to its own optimum is the opposite of unfair: it gives every
+condition its best chance, so the comparison is "best vanilla PPO against best full
+method", not "full method against a handicapped baseline". The fairness control is the
+seed separation, which stops any baseline from winning by overfitting hyperparameters to
+the seeds it is scored on.
+
+## References
+
+[1] T. Eimer, M. Lindauer, and R. Raileanu, "Hyperparameters in reinforcement learning
+    and how to tune them," in *Proc. 40th Int. Conf. Machine Learning (ICML)*, vol. 202,
+    2023, pp. 9104-9149.
+
+[2] P. Henderson, R. Islam, P. Bachman, J. Pineau, D. Precup, and D. Meger, "Deep
+    reinforcement learning that matters," in *Proc. AAAI Conf. Artificial Intelligence*,
+    2018, pp. 3207-3214,
+    doi: [10.1609/aaai.v32i1.11694](https://doi.org/10.1609/aaai.v32i1.11694).
+
+[3] L. Li, K. Jamieson, G. DeSalvo, A. Rostamizadeh, and A. Talwalkar, "Hyperband: A
+    novel bandit-based approach to hyperparameter optimization," *Journal of Machine
+    Learning Research*, vol. 18, no. 185, pp. 1-52, 2018.
