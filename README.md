@@ -62,10 +62,11 @@ withholding is scripted anywhere in the reward, as noted under [Results](#result
   <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
 </p>
 
-> The ring is the tier's **configured** 1-sigma GNSS noise, not the EKF's live
-> covariance. Degraded injects zero-mean 5 m noise, but the fused estimate stays
-> sub-metre most of the time, so the posterior separation between tiers is milder than
-> the ring suggests.
+> The ring drawn around the vehicle is the **configured** 1-sigma GNSS noise of the
+> active tier, not the live covariance reported by the filter. Noise of 5 m is injected
+> at the degraded tier, yet the fused estimate remains sub-metre for most of the
+> manoeuvre, so the separation between tiers in the posterior is milder than the ring
+> suggests.
 
 ---
 
