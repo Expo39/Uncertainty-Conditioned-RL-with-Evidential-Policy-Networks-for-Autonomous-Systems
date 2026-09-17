@@ -67,7 +67,7 @@ make eval-visualise-2d BASELINE=full_method CHECKPOINT=6_42_11062026-0628
 Displayed are the lot boundary, bay outlines in blue for perpendicular bays and grey
 for motorcycle bays, the target bay in green, parked NPCs in orange, the patrol NPC in
 red, pedestrians in magenta, and the ego vehicle in cyan with a heading arrow and a
-50-step trail.
+trail of its last 500 positions.
 
 ### 3D CARLA Spectator View
 
@@ -115,7 +115,7 @@ file that owns each setting. Live values are read from the YAML directly.
 | [`eval_config.yaml`](configs/eval_config.yaml) | Evaluation condition sweep |
 | [`ros2_config.yaml`](configs/ros2_config.yaml) | EKF, GNSS relay and IMU relay node parameters |
 | [`deployment/sim/env_config.yaml`](configs/deployment/sim/env_config.yaml) | CARLA environment: episode length, sensors, parking scenarios, curriculum overrides |
-| [`deployment/agent_config.yaml`](configs/deployment/agent_config.yaml) | Observation flags and safety thresholds, shared between sim and real |
+| [`deployment/agent_config.yaml`](configs/deployment/agent_config.yaml) | Safety thresholds, the actuator model and the deployed-baseline pointer, shared between sim and real. The observation flags themselves live in `baselines/` |
 | [`deployment/sensor_config.yaml`](configs/deployment/sensor_config.yaml) | Physical sensor mounts and specifications, shared between sim and real |
 | [`deployment/sim/gnss_noise_profiles.yaml`](configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers and the Markov transition matrix |
 | [`training/tuning_config.yaml`](configs/training/tuning_config.yaml) | Optuna study and search-space bounds |
@@ -156,14 +156,6 @@ seed, giving 600 pooled episodes per cell.
 
 ## Hyperparameter Tuning
 
-```bash
-# 1. Edit configs/training/tuning_config.yaml (n_trials, timesteps_per_trial, seed)
-make docker-tune
-
-# 2. Best parameters are written back to configs/train_config.yaml
-make docker-train STAGE=1 BASELINE=full_method
-```
-
 > **No tuning was performed for the reported results.** A single committed
 > configuration was applied identically to all four arms and all three seeds. Tuning
 > per arm would have made the configuration a fifth experimental variable and
@@ -171,6 +163,14 @@ make docker-train STAGE=1 BASELINE=full_method
 > operating point rather than at its best. The tuning pipeline is retained for future
 > work. See
 > [docs/detailed_notes/training/ablation_hpo_methodology.md](docs/detailed_notes/training/ablation_hpo_methodology.md).
+
+Were it run, the study settings and search-space bounds would come from
+`configs/training/tuning_config.yaml`, and a per-baseline run writes its winners to
+`logs/tuning/results/` rather than back into `train_config.yaml`:
+
+```bash
+make docker-tune STAGE=1 BASELINE=vanilla_ppo
+```
 
 ---
 
