@@ -2,17 +2,10 @@
 # @file dryrun.sh
 # @brief Start an inspect dry-run stack (training or eval) and stream output.
 #
-# Starts carla-server-demo and ros2-bridge-inspect detached, waits for them
-# to be healthy, then runs the dry-run training container.
-#
-# The same script drives two dry-runs, selected by the caller via env vars:
-#   - the curriculum dry-run (make docker-inspect-dryrun): profile
-#     inspect-dryrun, service training-inspect-dryrun, env INSPECT_STAGE.
-#   - the eval-scenario dry-run (make docker-inspect-eval-dryrun): profile
-#     inspect-eval-dryrun, service training-inspect-eval-dryrun, env
-#     INSPECT_SCENARIO.
-# The Makefile sets INSPECT_PROFILE / INSPECT_SERVICE / INSPECT_CONTAINER so this
-# script stays mode-agnostic; defaults keep the original curriculum behaviour.
+# Drives both the curriculum dry-run (docker-inspect-dryrun) and the
+# eval-scenario one (docker-inspect-eval-dryrun). The Makefile passes
+# INSPECT_PROFILE / INSPECT_SERVICE / INSPECT_CONTAINER so this stays
+# mode-agnostic; the defaults give the curriculum behaviour.
 
 set -euo pipefail
 

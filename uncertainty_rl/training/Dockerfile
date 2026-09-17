@@ -10,11 +10,9 @@ ENV PYTHONUNBUFFERED=1
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# apt package versions are NOT pinned: ROS apt repos are rolling and delete old
-# versions, so a version pin would eventually fail to fetch. Reproducibility of
-# the apt layers is instead achieved by distributing the BUILT image (docker
-# save/load), not by rebuilding from this Dockerfile on each machine.
-# Install system dependencies required for ROS 2 apt key setup
+# apt versions are deliberately unpinned: ROS repos are rolling and delete old
+# versions, so a pin would eventually fail to fetch. Reproducibility comes from
+# distributing the BUILT image (docker save/load), not from rebuilding here.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
@@ -23,11 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
-# -----------------------------------------------------------------------
-# ROS 2 Humble (minimal) for rclpy - subscribes to EKF covariance via DDS
-# NGC PyTorch 24.10 is Ubuntu 22.04 (Jammy) -> ROS 2 Humble
-# Only rclpy + message types needed; no full ROS 2 desktop install
-# -----------------------------------------------------------------------
+# ROS 2 Humble (minimal) for rclpy - subscribes to EKF covariance via DDS.
+# NGC PyTorch 24.10 is Ubuntu 22.04 (Jammy) -> ROS 2 Humble.
+# Only rclpy + message types needed; no full ROS 2 desktop install.
 RUN curl -sSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
         -o /usr/share/keyrings/ros-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-archive-keyring.gpg] \
@@ -64,7 +60,7 @@ RUN pip install --no-cache-dir pip==26.1.2 setuptools==82.0.1 wheel==0.47.0
 # Create workspace directory
 WORKDIR /workspace
 
-# Copy pyproject.toml for pip install -e 
+# Copy pyproject.toml for pip install -e
 COPY pyproject.toml /workspace/pyproject.toml
 # Minimal stub so pip install -e resolves the package at build time.
 # The real source is provided at runtime via the bind-mount in docker-compose.yml,

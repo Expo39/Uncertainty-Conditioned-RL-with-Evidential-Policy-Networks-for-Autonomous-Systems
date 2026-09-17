@@ -1,107 +1,50 @@
 """
-@file plot_degradation_tiers.py
-@brief F-14 replacement: per-arm success across the TRUE-localisation GNSS tiers
-       under the live anchor Markov chain, pooled over seeds.
+@file degradation_tiers.py
+@brief Per-arm success across TRUE-localisation GNSS tiers, pooled over seeds.
 
-The held gnss_fixed/gnss_degraded contrast is a weak stressor: the EKF suppresses
-a static raw fault, so the two held tiers do not separate at the policy's input
-(reported sigma p50 ~0.016 m in both). The real degradation axis lives inside the
-anchor_deployment condition, where the fix state transitions mid-episode and the
-TRUE localisation error sweeps the full tier range. This figure bands each anchor
-episode by its WORST true localisation error ||ekf_xy - gt_xy|| (the faithful tier
-proxy: the reported EKF std saturates ~1.3 m and understates the tier by up to 8x,
-per trace_tier_breakdown.py), then plots per-arm success rate across the bands,
-pooled over seeds 42/123/7.
-
-Read-only over the frozen eval CSVs. Pure CPU.
+The held gnss_fixed/gnss_degraded contrast barely separates (a static
+fault is EKF-suppressed); the real axis is anchor_deployment mid-episode
+drift, banded by WORST true error (see trace_tiers.py).
 """
 
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np  # noqa: E402
+import pandas as pd  # noqa: E402
+
+# Make the repo root importable so the shared figure style resolves when this
+# file is run directly (python scripts/analysis/figures/degradation_tiers.py).
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
+from scripts import figure_style as fs  # noqa: E402
 
 # Episodes are banded into equal-population terciles of their MEAN true
-# localisation error ||ekf_xy - gt_xy|| under the anchor chain. Mean (not the
-# per-episode maximum) is the faithful notion of how hard localisation typically
-# was: banding on the max rewards a single transient covariance spike and yields a
-# non-monotone axis. The fixed-integer tier is not a band here because the live
-# chain almost never holds cm-level accuracy for a whole episode (see caption); the
-# terciles instead partition the realised difficulty into low / medium / high.
+# localisation error ||ekf_xy - gt_xy|| under the anchor chain (mean, not
+# max, so one transient spike cannot make the axis non-monotone). Terciles
+# stand in for the fixed-integer tier, which the chain rarely holds all episode.
 _BAND_LABELS = ["low", "medium", "high"]
 
 _ARMS = ["vanilla_ppo", "input_uncertainty", "output_uncertainty", "full_method"]
 _SEEDS = ["seed_42", "seed_123", "seed_7"]
 
-# Four distinct, colour-blind-safe, print-friendly hues (Okabe-Ito derived).
-# full_method carries the eye (heavy blue line); the three baselines each get a
-# clearly separated hue + marker + linestyle so they never blur together.
-_ARM_STYLE: Dict[str, Dict[str, object]] = {
-    "full_method": dict(
-        color="#0353a4",
-        marker="o",
-        lw=2.4,
-        ms=6.5,
-        ls="-",
-        label="full method",
-        zorder=6,
-    ),
-    "output_uncertainty": dict(
-        color="#d55e00",
-        marker="s",
-        lw=1.6,
-        ms=5,
-        ls="--",
-        label="output uncertainty",
-        zorder=4,
-    ),
-    "input_uncertainty": dict(
-        color="#009e73",
-        marker="^",
-        lw=1.6,
-        ms=5.5,
-        ls="-.",
-        label="input uncertainty",
-        zorder=4,
-    ),
-    "vanilla_ppo": dict(
-        color="#7d3ac1",
-        marker="D",
-        lw=1.6,
-        ms=4.5,
-        ls=":",
-        label="vanilla PPO",
-        zorder=3,
-    ),
+# Draw order only: colour, marker and linestyle come from figure_style so this
+# figure shares one palette with every other plot. full_method sits on top so
+# the headline trace is never hidden behind a baseline.
+_ARM_ZORDER: Dict[str, int] = {
+    "full_method": 6,
+    "output_uncertainty": 4,
+    "input_uncertainty": 3,
+    "vanilla_ppo": 2,
 }
-
-
-def _set_style() -> None:
-    plt.rcParams.update(
-        {
-            "font.family": "serif",
-            "font.size": 10,
-            "axes.titlesize": 11,
-            "axes.labelsize": 10,
-            "legend.fontsize": 8.5,
-            "xtick.labelsize": 9,
-            "ytick.labelsize": 9,
-            "axes.spines.top": False,
-            "axes.spines.right": False,
-            "axes.grid": True,
-            "grid.alpha": 0.25,
-            "grid.linewidth": 0.6,
-            "figure.dpi": 150,
-        }
-    )
 
 
 def _stage6_dir(base: Path, seed: str, arm: str) -> Path:
@@ -165,13 +108,13 @@ def _wilson(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
 
 
 def plot(base: Path, out_pdf: Path) -> None:
-    _set_style()
+    fs.apply()
     df = _collect(base)
     e1, e2 = _tercile_edges(df["mean_err"])
     df["band"] = df["mean_err"].apply(lambda v: _band_of(v, e1, e2))
 
     x = np.arange(len(_BAND_LABELS))
-    fig, ax = plt.subplots(figsize=(7.2, 3.8))
+    fig, ax = plt.subplots(figsize=fs.WIDE)
     for arm in _ARMS:
         sub = df[df["arm"] == arm]
         ys, lo, hi = [], [], []
@@ -184,16 +127,15 @@ def plot(base: Path, out_pdf: Path) -> None:
             l, h = _wilson(s, n)
             lo.append((p - l) * 100 if n else 0.0)
             hi.append((h - p) * 100 if n else 0.0)
-        style = dict(_ARM_STYLE[arm])
-        label = style.pop("label")
         ax.errorbar(
             x,
             ys,
             yerr=[lo, hi],
             capsize=2.5,
             elinewidth=0.9,
-            **style,
-            label=label,
+            zorder=_ARM_ZORDER.get(arm, 3),
+            label=fs.arm_label(arm),
+            **fs.arm_kw(arm),
         )
 
     ax.set_xticks(x)
@@ -205,25 +147,17 @@ def plot(base: Path, out_pdf: Path) -> None:
         ]
     )
     ax.set_xlabel("mean true localisation error over the episode (anchor chain)")
-    ax.set_ylabel("success rate (\\%)")
+    ax.set_ylabel("success rate (%)")
     ax.set_ylim(0, 65)
     ax.set_xlim(-0.35, len(_BAND_LABELS) - 0.65)
+    # Legend order follows the arm order shared across the document.
     handles, labels = ax.get_legend_handles_labels()
-    order = [
-        "full method",
-        "output uncertainty",
-        "input uncertainty",
-        "vanilla PPO",
-    ]
+    order = [fs.arm_label(a) for a in fs.ARM_ORDER]
     pairs = sorted(zip(handles, labels), key=lambda hl: order.index(hl[1]))
     handles, labels = zip(*pairs)
-    ax.legend(handles, labels, ncol=2, frameon=False, loc="upper right")
+    fs.legend_strip(fig, (list(handles), list(labels)), side="above")
 
-    fig.tight_layout()
-    fig.savefig(out_pdf)
-    fig.savefig(out_pdf.with_suffix(".png"), dpi=160)
-    plt.close(fig)
-    print(f"wrote {out_pdf} and {out_pdf.with_suffix('.png')}")
+    fs.save(fig, out_pdf)
     print(f"tercile edges of mean true error: e1={e1:.3f} m, e2={e2:.3f} m")
 
     print("\nPooled anchor success by mean-error tercile (success/n = %):")
@@ -240,8 +174,8 @@ def plot(base: Path, out_pdf: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", type=Path, default=Path("outputs/evaluation_results"))
-    ap.add_argument("--out", type=Path, default=Path("f14_degradation_tiers.pdf"))
+    ap.add_argument("--base", type=Path, default=Path("outputs/raw/evaluation_results"))
+    ap.add_argument("--out", type=Path, default=Path("degradation_tiers"))
     args = ap.parse_args()
     plot(args.base, args.out)
 

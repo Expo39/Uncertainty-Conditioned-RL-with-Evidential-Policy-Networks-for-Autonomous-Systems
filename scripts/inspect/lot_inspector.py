@@ -32,10 +32,6 @@ warnings.filterwarnings(
     category=UserWarning,
 )
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
-
 
 def _build_env(
     host: str,
@@ -187,7 +183,7 @@ def main() -> None:
         help=(
             "Enable keyboard control in dryrun mode. "
             "Arrow keys: Up=throttle, Down=brake, Left/Right=steer. "
-            "Requires pynput (installed in inspect container). "
+            "Reads raw keys through termios/tty, so it needs a TTY. "
             "Ignored in all other modes."
         ),
     )
@@ -218,7 +214,7 @@ def main() -> None:
         default=None,
         help=(
             "Name of an eval_config.yaml condition (e.g. 'anchor_deployment', "
-            "'gnss_standalone', 'heldout_trapezoid_rtk_fixed'). The eval_dryrun "
+            "'ood_irregular_rtk_fixed', 'gnss_degrade_one_way'). The eval_dryrun "
             "env is built for this condition via the same make_eval_env path the "
             "sweep uses (scaled sensor noise, pinned occupancy / floor plan / "
             "GNSS tier). Omit to default to the first condition. "
@@ -236,12 +232,9 @@ def main() -> None:
 
     from uncertainty_rl.training.train_ppo import DEFAULT_STAGE, load_env_config
 
-    # Difficulty knobs live only in the stage files; resolve the stage the same way
-    # training does (--stage, defaulting to the curriculum head) so the inspector
-    # reflects a real training condition, not the env constructor defaults. The
-    # layout/sensor/live modes override the layout and occupancy themselves; the
-    # dryrun mode additionally applies the baseline + train_config below to build an
-    # env identical to a training rollout.
+    # Resolve the stage the same way training does (--stage, defaulting to the
+    # curriculum head), so the inspector reflects a real training condition
+    # rather than the env constructor defaults.
     stage = args.stage if args.stage is not None else DEFAULT_STAGE
     train_cfg = load_env_config("configs/deployment/sim/env_config.yaml", stage=stage)
 
@@ -309,11 +302,9 @@ def main() -> None:
         print("  light-blue arc = 270 deg 2D LiDAR")
 
     elif args.mode == "dryrun":
-        # Build the env through the SAME resolution as train_ppo.main() so the
-        # dryrun is, by construction, identical to a training rollout: merge
-        # train_config onto the stage-merged env config, then overlay the baseline
-        # (defaulting to the full method). Stage difficulty and obs flags therefore
-        # match what `make docker-train STAGE=.. BASELINE=..` would use.
+        # Resolve the env through the SAME merge order as train_ppo.main()
+        # (stage-merged env config, then the baseline overlay), so the dryrun
+        # matches what `make docker-train STAGE=.. BASELINE=..` would use.
         from uncertainty_rl.envs import make_env
         from uncertainty_rl.training.train_ppo import (
             DEFAULT_BASELINE,
@@ -328,12 +319,9 @@ def main() -> None:
         apply_baseline(dryrun_cfg, load_config(baseline_path))
         # Windowed CARLA for visual inspection (training runs headless).
         dryrun_cfg["no_rendering_mode"] = False
-        # Tick-level stepping (inspection-only override): the spectator camera,
-        # keyboard input, and console readout all run per env.step(), so the
-        # training action_repeat would drop them to the policy's decision rate
-        # and make manual driving feel like a slideshow. The observation build
-        # path is identical either way; training keeps action_repeat from
-        # env_config.
+        # Tick-level stepping: the spectator camera, keyboard input, and console
+        # readout all run per env.step(), so training's action_repeat would drop
+        # them to the policy's decision rate and make manual driving a slideshow.
         dryrun_cfg["action_repeat"] = 1
         print(
             f"Dryrun: stage {stage}, baseline "
@@ -403,12 +391,9 @@ def main() -> None:
         print("  Press Ctrl+C to stop.")
 
     elif args.mode == "eval_dryrun":
-        # Build the env through the SAME path the eval sweep uses
-        # (build_eval_env_factory), so manually driving here verifies the exact
-        # scenario evaluate.py would run: condition-scaled sensor noise, the
-        # locked GNSS tier (held_gnss_tier), pinned occupancy and floor
-        # plan, plus the obs flags / policy_type from the baseline. No model is
-        # loaded - you drive the keyboard (manual) or a constant action.
+        # Build the env via build_eval_env_factory, the same path the eval
+        # sweep uses, so manually driving here verifies the exact scenario
+        # evaluate.py would run. No model is loaded.
         import yaml
 
         from uncertainty_rl.evaluation.evaluate import build_eval_env_factory

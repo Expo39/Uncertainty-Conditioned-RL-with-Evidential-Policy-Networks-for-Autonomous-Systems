@@ -2,26 +2,9 @@
 @file handover_timing.py
 @brief When does the safety wrapper hand over, relative to the degradation onset?
 
-Host-side, read-only diagnostic that turns the per-episode handover-timing columns
-(handoff_step, degraded_onset_step, written by uncertainty_rl/evaluation/evaluate.py)
-into a per-condition latency table. The claim is about TIMING, not rate: a useful
-uncertainty-conditioned controller hands over soon after conditions degrade. The
-reference point for "soon after" differs by condition, so each is tagged with an
-onset regime and latency is only ever compared within a regime:
-
-  - spawn regime: the condition is degraded/novel from episode start (gnss_degraded,
-    lidar_degraded, OOD layout). Latency = handoff_step (steps from spawn). Reads as
-    "how fast does the controller react to this standing condition?".
-  - switch regime: the condition starts clean and the GNSS Markov chain drifts into
-    the degraded tier mid-episode (gnss_degrade_one_way). Latency =
-    handoff_step - degraded_onset_step (steps AFTER the drift crossing). This is the
-    causal money shot: does the handover track the onset, not just the map?
-  - none regime: clean/in-distribution conditions where no handover is expected; a
-    LOW handover fraction here is the desired (low false-positive) result.
-
-A spawn latency and a switch latency are different quantities and are never averaged
-together. Run via `make handover-timing` (never python directly).
-@see uncertainty_rl/evaluation/evaluate.py (episode_records.csv handoff_step columns).
+Builds a per-condition latency table. Spawn regime measures handoff_step
+from spawn; switch regime (GNSS drifts mid-episode) measures handoff_step -
+degraded_onset_step. The two are never averaged together.
 """
 
 from __future__ import annotations
@@ -32,21 +15,17 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 # Make the repo root importable so the shared discovery helper resolves when this
-# file is run directly (python scripts/evaluation/handover_timing.py).
+# file is run directly (python scripts/analysis/handover_timing.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import (  # noqa: E402
-    arm_leaf_subpath,
-    discover_records,
-)
+from scripts.analysis._discovery import arm_leaf_subpath, discover_records  # noqa: E402
 
-# Per-condition onset regime. switch = degradation arrives mid-episode (latency is
-# measured after the drift crossing); spawn = degraded/novel from step 0 (latency
-# from spawn); none = clean, no handover expected. Conditions absent from this map
-# default to "spawn" - the safe reading for any new standing condition. Names match
-# configs/eval_config.yaml.
+# Per-condition onset regime: switch = degradation arrives mid-episode (latency
+# measured after the drift crossing); spawn = degraded/novel from step 0; none =
+# clean, no handover expected. Unlisted conditions default to "spawn" - the safe
+# reading for a new standing condition. Names match configs/eval_config.yaml.
 _REGIME: Dict[str, str] = {
     "gnss_degrade_one_way": "switch",
     "gnss_degraded": "spawn",
@@ -87,7 +66,7 @@ def analyse(
 ) -> None:
     """
     @brief Build the per-condition handover-timing table and write it.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV table.
     @param arm: Optional baseline name to restrict to; None = most recent any-arm.
     @param leaf: Optional checkpoint leaf to pin to; None = newest run wins.
@@ -179,13 +158,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="Root holding <baseline>/<leaf>/episode_records.csv.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/handover_timing",
+        default="outputs/raw_derived/handover_timing",
         help="Directory for the handover-timing table.",
     )
     parser.add_argument(

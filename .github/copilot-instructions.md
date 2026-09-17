@@ -11,7 +11,7 @@ An autonomous parking system that knows when it does not know where it is and dr
 more carefully in response. EKF localisation uncertainty (covariance) is fed into an RL
 policy, and the policy uses evidential deep learning to quantify its own action
 uncertainty. Two layers: "how sure am I about where I am?" (EKF covariance) and "how
-sure am I about what to do?" (evidential policy output). MSc dissertation codebase -
+sure am I about what to do?" (evidential policy output). Research codebase -
 trains in CARLA, evaluates across uncertainty levels, designed to transfer to a real
 instrumented parking lot.
 
@@ -21,7 +21,7 @@ Three containers (see `docker-compose.yml`): **carla-server** (CARLA 0.9.16 head
 bind-mounted for hot-reload. Training requires the full stack - there is no standalone
 mode.
 
-## Core standards (full detail in root CLAUDE.md)
+## Core standards
 
 - British English everywhere (`localisation`, `behaviour`, `normalise_observations`).
 - Doxygen docstrings only (`@file`/`@brief`/`@param`/`@return`); never Google/NumPy/reST.
@@ -92,7 +92,7 @@ study. Always read `documentation/CURRICULUM_PLAN.md` before changing training-s
 `evaluate.py` sweeps `eval_conditions` (GNSS noise tier x traffic density x held-out /
 OOD layouts) to measure degradation. Collects success rate, reward, position/orientation
 error, uncertainty estimates -> CSV + seaborn plots. The condition sweep is the
-dissertation's core experiment.
+project's core experiment.
 
 ### `uncertainty_rl/ros2/`
 `CovarianceExtractorNode` subscribes to `/odometry/filtered`, extracts the 3x3 [x,y,yaw]

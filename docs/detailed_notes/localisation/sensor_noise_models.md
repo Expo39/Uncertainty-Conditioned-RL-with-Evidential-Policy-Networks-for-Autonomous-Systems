@@ -4,9 +4,12 @@ Extracted from `uncertainty_rl/envs/sim/helpers/_sensor_manager.py`,
 `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/imu_noise_relay.py`,
 `configs/deployment/sim/env_config.yaml`, and `configs/ros2_config.yaml`.
 
-This note documents the derivation of all sensor noise parameters used in simulation,
-with explicit references to the source datasheets. It exists here rather than in the
-source files to keep inline comments concise.
+This note records the datasheet figures behind the simulated sensor noise and maps
+each mechanism to the code that implements it. The derivations that turn these
+figures into the injected parameters - the CEP to sigma conversion, the spectral
+density to per-sample variance conversion, the per-tier GNSS values and the EKF
+process-noise diagonal - are given in the sensor-noise appendix of the dissertation
+(`docs/AntonioGaldes_Dissertation.pdf`), which is canonical for all of them.
 
 ## Target hardware
 
@@ -14,15 +17,13 @@ source files to keep inline comments concise.
 - **GNSS**: u-blox ZED-F9P-05B (multi-band RTK module)
 - **LiDAR**: SICK TiM571 (obstacle detection only; not in the EKF localisation pipeline)
 
-All noise injection in the simulator is gated by master flags (`enable_gnss_noise`, `enable_imu_noise`). In real deployment both flags are false and every mechanism below becomes a pass-through.
-
----
+All noise injection in the simulator is gated by master flags (`enable_gnss_noise`,
+`enable_imu_noise`). In real deployment both flags are false and every mechanism
+becomes a pass-through.
 
 ## 1. SICK TiM571 2D LiDAR (P/N 1075091)
 
-Datasheet: [TiM571-2050101, P/N 1075091](https://www.sick.com/media/pdf/4/44/444/dataSheet_TiM571-2050101_1075091_en.pdf)
-
-### Physical characteristics
+Datasheet [1].
 
 | Spec | Datasheet value |
 |------|----------------|
@@ -36,73 +37,14 @@ Datasheet: [TiM571-2050101, P/N 1075091](https://www.sick.com/media/pdf/4/44/444
 | Statistical error (90% reflectance) | <20 mm |
 | Statistical error (10% reflectance) | <10 mm (up to 6 m range) |
 
-### Noise model and parameter derivation
-
-Three independent error sources are modelled, applied per-callback in
-`SensorManager._apply_lidar_noise()`.
-
-#### 1a. Systematic range error (bias)
-
-The datasheet states +-60 mm systematic error. This is a fixed offset that varies
-from unit to unit and with mounting conditions but is constant within a single
-measurement session. In simulation it is modelled as:
-
-    bias ~ Uniform(-0.060, +0.060)  metres
-
-Resampled once per episode via `SensorManager.sample_lidar_noise_bias()`, called
-from `CARLAParkingEnv.reset()`. The bias is reset to 0.0 in `cleanup()` and
-`reset_state()` between episodes.
-
-Config key: `carla_sensors.lidar.noise.range_bias_limit_m = 0.060`
-
-#### 1b. Statistical range error (random noise)
-
-The datasheet gives <20 mm at 90% reflectance and <10 mm at 10% reflectance.
-A car park environment contains tarmac, concrete, and vehicle surfaces with
-reflectance spanning the full range. The conservative (larger) 90% figure is
-used as the 1-sigma parameter:
-
-    range_noise ~ N(0, 0.020)  metres  per point per scan
-
-Config key: `carla_sensors.lidar.noise.range_random_stddev_m = 0.020`
-
-Note: using 0.020 m rather than 0.010 m makes the simulation harder (more noise)
-and therefore more conservative for the obstacle clearance features. The 10%
-reflectance figure (0.010 m) could be used for a best-case bound.
-
-#### 1c. Angular error
-
-The datasheet gives no angular accuracy specification. No angular noise is modelled.
-The 0.33 deg angular resolution is a quantisation property of the sensor, not a
-noise figure, and no convention for converting it to a noise model is provided by
-the manufacturer. Adding an assumed value would introduce an unverifiable parameter.
-
-#### 1d. Implementation notes
-
-Noise is applied in polar coordinates. No angular noise is modelled (see 1c).
-The conversion is:
-
-    r = hypot(x, y)
-    theta = arctan2(y, x)
-    r_noisy = r + bias + N(0, range_stddev)
-    x_noisy = r_noisy * cos(theta)
-    y_noisy = r_noisy * sin(theta)
-
-After noise, returns below `min_range_m = 0.05 m` are discarded to prevent
-sub-minimum artefacts. The z-coordinate (always 0.0 for a 2D scan) is preserved
-unchanged. The output is stored in `_latest_lidar_scan` and consumed by
-`extract_obstacle_features()` in `_parking_core.py` without modification.
-
-CARLA's native `noise_stddev` blueprint attribute is zeroed in `_spawn_lidar_2d()`
-so that all noise is applied in Python and is fully configurable from YAML.
-
----
+Two range terms are modelled in `_apply_lidar_noise()`: a per-episode bias sampled
+from the systematic figure, and per-point Gaussian noise from the statistical figure.
+Returns below the 0.05 m minimum range are discarded, and CARLA's own per-sensor
+noise attribute is zeroed at spawn so the injected model is the only corruption.
 
 ## 2. VectorNav VN-100 IMU (Hardware v7.0)
 
-Datasheet: [VN-100 Product Brief / Datasheet](https://www.navtechgps.com/wp-content/uploads/VN100_ProductBrief_DS.pdf)
-
-### Physical characteristics
+Datasheet [2].
 
 | Spec | Datasheet value |
 |------|----------------|
@@ -117,128 +59,15 @@ Datasheet: [VN-100 Product Brief / Datasheet](https://www.navtechgps.com/wp-cont
 | Output rate | up to 800 Hz (IMU), up to 400 Hz (Attitude) |
 
 The EKF runs at 20 Hz and CARLA publishes sensor data at 20 Hz
-(`carla_sensors.imu.sensor_tick = 0.05 s`).
+(`carla_sensors.imu.sensor_tick = 0.05 s`). Each channel is modelled as
+`out = scale * truth + bias + noise`, with the scale factor and in-run bias resampled
+per episode and the white noise redrawn per sample. The same variances populate the
+outgoing covariance field, which CARLA would otherwise leave at zero. A ZUPT guard
+clamps near-stationary rates and skips injection on any clamped channel.
 
-### Noise model and parameter derivation
+## 3. u-blox ZED-F9P RTK-GNSS
 
-Two complementary mechanisms are applied in `ImuNoiseRelayNode`.
-
-#### 2a. Covariance stamping
-
-`robot_localization` reads the covariance fields of `sensor_msgs/Imu` to perform
-Mahalanobis gating and uncertainty propagation. CARLA publishes zero covariance
-(meaning infinite reliability), so realistic values must be stamped.
-
-The covariance value to stamp is the variance of a single sample at the EKF
-publish rate. For a white-noise process with power spectral density S
-(units: (unit)^2/Hz), the variance of one sample at rate f is:
-
-    variance = S * f
-
-**Gyro covariance:**
-
-Noise density: 0.0035 deg/s/sqrt(Hz)                               (Table 3)
-Convert:       0.0035 * pi / 180 = 6.10865e-5 rad/s/sqrt(Hz)
-PSD:           (6.10865e-5)^2    = 3.73157e-9 (rad/s)^2/Hz
-Variance at 20 Hz: 3.73157e-9 * 20 = 7.46314e-8 (rad/s)^2
-
-The code computes this exactly: `(0.0035 * pi/180)**2 * 20`.
-Config key: `imu_noise_relay.imu_gyro_variance = 7.4631e-8`
-
-**Accel covariance:**
-
-Noise density: 0.14 mg/sqrt(Hz)                                     (Table 2)
-Convert:       0.14e-3 * 9.81 = 1.37340e-3 m/s^2/sqrt(Hz)
-PSD:           (1.37340e-3)^2  = 1.88623e-6 (m/s^2)^2/Hz
-Variance at 20 Hz: 1.88623e-6 * 20 = 3.77246e-5 (m/s^2)^2
-
-The code computes this exactly: `(0.14e-3 * 9.81)**2 * 20`.
-Config key: `imu_noise_relay.imu_accel_variance = 3.77245e-5`
-
-**Diagonal covariance matrices** (3x3) are pre-built once at node init and
-assigned to the published message. `orientation_covariance` uses the -1.0
-sentinel in position [0] so `robot_localization` ignores the CARLA identity
-quaternion.
-
-#### 2b. Value noise injection
-
-Covariance stamping alone does not make the EKF prediction step noisier - the
-measurement values from CARLA are still ground truth. To make the EKF
-realistically uncertain between GNSS fixes, Gaussian noise is added to the
-`angular_velocity.z` and `linear_acceleration.x/y` fields before publishing.
-
-**Per-sample Gaussian noise:**
-
-At each callback, independent samples are drawn:
-
-    gyro_noise ~ N(0, sqrt(7.46e-8)) = N(0, 2.73e-4)  rad/s
-    accel_noise ~ N(0, sqrt(3.77e-5)) = N(0, 6.14e-3)  m/s^2
-
-These are applied after ZUPT clamping so that standstill behaviour is not
-corrupted: if `|vyaw| < zupt_threshold`, the angular velocity is already zeroed
-before noise is added, and the noise block is skipped for that channel.
-
-**Per-run bias (in-run bias stability):**
-
-The VN-100 specifies in-run bias stability of 5 deg/hr (gyro, typical) and
-0.04 mg (accel, typical). This is a slow drift within one continuous session.
-In simulation it is modelled as a fixed offset resampled each episode:
-
-    gyro_bias ~ Uniform(-2.424e-5, +2.424e-5)  rad/s
-    accel_bias_x ~ Uniform(-3.924e-4, +3.924e-4)  m/s^2
-    accel_bias_y ~ Uniform(-3.924e-4, +3.924e-4)  m/s^2
-
-Derivation (both computed exactly in code):
-
-    gyro:  5 * pi/180 / 3600 = 2.42407e-5 rad/s    [5 deg/hr: low end of 5-7 deg/hr typical; slightly optimistic]
-    accel: 0.04e-3 * 9.81    = 3.92400e-4 m/s^2    [< 0.04 mg from datasheet; upper bound used]
-
-The bias is resampled at every episode boundary. `ImuNoiseRelayNode` polls
-the shared `episode_config.json` (written by `_CovarianceSubscriber` at each
-`reset()`) and redraws all bias values when the `seq` field increments, so a
-fresh in-run bias is presented to the EKF on every new episode.
-
-Config keys: `imu_noise_relay.imu_gyro_bias_limit_rad_s = 2.42407e-5`,
-             `imu_noise_relay.imu_accel_bias_limit_ms2 = 3.924e-4`
-
-**Per-axis scale-factor error:**
-
-The VN-100 calibration sheet specifies a residual scale-factor error of
-+-0.5 % per axis (1-sigma) on both gyro and accelerometer channels after
-factory calibration. This is a multiplicative error on the measured signal,
-distinct from additive bias. Modelled as:
-
-    out = scale * truth + bias + noise
-    scale ~ 1.0 + Uniform(-scale_limit, +scale_limit)
-
-with `scale_limit = 0.005` for both gyro and each accel axis. Each axis has
-an independent factor that is resampled together with the per-episode bias.
-
-Config keys: `imu_noise_relay.imu_gyro_scale_factor_limit = 0.005`,
-             `imu_noise_relay.imu_accel_scale_factor_limit = 0.005`
-
-#### 2c. ZUPT (Zero-velocity Update)
-
-When the vehicle is stationary, CARLA's physics engine produces a small residual
-yaw rate (~0.012 rad/s) and acceleration (~0.05-0.15 m/s^2) due to floating-point
-noise in the physics solver. Without correction, these residuals cause the EKF to
-estimate non-zero velocity at standstill, leading to growing position error.
-
-ZUPT clamping zeros `angular_velocity.z` when `|vyaw| < 0.015 rad/s`, and zeros
-`linear_acceleration.x/y` when gyro ZUPT is active and `|ax|, |ay| < 0.2 m/s^2`.
-This bounds EKF velocity drift at standstill.
-
-Value noise injection is skipped for channels where ZUPT is active (the `if not
-zupt_active` guards in `_imu_callback`), so ZUPT and noise injection are consistent.
-
----
-
-## 3. u-blox ZED-F9P-05B RTK-GNSS
-
-Datasheet: [UBXDOC-963802114-12824, Revision R02, 16 October 2024](https://content.u-blox.com/sites/default/files/documents/ZED-F9P-05B_DataSheet_UBXDOC-963802114-12824.pdf)
-All position accuracy values are from Table 3 (GPS+GLO+GAL+BDS mode).
-
-### Physical characteristics
+Datasheet [3]. All position accuracy values are from Table 3 (GPS+GLO+GAL+BDS mode).
 
 | Spec | Datasheet value | Source |
 |------|----------------|--------|
@@ -250,175 +79,22 @@ All position accuracy values are from Table 3 (GPS+GLO+GAL+BDS mode).
 | RTK convergence time | <10 s | Table 2 |
 | Max navigation update rate (RTK) | 5 Hz (all-constellation) | Table 2 |
 
-No RTK float accuracy is specified in the datasheet. Float is a receiver-internal
-state; accuracy depends on atmospheric conditions, baseline length, and satellite
-geometry. An industry-standard estimate of 0.300 m CEP is used (documented below).
+No RTK float accuracy is specified: float is a receiver-internal state whose accuracy
+depends on atmospheric conditions, baseline length and satellite geometry, so the
+float tier is estimated rather than taken from the datasheet.
 
-### CEP to 1-sigma conversion
-
-Position accuracy is specified in CEP (Circular Error Probable, 50th percentile
-of the 2D position error distribution). For a 2D isotropic zero-mean Gaussian:
-
-    1-sigma = CEP / 0.8326
-
-This conversion is exact for a circularly symmetric Gaussian. The ZED-F9P-05B
-datasheet does not state the distribution assumption explicitly, but CEP is the
-standard IEEE definition and this conversion is appropriate.
-
-### Noise tier derivations
-
-Four simulation tiers model the RTK fix-state continuum. Noise is applied as
-zero-mean Gaussian per GNSS fix in `GnssNoiseRelayNode._gnss_callback()`.
-
-#### 3a. RTK fixed
-
-Datasheet Table 3: horizontal accuracy = 0.010 m CEP + 1 ppm.
-
-    1-sigma = 0.010 / 0.8326 = 0.01201 m
-
-The 1 ppm baseline term: at a parking-lot baseline of 100 m from the base station,
-1 ppm = 0.0001 m - negligible. Excluded from the model.
-
-Datasheet footnote 10 states: "Does not account for possible antenna phase centre
-offset errors." A conservative 0.020 m 1-sigma is used to cover this and
-multipath from parked vehicles. This is the floor variance; EKF RTK fixed is
-not limited by the receiver alone.
-
-    metric_stddev_m = 0.020 m (conservative; datasheet floor 0.0120 m)
-    lat_stddev_deg  = 0.020 / 111320 = 1.797e-7 deg  (rounded to 2.0e-7)
-    lon_stddev_deg  = 0.020 / 111320 = 1.797e-7 deg  (equatorial approximation)
-
-Config key: `tiers.rtk_fixed.metric_stddev_m = 0.020`
-
-#### 3b. RTK float
-
-No datasheet specification. RTK float is a transitional state between
-fixed-integer and standalone; its accuracy depends on atmospheric conditions
-and is not guaranteed by the manufacturer.
-
-Industry-standard figure from RTK literature (e.g. Trimble, Leica application
-notes): approximately 0.300 m CEP at short baselines under good conditions.
-
-    1-sigma = 0.300 / 0.8326 = 0.360 m
-    lat_stddev_deg  = 0.360 / 111320 = 3.234e-6 deg  (rounded to 3.2e-6)
-    lon_stddev_deg  = 0.360 / 111320 = 3.234e-6 deg
-
-This is an estimate, not a datasheet value. It is conservative relative to the
-fixed tier and represents marginal accuracy for a 2.5 m wide parking bay.
-
-Config key: `tiers.rtk_float.metric_stddev_m = 0.360`
-
-#### 3c. Standalone PVT
-
-Datasheet Table 3: horizontal accuracy = 1.5 m CEP (24 h static, all-constellation).
-
-    1-sigma = 1.5 / 0.8326 = 1.802 m
-    lat_stddev_deg  = 1.802 / 111320 = 1.619e-5 deg  (rounded to 1.62e-5)
-    lon_stddev_deg  = 1.802 / 111320 = 1.619e-5 deg
-
-At this accuracy level, a 2.5 m bay is only 1.4-sigma wide - parking is unsafe.
-The reward function's uncertainty penalty approaches zero and the policy learns
-to abort or hold position.
-
-Config key: `tiers.standalone.metric_stddev_m = 1.802`
-
-#### 3d. Degraded (simulation parameter)
-
-No datasheet value. This tier models conditions beyond the receiver's specified
-operating range: heavy multipath in a covered car park entrance, jamming, or
-severe signal obstruction.
-
-5.0 m 1-sigma is a simulation design choice to saturate the uncertainty penalty
-and force the policy to learn hard abort / safety-handoff behaviour. It does not
-correspond to any published ZED-F9P-05B specification.
-
-    lat_stddev_deg  = 5.0 / 111320 = 4.492e-5 deg  (rounded to 4.49e-5)
-    lon_stddev_deg  = 5.0 / 111320 = 4.492e-5 deg
-
-Config key: `tiers.degraded.metric_stddev_m = 5.0`
-
-### Lat/lon conversion
-
-CARLA GNSS noise is added in degrees of latitude and longitude. The flat-earth
-conversion uses 111320 m/deg for both axes (equatorial approximation). CARLA
-FlatPlane does not assign a real-world latitude to the map, so a
-latitude-dependent cos() correction cannot be applied. At mid-latitudes (~51 deg,
-representative of a UK deployment site), the longitude scale factor is
-`111320 * cos(51 deg) = 70023 m/deg`, giving a ~37% underestimate of longitude
-noise in the injected lat/lon values. However, the EKF consumes the metric
-Odometry output of `GnssNoiseRelayNode` (flat-earth XY), not the raw lat/lon,
-so the covariance stamped on the Odometry message is in metres and is correct
-regardless of the lat/lon degree conversion.
-
-### COG heading
-
-The ZED-F9P-05B in moving-base RTK mode achieves 0.4 deg (50th percentile)
-heading accuracy at 30 m/s with a short baseline (Table 6). The simulation
-does not use moving-base RTK for heading; instead, Course Over Ground is derived
-from successive noisy GNSS position fixes in `GnssNoiseRelayNode._gnss_callback()`.
-COG heading variance is computed analytically by propagating position noise
-through `atan2(dy, dx)`:
-
-    var_heading = 2 * sigma_xy^2 / displacement^2
-
-`sigma_xy` is read directly from the input NavSatFix's position covariance
-(the larger of the two diagonal entries when noise is anisotropic), so the
-same logic works in sim and on real receivers. `displacement` is the
-per-callback flat-earth distance between successive fixes.
-
-COG is forward-only (no reverse-motion disambiguation against EKF yaw); the
-action space has no reverse gear. Publication is gated on (a) displacement
->= `cog_min_displacement_m`, (b) IMU not in ZUPT (read from the stamped IMU
-topic), and (c) candidate variance below `pi^2 / 3` (the variance of a uniform
-heading distribution - any wider observation is uninformative).
-
-### GNSS east/north anisotropy
-
-Real RTK receivers have unequal east/north variances determined by satellite
-geometric dilution of precision (HDOP). `GnssNoiseRelayNode._resample_anisotropy()`
-draws a per-episode ratio uniformly from `[1.0, aniso_ratio_max]` (default 1.5)
-and assigns it to either the x or y axis at random. The factors satisfy
-`sigma_x_factor * sigma_y_factor = 1`, so the tier's nominal sigma is preserved
-on average across episodes. Config key:
-`gnss_noise_relay.enable_gnss_anisotropy = true`,
-`gnss_noise_relay.aniso_ratio_max = 1.5`.
-
-### GNSS per-callback dropout
-
-Cycle slips and brief satellite occlusions cause RTK receivers to skip fixes
-in real operation. Modelled as a Bernoulli draw on each callback:
-
-    P(skip) = gnss_dropout_probability  (default 0.02)
-
-When a callback is skipped the EKF receives no position update for that tick
-and propagates on IMU prediction alone. Config key:
-`gnss_noise_relay.gnss_dropout_probability = 0.02`.
-
-### NavSatStatus mapping
-
-The outgoing `NavSatFix.status.status` is overridden by the active tier so
-downstream consumers that branch on fix quality see realistic values:
-
-| Tier | NavSatStatus value |
-|------|-------------------|
-| rtk_fixed | `STATUS_GBAS_FIX` (ground-based augmentation) |
-| rtk_float | `STATUS_GBAS_FIX` |
-| standalone | `STATUS_FIX` |
-| degraded | `STATUS_FIX` |
-
-Real ZED-F9P-05B receivers use ground-based augmentation (RTCM) for both
-RTK FIXED and RTK FLOAT, hence the shared GBAS code. This is API parity,
-not data realism.
-
----
+The per-tier noise values live in `configs/deployment/sim/gnss_noise_profiles.yaml`,
+which is their single source of truth. Beyond the tier magnitudes, the relay applies
+per-episode east/north anisotropy, per-callback dropout, tier-mapped `NavSatStatus`,
+flat-earth lat/lon projection and COG heading derivation.
 
 ## 4. Cross-references
 
 | Source | Role |
 |--------|------|
-| [SICK TiM571 datasheet](https://www.sick.com/media/pdf/4/44/444/dataSheet_TiM571-2050101_1075091_en.pdf) | Systematic error (+-60 mm), statistical error (<20 mm), angular resolution (0.33 deg), range (0.05-25 m) |
-| [VectorNav VN-100 datasheet](https://www.navtechgps.com/wp-content/uploads/VN100_ProductBrief_DS.pdf) | Gyro noise density (0.0035 deg/s/sqrt(Hz)), accel noise density (0.14 mg/sqrt(Hz)), gyro bias (5-7 deg/hr typ.), accel bias (< 0.04 mg) |
-| [u-blox ZED-F9P-05B datasheet](https://content.u-blox.com/sites/default/files/documents/ZED-F9P-05B_DataSheet_UBXDOC-963802114-12824.pdf) | RTK fixed CEP (Table 3), standalone CEP (Table 3), moving-base heading (Table 6), convergence time (Table 2) |
+| SICK TiM571 datasheet [1] | Systematic error (+-60 mm), statistical error (<20 mm), angular resolution (0.33 deg), range (0.05-25 m) |
+| VectorNav VN-100 datasheet [2] | Gyro noise density (0.0035 deg/s/sqrt(Hz)), accel noise density (0.14 mg/sqrt(Hz)), gyro bias (5-7 deg/hr typ.), accel bias (< 0.04 mg) |
+| u-blox ZED-F9P datasheet [3] | RTK fixed CEP (Table 3), standalone CEP (Table 3), moving-base heading (Table 6), convergence time (Table 2) |
 | `uncertainty_rl/envs/sim/helpers/_sensor_manager.py` | `_apply_lidar_noise()`, `sample_lidar_noise_bias()` |
 | `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/imu_noise_relay.py` | `ImuNoiseRelayNode.__init__()`, `_imu_callback()` |
 | `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | `GnssNoiseRelayNode._gnss_callback()`, `_TIER_DEFAULTS` |
@@ -427,3 +103,17 @@ not data realism.
 | `configs/deployment/sensor_config.yaml` | Physical sensor specs (docs only) |
 | `configs/ros2_config.yaml` | `imu_noise_relay.*` |
 | `tests/test_lidar_noise.py` | Unit tests for TiM571 noise model |
+
+## References
+
+[1] SICK AG, *TiM571-2050101 2D LiDAR Sensors: Data Sheet*, Waldkirch, Germany, order
+    no. 1075091. [Online]. Available:
+    https://www.sick.com/media/pdf/4/44/444/dataSheet_TiM571-2050101_1075091_en.pdf
+
+[2] VectorNav Technologies, LLC, *VN-100 Rugged IMU/AHRS: Sensor Datasheet (Hardware
+    v7.0)*, Dallas, TX, USA, 2023, doc. DS100-CR-70. [Online]. Available:
+    https://www.vectornav.com/resources/detail/vn-100-imu-ahrs
+
+[3] u-blox AG, *ZED-F9P-04B High Precision GNSS Module: Data Sheet*, Thalwil,
+    Switzerland, 2024, doc. UBX-21044850, revision R05. [Online]. Available:
+    https://content.u-blox.com/sites/default/files/ZED-F9P-04B_DataSheet_UBX-21044850.pdf

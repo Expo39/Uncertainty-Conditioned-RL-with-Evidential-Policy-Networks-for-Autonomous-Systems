@@ -2,10 +2,7 @@
 @file test_safety_wrapper.py
 @brief Unit tests for the SafetyWrapper Gymnasium wrapper.
 
-CPU-only, no CARLA or ROS 2 required. The underlying env is mocked so all tests run
-without a live simulation. The wrapper hands off (full stop) when the TOTAL predictive
-uncertainty (epistemic + aleatoric) reaches a single threshold; see
-documentation/detailed_notes/epistemic_aleatoric_disentanglement.md.
+CPU-only with a mocked env, so these run without a live simulation.
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -15,10 +12,6 @@ import numpy as np
 import pytest
 
 from uncertainty_rl.envs.safety_wrapper import SafetyWrapper
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 class _StubEnv(gym.Env):
@@ -65,11 +58,6 @@ def _make_action(
     steer: float = 0.0, throttle: float = 0.5, brake: float = 0.0
 ) -> np.ndarray:
     return np.array([steer, throttle, brake], dtype=np.float32)
-
-
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperApply - pure static method, no env needed
-# ---------------------------------------------------------------------------
 
 
 class TestSafetyWrapperApply:
@@ -132,11 +120,6 @@ class TestSafetyWrapperApply:
             handoff_threshold=5.0,
         )
         np.testing.assert_array_equal(action, original)
-
-
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperStep
-# ---------------------------------------------------------------------------
 
 
 class TestSafetyWrapperStep:
@@ -207,11 +190,6 @@ class TestSafetyWrapperStep:
         assert not truncated
 
 
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperReset
-# ---------------------------------------------------------------------------
-
-
 class TestSafetyWrapperReset:
     """
     @class TestSafetyWrapperReset
@@ -245,11 +223,6 @@ class TestSafetyWrapperReset:
         _, _, _, _, info = wrapper.step(_make_action())
         assert info["epistemic"] == pytest.approx(0.0)
         assert info["aleatoric"] == pytest.approx(0.0)
-
-
-# ---------------------------------------------------------------------------
-# TestSafetyWrapperStats
-# ---------------------------------------------------------------------------
 
 
 class TestSafetyWrapperStats:

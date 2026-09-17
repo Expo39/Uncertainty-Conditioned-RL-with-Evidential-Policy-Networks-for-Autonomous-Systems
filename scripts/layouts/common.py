@@ -1,11 +1,10 @@
 """
 @file common.py
-@brief World-frame transform, YAML serialisation, and PNG plotting for parking
-       lot layouts.
+@brief World-frame transform, YAML serialisation, and PNG plotting for
+       parking lot layouts.
 
-This module is the *engine* side of layout generation: it turns a layout dict
-(returned by LotBuilder.build()) into a CARLA-frame YAML file plus a bird's-eye
-PNG.
+The engine side of layout generation: turns a layout dict (from
+LotBuilder.build()) into a CARLA-frame YAML file plus a bird's-eye PNG.
 """
 
 import math
@@ -40,11 +39,6 @@ def _bay_legend_colour(bay_type: str) -> str:
     if bay_type == "motorcycle":
         return MOTORCYCLE_DRAW_HEX
     return BAY_HEX.get(bay_type, "grey")
-
-
-# ---------------------------------------------------------------------------
-# World-frame transformation
-# ---------------------------------------------------------------------------
 
 
 def to_world_frame(
@@ -159,11 +153,6 @@ def to_world_frame(
     }
 
 
-# ---------------------------------------------------------------------------
-# YAML output
-# ---------------------------------------------------------------------------
-
-
 def write_layout_yaml(
     shape: str,
     origin_x: float,
@@ -218,11 +207,6 @@ def write_layout_yaml(
     print(f"  Written: {output_path}")
 
 
-# ---------------------------------------------------------------------------
-# Bird's-eye PNG plot
-# ---------------------------------------------------------------------------
-
-
 def plot_layout(
     shape: str,
     world_layout: Dict[str, Any],
@@ -260,6 +244,8 @@ def plot_layout(
         from matplotlib.lines import Line2D
         from matplotlib.patches import Polygon as MPoly
         from matplotlib.patheffects import withStroke
+
+        from scripts import figure_style as fs
     except ImportError:
         print("  WARNING: matplotlib not available, skipping plot.")
         return
@@ -273,11 +259,12 @@ def plot_layout(
     )
     from uncertainty_rl.utils.geometry import inflate_polygon
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fs.apply()
+    fig, ax = plt.subplots(figsize=fs.WIDE_TALL)
     ax.set_aspect("equal")
-    ax.set_title(f"Floor plan: {shape}", fontsize=14)
-    ax.set_xlabel("x (m)", fontsize=12)
-    ax.set_ylabel("y (m)", fontsize=12)
+    ax.set_xlabel("x (m)")
+    ax.set_ylabel("y (m)")
+    ax.set_aspect("equal", adjustable="datalim")
     # Layout YAMLs are in CARLA's left-handed frame (Y increases rightward).
     # Invert Y so the PNG matches an intuitive bird's-eye view (north = up).
     ax.invert_yaxis()
@@ -344,7 +331,7 @@ def plot_layout(
             bay_id,
             ha="center",
             va="center",
-            fontsize=10,
+            fontsize=fs.FS_NOTE,
             color="black",
             weight="bold",
             path_effects=[withStroke(linewidth=1, foreground="white")],
@@ -416,7 +403,7 @@ def plot_layout(
             sp["x"] + cos_y * 0.2 - sin_y * label_offset_perp,
             sp["y"] + sin_y * 0.2 + cos_y * label_offset_perp + label_y_nudge,
             f"SPAWN {idx + 1}",
-            fontsize=10,
+            fontsize=fs.FS_NOTE,
             color="cyan",
             fontweight="bold",
             zorder=7,
@@ -485,20 +472,18 @@ def plot_layout(
                 label="Pedestrian zones",
             )
         )
-    ax.legend(handles=handles, loc=legend_loc, fontsize=9)
-    ax.grid(True, alpha=0.3)
+    fs.legend_strip(
+        fig, (handles, [h.get_label() for h in handles]), side="below", ncol=2
+    )
+    fs.grid(ax)
 
-    # Pin the data limits to the lot extent (plus a fixed margin) so the saved
-    # canvas is well-defined. Legend handles such as the pedestrian-zone
-    # FancyBboxPatch carry a data-space footprint at (0, 0); without explicit
-    # limits, bbox_inches="tight" expands the figure to enclose that footprint
-    # and produces a runaway multi-gigapixel PNG. Fixed limits + a fixed bbox
-    # avoid that entirely. The Y axis is left inverted (set above).
-    #
-    # The padding clears the soft OOB skirt (which extends oob_inflation_margin
-    # beyond the lot) with extra headroom, so the dashed boundary is never drawn
-    # against the axis edge.
+    # Pin the data limits to the lot extent: legend handles such as the
+    # pedestrian-zone FancyBboxPatch carry a data-space footprint at (0, 0),
+    # and without explicit limits bbox_inches="tight" expands the figure to
+    # enclose it, producing a runaway multi-gigapixel PNG.
     pad = 5.0
+    # Clears the soft OOB skirt (extends oob_inflation_margin beyond the lot)
+    # with headroom, so the dashed boundary is never drawn at the axis edge.
     if oob_inflation_margin is not None:
         pad = oob_inflation_margin + 5.0
     xs = [p[0] for p in corner_pts]
@@ -506,7 +491,5 @@ def plot_layout(
     ax.set_xlim(min(xs) - pad, max(xs) + pad)
     ax.set_ylim(max(ys) + pad, min(ys) - pad)
 
-    plot_path.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(plot_path, dpi=150)
-    plt.close()
+    fs.save(fig, plot_path)
     print(f"  Plot:    {plot_path}")

@@ -2,20 +2,9 @@
 @file covariance_probe.py
 @brief Measure a trained policy's action sensitivity to the EKF covariance input.
 
-Holds one observation fixed and sweeps ONLY the covariance block (obs indices
-VEHICLE_STATE_DIM through VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM) from low
-(certain) to high (uncertain), reporting how the deterministic action moves. A
-growing action delta isolates the covariance as the cause, since nothing else
-in the observation changes; a flat delta means the policy ignores the input.
-
-Two modes:
-  - synthetic (default): one hand-built near-bay observation, covariance swept.
-    Cheap, but the base observation may sit off the data manifold.
-  - manifold (--real-obs <file.npy>): replays REAL observations captured during
-    an evaluation run (the eval loop dumps them when EVAL_DUMP_OBS is set),
-    sweeping only the covariance block on each and reporting the mean action
-    delta across the real-state distribution. This answers the same causal
-    question on-manifold, which is the stronger claim.
+Holds one observation fixed and sweeps ONLY the covariance block: a growing
+action delta isolates the covariance as the cause, a flat delta means the
+policy ignores it. Modes: synthetic (default), on-manifold (--real-obs).
 """
 
 from __future__ import annotations

@@ -2,9 +2,8 @@
 @file __init__.py
 @brief ROS 2 package for EKF covariance extraction.
 
-This is the ament_python package directory used by colcon inside the
-ros2-bridge container. The actual node implementations live in
-covariance_extractor.py within this directory.
+The ament_python package directory colcon builds inside the ros2-bridge
+container.
 """
 
 try:
@@ -18,7 +17,6 @@ try:
         "CovarianceMonitorNode",
     ]
 except ImportError:
-    # Outside the ros2-bridge container (CI, unit tests, host dev).
-    # rclpy / uncertainty_rl_ros2 are only available after colcon build
-    # inside the container.
+    # Outside the container (CI, host dev): rclpy and the built package exist
+    # only after a colcon build inside it.
     __all__ = []

@@ -111,8 +111,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--plot-dir",
         type=str,
-        default="outputs/layouts",
-        help="Output directory for PNG files. Default: outputs/layouts.",
+        default="outputs/raw_derived/layouts",
+        help="Output directory for PNG files. Default: outputs/raw_derived/layouts.",
     )
     parser.add_argument(
         "--no-plot",

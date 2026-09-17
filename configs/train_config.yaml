@@ -27,11 +27,11 @@ log_std_init: -0.6  # Initial Gaussian action log-std (std ~= 0.55). Standard he
 evidential:
   lambda_reg: 0.02  # Prior-anchor coefficient (target after warmup). Anchors alpha/beta near the prior. Brittle - do not over-raise (DER survey: quality decays even 0.01->0.03).
   lambda_reg_warmup_steps: 50000  # Steps to linearly anneal lambda_reg from 0 to target.
-  lambda_evidence: 0.0  # Off: RL has no action target, so nu stays state-independent and cannot disentangle epistemic/aleatoric. See detailed_notes/epistemic_aleatoric_disentanglement.md.
+  lambda_evidence: 0.0  # Off: RL has no action target, so nu stays state-independent and cannot disentangle epistemic/aleatoric.
   lambda_evidence_warmup_steps: 50000  # Steps to linearly anneal lambda_evidence from 0 to target (let PPO settle gamma first).
   lambda_nu_anchor: 0.0  # Off: only flips which channel dominates everywhere, does not make nu state-dependent. See the detailed note above.
   aleatoric_floor: 0.04  # Min predictive aleatoric (action variance); sampling std floored at sqrt(0.04)=0.2. Stops the NIG variance collapsing to a Dirac delta (exploration death). Evidential-actor analogue of the SAC log_std clamp. Tunable.
-  use_uncertainty_conditioning: false  # Route covariance through a dual-encoder pathway. False keeps the 2x2 ablation clean (covariance enters identically for both heads).
+  use_uncertainty_conditioning: false  # Unused. Would route covariance through its own encoder; off so the 2x2 ablation stays clean (covariance enters identically for both heads).
 
 # Logging and checkpointing
 checkpoint_freq: 50000  # Save checkpoint every N steps.

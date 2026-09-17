@@ -25,11 +25,6 @@ HIDDEN_DIMS = [64, 64]
 BATCH_SIZE = 8
 
 
-# ---------------------------------------------------------------------------
-# EvidentialLayer
-# ---------------------------------------------------------------------------
-
-
 class TestEvidentialLayer:
     """
     @class TestEvidentialLayer
@@ -113,11 +108,6 @@ class TestEvidentialLayer:
         assert (beta <= 100.0).all(), f"Beta exceeded upper bound: max={beta.max()}"
 
 
-# ---------------------------------------------------------------------------
-# EvidentialPolicyNetwork
-# ---------------------------------------------------------------------------
-
-
 class TestEvidentialPolicyNetwork:
     """
     @class TestEvidentialPolicyNetwork
@@ -186,7 +176,7 @@ class TestEvidentialPolicyNetwork:
 
     def test_aleatoric_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Aleatoric uncertainty must be beta / (alpha - 1) (Amini et al. 2020).
+        @brief Aleatoric uncertainty must be beta / (alpha - 1).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["alpha"] - 1)
@@ -194,7 +184,7 @@ class TestEvidentialPolicyNetwork:
 
     def test_epistemic_formula(self, state_batch: torch.Tensor) -> None:
         """
-        @brief Epistemic uncertainty must be beta / (nu * (alpha - 1)) (Amini et al. 2020).
+        @brief Epistemic uncertainty must be beta / (nu * (alpha - 1)).
         """
         _, unc = self.net.get_action(state_batch, deterministic=False)
         expected = unc["beta"] / (unc["nu"] * (unc["alpha"] - 1))
@@ -234,11 +224,6 @@ class TestEvidentialPolicyNetwork:
             x = torch.randn(2, STATE_DIM)
             gamma, nu, alpha, beta = net(x)
             assert gamma.shape == (2, ACTION_DIM)
-
-
-# ---------------------------------------------------------------------------
-# Evidential loss
-# ---------------------------------------------------------------------------
 
 
 class TestEvidentialLoss:
@@ -314,11 +299,6 @@ class TestEvidentialLoss:
         result["loss"].backward()
         for param in self.net.parameters():
             assert param.grad is not None
-
-
-# ---------------------------------------------------------------------------
-# UncertaintyConditionedActor
-# ---------------------------------------------------------------------------
 
 
 class TestUncertaintyConditionedActor:

@@ -1,13 +1,10 @@
 """
 @file test_cross_seed.py
-@brief Tests for the cross-seed pooled aggregator (scripts/evaluation/cross_seed.py).
+@brief Tests for the cross-seed pooled aggregator (scripts/analysis/cross_seed.py).
 
-Builds tiny synthetic episode_records.csv files under the nested
-seed_<N>/<arm>/<leaf>/<variant>/ layout and checks that cross_seed pools every
-seed into one sample, that the pooled contrast frame keeps the expected schema and
-the ordered arm Categorical, that the pooled episode count is the sum across seeds,
-that the per-seed robustness mean/min/max match hand computation, and that a single
-seed (pool of one) still produces non-empty pooled tables with a zero range.
+Builds synthetic episode_records.csv files under the nested seed_<N>/ layout
+and checks pooling across seeds, the pooled schema, the per-seed robustness
+mean/min/max against hand computation, and single-seed non-empty tables.
 """
 
 from pathlib import Path
@@ -15,8 +12,8 @@ from typing import List, Tuple
 
 import pandas as pd
 
-from scripts.evaluation import cross_seed
-from scripts.evaluation.ablation_analyser import _ARM_ORDER
+from scripts.analysis import cross_seed
+from scripts.analysis.ablation import _ARM_ORDER
 
 # The two GNSS-tier endpoints the degradation slope and many tests key on.
 _CLEAN = "gnss_fixed"
@@ -154,7 +151,7 @@ class TestCrossSeedPooling:
         """
         root = _build_three_seed_tree(tmp_path)
         pooled = cross_seed._pool_episodes(root, stage="6")
-        from scripts.evaluation.ablation_analyser import _contrast_table
+        from scripts.analysis.ablation import _contrast_table
 
         contrasts = _contrast_table(pooled, seed=42)
         expected = {
@@ -250,9 +247,10 @@ class TestPoolOfOne:
         assert (robustness["n_seeds"] == 1).all()
         # A pool of one has zero cross-seed range everywhere.
         assert (robustness["success_range_pp"] == 0.0).all()
-        # The headline figure and pooled summary were written too.
-        assert (stage_dir / "seed_robustness.png").exists()
         assert (stage_dir / "pooled_condition_summary.csv").exists()
+        # The aggregator writes CSVs only; figures are drawn separately from
+        # them by scripts/analysis/figures/, so nothing here renders.
+        assert not list(stage_dir.glob("*.png"))
 
     def test_held_tiers_dropped_by_default(self, tmp_path: Path) -> None:
         """

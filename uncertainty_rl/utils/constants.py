@@ -2,52 +2,31 @@
 @file constants.py
 @brief Structural constants for the uncertainty RL project.
 
-Defines dimensions and thresholds that are fixed by the system architecture.
-These are not tuneable hyperparameters - changing them requires coordinated
-updates across networks, environments, and evaluation code.
-
-Tuneable values (timesteps, seeds, noise levels, etc.) belong in YAML configs.
+Fixed by the system architecture, so changing them needs coordinated updates
+across networks, environments and evaluation code; tuneable values belong in
+YAML instead. Throttle/brake are separate axes so a held stop is stable.
 """
 
 import numpy as np
 
-# ---------------------------------------------------------------------------
-# Success Criteria for Parking Manoeuvres
-# ---------------------------------------------------------------------------
-
-# Velocity threshold for successful parking (m/s). Combined with the
-# geometric in-bay check (car_fully_inside_bay) to define a parked vehicle.
+# Velocity threshold for a successful park (m/s), combined with the geometric
+# in-bay check (car_fully_inside_bay).
 SUCCESS_THRESHOLD_VELOCITY = 0.1
 
-# Consecutive steps the success conditions (in-bay polygon fit + velocity below
-# threshold) must hold before the episode terminates as a park. Prevents a
-# fly-through from counting as a success.
+# Consecutive steps the success conditions must hold before the episode
+# terminates as a park, so a fly-through cannot count as a success.
 SUCCESS_DWELL_STEPS = 5
 
-# Strict inward bay margin (metres) for the polygon-fit success check - the
-# published parking criterion used by EVALUATION, the demo driver, and the lot
-# inspector. Negative inflates the acceptance box outward so corners may overhang
-# by |margin| metres.
-#
-# TRAINING does NOT use this constant: training (and hyperparameter tuning) read
-# `bay_margin` from configs/deployment/sim/env_config.yaml, relaxed per stage by
-# the curriculum files in configs/deployment/sim/curriculum/. The training default
-# in env_config equals this strict value, and the curriculum tightens back to it.
+# Strict inward bay margin (metres) for the polygon-fit success check: the
+# published parking criterion, used by evaluation, the demo driver and the lot
+# inspector. Negative inflates the acceptance box, so corners may overhang by
+# |margin| metres. Training/tuning instead read per-stage `bay_margin`.
 STRICT_BAY_MARGIN = -0.25
 
-# ---------------------------------------------------------------------------
-# Corridor Reward Shaping (not success criteria)
-# ---------------------------------------------------------------------------
-#
-# The reward is shaped in the BAY FRAME, not as a radial distance to the bay
-# centre: the bay depth axis defines a centreline and the car is rewarded for
-# getting onto it (cross-track -> 0), squaring to it (heading, 180-deg symmetric),
-# and advancing to the parked depth (along-track -> 0). Bays are open / back-to-
-# back, so the shaping uses magnitudes and 180-deg heading symmetry. These live
-# here, not in YAML, because reward changes are code, not data.
-
-# Cross-track reference (metres): half-width of the approach corridor. The
-# `on_line` factor is 1 on the centreline and ramps to 0 at this offset.
+# Corridor shaping works in the BAY FRAME, not radially: the depth axis is a
+# centreline the car joins, squares to (180-deg symmetric, bays being open) and
+# advances along. Half-width (metres) of that corridor; the `on_line` factor is
+# 1 on the centreline and ramps to 0 here.
 CORRIDOR_HALF_WIDTH = 2.0
 
 # Along-track reference (metres): depth scale over which the `near_depth` factor
@@ -55,42 +34,32 @@ CORRIDOR_HALF_WIDTH = 2.0
 ALONG_TRACK_SCALE = 6.0
 
 # Orientation error (radians) at which the alignment factor saturates (45 deg).
-# Reused by the corridor `aligned` factor.
 APPROACH_INNER_ALIGNMENT_CUTOFF = np.pi / 4
 
-# Corridor potential weights: phi = -(W_ALONG*|along| + W_CROSS*|cross| +
-# W_HEAD*heading_err). Cross-track and heading outweigh along-track so the gradient
-# pulls the car onto the centreline and square before advancing in depth; W_HEAD is
-# the alignment lever (at 3.0 a 20 deg heading error costs ~1.05 m of along-track).
-# Kept moderate: large cross/heading weights make every S-correction locally
-# expensive (the heading term must be paid before the cross term pays back), which
-# stalls a forward-only car in aligned-but-offset poses.
-CORRIDOR_W_ALONG = 1.0
+# Corridor potential weights:
+# phi = -(W_ALONG*|along| + W_CROSS*|cross| + W_HEAD*heading_err)
+CORRIDOR_W_ALONG = 1.0  # depth term, the unit the other two are priced against
+# Above along-track, so the gradient pulls onto the centreline before advancing.
 CORRIDOR_W_CROSS = 2.0
+# Alignment lever: at 3.0 a 20 deg heading error costs ~1.05 m of along-track.
+# Kept moderate - larger values make every S-correction locally expensive (heading
+# is paid before cross-track pays back), stalling a forward-only car when aligned
+# but offset.
 CORRIDOR_W_HEAD = 3.0
 
 # Held-stop finisher on top of the corridor potential:
-# endgame = (ENDGAME_MOVE_COEF + ENDGAME_HOLD_COEF*stopped) * on_line * aligned
-# * near_depth. MOVE applies while moving, +HOLD once stopped on the line. Bounded
-# so the most an episode can accrue stays below the discounted +50 terminal, hence
-# completing the park always dominates hovering near the goal.
+# endgame = (MOVE_COEF + HOLD_COEF*stopped) * on_line * aligned * near_depth
+# Both are small so a full episode of hovering near the goal accrues less than the
+# discounted +50 terminal, and completing the park always dominates.
 ENDGAME_MOVE_COEF = 0.008
 ENDGAME_HOLD_COEF = 0.006
 
-# ---------------------------------------------------------------------------
-# Obstacle Clearance Shaping (safety nudge, not a success criterion)
-# ---------------------------------------------------------------------------
-#
-# Smooth penalty for drifting toward a neighbouring parked car during a crooked
-# approach. SAFE sits below the ~0.98 m side gap a square-parked ego leaves beside
-# an occupied neighbour, so a correct park pays ~0; the reward also gates this off
-# once the car is square on the centreline.
+# Obstacle clearance shaping (safety nudge, not a success criterion): a smooth
+# penalty for drifting toward a neighbouring parked car during a crooked approach.
+# SAFE sits below the ~0.98 m side gap a square-parked ego leaves beside an
+# occupied neighbour, so a correct park pays ~0.
 OBSTACLE_CLEARANCE_SAFE = 0.8
 OBSTACLE_CLEARANCE_DANGER = 0.3
-
-# ---------------------------------------------------------------------------
-# State Space Dimensions
-# ---------------------------------------------------------------------------
 
 # Core vehicle state: [speed, vyaw]. speed is signed body-frame longitudinal
 # velocity (m/s) from the EKF.
@@ -106,12 +75,8 @@ TARGET_POSE_DIM = 3
 # [left_dist, left_bearing, right_dist, right_bearing, forward_dist]
 OBSTACLE_FEATURES_DIM = 5
 
-# Total observation dimension (with uncertainty conditioning and obstacle obs)
-# Index   0:      signed body-frame speed (m/s)
-# Index   1:      yaw rate (vyaw, rad/s)
-# Indices 2-4:    EKF covariance features (std_x, std_y, std_yaw) (when include_covariance=True)
-# Indices 5-7:    relative target pose (dx, dy, dyaw)
-# Indices 8-12:   hemispheric obstacle clearance (when include_obstacle_obs=True)
+# Total observation dimension, both ablation flags on. Index table in the module
+# docstring; the live dim comes from _compute_obs_dim(), not this constant.
 TOTAL_OBS_DIM = (
     VEHICLE_STATE_DIM
     + COVARIANCE_FEATURES_DIM
@@ -119,9 +84,6 @@ TOTAL_OBS_DIM = (
     + OBSTACLE_FEATURES_DIM
 )  # 13
 
-# ---------------------------------------------------------------------------
-# Observation Normalisation Scales
-# ---------------------------------------------------------------------------
 # Fixed physical-range divisors for the observation, applied in build_observation():
 # each component is divided by its scale and clipped to +/-OBS_NORM_CLIP. Stage- and
 # layout-invariant: identical in training, evaluation, every layout, and on the real
@@ -144,74 +106,43 @@ OBS_OBSTACLE_BEARING_SCALE = np.pi / 2  # rad - forward-hemisphere bearing bound
 # Clip magnitude applied after scaling. Wide enough that only outliers are clipped.
 OBS_NORM_CLIP = 5.0
 
-# ---------------------------------------------------------------------------
-# Action Space Dimensions
-# ---------------------------------------------------------------------------
-
-# Continuous action: [steering, throttle, brake]
-# steering : [-1, 1]  left to right
-# throttle : [ 0, 1]  forward throttle (no reverse gear: forward perpendicular
-#                     bay parking only)
-# brake    : [ 0, 1]  friction brake
-# Throttle and brake are separate non-negative axes so a held stop
-# (throttle = 0, brake > 0) is a stable region of the action space.
+# Continuous action: [steering, throttle, brake]. Ranges and the reason throttle
+# and brake are separate axes are in the module docstring.
 ACTION_DIM = 3
-
-# ---------------------------------------------------------------------------
-# Environment Safety and Termination Thresholds
-# ---------------------------------------------------------------------------
 
 # Radial distance from target bay before out-of-bounds termination (metres).
 # Used on the real-world inference path only; the sim path uses the soft
 # polygon boundary below.
 OUT_OF_BOUNDS_THRESHOLD = 20.0
 
-# Consecutive policy decisions below SUCCESS_THRESHOLD_VELOCITY while NOT inside
-# the acceptance box before the episode truncates as a stall (same graded
-# timeout penalty as the clock running out). A stalled policy otherwise sits
-# motionless for the remaining episode, flooding the rollout buffer with
-# identical zero-advantage frames. Sized at 10 s of standstill: a terminal
-# freeze releases the episode early. The counter is SUSPENDED while the live EKF
-# position std exceeds STALL_GATE_EKF_STD_M (see below), so waiting out a bad-fix
-# excursion is never counted as a stall however long the recovery takes - the
-# stall rule only governs a freeze under GOOD localisation. Discounting makes an
-# early stall strictly worse than a late one, so this cannot be gamed to escape
-# an episode.
+# Consecutive decisions below SUCCESS_THRESHOLD_VELOCITY while outside the
+# acceptance box before truncating as a stall (50 = 10 s), else a frozen policy
+# floods the buffer with zero-advantage frames. The graded timeout penalty is
+# discounted, so an early stall is worse than a late one and cannot be gamed.
 STALL_TRUNCATION_DECISIONS = 50
 
-# Live EKF position std (metres, 1-sigma) above which a near-stop is treated as a
-# legitimate wait-for-recovery rather than a stall, so the stall counter does not
-# increment. Set at the RTK-float/standalone boundary (float settles ~0.36 m,
-# standalone ~0.47 m, degraded ~1.0 m at the EKF output), so the gate opens only
-# when localisation is genuinely degraded - waiting is the correct response there
-# and must not be punished, the behaviour the input covariance is meant to induce.
+# Live EKF position std (metres, 1-sigma) above which the stall counter is
+# SUSPENDED, so the rule governs only a freeze under GOOD localisation and
+# waiting out a bad fix is never a stall. Set at the RTK-float/standalone
+# boundary: waiting there is the behaviour the input covariance should induce.
 STALL_GATE_EKF_STD_M = 0.4
 
-# ---------------------------------------------------------------------------
-# Dense reward scale
-# ---------------------------------------------------------------------------
-# Per-episode progress target. progress = (phi(curr) - phi(prev)) /
-# max(|phi(start)|, PHI_NORM_FLOOR) * PROGRESS_TARGET. The /|phi(start)| factor
-# equalises bays so a far bay offers no larger shaping pool than a near one;
-# PROGRESS_TARGET sets the dense magnitude. Set to the stage-1 |phi(start)| (~39 m)
-# so for the fixed stage-1 bay the /|phi(start)| factor is ~1 and the dense reward
-# equals the raw potential progress (phi(curr) - phi(prev)) the stage-1 reward was
-# designed around; for stage 2+ the same factor equalises varied bays. Terminals
-# (+50 / -25 / -10) are NOT scaled by it.
+# progress = (phi(curr) - phi(prev)) / max(|phi(start)|, PHI_NORM_FLOOR)
+#            * PROGRESS_TARGET
+# The divisor equalises bays; 39.0 is the stage-1 |phi(start)|, so there the
+# dense reward is the raw potential progress. Terminals are NOT scaled by it.
 PROGRESS_TARGET = 39.0
 
 # Floor on the per-episode start potential |phi(start)| used as the reward
-# normaliser. Progress and the graded timeout penalty are divided by
-# max(|phi(start)|, PHI_NORM_FLOOR) so a spawn very close to its bay
-# (|phi(start)| -> 0) cannot blow the normalised reward up.
+# normaliser, so a spawn very close to its bay (|phi(start)| -> 0) cannot blow the
+# normalised reward up.
 PHI_NORM_FLOOR = 5.0
 
-# Graded timeout penalty coefficients. The penalty at truncation is
-# -(TIMEOUT_POS_COEF * final_pos_error + TIMEOUT_YAW_COEF * final_orientation_error),
-# normalised by the per-episode start potential and clamped to
-# TIMEOUT_PENALTY_FLOOR_NORM. yaw is weighted above pos so a square near-miss is
-# cheaper than a far-short freeze.
+# Graded timeout penalty, normalised by the per-episode start potential and
+# clamped to TIMEOUT_PENALTY_FLOOR_NORM:
+# -(TIMEOUT_POS_COEF * final_pos_error + TIMEOUT_YAW_COEF * final_yaw_error)
 TIMEOUT_POS_COEF = 1.5
+# Weighted above pos, so a square near-miss is cheaper than a far-short freeze.
 TIMEOUT_YAW_COEF = 2.5
 
 # Floor of the graded timeout penalty. Sized below the worst graded value but above
@@ -219,24 +150,18 @@ TIMEOUT_YAW_COEF = 2.5
 # collision(-25) holds and the policy never crashes deliberately to escape a timeout.
 TIMEOUT_PENALTY_FLOOR_NORM = -24.0
 
-# ---------------------------------------------------------------------------
-# Soft Out-of-Bounds Boundary (sim training)
-# ---------------------------------------------------------------------------
 # The drivable boundary is the lot polygon inflated outward by this margin
-# (metres), forming a run-off skirt beyond the lot edge that softens the boundary
-# penalty during early learning.
+# (metres), forming a run-off skirt that softens the boundary penalty during
+# early learning.
 OOB_INFLATION_MARGIN = 5.0
 
 # Reward applied each policy decision the ego centre is outside the inflated
-# polygon. Applied RAW (never divided by the per-episode normaliser): the lot edge is
-# a bay-independent world boundary, so its cost must not shrink for far bays. It
-# accumulates so a sustained run-out terminates the episode.
+# polygon. Applied RAW (never divided by the per-episode normaliser): the lot edge
+# is a bay-independent world boundary, so its cost must not shrink for far bays.
 OOB_STEP_PENALTY = -0.5
 
-# Accumulated out-of-bounds cost (sum of |OOB_STEP_PENALTY|) at which the episode
-# terminates with no extra crash penalty - the accrued per-step penalties are the
-# cost. At OOB_STEP_PENALTY = -0.5 this is reached after ~20 consecutive outside
-# decisions, so a committed run-out terminates while a momentary clip does not. Sized
-# below the ego collision penalty so leaving the lot is never punished harder than a
-# real collision.
+# Accumulated |OOB_STEP_PENALTY| at which the episode terminates, with no extra
+# crash penalty - the accrued per-step cost is the penalty, and it stays below the
+# ego collision penalty so leaving the lot never costs more than a real collision.
+# ~20 outside decisions: a committed run-out ends, a momentary clip does not.
 OOB_TERMINATION_PENALTY_LIMIT = 10.0

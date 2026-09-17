@@ -45,17 +45,12 @@ from uncertainty_rl.utils.logging import DebugLogger
 from uncertainty_rl.utils.visualisation import VisStateWriter
 
 __all__ = [
-    # Actuation calibration
     "ActuationCalibration",
-    # Config merge hierarchy
     "BASELINE_KEYS",
     "apply_baseline",
     "deep_merge",
-    # Logging
     "DebugLogger",
-    # Visualisation
     "VisStateWriter",
-    # Constants
     "ACTION_DIM",
     "ALONG_TRACK_SCALE",
     "APPROACH_INNER_ALIGNMENT_CUTOFF",
@@ -75,11 +70,11 @@ __all__ = [
     "TIMEOUT_PENALTY_FLOOR_NORM",
     "TOTAL_OBS_DIM",
     "VEHICLE_STATE_DIM",
-    # Covariance utilities
     "extract_2d_covariance_features",
     "get_covariance_dimension",
     "validate_covariance_matrix",
-    # Geometry utilities (private helpers re-exported for internal package use)
+    # Geometry: the leading-underscore helpers are re-exported for internal
+    # package use, not as public API.
     "bay_containment_fraction",
     "car_fully_inside_bay",
     "inflate_polygon",

@@ -25,7 +25,7 @@ static_tf = _common_mod.static_tf
 def generate_launch_description() -> LaunchDescription:
     """
     @brief Generate the real-vehicle sensor pipeline launch description.
-    @return LaunchDescription with navsat_transform, static TFs, EKF, and
+    @return LaunchDescription with the sensor relay, static TFs, EKF, and
             CovarianceExtractorNode.
     """
     ros2_cfg = load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")
@@ -41,8 +41,8 @@ def generate_launch_description() -> LaunchDescription:
     gnss_fix_topic: str = str(real_cfg.get("gnss_fix_topic", "/gnss/fix"))
     imu_input_topic: str = str(real_cfg.get("imu_topic", "/imu/data"))
 
-    # Internal topic names match sim so the EKF and CovarianceExtractor configs
-    # are identical across deployments.
+    # Held identical to sim so the EKF and CovarianceExtractor configs need no
+    # per-deployment variant.
     gnss_odom_topic: str = "/odometry/gps"
     heading_topic: str = "/gnss/heading"
     imu_stamped_topic: str = "/imu/data/stamped"
@@ -74,9 +74,7 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
-    # Static TF nodes
-    # Real vehicle uses ROS-conventional frame names (base_link, imu_link, etc.)
-    # rather than CARLA's ego_vehicle/* names.
+    # ROS-conventional frame names here, rather than CARLA's ego_vehicle/* ones.
     sensor_tf_nodes = build_sensor_tf_nodes(
         sensor_cfg,
         body_frame="base_link",
@@ -86,15 +84,13 @@ def generate_launch_description() -> LaunchDescription:
         use_sim_time=False,
     )
     sensor_tf_nodes.append(
-        # map->odom identity for nav_msgs consumers that need the full chain.
+        # Identity, for nav_msgs consumers that need the full chain.
         static_tf("map_to_odom_tf", "map", "odom", 0.0, 0.0, 0.0)
     )
 
-    # Sensor relay node
-    # Same executable as sim, with all noise injection disabled. The relays
-    # do flat-earth projection (GNSS), COG heading derivation, IMU covariance
-    # stamping and ZUPT clamping. Real receiver/IMU values flow through
-    # unmodified except for ZUPT.
+    # The sim executable with noise injection off, so real receiver and IMU
+    # values pass through unmodified except for ZUPT. What remains is the
+    # projection, COG derivation and covariance stamping the EKF needs.
     gnss_relay_cfg = ros2_cfg.get("gnss_noise_relay", {})
     imu_relay_cfg = ros2_cfg.get("imu_noise_relay", {})
 
@@ -105,7 +101,6 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[
             {
                 "use_sim_time": False,
-                # GNSS: real receiver -> flat-earth XY + COG heading.
                 "input_topic": gnss_fix_topic,
                 "output_topic": gnss_relay_cfg.get("output_topic", "/gnss/noisy"),
                 "odom_output_topic": gnss_odom_topic,
@@ -118,13 +113,11 @@ def generate_launch_description() -> LaunchDescription:
                     "cog_min_displacement_m", 0.05
                 ),
                 "enable_cog_heading": gnss_relay_cfg.get("enable_cog_heading", True),
-                # Sim-only noise generators are off in real deployment; the
-                # receiver's reported covariance and natural dropouts pass
-                # through unmodified.
+                # The real receiver has its own geometry-driven anisotropy and
+                # its own dropouts, so simulating either would double-count.
                 "enable_gnss_anisotropy": False,
                 "gnss_dropout_probability": 0.0,
                 "imu_topic": imu_stamped_topic,
-                # IMU: real driver -> covariance-stamped, ZUPT-clamped.
                 "imu_input_topic": imu_input_topic,
                 "imu_output_topic": imu_stamped_topic,
                 "enable_imu_noise": False,
@@ -138,18 +131,15 @@ def generate_launch_description() -> LaunchDescription:
                 "accel_zupt_threshold_ms2": imu_relay_cfg.get(
                     "accel_zupt_threshold_ms2", 0.2
                 ),
-                # Sim-only scale factor errors are off in real deployment;
-                # the physical IMU already has its own scale-factor properties.
+                # The physical IMU already has its own scale-factor error.
                 "imu_gyro_scale_factor_limit": 0.0,
                 "imu_accel_scale_factor_limit": 0.0,
             }
         ],
     )
 
-    # EKF node
-    # Same EKF params as sim, including pose0=/gnss/heading so the COG-derived
-    # yaw correction is available in real deployment too. Only frame names,
-    # topic names, and use_sim_time differ from the sim launch.
+    # Same params as sim down to pose0, so the COG-derived yaw correction is
+    # available here too; only frames, topics and use_sim_time differ.
     ekf_params = {
         **ros2_cfg.get("ekf", {}),
         "use_sim_time": False,
@@ -167,8 +157,6 @@ def generate_launch_description() -> LaunchDescription:
         remappings=[("odometry/filtered", odom_filtered_topic)],
     )
 
-    # CovarianceExtractorNode
-    # Identical config to sim: subscribes to /odometry/filtered, writes ekf_state.json.
     covariance_extractor = Node(
         package="uncertainty_rl_ros2",
         executable="covariance_extractor",

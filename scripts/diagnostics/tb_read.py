@@ -2,26 +2,16 @@
 @file tb_read.py
 @brief Inspect scalar trajectories in TensorBoard event files from the CLI.
 
-Ad-hoc diagnostic for reading a training run's logged scalars without the
-TensorBoard UI. Prints, per tag, the full-series statistics (count, mean,
-nonzero count, first/last and min/max with their steps) plus an evenly
-sampled trajectory, so spiky sparse-positive metrics stay visible rather
-than being hidden behind quantiles. Supports tag selection, smoothing, tail
-inspection, multi-run comparison, and tidy CSV export.
-
-Usage (via make):
-  make tb-scalars LOG=logs/<run_dir>
-  make tb-scalars LOG=logs/<run_dir> ARGS="--match success collision"
-  make tb-scalars LOG=logs/<run_dir> ARGS="--tags env/success_rate --full"
-  make tb-scalars LOG=logs/<run_a> ARGS="logs/<run_b> --match success"
+Prints full-series statistics plus an evenly sampled trajectory, so spiky
+sparse-positive metrics stay visible rather than hidden behind quantiles.
+Usage: `make tb-scalars LOG=logs/<run_dir> [ARGS="--match success --full"]`.
 """
 
 import argparse
 import csv
+import struct
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
-
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from typing import Dict, List, Optional, Sequence, Tuple
 
 # (step, value) pairs in logged order.
 Series = List[Tuple[int, float]]
@@ -93,17 +83,138 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _varint(buf: bytes, pos: int) -> Tuple[int, int]:
+    """
+    @brief Read one protobuf base-128 varint.
+    @param buf: Buffer to read from.
+    @param pos: Offset to start at.
+    @return (value, offset just past the varint).
+    """
+    result = shift = 0
+    while pos < len(buf):
+        byte = buf[pos]
+        pos += 1
+        result |= (byte & 0x7F) << shift
+        if not byte & 0x80:
+            break
+        shift += 7
+    return result, pos
+
+
+def _scalars_from_event(payload: bytes) -> List[Tuple[int, str, float]]:
+    """
+    @brief Extract (step, tag, value) triples from one serialised Event.
+    @param payload: The Event protobuf bytes of a single TFRecord.
+    @return Every simple-value scalar the event carries; empty for other events.
+
+    Hand-decoded rather than via the tensorboard package, which would pull a
+    whole dashboard (gRPC, Werkzeug, a web server) onto the host just to parse
+    a file. Only the fields needed are read - Event.step (field 2, varint),
+    Event.summary (field 5), then Summary.Value.tag (field 1, bytes) and
+    simple_value (field 2, 32-bit float). Any field this does not recognise is
+    skipped by its wire type, so unknown fields cannot desynchronise the parse.
+    """
+    out: List[Tuple[int, str, float]] = []
+    step = 0
+    pos = 0
+    while pos < len(payload):
+        key, pos = _varint(payload, pos)
+        field, wire = key >> 3, key & 0x07
+        if wire == 0:
+            value, pos = _varint(payload, pos)
+            if field == 2:  # Event.step
+                step = value
+        elif wire == 1:  # 64-bit (Event.wall_time)
+            pos += 8
+        elif wire == 2:  # length-delimited
+            length, pos = _varint(payload, pos)
+            block = payload[pos : pos + length]
+            pos += length
+            if field == 5:  # Event.summary
+                out.extend((step, tag, val) for tag, val in _summary_values(block))
+        elif wire == 5:  # 32-bit
+            pos += 4
+        else:  # unknown wire type: cannot continue safely
+            break
+    return out
+
+
+def _summary_values(block: bytes) -> List[Tuple[str, float]]:
+    """
+    @brief Extract (tag, simple_value) pairs from a serialised Summary.
+    @param block: The Summary protobuf bytes.
+    @return One pair per Value that carries a simple_value; others are skipped.
+    """
+    pairs: List[Tuple[str, float]] = []
+    pos = 0
+    while pos < len(block):
+        key, pos = _varint(block, pos)
+        field, wire = key >> 3, key & 0x07
+        if wire == 2:
+            length, pos = _varint(block, pos)
+            value_block = block[pos : pos + length]
+            pos += length
+            if field == 1:  # Summary.value (repeated)
+                tag: Optional[str] = None
+                simple: Optional[float] = None
+                vpos = 0
+                while vpos < len(value_block):
+                    vkey, vpos = _varint(value_block, vpos)
+                    vfield, vwire = vkey >> 3, vkey & 0x07
+                    if vwire == 2:
+                        vlen, vpos = _varint(value_block, vpos)
+                        if vfield == 1:  # Value.tag
+                            tag = value_block[vpos : vpos + vlen].decode(
+                                "utf-8", "replace"
+                            )
+                        vpos += vlen
+                    elif vwire == 5:
+                        if vfield == 2:  # Value.simple_value
+                            (simple,) = struct.unpack_from("<f", value_block, vpos)
+                        vpos += 4
+                    elif vwire == 0:
+                        _, vpos = _varint(value_block, vpos)
+                    elif vwire == 1:
+                        vpos += 8
+                    else:
+                        break
+                if tag is not None and simple is not None:
+                    pairs.append((tag, float(simple)))
+        elif wire == 0:
+            _, pos = _varint(block, pos)
+        elif wire == 1:
+            pos += 8
+        elif wire == 5:
+            pos += 4
+        else:
+            break
+    return pairs
+
+
 def load_scalars(log_dir: Path) -> Dict[str, Series]:
     """
     @brief Load every scalar series from a TensorBoard event directory.
     @param log_dir: Run directory containing one or more event files.
     @return Mapping of tag -> list of (step, value) in logged order.
+
+    Reads the TFRecord framing directly: each record is an 8-byte little-endian
+    length, a 4-byte CRC of that length, the payload, then a 4-byte CRC of the
+    payload. The CRCs are not checked - a truncated final record (a run killed
+    mid-write) simply ends the read, which is the behaviour wanted here.
     """
-    accumulator = EventAccumulator(str(log_dir), size_guidance={"scalars": 0})
-    accumulator.Reload()
     series: Dict[str, Series] = {}
-    for tag in accumulator.Tags()["scalars"]:
-        series[tag] = [(e.step, float(e.value)) for e in accumulator.Scalars(tag)]
+    for path in sorted(log_dir.glob("events.out.tfevents.*")):
+        data = path.read_bytes()
+        pos = 0
+        while pos + 12 <= len(data):
+            (length,) = struct.unpack_from("<Q", data, pos)
+            start = pos + 12
+            end = start + length
+            if end > len(data):
+                break  # truncated tail from an interrupted run
+            for step, tag, value in _scalars_from_event(data[start:end]):
+                series.setdefault(tag, []).append((step, value))
+            pos = end + 4
     return series
 
 

@@ -1,10 +1,6 @@
 """
 @file setup.py
 @brief ROS 2 ament_python package setup for uncertainty_rl_ros2.
-
-This setup script is used by colcon to build and install the ROS 2
-package containing covariance extraction nodes and the CARLA bridge
-launch file.
 """
 
 import os

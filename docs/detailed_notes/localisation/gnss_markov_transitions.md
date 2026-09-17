@@ -1,156 +1,69 @@
-# GNSS Fix-State Markov Chain - Design and Sim-to-Real Rationale
+# GNSS Fix-State Markov Chain - Implementation Notes
 
-> **Single-phase curriculum.** Mid-episode Markov drift is ON from Stage 1 (master switches
-> in `ros2_config.yaml` enabled globally). Each episode STARTS in a tier SAMPLED from the
-> per-tier `weight` values in `gnss_noise_profiles.yaml` (biased toward the bad tiers -
-> 40/20/20/20 over fixed/float/standalone/degraded - so most episodes begin under
-> uncertainty, the realistic arrival case), and the chain wanders from there. The chain is a
-> FIXED, stage-invariant process - it is loaded once at
-> node startup from `configs/deployment/sim/gnss_noise_profiles.yaml` and is identical in
-> every curriculum stage (the GNSS degradation is not a ramped axis). The transition matrix
-> shown below is the one in that config.
+Extracted from `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`.
 
-Extracted from the GNSS noise relay pipeline in `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`.
+Section 3.4.1 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical
+for the chain: why fix quality is modelled as a Markov process rather than a per-episode
+constant, the ladder-only transition structure, the upward recovery bias, the long-run
+occupancy and dwell times, the one-way drift mode used for evaluation, and the local
+datum. Figure 3.8 there draws the chain with its probabilities.
 
-## Rationale
+This note records only the runtime behaviour around it.
 
-In a real outdoor parking lot RTK fix quality changes continuously as the
-vehicle moves: driving past a parked van blocks satellites, rounding a corner
-re-exposes the antenna, nearby structures cause multipath bursts. The policy
-must therefore see covariance spikes that occur mid-manoeuvre, not only a
-single constant fix state per episode, so that its uncertainty-conditioned
-behaviour is defined across the whole covariance range it will meet on the
-real vehicle.
+## Configuration and rates
 
-The fix-state tier is therefore modelled as a discrete-time Markov chain that
-can transition mid-episode, rather than a constant sampled once at `reset()`.
+The transition matrix, tier definitions and per-episode start weights live in
+`configs/deployment/sim/gnss_noise_profiles.yaml`, which is their single source of
+truth. The chain is loaded once at node startup and is identical in every curriculum
+stage, so GNSS degradation is not a ramped axis, and mid-episode drift is active from
+stage 1 with the master switches in `ros2_config.yaml` enabled globally.
 
----
+`_step_markov()` runs on every GNSS callback at 20 Hz, so with `action_repeat=4` the
+chain takes four steps per agent decision.
 
-## Discrete-Time Markov Chain
+Each episode starts in a tier sampled from the per-tier `weight` values, biased toward
+the degraded tiers (0.40/0.20/0.20/0.20 over fixed/float/standalone/degraded) so that
+most episodes begin under uncertainty, which is the realistic arrival case. Because the
+chain recovers up the ladder, the agent meets the full covariance range mid-manoeuvre
+while the fix trends clean over the approach. The start distribution is therefore
+deliberately not the chain's stationary distribution.
 
-At each GNSS callback (20 Hz) the active fix-state tier can transition to an
-adjacent tier with a small probability. The transition is drawn from a 4-state
-discrete Markov chain:
+## EKF process noise
 
-```
-States:  rtk_fixed (0) <-> rtk_float (1) <-> standalone (2) <-> degraded (3)
-```
+CARLA publishes zero IMU covariance, which makes `robot_localization` treat the IMU as
+infinitely reliable: the EKF covariance never grows during the prediction step and stays
+artificially flat between fixes. On real hardware, yaw covariance grows visibly between
+20 Hz GNSS updates.
 
-No direct transitions between non-adjacent tiers (e.g. fixed -> standalone)
-are permitted; degradation and recovery walk the ladder through neighbouring
-states. This matches the physical mechanism: RTK does not jump directly from
-cm-level to metre-level accuracy -- it degrades through float first.
+`process_noise_covariance` in `configs/ros2_config.yaml` corrects this. The active
+diagonal entries are 1.0e-2 on x and y, 1.0e-4 on yaw and the two planar velocities, and
+1.0e-3 on yaw rate, with 1.0e-6 as a positive-definite floor on the states the planar
+mode does not estimate. The relative sizing is derived in the sensor-noise appendix.
 
-### Transition Matrix (per callback, 20 Hz)
+These values make the covariance inflate between fixes and collapse when one arrives,
+producing the sawtooth profile the policy learns to respond to.
 
-```
-             to: fixed   float   standalone  degraded
-from: fixed      0.9920  0.0080  0.0000      0.0000
-from: float      0.0400  0.9550  0.0050      0.0000
-from: standalone 0.0000  0.0080  0.9875      0.0045
-from: degraded   0.0000  0.0000  0.0071      0.9929
-```
+## Control flag
 
-### Behaviour
+`enable_markov_transitions: false` in `configs/ros2_config.yaml` (or the node parameter)
+disables the chain, holding the start tier for the whole episode. This is used for
+ablations needing a fixed tier, for isolating tier transitions when debugging, and for
+evaluation runs at a specified condition.
 
-The chain is **upward-biased**: at every off-fixed rung the recovery
-probability (toward `rtk_fixed`) exceeds the degradation probability (deeper).
-This makes it fixed-dominant and self-recovering. The dwell is deliberately
-**asymmetric** - standalone holds ~4 s and degraded ~7 s (longer where waiting
-for recovery is the only correct move), both kept below the ~10 s
-stall-truncation margin so a justified wait is never cut short.
+## Limitations
 
-| Property | Value |
-|----------|-------|
-| Long-run distribution    | ~80% `rtk_fixed` (fixed-dominant healthy open-sky receiver) |
-| Mean dwell off-fixed     | standalone ~4 s, degraded ~7 s |
-| Leave-fixed rate         | 0.008/step -> a degradation event begins every ~6 s of fixed |
-
-The `_step_markov()` call runs on every GNSS callback (20 Hz); with
-`action_repeat=4` that is 4 chain steps per agent decision. Because most
-episodes START off-fixed (biased start weights) and the chain recovers up the
-ladder, the agent meets the full covariance range mid-manoeuvre while the fix
-trends clean over the approach.
-
----
-
-## Parameter Choices and Justification
-
-### Transition probabilities
-
-The probabilities were chosen to satisfy three constraints:
-
-1. **Fixed-dominant, like a healthy open-sky RTK receiver.** A correctly
-   operating RTK rover with sky view holds fix the large majority of the time;
-   fix loss is a discrete, transient event (cycle slip, a passing vehicle
-   blocking the antenna, a multipath burst), not the baseline. The long-run
-   distribution (~80% fixed) reflects this. An earlier matrix that diffused
-   freely (~30% fixed, recovery in minutes) modelled a chronically degraded
-   urban-canyon receiver and made degraded episodes effectively unwinnable.
-
-2. **Excursions recover within an approach.** Recovery to fixed in a few
-   seconds (not minutes) is what makes "wait for the fix to recover" a
-   learnable behaviour rather than a frozen, unwinnable episode: the policy can
-   hold while uncertain and then commit once the EKF target sharpens.
-
-3. **Recovery outweighs degradation at every rung.** The upward (toward fixed)
-   probability is ~7-8x the downward (deeper) probability in each off-fixed row,
-   so the chain is pulled back toward fixed. The degraded tier is reachable only
-   by several downward steps against this bias, making it rare and brief - the
-   abort/handoff regime, present for training but not dominating the episode.
-
-### IMU process noise covariance
-
-CARLA publishes zero IMU covariance, which causes `robot_localization` to
-treat IMU as an infinitely reliable sensor. The result is that EKF covariance
-stays artificially flat between GNSS fixes -- it never grows during the IMU
-prediction step. On real hardware (e.g. VectorNav VN-100), yaw covariance
-grows visibly between 20 Hz GNSS updates.
-
-Fix: set `process_noise_covariance` in the EKF config with values derived
-from VN-100 datasheet:
-
-- Gyro noise density: ~0.0035 rad/s/sqrt(Hz) at 20 Hz
-  -> per-sample variance = (0.0035 * sqrt(20))^2 = 2.45e-4 (rad/s)^2
-  -> using 2.5e-4 (slight rounding up for margin)
-- Yaw orientation stddev: ~0.5 deg = 0.0087 rad
-  -> variance = 7.6e-5 rad^2
-
-These values mean the EKF covariance inflates slightly between each pair of
-GNSS fixes and collapses when a fix arrives, producing the realistic
-``saw-tooth'' covariance profile the policy should learn to respond to.
-
-On the real vehicle, replace these with the actual IMU datasheet noise floor.
-
----
-
-## Control Flag
-
-The Markov chain can be disabled via `enable_markov_transitions: false` in
-`configs/ros2_config.yaml` (or the ROS 2 node parameter). This is useful for:
-
-- Ablation studies that require a fixed noise tier for the full episode.
-- Debugging: isolating the effect of tier transitions from other variables.
-- Evaluation runs where a specific fixed condition is desired.
-
----
+- The transition matrix is hand-tuned. A higher-fidelity model could learn it from a
+  logged RTK dataset at the deployment site.
+- Off-diagonal covariance terms from correlated satellite-geometry errors are not
+  modelled: the NavSatFix covariance is always diagonal.
+- Weather effects such as ionospheric delay are not modelled, as FlatPlane does not
+  render weather.
 
 ## Where This Is Implemented
 
-| File | What changed |
-|------|--------------|
-| `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | `_TIER_ORDER`, `_TIER_DEFAULTS`, `_DEFAULT_TRANSITION_MATRIX` constants; `_apply_tier()`, `_step_markov()` methods; `enable_markov_transitions` parameter; `_gnss_callback()` calls `_step_markov()` each tick |
-| `configs/ros2_config.yaml` | `gnss_noise_relay.enable_markov_transitions` flag; `ekf.process_noise_covariance` matrix with realistic IMU noise |
+| File | Role |
+|------|------|
+| `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | `_TIER_ORDER`, `_TIER_DEFAULTS` and `_DEFAULT_TRANSITION_MATRIX` constants; `_apply_tier()` and `_step_markov()`, the latter called from `_gnss_callback()` each tick |
+| `configs/deployment/sim/gnss_noise_profiles.yaml` | Tier definitions, start weights and the transition matrix |
+| `configs/ros2_config.yaml` | `gnss_noise_relay.enable_markov_transitions` flag; `ekf.process_noise_covariance` |
 | `uncertainty_rl/ros2/launch/carla_bridge.launch.py` | Passes `enable_markov_transitions` to the node |
-
----
-
-## Limitations and Future Work
-
-- The transition matrix is hand-tuned. For a higher-fidelity model, the
-  matrix could be learned from a logged RTK dataset on the real site.
-- Off-diagonal covariance terms (from correlated satellite geometry errors)
-  are not modelled -- the NavSatFix covariance is always diagonal.
-- Weather effects (ionospheric delay in rain) are not modelled because
-  FlatPlane does not render weather. This is a known, documented limitation.

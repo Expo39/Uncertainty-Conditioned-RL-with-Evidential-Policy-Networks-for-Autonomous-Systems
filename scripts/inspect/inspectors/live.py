@@ -14,6 +14,7 @@ except ImportError:
     print("ERROR: carla Python package not found.  Run inside the training container.")
     sys.exit(1)
 
+from scripts.inspect._drawing import _draw_layout_overlays
 from scripts.inspect.inspectors.base import _Inspector
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 
@@ -47,10 +48,6 @@ class LiveInspector(_Inspector):
         self._train_cfg = train_cfg
         self._sensors: List[Any] = []
         self._lidar_logged: bool = False
-
-    # -----------------------------------------------------------------------
-    # Sensor spawning
-    # -----------------------------------------------------------------------
 
     def _spawn_sensors(self) -> None:
         """
@@ -98,10 +95,6 @@ class LiveInspector(_Inspector):
         lidar_actor.listen(self._on_lidar)
         self._sensors.append(lidar_actor)
 
-    # -----------------------------------------------------------------------
-    # Sensor data callbacks
-    # -----------------------------------------------------------------------
-
     def _on_lidar(self, lidar_data: Any) -> None:
         """
         @brief LiDAR data callback - draws each hit point as a red debug dot.
@@ -135,10 +128,6 @@ class LiveInspector(_Inspector):
                 life_time=life,
             )
 
-    # -----------------------------------------------------------------------
-    # Spectator placement
-    # -----------------------------------------------------------------------
-
     def place_spectator(self) -> None:
         """
         @brief Position the spectator in birds-eye view 80 m above the ego vehicle.
@@ -150,9 +139,22 @@ class LiveInspector(_Inspector):
         self._place_spectator_birds_eye(cx, cy, sz, 80.0)
         print("Spectator: birds-eye view (80 m).")
 
-    # -----------------------------------------------------------------------
-    # Main run loop
-    # -----------------------------------------------------------------------
+    def _draw_overlays(self, life_time: float) -> None:
+        """
+        @brief Draw the lot geometry so the scan is read against the bays.
+        @param life_time: Primitive lifetime in seconds.
+        """
+        if self._env.world is None or not self._env._current_layout:
+            return
+        _draw_layout_overlays(
+            self._env.world,
+            self._env._current_layout,
+            self._env._target_bay.get("bay_id", ""),
+            life_time,
+            show_patrol=self._env._num_patrol_max > 0,
+            show_pedestrians=self._env._pedestrian_spawn_prob > 0.0,
+            oob_inflation_margin=self._env._oob_inflation_margin,
+        )
 
     def run(self) -> None:
         """
@@ -177,7 +179,11 @@ class LiveInspector(_Inspector):
         update_patrol = self._env._update_patrol_npcs
         update_peds = self._env._update_pedestrians
         place_birds_eye = self._place_spectator_birds_eye
+        draw_overlays = self._draw_overlays
         vehicle = self._env.vehicle
+        # Redraw the lot overlays on the same cadence the other inspectors use,
+        # so the scan is read against the bay geometry rather than bare tarmac.
+        redraw_ticks = self._REDRAW_INTERVAL * tick_hz
 
         print(
             f"Live sensor session for {self._duration}s.  Press Ctrl+C to exit early."
@@ -193,6 +199,9 @@ class LiveInspector(_Inspector):
                 if vehicle is not None:
                     vt = vehicle.get_transform()
                     place_birds_eye(vt.location.x, vt.location.y, vt.location.z, 80.0)
+
+                if i % redraw_ticks == 0:
+                    draw_overlays(life_time=self._OVERLAY_LIFE)
 
                 time.sleep(tick_period)
 

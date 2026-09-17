@@ -101,7 +101,7 @@ def _short_path(path: str) -> str:
     @brief Trim a run path to its trailing <baseline>/<leaf>[/file] tail for display.
     @param path: A checkpoint, log, or model path under one of the output roots.
     @return The last up-to-three path components joined with "/", so log lines
-            show e.g. "full_method/seed42_11062026-0628/final_model" rather than
+            show e.g. "full_method/6_42_11062026-0628/final_model" rather than
             the full path. Shortening is cosmetic only; callers keep the original
             path for filesystem operations.
     """
@@ -232,19 +232,17 @@ def load_env_config(
 
     # Merge: sensor_config < agent_config < env_config (env wins on conflict).
     # Deep merge so a higher-precedence file can override individual keys inside
-    # a shared nested block (e.g. env_config's ros2.carla_recovery layered onto
-    # agent_config's ros2.covariance_timeout) instead of replacing the whole
-    # block. A shallow {**a, **b} would silently drop the agent_config ros2 keys.
+    # a shared nested block instead of replacing it whole - a shallow {**a, **b}
+    # would silently drop the agent_config ros2 keys.
     merged: Dict[str, Any] = {}
     _deep_merge(merged, sensor_cfg)
     _deep_merge(merged, agent_cfg)
     _deep_merge(merged, env_config)
 
-    # Inject the physical sensor spec from sensor_config.yaml (the single source of
-    # the physical sensor suite) into carla_sensors, which the CARLA spawner reads.
-    # `mount` for every sensor, plus the shared physical LiDAR spec (range, channels)
-    # so those values live ONLY in sensor_config - env_config's carla_sensors holds
-    # the CARLA-only spawn keys (points_per_second, sensor_tick, fov, noise).
+    # Inject the physical sensor spec from sensor_config.yaml into carla_sensors,
+    # which the CARLA spawner reads, so those values live ONLY in sensor_config -
+    # env_config's carla_sensors keeps only the CARLA-only spawn keys
+    # (points_per_second, sensor_tick, fov, noise).
     _SENSOR_SPEC_KEYS = ("mount", "range", "channels")
     for sensor_name, sensor_data in sensor_cfg.get("sensors", {}).items():
         if sensor_name not in merged.get("carla_sensors", {}):
@@ -253,11 +251,9 @@ def load_env_config(
             if spec_key in sensor_data:
                 merged["carla_sensors"][sensor_name][spec_key] = sensor_data[spec_key]
 
-    # `training_overrides` is a stage-file-only block of TRAINING hyperparameters
-    # (stage_timesteps, learning_rate, ent_coef, ...). It is not an environment
-    # setting, so strip it here - it is applied separately via
-    # _apply_stage_training_overrides() after the train/env merge, with an
-    # allowlist. Leaving it in would pass an unknown kwarg path into the env dict.
+    # Not an environment setting - applied separately via
+    # _apply_stage_training_overrides() after the train/env merge. Leaving it in
+    # would pass an unknown kwarg path into the env dict.
     merged.pop("training_overrides", None)
 
     return merged
@@ -288,16 +284,15 @@ def _apply_stage_training_overrides(
 ) -> None:
     """
     @brief Apply a curriculum stage's per-policy override block onto config.
-    @param config: The merged train+env config (mutated in place). Carries the
+    @param config: Merged train+env config (mutated in place); carries the
            baseline's `policy_type` (apply_baseline runs first).
     @param env_config_path: Path to env_config.yaml (the stage file sits in a
            sibling `curriculum/` directory).
     @param stage: Curriculum stage number.
-
-    The stage file carries `standard_overrides` and `evidential_overrides`, selected
-    by `policy_type` (a single `training_overrides` block is accepted as a fallback).
-    Only allowlisted keys (@see _STAGE_TRAINING_OVERRIDE_ALLOWLIST) are copied onto
-    config; a non-allowlisted key raises. An absent block is a no-op.
+    @note Selects `standard_overrides` or `evidential_overrides` by
+          `policy_type` (falls back to a single `training_overrides` block);
+          only allowlisted keys are copied onto config, a non-allowlisted key
+          raises. @see _STAGE_TRAINING_OVERRIDE_ALLOWLIST.
     """
     stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
     with open(stage_path) as f:
@@ -336,15 +331,10 @@ class EnvDiagnosticsCallback(BaseCallback):
     @class EnvDiagnosticsCallback
     @brief SB3 callback that logs per-episode environment diagnostics to TensorBoard.
 
-    The per-step means (pos/orientation/speed/progress) are averaged over every
-    step in a rollout, so they are already smooth. The terminal rates (success,
-    collision, out-of-bounds, timeout) are sparse - one PPO rollout holds only a
-    handful of terminal episodes (~n_steps / max_steps), so a per-rollout rate
-    has a noise band of tens of percentage points and cannot be read as policy
-    quality. To make the rates legible, terminal outcomes are kept in a rolling
-    window of the last `outcome_window` episodes and the logged rate is the mean
-    over that window. This is a logging change only - it does not touch training
-    dynamics.
+    Terminal rates (success, collision, out-of-bounds, timeout) are sparse - one
+    PPO rollout holds only a handful of terminal episodes, so a per-rollout rate
+    has a noise band of tens of percentage points. Logged rates are instead the
+    mean over a rolling window of the last `outcome_window` terminal episodes.
     """
 
     def __init__(self, outcome_window: int = 50) -> None:
@@ -425,13 +415,10 @@ class BaySuccessCallback(BaseCallback):
     @class BaySuccessCallback
     @brief Accumulates per-bay success counts over training and dumps to CSV.
 
-    Unlike the rolling-window rates in EnvDiagnosticsCallback, this tracks
-    cumulative attempts and successes per target bay across the whole run, so a
-    run on the random-bay curriculum (Stage 2 onwards) can be inspected for
-    which specific bays the policy can and cannot park in. Output goes to
-    outputs/bay_successes/training/<run_name>/ as bay_successes.csv plus a
-    run_info.txt header. This is a logging change only - it does not touch
-    training dynamics.
+    Tracks cumulative attempts/successes per target bay across the whole run
+    (unlike EnvDiagnosticsCallback's rolling window), so a random-bay curriculum
+    run can be inspected for which specific bays the policy can and cannot park
+    in. Writes bay_successes.csv plus a run_info.txt header.
     """
 
     def __init__(
@@ -500,31 +487,23 @@ def train(
 ) -> TrainResult:
     """
     @brief Train the uncertainty-conditioned RL agent with PPO.
-    @param config: Fully-resolved configuration dictionary. All operational
-           settings (seed, log_dir, etc.) and hyperparameters are read from
-           this dict. CLI arguments override YAML values before this is called.
-    @param extra_callbacks: Optional list of additional callbacks to append to
-           the training callback list (e.g. for Optuna trial evaluation).
-    @param env: Pre-built VecNormalize env to reuse across calls. When None,
-           train() creates and closes its own env. Optuna tuning passes a
-           shared env so the CARLA actors and ROS bridge stay warm between
-           trials (a destroy+respawn cycle breaks the EKF, see
-           tune_hyperparams.run_study).
-    @param resume_from: Optional path to checkpoint directory (contains
-           final_model.zip and vec_normalize.pkl). When provided, loads the
-           saved model and environment normalisation from this checkpoint and
-           continues training with reset_num_timesteps=False. If None, trains
-           from scratch.
+    @param config: Fully-resolved configuration dictionary (CLI args already
+           overlaid onto the YAML values).
+    @param extra_callbacks: Optional additional callbacks appended to the
+           training callback list (e.g. for Optuna trial evaluation).
+    @param env: Pre-built VecNormalize env to reuse across calls; None makes
+           train() create and close its own (a destroy+respawn cycle between
+           Optuna trials breaks the EKF, see tune_hyperparams.run_study).
+    @param resume_from: Optional checkpoint directory (final_model.zip +
+           vec_normalize.pkl) to resume from; None trains from scratch.
     @return TrainResult containing final metrics, model path, and log directory.
     """
     # Resolve operational settings from config
     seed = config.get("seed", 42)
-    # A curriculum stage may set `stage_timesteps`: the number of steps to run in
-    # THIS stage, with its LR / ent_coef schedules restarting from the stage's own
-    # initial values over that budget (see the reset_num_timesteps logic below).
-    # When set, it takes precedence over the global `total_timesteps`. This is what
-    # lets each stage own a fresh, full-range schedule instead of sharing one
-    # decay stretched across the whole curriculum.
+    # A curriculum stage may set `stage_timesteps` (takes precedence over the
+    # global `total_timesteps`), letting each stage own a fresh, full-range LR /
+    # ent_coef schedule instead of sharing one decay stretched across the whole
+    # curriculum (see the reset_num_timesteps logic below).
     stage_timesteps = config.get("stage_timesteps", None)
     total_timesteps = (
         int(stage_timesteps)
@@ -532,14 +511,9 @@ def train(
         else config.get("total_timesteps", 1000000)
     )
 
-    # Each run gets its own subtree nested by baseline so the ablation grid is
-    # navigable: <root>/<baseline_name>/<run_leaf>/, where run_leaf is
-    # <stage>_<seed>_<DDMMYYYY-HHMM>. This layout is shared by logs/, checkpoints/,
-    # and outputs/ (bay_successes, demo_traces). The seed (second token) is parsed
-    # back out by demo_drive.py via a _<seed>_ pattern. baseline_name is set
-    # explicitly in baseline override configs; for ad-hoc runs it is derived from
-    # policy_type and observation flags. Timestamp is local (Europe/Malta,
-    # DST-aware) so leaf times match the wall clock the runs are launched at.
+    # Each run nests as <root>/<baseline_name>/<run_leaf>/ (run_leaf =
+    # <stage>_<seed>_<DDMMYYYY-HHMM>), a layout shared by logs/, checkpoints/,
+    # and outputs/ (bay_successes, demo_traces).
     policy_type = config.get("policy_type", "evidential")
     include_cov = config.get("include_covariance", True)
     include_obs = config.get("include_obstacle_obs", True)
@@ -549,11 +523,14 @@ def train(
         f"_obs{'on' if include_obs else 'off'}"
     )
     baseline_name = config.get("baseline_name", _default_run_name)
+    # Local (Europe/Malta, DST-aware) so leaf times match the wall clock the
+    # run was launched at rather than the container's UTC clock.
     _timestamp = datetime.now(_LOCAL_TZ).strftime("%d%m%Y-%H%M")
     _stage = config.get("curriculum_stage", DEFAULT_STAGE)
     # run_leaf defaults to <stage>_<seed>_<timestamp>; callers that need a
     # deterministic leaf (e.g. Optuna gives each trial run_leaf=trial_<N>) may
     # override it so the on-disk tree stays <baseline>/<leaf>/ in both cases.
+    # The seed (second token) is parsed back out by demo_drive.py.
     run_leaf = config.get("run_leaf", f"{_stage}_{seed}_{_timestamp}")
     # Provenance label mirroring the on-disk tree (<baseline>/<leaf>).
     run_name = f"{baseline_name}/{run_leaf}"
@@ -567,11 +544,9 @@ def train(
     eval_freq = config.get("eval_freq", 10000)
     n_eval_episodes = config.get("n_eval_episodes", 10)
 
-    # Set random seeds. All three global RNGs are seeded: torch (network
-    # init + action sampling), numpy (module-level np.random), and the stdlib
-    # random module. SB3's PPO(seed=seed) additionally seeds each vectorised
-    # env's Gymnasium np_random (with a per-rank offset), which drives the
-    # per-episode task selection (spawn point, target bay, NPC placement).
+    # Seeds torch (network init + action sampling), numpy, and stdlib random.
+    # SB3's PPO(seed=seed) separately seeds each vectorised env's Gymnasium
+    # np_random, which drives per-episode task selection (spawn, target bay).
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
@@ -586,19 +561,18 @@ def train(
     if own_env:
         n_workers: int = config.get("parallel_workers", 1)
         logger.info(f"Creating training environment ({n_workers} worker(s))...")
-        # bay_margin comes from env_config (its single source of truth), relaxed
-        # per stage by a curriculum override merged in via --stage. The .get guard
-        # falls back to the env's own constructor default if the key is absent.
+        # bay_margin is defined per stage in configs/deployment/sim/curriculum/
+        # stage<N>.yaml and reaches config via load_env_config's stage merge. The
+        # .get guard falls back to the env's own constructor default if absent.
         bay_margin = float(config.get("bay_margin", 0.0))
         train_vec_env = DummyVecEnv(
             [make_env(config, bay_margin=bay_margin, rank=i) for i in range(n_workers)]
         )
 
-        # Reward normalisation only. Observations are normalised by fixed physical
-        # ranges in build_observation (constants.py OBS_*_SCALE), so norm_obs is off.
-        # norm_reward divides rewards by the running discounted-return std (unit-variance
-        # critic target); clip_reward keeps the +50 terminal unclipped; gamma matches
-        # the PPO discount.
+        # Reward normalisation only (norm_obs off - obs are normalised by fixed
+        # physical ranges in build_observation, constants.py OBS_*_SCALE).
+        # norm_reward divides by the running discounted-return std for a
+        # unit-variance critic target; clip_reward keeps the +50 terminal unclipped.
         env = VecNormalize(
             train_vec_env,
             norm_obs=False,
@@ -626,12 +600,9 @@ def train(
         config.get("activation", "relu").lower(), torch.nn.ReLU
     )
     # log_std_init sets the initial Gaussian action log-std (std = exp(log_std_init)).
-    # Shared across all baselines so it is not an ablation variable. It only affects
-    # the standard (Gaussian) head; the evidential head ignores it (its std comes from
-    # the NIG aleatoric), but it is passed uniformly so the construction path is
-    # identical. A value below the SB3 default (0.0 -> std 1.0) starts the policy
-    # committed so the entropy bonus cannot inflate the std into a non-committing
-    # circling policy.
+    # Only the standard head uses it (the evidential head's std comes from NIG
+    # aleatoric); below the SB3 default (0.0 -> std 1.0) so the entropy bonus
+    # cannot inflate the std into a non-committing circling policy.
     policy_kwargs = dict(
         net_arch=dict(
             pi=config.get("net_arch", [256, 256]),
@@ -649,11 +620,10 @@ def train(
     lr_final = config.get("learning_rate_final", 0.0)
     lr_schedule = linear_schedule(lr_initial, lr_final)
 
-    # ent_coef is a linear DECAY schedule, not a constant. In the evidential
-    # policy the action sampling std IS sqrt(aleatoric), so the entropy bonus
-    # is a direct pressure on the action std. A constant value cannot allow
-    # the policy to both explore early and commit late, so we decay to a small
-    # non-zero floor.
+    # ent_coef decays linearly rather than staying constant: in the evidential
+    # policy the action sampling std IS sqrt(aleatoric), so the entropy bonus is
+    # direct pressure on the action std, and decaying to a small floor lets the
+    # policy explore early and commit late.
     ent_coef_initial = config.get("ent_coef", 0.01)
     ent_coef_final = config.get("ent_coef_final", 0.0005)
     ent_coef_schedule = linear_schedule(ent_coef_initial, ent_coef_final)
@@ -696,12 +666,9 @@ def train(
         final_model = os.path.join(resume_from, "final_model")
         final_vec_norm = os.path.join(resume_from, "vec_normalize.pkl")
 
-        # SB3 saves models as <name>.zip, so the on-disk file is
-        # final_model.zip even though SB3's load() takes the extension-less
-        # path. Test for the .zip explicitly: os.path.exists("final_model")
-        # is False when only "final_model.zip" is present, which would
-        # otherwise silently skip the final model and fall through to a
-        # (lexically mis-sorted) periodic checkpoint.
+        # SB3 saves models as <name>.zip, so test the .zip path explicitly:
+        # os.path.exists("final_model") is False when only "final_model.zip" is
+        # present, which would otherwise silently skip to a periodic checkpoint.
         if os.path.exists(final_model + ".zip") or os.path.exists(final_model):
             checkpoint_model_path = final_model
             checkpoint_vec_norm_path = (
@@ -823,14 +790,10 @@ def train(
             use_uncertainty_conditioning = evidential_config.get(
                 "use_uncertainty_conditioning", False
             )
-            # The dual-encoder actor routes the covariance block (obs indices
-            # VEHICLE_STATE_DIM..VEHICLE_STATE_DIM+COVARIANCE_FEATURES_DIM) into a
-            # dedicated uncertainty encoder. With include_covariance=False that
-            # block does not exist, so the slice would silently capture the
-            # relative target pose instead and starve the actor of its goal
-            # direction. The two are mutually exclusive: fall back to the flat
-            # evidential MLP (which is exactly the output_uncertainty baseline:
-            # evidential policy head, no covariance input).
+            # The dual-encoder actor routes the covariance block into a dedicated
+            # uncertainty encoder; with include_covariance=False that block does
+            # not exist, so the slice would silently capture the target pose
+            # instead - fall back to the flat evidential MLP instead.
             if use_uncertainty_conditioning and not include_cov:
                 logger.warning(
                     "use_uncertainty_conditioning=True requires "
@@ -855,15 +818,10 @@ def train(
                 **ppo_kwargs,
             )
         elif policy_type == "standard":
-            # ScheduledEntCoefPPO (not bare PPO): the shared ppo_kwargs pass a
-            # CALLABLE ent_coef decay schedule, which stock PPO.train() cannot
-            # multiply (it stores ent_coef verbatim). The subclass resolves the
-            # callable per update, so the standard baselines share the identical
-            # ent_coef schedule as the evidential ones.
-            # LayerNormActorCriticPolicy (not "MlpPolicy"): matches the evidential
-            # policy's LayerNorm backbone and default-forward action prior so the
-            # ONLY differences between the standard and evidential baselines are the
-            # actor head and the observation - the 2x2 ablation axes.
+            # ScheduledEntCoefPPO (not bare PPO): ppo_kwargs pass a CALLABLE
+            # ent_coef schedule, which stock PPO.train() cannot multiply.
+            # LayerNormActorCriticPolicy (not "MlpPolicy") matches the evidential
+            # policy's backbone, keeping the actor head as the only difference.
             model = ScheduledEntCoefPPO(
                 policy=LayerNormActorCriticPolicy,
                 **ppo_kwargs,
@@ -887,14 +845,11 @@ def train(
         save_vecnormalize=True,
     )
 
-    # Per-bay success accounting. Cumulative attempts/successes per target bay
-    # over the whole run, dumped to
-    # outputs/bay_successes/training/seed_<N>/<baseline>/<leaf>/ so a random-bay
-    # run can be inspected for which bays the policy can park, and so a second
-    # seed's successes never overwrite the first's (seed_<N> mirrors the eval and
-    # analysis trees).
+    # Per-bay success accounting, nested by seed_<N> (mirrors the eval/analysis
+    # trees) so a random-bay run can be inspected per bay and a second seed's
+    # successes never overwrite the first's.
     _bay_output_dir = (
-        Path("./outputs/bay_successes/training")
+        Path("./outputs/raw/bay_successes/training")
         / f"seed_{seed}"
         / baseline_name
         / run_leaf
@@ -937,23 +892,18 @@ def train(
     # Train the agent (wrapped in try/finally for CARLA crash safety)
     try:
         logger.info("Starting training for %d timesteps...", total_timesteps)
-        # Disable progress bar when env is caller-owned (e.g. Optuna tuning).
-        # tqdm[rich] leaks a "live display" between trials when model.learn()
-        # is called repeatedly in one process, so the second call onwards
-        # raises "Only one live display may be active at once".
-        # Reset the step counter for a fresh run, OR when a curriculum stage
-        # defines its own budget: a per-stage `stage_timesteps` means the LR /
-        # ent_coef schedules should restart from this stage's initial values and
-        # decay over this stage's budget (progress_remaining = 1 -
-        # num_timesteps/total_timesteps needs num_timesteps to start at 0 for the
-        # schedule to span the full stage). The model weights and VecNormalize
-        # statistics are still carried over from the resumed checkpoint; only the
-        # step counter (and hence the schedule clock) restarts.
+        # A per-stage `stage_timesteps` restarts the LR / ent_coef schedules over
+        # this stage's own budget; model weights and VecNormalize stats still
+        # carry over from the resumed checkpoint, only the schedule clock resets.
         reset_num_ts = (resume_from is None) or (stage_timesteps is not None)
         model.learn(
             total_timesteps=total_timesteps,
             callback=callback_list,
             log_interval=config.get("log_interval", 10),
+            # False for a caller-owned env (e.g. Optuna): tqdm[rich] leaks a
+            # "live display" across repeated model.learn() calls in one process,
+            # raising "Only one live display may be active at once" from the
+            # second call onwards.
             progress_bar=own_env,
             reset_num_timesteps=reset_num_ts,
         )
@@ -1082,13 +1032,9 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    # Resolve the effective stage and baseline. Difficulty knobs live ONLY in the
-    # curriculum stage files and the observation/policy flags ONLY in the baseline
-    # files - neither has a default in env_config / train_config - so every run must
-    # pick one of each. Omitting --stage starts at the curriculum head (stage 1);
-    # omitting --baseline runs the full method. This keeps each value in exactly one
-    # place (no base defaults shadowing the stage/baseline) with no hidden code
-    # fallback.
+    # Difficulty knobs live ONLY in the curriculum stage files and the obs/policy
+    # flags ONLY in the baseline files, so every run must pick one of each.
+    # Omitting --stage starts at stage 1; omitting --baseline runs the full method.
     stage = args.stage if args.stage is not None else DEFAULT_STAGE
     baseline_path = args.baseline if args.baseline is not None else DEFAULT_BASELINE
 

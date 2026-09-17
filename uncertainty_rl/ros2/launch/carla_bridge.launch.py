@@ -2,10 +2,9 @@
 @file carla_bridge.launch.py
 @brief Launch file for CARLA bridge, RTK-GNSS+IMU EKF, and covariance extraction.
 
-The bridge runs in **passive mode** (passive=True): it does NOT call world.tick().
-Only the training container (CARLAParkingEnv.step -> world.tick) advances the
-simulation. The bridge auto-discovers sensors spawned by the training container
-(register_all_sensors=True) and publishes their data as ROS 2 topics.
+The bridge runs passive: it never calls world.tick(), so the training container
+(CARLAParkingEnv.step) remains the sole tick driver. It auto-discovers the
+sensors that container spawns and republishes them as ROS 2 topics.
 """
 
 import importlib.util
@@ -44,8 +43,7 @@ def generate_launch_description() -> LaunchDescription:
     agent_config = load_yaml(
         "/workspace/configs/deployment/agent_config.yaml", "AGENT_CONFIG_PATH"
     )
-    # Merge: sensor_config < agent_config < env_config (env wins on conflict).
-    # Matches the three-layer merge in load_env_config() in train_ppo.py.
+    # Precedence must match the three-layer merge in load_env_config().
     env_config = {
         **sensor_config,
         **agent_config,
@@ -54,12 +52,9 @@ def generate_launch_description() -> LaunchDescription:
 
     use_sim_time: bool = ros2_config.get("use_sim_time", True)
 
-    # synchronous_mode has NO effect when passive=true: the bridge skips
-    # apply_settings entirely and never registers as a synchronous CARLA client.
-    # The training container's world.tick() is the sole tick driver.
+    # Inert while passive=true: the bridge skips apply_settings entirely and
+    # never registers as a synchronous CARLA client.
     bridge_sync_mode = "false"
-
-    # Launch arguments
 
     launch_args = [
         DeclareLaunchArgument(
@@ -79,8 +74,6 @@ def generate_launch_description() -> LaunchDescription:
         ),
     ]
 
-    # CARLA ROS bridge
-
     try:
         from ament_index_python.packages import get_package_share_directory
 
@@ -93,27 +86,23 @@ def generate_launch_description() -> LaunchDescription:
                 "host": LaunchConfiguration("carla_host"),
                 "port": LaunchConfiguration("carla_port"),
                 "town": LaunchConfiguration("town"),
-                # No effect when passive=true (bridge never calls world.tick()).
                 "synchronous_mode": bridge_sync_mode,
                 "fixed_delta_seconds": "0.05",
                 "passive": "true",
                 "register_all_sensors": "true",
                 "timeout": "30",
-                # Prevent the bridge from sending vehicle_control_cmd to the ego
-                # vehicle and overriding the training container's apply_control().
-                # The bridge matches control targets by role_name; "hero" does not
-                # match our "ego_vehicle" actor, so no controls are injected.
+                # Deliberately NOT "ego_vehicle": the bridge matches control
+                # targets by role_name, so a non-matching name stops it sending
+                # vehicle_control_cmd over the training container's
+                # apply_control().
                 "ego_vehicle_role_name": "hero",
-                # Publish CARLA sim time on /clock so all ROS nodes using
-                # use_sim_time=true have a consistent time source. Without this
-                # the EKF waits forever for /clock and never starts.
+                # The EKF nodes run with use_sim_time, so without /clock they
+                # would wait for a time source that never arrives.
                 "publish_clock": "true",
             }.items(),
         )
     except Exception:
         carla_bridge = None
-
-    # EKF node
 
     # Spread into a new dict to avoid mutating the live ros2_config object.
     ekf_params = {**ros2_config.get("ekf", {}), "use_sim_time": use_sim_time}
@@ -125,17 +114,13 @@ def generate_launch_description() -> LaunchDescription:
         parameters=[ekf_params],
     )
 
-    # Static TF: sensor mount tree
-
     static_tf_nodes = [
-        # Anchors ego_vehicle at the map origin. The EKF will override this by
-        # publishing odom -> ego_vehicle as it fuses IMU and GNSS data.
+        # A placeholder anchor at the map origin: the EKF supersedes it once it
+        # starts publishing odom -> ego_vehicle.
         static_tf("map_to_ego_vehicle_tf", "map", "ego_vehicle", 0.0, 0.0, 0.0),
-        # Identity map -> odom for consumers that need the full map->odom->body chain.
+        # Identity, for consumers needing the full map->odom->body chain.
         static_tf("map_to_odom_tf", "map", "odom", 0.0, 0.0, 0.0),
     ]
-
-    # Sensor relay node
 
     gnss_relay_cfg = ros2_config.get("gnss_noise_relay", {})
     imu_relay_cfg = ros2_config.get("imu_noise_relay", {})
@@ -206,16 +191,13 @@ def generate_launch_description() -> LaunchDescription:
                 "imu_accel_scale_factor_limit": imu_relay_cfg.get(
                     "imu_accel_scale_factor_limit", 0.005
                 ),
-                # Both co-spun relay nodes seed their independent noise RNG from
-                # the single master seed in agent_config.yaml - the one source
-                # shared by training and this separate-process noise container, so
-                # the network init and the noise realisations share a seed.
+                # The master seed in agent_config.yaml is the one source shared
+                # by training and this separate-process noise container, so
+                # network init and noise realisations stay in step.
                 "seed": agent_config.get("seed", 42),
             }
         ],
     )
-
-    # Covariance extractor node
 
     covariance_extractor = Node(
         package="uncertainty_rl_ros2",
@@ -229,16 +211,15 @@ def generate_launch_description() -> LaunchDescription:
                     "covariance_topic", "/ekf_uncertainty/covariance"
                 ),
                 "publish_rate": ros2_config.get("publish_rate", 10.0),
-                # robot_localisation publishes twist in the child frame (body
-                # frame) per nav_msgs/Odometry convention. No rotation needed.
+                # Ignored by the node: robot_localisation already publishes
+                # twist in the child (body) frame per nav_msgs/Odometry.
                 "twist_in_odom_frame": ros2_config.get("twist_in_odom_frame", False),
             }
         ],
     )
 
-    # Pipeline diagnostic: log topic status after 20 s
-    # Prints which key topics are publishing so stalls can be diagnosed from
-    # the ros2-bridge container logs. Safe to leave in permanently.
+    # Reports which key topics are publishing, so a stalled pipeline can be
+    # diagnosed from the ros2-bridge container logs alone.
     pipeline_diag = ExecuteProcess(
         cmd=[
             "bash",
@@ -282,17 +263,14 @@ def generate_launch_description() -> LaunchDescription:
         output="screen",
     )
 
-    # Assemble launch description
-    # Startup order: bridge first (so sensor topics exist and /clock publishes),
-    # then static TFs (so the EKF can resolve sensor frames), then the rest.
-
     actions = [*launch_args]
 
-    # CARLA ROS bridge first so sensor topics exist.
+    # Bridge first, so the sensor topics exist and /clock publishes.
     if carla_bridge is not None:
         actions.append(carla_bridge)
 
-    # Static TFs before the EKF so the frame tree is complete.
+    # Then the static TFs, so the frame tree is complete before the EKF starts
+    # trying to resolve sensor frames against it.
     actions.extend(static_tf_nodes)
 
     actions.extend(

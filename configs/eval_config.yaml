@@ -1,21 +1,19 @@
-# Evaluation Configuration
 # De-confounded condition sweep for the ablation study: every condition varies
 # exactly ONE factor against the in-distribution anchor (rectangle lot, bay
-# occupancy 0.5, no dynamic actors - training has static parked cars only).
-# Connection, timing and ROS 2 settings come from env_config.yaml (single
-# source of truth); this file holds only the condition sweep and eval options.
+# occupancy 0.5, no dynamic actors). Connection, timing and ROS 2 settings come
+# from env_config.yaml; this file holds only the sweep and eval options.
 #
-# GNSS levels: a condition with held_gnss_tier names one RTK fix-state tier from
-# configs/deployment/sim/gnss_noise_profiles.yaml (rtk_fixed, rtk_float,
-# standalone, degraded) and holds it for the whole episode (bypasses tier
-# sampling and Markov drift) so the level is a controlled independent variable.
-# A condition WITHOUT the key runs the training noise process itself:
-# per-episode tier sampling + mid-episode Markov drift.
+# held_gnss_tier pins one tier from gnss_noise_profiles.yaml for the whole
+# episode, bypassing sampling and Markov drift so the level is a controlled
+# variable; omitting it runs the training noise process instead. The
+# *_noise_multiplier keys scale CARLA sensor stddevs above the training floor
+# (bias and tick-rate are never scaled).
 #
-# imu_noise_multiplier / lidar_noise_multiplier scale the CARLA sensor stddev
-# values above the fixed training noise floor (bias and tick-rate keys are
-# never scaled). LiDAR noise itself is always enabled at eval, matching the
-# constant realism floor every training stage runs with.
+# Four conditions carry reported results: anchor_deployment, anchor_empty,
+# ood_irregular_rtk_fixed and gnss_degrade_one_way. The sweep runs the rest and
+# writes their records, but the analysis scripts exclude them (see
+# _HELD_TIER_CONDITIONS and _UNREPORTED_CONDITIONS in scripts/analysis/ablation.py);
+# each is marked UNREPORTED below with the reason.
 
 model_path: "checkpoints/final_model"  # Overridden by make docker-eval.
 
@@ -35,28 +33,21 @@ eval_conditions:
     description: "Training GNSS process (tier sampling + Markov drift), occupancy 0.5"
     bay_occupancy_rate: 0.5
 
-  # Same GNSS process as the anchor but an EMPTY lot (occupancy 0.0): the
-  # no-obstacle control. With zero parked cars the LiDAR channel (obs 8-12) sees
-  # nothing, so the policy must park on localisation alone (EKF speed +
-  # covariance + bay-direction), with the obstacle-avoidance crutch removed. The
-  # drift is mostly RTK-fixed, so the bay-direction obs is trustworthy and the
-  # car can still park - the empty lot is a fair control here, NOT the broken
-  # held-degraded-empty case (a degraded fix in an empty lot has no GNSS-
-  # independent bay signal, since bays carry no physical markers - only
-  # neighbour cars are LiDAR-visible). The anchor/anchor_empty pair isolates how
-  # much the policy leans on neighbours versus localisation.
+  # No-obstacle control: with no parked cars the LiDAR channel sees nothing, so
+  # the pair with the anchor isolates reliance on neighbours versus localisation.
+  # Fair only because the drift stays mostly RTK-fixed - bays carry no physical
+  # markers, so a degraded fix in an empty lot leaves no bay signal at all.
   - name: "anchor_empty"
     description: "Training GNSS process, EMPTY lot (occupancy 0.0) - no-obstacle control"
     bay_occupancy_rate: 0.0
 
-  # --- GNSS axis: degradation-slope endpoints (occupancy 0.5, rectangle) --
-  # Hold one RTK fix-state tier constant all episode (bypassing the Markov
-  # chain) so the localisation level is a controlled independent variable. Only
-  # the slope ENDPOINTS are kept: fixed (clean baseline) and degraded (worst).
-  # The intermediate float/standalone tiers are dropped - their EKF error
-  # (~0.36/0.47 m) sits inside the bay's lateral slack at occupancy 0.5, so the
-  # covariance arms and the blind arms are indistinguishable there (no signal,
-  # only eval time).
+  # UNREPORTED (both). GNSS axis, slope endpoints only: fixed (clean) and
+  # degraded (worst). Intended as a degradation slope, but pinning one tier for
+  # a whole episode lets the EKF suppress the static fault, so the slope between
+  # them is flat by construction and neither is reported. The intermediate
+  # float/standalone tiers are absent for a related reason: their EKF error sits
+  # inside the bay's lateral slack at occupancy 0.5, leaving the covariance and
+  # blind arms indistinguishable - no signal, only eval time.
   - name: "gnss_fixed"
     description: "RTK fixed (~2 cm) held - clean baseline (slope start)"
     held_gnss_tier: rtk_fixed
@@ -69,50 +60,39 @@ eval_conditions:
     held_gnss_tier: degraded
     bay_occupancy_rate: 0.5
 
-  # --- LiDAR axis (GNSS pinned at RTK fixed, occupancy 0.5, rectangle) ----
-  # Degrades only the obstacle channel (obs 8-12). The EKF fuses GNSS + IMU and
-  # never consumes LiDAR, so the localisation stds stay at the RTK-fixed floor:
-  # an EKF-std safety gate is structurally blind to this condition, while the
-  # evidential head sees the corrupted obstacle features. Multiplier scales the
-  # 0.020 m datasheet stddev floor; 25x = 0.5 m 1-sigma range noise (a failing
-  # or interfered sensor, far beyond any in-distribution level).
+  # UNREPORTED. LiDAR axis: degrades only the obstacle channel. The EKF never
+  # consumes LiDAR, so its stds stay at the RTK-fixed floor and the condition
+  # carries no localisation-uncertainty signal for the headline figures. Kept
+  # because it is the one condition where an EKF-std safety gate is structurally
+  # blind while the evidential head still sees the corruption, which makes it the
+  # natural test of whether a policy-side signal adds anything a covariance gate
+  # cannot. 25x the 0.020 m datasheet floor = 0.5 m 1-sigma, a failing sensor.
   - name: "lidar_degraded"
     description: "25x LiDAR range noise (0.5 m 1-sigma), RTK fixed - EKF-blind degradation"
     held_gnss_tier: rtk_fixed
     lidar_noise_multiplier: 25.0
     bay_occupancy_rate: 0.5
 
-  # --- Generalisation: unseen geometry (occupancy 0.5) --------------------
-  # irregular_a is the designated OOD layout (training is rectangle only) - the
-  # epistemic-uncertainty / generalisation check. One point (RTK fixed) is kept:
-  # at clean GNSS the only OOD factor is the layout, so it isolates
-  # generalisation from localisation degradation. The float variant is dropped
-  # (same reason float is dropped from the GNSS axis - no covariance signal).
+  # irregular_a is the designated OOD layout (training is rectangle only), the
+  # epistemic-uncertainty check. Held at RTK fixed so the layout is the ONLY OOD
+  # factor, isolating generalisation from localisation degradation. The float
+  # variant is dropped for the same no-signal reason as on the GNSS axis.
   - name: "ood_irregular_rtk_fixed"
     description: "OOD floor plan (irregular_a), RTK fixed (~2 cm)"
     held_gnss_tier: rtk_fixed
     bay_occupancy_rate: 0.5
     floor_plan: "irregular_a"
 
-  # --- Monotone degradation: starts good, degrades, never recovers ----------
-  # degrade_one_way pins the START tier to rtk_fixed and lets the relay Markov
-  # chain walk DOWN the ladder only (recovery transitions zeroed), so localisation
-  # drifts fixed -> float -> standalone -> degraded and stays there. Unlike
-  # gnss_degraded (a held worst-tier level from step 0) this gives a clean
-  # within-episode trajectory from confident to ignorant: the discriminating test
-  # for whether predictive uncertainty and the policy's caution track the
-  # degradation onset, not just the spawn condition. Mutually
-  # exclusive with held_gnss_tier. Occupancy 0.5 so the LiDAR landmark (neighbour
-  # cars) survives once GNSS is gone - without it both arms are blind (see the
-  # anchor_empty note on the broken degraded-empty case).
+  # Starts at rtk_fixed and walks DOWN the ladder only. Unlike the held
+  # worst-tier gnss_degraded, this gives a within-episode trajectory from
+  # confident to ignorant - the discriminating test of whether uncertainty and
+  # caution track the ONSET rather than the spawn condition.
   - name: "gnss_degrade_one_way"
     description: "Starts RTK fixed, drifts one-way to degraded (never recovers)"
-    degrade_one_way: true
-    # Drift-schedule compression. At the native datasheet rate the chain needs
-    # ~27 s in expectation to walk rtk_fixed -> degraded, while an episode runs
-    # ~17 s, so only ~31% of episodes ever reach the worst tier and the handover
-    # latency is estimated from a small subsample. A factor of 3 shortens the
-    # expected walk to ~9 s (~93% of episodes reach degraded) without altering
-    # the tier ladder, the noise levels or the one-way ratchet.
-    degrade_rate_scale: 3.0
-    bay_occupancy_rate: 0.5
+    degrade_one_way: true  # Mutually exclusive with held_gnss_tier.
+    # Compresses the drift schedule without touching the ladder, noise levels or
+    # the one-way ratchet. At 1.0 the walk to degraded takes ~27 s against a
+    # ~17 s episode, so only ~31% of episodes reach the worst tier; raise it to
+    # trade realism for handover-latency sample size.
+    degrade_rate_scale: 1.0
+    bay_occupancy_rate: 0.5  # Keeps neighbour cars as a landmark once GNSS goes.

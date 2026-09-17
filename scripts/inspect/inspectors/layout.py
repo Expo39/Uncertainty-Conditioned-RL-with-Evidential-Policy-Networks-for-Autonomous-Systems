@@ -28,10 +28,6 @@ class LayoutInspector(_Inspector):
         """
         super().__init__(env, duration)
 
-    # -----------------------------------------------------------------------
-    # Spectator placement
-    # -----------------------------------------------------------------------
-
     def place_spectator(self) -> None:
         """
         @brief Position spectator above the lot centroid.
@@ -76,10 +72,6 @@ class LayoutInspector(_Inspector):
             f"Spectator at lot centroid ({cx:.0f}, {cy:.0f}, {sz + cam_z:.0f})"
             " - birds-eye view."
         )
-
-    # -----------------------------------------------------------------------
-    # Overlay drawing
-    # -----------------------------------------------------------------------
 
     def _draw_overlays(self, life_time: float) -> None:
         """

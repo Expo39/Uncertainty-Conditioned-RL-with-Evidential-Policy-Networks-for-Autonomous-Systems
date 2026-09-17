@@ -2,9 +2,9 @@
 @file visualisation.py
 @brief Atomic JSON writer for the detachable 2D bird's-eye visualiser.
 
-VisStateWriter streams environment state to outputs/vis_history.jsonl every
-step. The detachable visualiser (scripts/visualise/visualiser.py) tails that
-file and renders each frame via Pygame.
+VisStateWriter snapshots environment state to a caller-supplied path each
+step. Writes go to a sibling .tmp file and are moved into place with
+os.replace, so a concurrent reader never observes a half-written frame.
 """
 
 import json
@@ -19,17 +19,13 @@ logger = logging.getLogger(__name__)
 class VisStateWriter:
     """
     @class VisStateWriter
-    @brief Writes vis_state.json every step for the detachable 2D visualiser.
+    @brief Writes a state snapshot every step for the detachable 2D visualiser.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(self, output_path: Path) -> None:
         """
         @brief Initialise the writer.
-        @param output_path: Destination path for vis_state.json.
+        @param output_path: Destination path for the state snapshot.
         """
         self._output_path = output_path
         self._tmp_path = output_path.with_suffix(".tmp")

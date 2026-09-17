@@ -1,36 +1,34 @@
-# Actuation calibration for sim-to-real transfer.
+# Maps normalised policy output [steering, throttle, brake] to physical actuator
+# commands. Steering is bipolar [-1, 1]; throttle and brake are separate
+# non-negative axes [0, 1]. No reverse gear.
 #
-# Maps the policy's normalised action output [steering, throttle, brake] to
-# physical actuator commands on the real vehicle. Steering is bipolar [-1, 1];
-# throttle and brake are separate non-negative axes [0, 1]. No reverse gear.
+# Ships as an identity mapping. The per-axis terms come from the vehicle's
+# measured response curve, being a property of its drive-by-wire hardware.
 
 calibration:
   steering:
-    # Maps policy steering [-1, 1] to wheel angle command [-1, 1].
-    # @warning UNCALIBRATED - identity mapping until measured.
-    gain: 1.0  # TODO: measure from steering response
-    deadband: 0.0  # TODO: measure minimum input for non-zero steer
-    deadband_offset: 0.0  # TODO: adjust if steering is asymmetric
-    bias: 0.0  # TODO: adjust for any steering neutral offset
+    # Policy steering [-1, 1] -> wheel angle command [-1, 1].
+    gain: 1.0  # Command per unit policy output.
+    deadband: 0.0  # Input below which the wheel does not move.
+    deadband_offset: 0.0  # Asymmetry between left and right deadband.
+    bias: 0.0  # Neutral offset (straight-ahead trim).
     min_output: -1.0
     max_output: 1.0
 
   throttle:
-    # Maps policy throttle [0, 1] to throttle command [0, 1].
-    # @warning UNCALIBRATED - identity mapping until measured.
-    gain: 1.0  # TODO: measure from throttle response
-    deadband: 0.0  # TODO: measure minimum input for vehicle motion
-    deadband_offset: 0.0  # TODO: adjust for any input bias
-    bias: 0.0  # TODO: adjust for creep at zero throttle
+    # Policy throttle [0, 1] -> throttle command [0, 1].
+    gain: 1.0  # Command per unit policy output.
+    deadband: 0.0  # Input below which the vehicle does not move.
+    deadband_offset: 0.0  # Asymmetry in the throttle deadband.
+    bias: 0.0  # Compensates creep at zero throttle.
     min_output: 0.0
     max_output: 1.0
 
   brake:
-    # Maps policy brake [0, 1] to brake command [0, 1].
-    # @warning UNCALIBRATED - identity mapping until measured.
-    gain: 1.0  # TODO: measure from brake response
-    deadband: 0.0  # TODO: measure minimum input for non-zero braking
-    deadband_offset: 0.0  # TODO: adjust for any input bias
-    bias: 0.0  # TODO: adjust for any brake neutral offset
+    # Policy brake [0, 1] -> brake command [0, 1].
+    gain: 1.0  # Command per unit policy output.
+    deadband: 0.0  # Input below which no braking occurs.
+    deadband_offset: 0.0  # Asymmetry in the brake deadband.
+    bias: 0.0  # Brake neutral offset.
     min_output: 0.0
     max_output: 1.0

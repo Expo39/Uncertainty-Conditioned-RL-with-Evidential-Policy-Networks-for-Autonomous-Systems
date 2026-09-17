@@ -2,10 +2,9 @@
 @file covariance_subscriber.py
 @brief File-based covariance reader for EKF uncertainty features.
 
-Reads the latest EKF state from a shared JSON file written by the
-CovarianceExtractorNode in the ros2-bridge container. This avoids DDS
-cross-distro serialisation issues between ROS 2 Humble (training container)
-and Jazzy (ros2-bridge container).
+Reads the latest EKF state from a shared JSON file written by
+CovarianceExtractorNode, avoiding DDS cross-distro serialisation issues
+between ROS 2 Humble (training) and Jazzy (ros2-bridge).
 """
 
 import json
@@ -44,10 +43,6 @@ class _CovarianceSubscriber:
     pose, velocity, and 3x3 covariance to a shared file. This class reads
     that file on demand - no DDS subscription needed.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -129,25 +124,16 @@ class _CovarianceSubscriber:
             self._initial_pose_path,
         )
 
-    # -----------------------------------------------------------------------
-    # EKF state read interface
-    # -----------------------------------------------------------------------
-
     def invalidate(self) -> None:
         """
         @brief Mark cached data as stale at the current write sequence.
 
-        Records the seq number from the last successfully read JSON write.
-        After this call, _read_file() only accepts a file whose `seq` field
-        is strictly greater than the recorded seq, guaranteeing the next
-        reading is a genuinely post-reset write from the extractor node.
-
-        Call this at episode reset before publish_initial_pose and before
-        _wait_for_covariance.
+        Records the last-read seq as a barrier: _read_file() then only accepts
+        a file whose `seq` exceeds it, guaranteeing the next reading is a
+        genuinely post-reset write from the extractor node. Call at episode
+        reset before publish_initial_pose and before _wait_for_covariance.
         """
         with self._lock:
-            # Barrier at the last-seen write seq.  Any file with seq <= this
-            # value was written before the reset and will be rejected.
             self._valid_after_seq = self._last_read_seq
             self._latest_uncertainty = None
             self._latest_pose = None
@@ -157,17 +143,12 @@ class _CovarianceSubscriber:
 
     def _read_file(self) -> bool:
         """
-        @brief Read the latest EKF state from the shared JSON file.
+        @brief Read the latest EKF state, rejecting anything pre-dating invalidate().
 
-        Only accepts the file if its `seq` field is strictly greater than
-        the seq recorded at the last invalidate() call, preventing stale
-        pre-reset data from being returned during the wait period at episode
-        start.  This is clock-skew-proof: the seq is written by the extractor
-        node and compared numerically, so Docker container clock differences
-        cannot cause a stale read to pass the guard.
-
-        Updates both _latest_pose and _latest_uncertainty atomically under
-        the lock so callers never see a partially-updated state.
+        The seq guard is compared numerically (not by mtime), so Docker
+        container clock skew cannot let a stale pre-reset write pass. Updates
+        pose and uncertainty atomically under the lock so callers never see a
+        partially-updated state.
 
         @return True if fresh (post-invalidation) data was read successfully.
         """
@@ -312,20 +293,13 @@ class _CovarianceSubscriber:
         tier = data.get("tier_name")
         return str(tier) if tier else None
 
-    # -----------------------------------------------------------------------
-    # Episode signal writers
-    # -----------------------------------------------------------------------
-
     def publish_initial_pose(self, x: float, y: float, yaw: float) -> None:
         """
         @brief Signal the spawn pose to the ros2-bridge via a shared file.
 
-        Writes initial_pose.json with the spawn position in CARLA world frame.
-        The CovarianceExtractorNode in the ros2-bridge container watches this
-        file and publishes /set_pose locally (same DDS domain as the EKF).
-
-        The CARLA-to-ROS frame conversion (negate y and yaw) is applied by the
-        extractor node at publish time, keeping this file in CARLA convention.
+        The CovarianceExtractorNode watches this file and publishes /set_pose
+        locally (same DDS domain as the EKF), negating y and yaw itself to
+        convert from this file's CARLA convention to ROS's right-handed frame.
 
         @param x: Spawn X in CARLA world frame (metres).
         @param y: Spawn Y in CARLA world frame (metres).
@@ -363,24 +337,19 @@ class _CovarianceSubscriber:
     ) -> None:
         """
         @brief Signal the GNSS noise tier and spawn datum to the ros2-bridge.
-        @param tier_name: RTK fix-state tier name (e.g. 'rtk_fixed') - the tier
-                          the episode STARTS in.
+        @param tier_name: RTK fix-state tier the episode STARTS in (e.g. 'rtk_fixed').
         @param datum_lat: Latitude (degrees) of vehicle spawn (CARLA geolocation).
         @param datum_lon: Longitude (degrees) of vehicle spawn.
-        @param hold_tier: If True, the relay holds this tier for the whole
-                          episode (Markov drift suppressed) - the controlled
-                          fixed-level evaluation conditions. Training leaves it
-                          False so the chain wanders.
-        @param degrade_one_way: If True, the relay lets the Markov chain only
-                          degrade (never recover) - the monotone-degradation eval
-                          condition. Mutually exclusive with hold_tier (a held tier
-                          has no drift). Training leaves it False.
+        @param hold_tier: If True, the relay holds this tier for the whole episode
+                          (Markov drift suppressed) for fixed-level eval conditions;
+                          training leaves it False so the chain wanders.
+        @param degrade_one_way: If True, the chain may only degrade, never
+                          recover (the monotone-degradation eval condition);
+                          mutually exclusive with hold_tier. Training leaves it False.
         @param degrade_rate_scale: Multiplier on the one-way chain's downward
-                          transition mass. 1.0 (the default everywhere else) is
-                          the datasheet-anchored schedule; the drift condition
-                          raises it so the walk to the worst tier completes
-                          inside the episode horizon. Ignored unless
-                          degrade_one_way is set.
+                          transition mass so the walk to the worst tier completes
+                          inside the episode horizon; 1.0 is the datasheet-anchored
+                          default elsewhere. Ignored unless degrade_one_way is set.
         """
         self._episode_config_seq += 1
         data: Dict[str, Any] = {

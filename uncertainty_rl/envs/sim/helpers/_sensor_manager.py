@@ -3,13 +3,8 @@
 @brief Sensor lifecycle manager for CARLAParkingEnv.
 
 Owns all per-episode sensor state (IMU, GNSS, 2D LiDAR, collision sensor)
-and the spawn, callback, and cleanup logic for each. CARLAParkingEnv holds
-a SensorManager instance and delegates sensor lifecycle calls to it.
-
-Sensor roles:
-  - RTK-GNSS + IMU: localisation via robot_localisation EKF.
-  - 2D LiDAR: obstacle detection only (obs indices 8-12). NOT localisation.
-  - Collision sensor: terminal reward signal.
+and the spawn/callback/cleanup logic for each. RTK-GNSS + IMU feed
+localisation via the EKF; 2D LiDAR is obstacle detection only.
 """
 
 import logging
@@ -66,10 +61,6 @@ class SensorManager:
     # CARLA blueprint attribute zeroed for LiDAR; all noise applied in _apply_lidar_noise().
     _LIDAR_NOISE_ATTRS: Tuple[str, ...] = ("noise_stddev",)
 
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
-
     def __init__(
         self,
         sensors_config: Dict[str, Any],
@@ -113,17 +104,11 @@ class SensorManager:
         # sample_lidar_noise_bias() called from CARLAParkingEnv.reset().
         self._lidar_range_bias_m: float = 0.0
 
-        # Dedicated RNG for per-point LiDAR range noise. _apply_lidar_noise()
-        # runs in the CARLA sensor-callback thread, so it must NOT touch the
-        # env's np_random directly (that would race the main reset/step thread).
-        # Instead, sample_lidar_noise_bias() reseeds this generator each episode
-        # from a child seed drawn off np_random, keeping the per-point noise
-        # reproducible at a fixed training seed without cross-thread contention.
+        # Dedicated RNG: _apply_lidar_noise() runs in the CARLA sensor-callback
+        # thread, so it must not touch np_random directly (would race the main
+        # thread). sample_lidar_noise_bias() reseeds this from a child seed off
+        # np_random instead, keeping it reproducible without cross-thread contention.
         self._lidar_rng: np.random.Generator = np.random.default_rng()
-
-    # -----------------------------------------------------------------------
-    # Public interface
-    # -----------------------------------------------------------------------
 
     @property
     def collision_detected(self) -> bool:
@@ -192,10 +177,6 @@ class SensorManager:
         self._spawn_lidar_2d(world, vehicle)
         self._spawn_collision_sensor(world, vehicle)
 
-    # -----------------------------------------------------------------------
-    # Cleanup
-    # -----------------------------------------------------------------------
-
     def cleanup(self) -> None:
         """
         @brief Stop and destroy all spawned sensors; reset collision and scan state.
@@ -253,10 +234,6 @@ class SensorManager:
         self._ego_vehicle = None
         self.reset_state()
 
-    # -----------------------------------------------------------------------
-    # Sensor spawn helpers
-    # -----------------------------------------------------------------------
-
     def _spawn_imu(self, world: Any, vehicle: Any) -> None:
         """
         @brief Spawn IMU sensor at centre-of-mass height.
@@ -293,7 +270,7 @@ class SensorManager:
         @brief Spawn 2D LiDAR sensor at front bumper height for obstacle detection.
 
         Single-channel horizontal scan. Feeds obstacle clearance features
-        (obs indices 7-11) only - NOT used for localisation.
+        (obs indices 8-12) only - NOT used for localisation.
 
         @param world: carla.World for the current episode.
         @param vehicle: Ego vehicle actor to attach to.
@@ -380,10 +357,6 @@ class SensorManager:
         sensor = world.spawn_actor(bp, carla.Transform(), attach_to=vehicle)
         sensor.listen(self._on_collision)
         self._spawned_sensors.append(sensor)
-
-    # -----------------------------------------------------------------------
-    # Sensor callbacks
-    # -----------------------------------------------------------------------
 
     def _on_collision(self, event: Any) -> None:
         """
