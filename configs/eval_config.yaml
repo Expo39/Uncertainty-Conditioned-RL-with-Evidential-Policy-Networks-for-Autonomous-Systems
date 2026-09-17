@@ -8,6 +8,12 @@
 # variable; omitting it runs the training noise process instead. The
 # *_noise_multiplier keys scale CARLA sensor stddevs above the training floor
 # (bias and tick-rate are never scaled).
+#
+# Four conditions carry reported results: anchor_deployment, anchor_empty,
+# ood_irregular_rtk_fixed and gnss_degrade_one_way. The sweep runs the rest and
+# writes their records, but the analysis scripts exclude them (see
+# _HELD_TIER_CONDITIONS and _UNREPORTED_CONDITIONS in scripts/analysis/ablation.py);
+# each is marked UNREPORTED below with the reason.
 
 model_path: "checkpoints/final_model"  # Overridden by make docker-eval.
 
@@ -35,8 +41,11 @@ eval_conditions:
     description: "Training GNSS process, EMPTY lot (occupancy 0.0) - no-obstacle control"
     bay_occupancy_rate: 0.0
 
-  # GNSS axis, slope endpoints only: fixed (clean) and degraded (worst). The
-  # intermediate float/standalone tiers are dropped because their EKF error sits
+  # UNREPORTED (both). GNSS axis, slope endpoints only: fixed (clean) and
+  # degraded (worst). Intended as a degradation slope, but pinning one tier for
+  # a whole episode lets the EKF suppress the static fault, so the slope between
+  # them is flat by construction and neither is reported. The intermediate
+  # float/standalone tiers are absent for a related reason: their EKF error sits
   # inside the bay's lateral slack at occupancy 0.5, leaving the covariance and
   # blind arms indistinguishable - no signal, only eval time.
   - name: "gnss_fixed"
@@ -51,10 +60,13 @@ eval_conditions:
     held_gnss_tier: degraded
     bay_occupancy_rate: 0.5
 
-  # LiDAR axis: degrades only the obstacle channel. The EKF never consumes
-  # LiDAR, so its stds stay at the RTK-fixed floor and an EKF-std safety gate is
-  # structurally blind here, while the evidential head sees the corruption.
-  # 25x the 0.020 m datasheet floor = 0.5 m 1-sigma, a failing sensor.
+  # UNREPORTED. LiDAR axis: degrades only the obstacle channel. The EKF never
+  # consumes LiDAR, so its stds stay at the RTK-fixed floor and the condition
+  # carries no localisation-uncertainty signal for the headline figures. Kept
+  # because it is the one condition where an EKF-std safety gate is structurally
+  # blind while the evidential head still sees the corruption, which makes it the
+  # natural test of whether a policy-side signal adds anything a covariance gate
+  # cannot. 25x the 0.020 m datasheet floor = 0.5 m 1-sigma, a failing sensor.
   - name: "lidar_degraded"
     description: "25x LiDAR range noise (0.5 m 1-sigma), RTK fixed - EKF-blind degradation"
     held_gnss_tier: rtk_fixed
