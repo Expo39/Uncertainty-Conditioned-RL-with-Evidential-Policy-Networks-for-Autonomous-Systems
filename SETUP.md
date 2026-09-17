@@ -107,13 +107,13 @@ make docker-up
 make docker-train STAGE=1 BASELINE=full_method
 
 # 3. Resume the next stage from the previous stage's run leaf (bare name, not a path)
-make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=seed42_11062026-0628
+make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=6_42_11062026-0628
 
 # 4. Attach the 2D visualiser at any time (host terminal, non-blocking)
 make visualise
 
 # 5. Run the evaluation sweep
-make docker-eval BASELINE=full_method CHECKPOINT=seed42_11062026-0628
+make docker-eval BASELINE=full_method CHECKPOINT=6_42_11062026-0628
 
 # 6. Stop when done
 make docker-down

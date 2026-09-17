@@ -61,7 +61,7 @@ writes frames to `outputs/vis_history.jsonl` only while it is active.
 
 ```bash
 make visualise           # open viewer (closing the window detaches, training unaffected)
-make eval-visualise-2d BASELINE=full_method CHECKPOINT=seed42_11062026-0628
+make eval-visualise-2d BASELINE=full_method CHECKPOINT=6_42_11062026-0628
 ```
 
 Displayed are the lot boundary, bay outlines in blue for perpendicular bays and grey
@@ -72,7 +72,7 @@ red, pedestrians in magenta, and the ego vehicle in cyan with a heading arrow an
 ### 3D CARLA Spectator View
 
 ```bash
-make docker-eval-visualise-3d BASELINE=full_method CHECKPOINT=seed42_11062026-0628
+make docker-eval-visualise-3d BASELINE=full_method CHECKPOINT=6_42_11062026-0628
 ```
 
 ### Live Inspect Modes

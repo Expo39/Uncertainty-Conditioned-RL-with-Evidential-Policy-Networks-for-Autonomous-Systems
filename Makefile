@@ -72,7 +72,7 @@ OFFSET   ?= 0,0
 OUT      ?=
 
 # BASELINE and CHECKPOINT are bare names (BASELINE=input_uncertainty
-# CHECKPOINT=seed42_11062026-0628); the recipes rebuild the nested paths
+# CHECKPOINT=6_42_11062026-0628); the recipes rebuild the nested paths
 # <root>/<baseline>/<leaf>/. A full YAML path also works (the stem is taken).
 BASELINE_NAME = $(if $(BASELINE),$(notdir $(basename $(BASELINE))),full_method)
 BASELINE_YAML = $(CONFIG_DIR)/baselines/$(BASELINE_NAME).yaml
@@ -165,7 +165,7 @@ docker-top: ## Show running processes in containers
 run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
 	bash scripts/training/run_seed_leg.sh
 
-docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628]
 	@echo "Training: layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=agent_config"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -173,7 +173,7 @@ docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rect
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/train.sh $(if $(STAGE),--stage $(STAGE),) $(if $(CHECKPOINT),--resume-from $(CHECKPOINT_DIR),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628]
+docker-train-short: ensure-dirs ## Quick training (10k steps). Usage: make docker-train-short [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628]
 	@echo "Training (10k steps): layout=$(LAYOUT) stage=$(or $(STAGE),1) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=agent_config"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -189,7 +189,7 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
 	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(EVAL_SEED) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -204,7 +204,7 @@ docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-
 		$(if $(filter command line,$(origin SCENARIO)),--conditions $(SCENARIO),) \
 		--output-dir $(EVAL_RESULTS_ROOT)
 
-docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=seed42_11062026-0628 [REAL_OBS=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/real_observations.npy]
+docker-covariance-probe: ## Causal probe - does the policy USE the covariance input? Usage: make docker-covariance-probe BASELINE=full_method CHECKPOINT=6_42_11062026-0628 [REAL_OBS=outputs/raw/evaluation_results/seed_42/full_method/<leaf>/real_observations.npy]
 	@echo "Covariance probe: checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME)$(if $(REAL_OBS), (on-manifold),)"
 	$(DOCKER_COMPOSE) exec training python $(SCRIPTS_DIR)/analysis/covariance_probe.py \
 		--model-path $(CHECKPOINT_MODEL) \
@@ -488,7 +488,7 @@ visualise: ## Open 2D bird's-eye viewer. Usage: make visualise [WORKER=0] [RECOR
 	PYTHONPATH=$(CURDIR) DISPLAY=$(_DISPLAY) \
 		$(PYTHON) scripts/visualise/visualiser.py --history-file $(_VIS_FILE) $(_VIS_FLAGS)
 
-eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=seed42_11062026-0628] [REALTIME=false] [STAGE=N] [GNSS_TIER=fixed|float|standalone|degraded] [RECORD=false] [TRACE=true] [UI_SCALE=1.5]
+eval-visualise-2d: ## Load checkpoint, start demo drive, open 2D viewer. Usage: make eval-visualise-2d [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628] [REALTIME=false] [STAGE=N] [GNSS_TIER=fixed|float|standalone|degraded] [RECORD=false] [TRACE=true] [UI_SCALE=1.5]
 	$(call ensure-venv)
 	@if [ "$(RECORD)" = "true" ]; then $(MAKE) --no-print-directory check-host-deps; fi
 	$(eval _DISPLAY := $(or $(DISPLAY),$(shell ls /tmp/.X11-unix/X* 2>/dev/null | head -1 | sed 's|/tmp/.X11-unix/X|:|')))

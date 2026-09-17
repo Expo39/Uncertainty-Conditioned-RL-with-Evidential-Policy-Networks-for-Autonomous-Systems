@@ -10,7 +10,7 @@ Two conventions run through the whole reference:
 - **`BASELINE` and `CHECKPOINT` are bare names, never paths.** The output tree is nested
   by baseline: `<root>/<baseline>/<leaf>/`, where `<leaf>` is `seed<N>_<DDMMYYYY-HHMM>`
   (or `trial_<N>` for tuning). You pass only the names -
-  `BASELINE=input_uncertainty CHECKPOINT=seed42_11062026-0628` - and the recipes
+  `BASELINE=input_uncertainty CHECKPOINT=6_42_11062026-0628` - and the recipes
   reconstruct the full `checkpoints/<baseline>/<leaf>/` paths. `BASELINE` defaults to
   `full_method`, and the seed and timestamp are recoverable from the leaf name alone.
 - **Every run is staged and baselined.** Omitting `STAGE` defaults to stage 1 (the
@@ -124,7 +124,7 @@ a random init (no `CHECKPOINT`). See
 make docker-train STAGE=1 BASELINE=vanilla_ppo
 
 # Stage 2 resuming from a stage-1 run leaf (same baseline)
-make docker-train STAGE=2 BASELINE=vanilla_ppo CHECKPOINT=seed42_11062026-0628
+make docker-train STAGE=2 BASELINE=vanilla_ppo CHECKPOINT=6_42_11062026-0628
 ```
 
 > **Further reading:** [uncertainty_rl/training/README.md](uncertainty_rl/training/README.md) - training loop, callbacks, resume mechanics.
