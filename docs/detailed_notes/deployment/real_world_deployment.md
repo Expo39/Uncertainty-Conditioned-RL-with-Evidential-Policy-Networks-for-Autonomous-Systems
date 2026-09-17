@@ -2,6 +2,9 @@
 
 Extracted from `uncertainty_rl/envs/real/`.
 
+**Never run on hardware.** The pipeline is implemented and unit-tested but has never
+driven a physical vehicle, so nothing below is empirically validated.
+
 Appendix B of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
 the deployment path: code-path parity, the ROS interface and master-switch values, the
 frame-calibration transform, the actuation model and the pre-deployment sequence. The

@@ -4,9 +4,13 @@ Real-world deployment stubs for the uncertainty-conditioned parking policy. Sist
 to `envs/sim/` (CARLA training environment). Provides the localisation, actuation, and
 inference scaffolding needed to run a trained policy on a physical instrumented vehicle.
 
-**Status:** Stubs complete. LiDAR hardware callback (`_get_lidar_scan`) requires
-hardware-specific implementation before closed-loop testing. See
-`docs/detailed_notes/deployment/real_world_deployment.md` for the pre-deployment checklist.
+**Status: never run on hardware.** The pipeline is implemented and unit-tested, but it
+has never driven a physical vehicle, so nothing in this package is empirically validated.
+Three things are outstanding before a first closed-loop trial: the LiDAR hardware callback
+(`_get_lidar_scan`) and the vehicle command interface, both hardware-specific; the surveyed
+lot datum; and the actuator calibration. The last two ship as placeholders that reduce to
+identity transforms. See `docs/detailed_notes/deployment/real_world_deployment.md` for the
+code map and Appendix B of the dissertation for the pre-deployment sequence.
 
 ---
 
