@@ -127,14 +127,14 @@ Use `compute_obs_dim()` from `uncertainty_rl/envs/_parking_core.py` at runtime r
 
 The output path is set at construction time. The visualiser ([scripts/visualise/](../../scripts/visualise/)) reads this file every frame.
 
-**Plot standards**: this package renders nothing. Every figure is drawn under [scripts/](../../scripts/) through the shared house style in [scripts/figure_style.py](../../scripts/figure_style.py), which is the single source of rcParams, palette and legend treatment - import it rather than setting any of them by hand. Colours: blue = epistemic, red = aleatoric. Uncertainty ellipses: 95% confidence ($\chi^2 = 5.991$ for 2 DOF).
+**Plot standards**: this package renders nothing. Every figure is drawn under [scripts/](../../scripts/) through the shared house style in [scripts/figure_style.py](../../scripts/figure_style.py), which is the single source of rcParams, palette, figure sizes and legend treatment - import it rather than setting any of them by hand.
 
 ## actuation_calibration.py
 
 | Class | Purpose |
 |-------|---------|
-| `ActuatorMap` | Single-actuator mapping with deadband, gain, bias and output clamp. Internal, not re-exported |
-| `ActuationCalibration` | Wraps steering and drive `ActuatorMap` instances. Identity in simulation, calibrated for real deployment |
+| `ActuatorMap` | Single-actuator mapping with gain, bias, a deadband about a configurable centre (`deadband_offset`) and an output clamp to `[min_output, max_output]`. Internal, not re-exported |
+| `ActuationCalibration` | Wraps one `ActuatorMap` per action axis: steering, throttle and brake. Identity in simulation, calibrated for real deployment |
 
 Load via `ActuationCalibration.from_config(path)`, which returns an identity mapping when
 the calibration file is absent, so simulation and real deployment share one code path. The
