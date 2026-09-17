@@ -183,7 +183,7 @@ def main() -> None:
         help=(
             "Enable keyboard control in dryrun mode. "
             "Arrow keys: Up=throttle, Down=brake, Left/Right=steer. "
-            "Requires pynput (installed in inspect container). "
+            "Reads raw keys through termios/tty, so it needs a TTY. "
             "Ignored in all other modes."
         ),
     )

@@ -268,7 +268,7 @@ def analyse(
                 for r in b.itertuples()
             )
             print(f"  {axis:9s} {trail}")
-    print(f"\nTables and figure written to {out_dir}")
+    print(f"\nTables written to {out_dir}")
 
 
 def main() -> None:
