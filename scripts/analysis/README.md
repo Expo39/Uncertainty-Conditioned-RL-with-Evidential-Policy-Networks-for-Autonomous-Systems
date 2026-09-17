@@ -55,16 +55,6 @@ widen it by a side path:
   which need a std that moves *while the vehicle drives*. That excludes the held tiers
   and the OOD layout (held at RTK fixed).
 
-**Why the held tiers go.** `gnss_fixed` and `gnss_degraded` each pin one fix state for
-the whole episode, so neither degrades *within* an episode and the "slope" between them
-is a between-condition difference rather than degradation any arm rides through. The EKF
-also suppresses a static raw fault, so the two do not separate at the policy's input and
-the slope is flat by construction (see the degradation section of the dissertation,
-[`docs/AntonioGaldes_Dissertation.pdf`](../../docs/AntonioGaldes_Dissertation.pdf)). The
-graceful-degradation evidence instead comes from the live anchor chain banded by true
-error (`figures/degradation_tiers.py`) and the one-way drift. Pass `--keep-held-tiers`
-to restore the seven-condition behaviour and the slope.
-
 Writes `condition_summary.csv`, `covariance_contrasts.csv`, `behaviour_by_std.csv`,
 `caution_slopes.csv`, `caution_contrast.csv` and `caution_levels.csv` (plus
 `degradation_slope.csv` only when the held tiers are kept) under
