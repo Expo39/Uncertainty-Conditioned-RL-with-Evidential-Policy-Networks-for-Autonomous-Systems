@@ -8,11 +8,13 @@ training containers), and the column in each table marks which.
 Two conventions run through the whole reference:
 
 - **`BASELINE` and `CHECKPOINT` are bare names, never paths.** The output tree is nested
-  by baseline: `<root>/<baseline>/<leaf>/`, where `<leaf>` is `seed<N>_<DDMMYYYY-HHMM>`
-  (or `trial_<N>` for tuning). You pass only the names -
+  by baseline: `<root>/<baseline>/<leaf>/`, where `<leaf>` is
+  `<stage>_<seed>_<DDMMYYYY-HHMM>` (or `trial_<N>` for tuning). You pass only the names -
   `BASELINE=input_uncertainty CHECKPOINT=6_42_11062026-0628` - and the recipes
   reconstruct the full `checkpoints/<baseline>/<leaf>/` paths. `BASELINE` defaults to
-  `full_method`, and the seed and timestamp are recoverable from the leaf name alone.
+  `full_method`. The middle token is the seed, and the evaluation targets parse it back
+  out to nest their results under `seed_<N>/`, so a malformed leaf sends output to the
+  wrong tree.
 - **Every run is staged and baselined.** Omitting `STAGE` defaults to stage 1 (the
   curriculum head), and omitting `BASELINE` defaults to `full_method`. No value falls back to
   a hidden Python default - see [configs/README.md](configs/README.md) for the merge
@@ -118,6 +120,7 @@ a random init (no `CHECKPOINT`). See
 |---------|---------|------|
 | `make docker-train [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=<leaf>] [LAYOUT=rectangle]` | Run a training stage | Yes |
 | `make docker-train-short [STAGE=1] [BASELINE=...] [CHECKPOINT=<leaf>]` | 10 000-step smoke test before a full run | Yes |
+| `make run-seed-leg [DRY_RUN=1]` | The whole experiment: every arm through every stage, then evaluate the final stage | Yes |
 
 ```bash
 # Stage 1 from scratch, vanilla baseline
@@ -127,14 +130,25 @@ make docker-train STAGE=1 BASELINE=vanilla_ppo
 make docker-train STAGE=2 BASELINE=vanilla_ppo CHECKPOINT=6_42_11062026-0628
 ```
 
+`run-seed-leg` chains all of that automatically: it trains the four arms through stages
+1-6 for each seed, resume-chaining every stage, then evaluates the final stage only. It is
+idempotent, skipping work that is already done, so a crashed leg resumes on re-run. Expect
+it to run for days - start it under `tmux`, and use `DRY_RUN=1` first to print the plan
+without executing it.
+
 > **Further reading:** [uncertainty_rl/training/README.md](uncertainty_rl/training/README.md) - training loop, callbacks, resume mechanics.
 
 ---
 
 ## Hyperparameter Tuning
 
-Per project methodology, HPO is run **after** the curriculum validates on the vanilla
-baseline and tunes structural PPO parameters only.
+> **Never run.** No reported result used this pipeline: every arm and seed trained on the
+> committed defaults in `configs/train_config.yaml`, because a separate search per arm
+> would make the configuration a fifth experimental variable and confound the 2x2
+> ablation. The target is retained for future work.
+
+Were it run, it would tune structural PPO parameters only, leaving `learning_rate` and
+`ent_coef` to their stage-owned schedules.
 
 | Command | Purpose | GPU? |
 |---------|---------|------|
@@ -152,8 +166,10 @@ baseline and tunes structural PPO parameters only.
 | `make docker-eval-visualise-3d [BASELINE=...] [CHECKPOINT=<leaf>]` | Load a checkpoint with a live CARLA 3D spectator view (needs a display) | Yes |
 | `make eval-visualise-2d [BASELINE=...] [CHECKPOINT=<leaf>] [LAYOUT=rectangle] [STAGE=N] [REALTIME=false]` | Start a checkpoint demo drive and open the 2D bird's-eye viewer | No for the viewer, yes for CARLA |
 
-The 9 conditions span nominal GNSS (RTK fixed, empty lot) through to worst-case
-(degraded fix state, high IMU noise, OOD layout).
+The sweep runs the seven conditions defined in `configs/eval_config.yaml`, spanning the
+in-distribution anchor through held fix-state tiers, degraded LiDAR, an unseen layout and
+mid-episode drift. Four of them carry reported results; the analysis scripts exclude the
+other three.
 
 > **Further reading:** [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md) - condition table, metric definitions, output structure.
 
@@ -171,6 +187,7 @@ them while training.
 | `make docker-inspect-sensors [INSPECT_LAYOUT=...] [SENSORS_VIEW=birds_eye] [INSPECT_ZOOM=close]` | Visualise sensor FOV on the layout | Yes |
 | `make docker-inspect-live [INSPECT_SENSOR=lidar] [INSPECT_LAYOUT=...]` | Live single-sensor view in windowed CARLA | Yes |
 | `make docker-inspect-dryrun [STAGE=1] [BASELINE=...] [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=...] [INSPECT_PAUSE=3.0] [INSPECT_OOD=false]` | Full training pipeline in windowed CARLA, built identically to training | Yes |
+| `make docker-inspect-eval-dryrun SCENARIO=anchor_deployment [BASELINE=...] [MANUAL=true] [INSPECT_EPISODES=5] [INSPECT_VIEW=...]` | Manually drive one named eval condition, to verify the scenario wiring (no checkpoint) | Yes |
 | `make docker-demo MODEL=<path>` | Windowed CARLA demo of a checkpoint | Yes |
 
 > **Further reading:** [scripts/inspect/README.md](scripts/inspect/README.md) - inspector modes, CLI flags, per-mode previews.
@@ -199,7 +216,11 @@ is not installed outside Docker.
 |---------|---------|------|
 | `make generate-layouts [LAYOUT=trapezoid]` | Regenerate all lot YAMLs and bird's-eye PNGs | No |
 | `make analyse-markov [N_EPISODES=10000] [N_STEPS=1750]` | Diagnose the GNSS tier Markov chain from `gnss_noise_profiles.yaml` | No |
+| `make tb-scalars LOG=logs/<run_dir> [ARGS="--match success --last 10"]` | Print TensorBoard scalar trajectories for one or more runs | No |
 | `make visualise [WORKER=0]` | Open the detachable 2D bird's-eye viewer for a running worker | No |
+| `make check-host-deps` | Verify the host-side tools the recording targets need (ffmpeg) | No |
+| `make record-screen [DURATION=30] [OUT=...]` | Screen-record the CARLA window to MP4 until Ctrl+C | No |
+| `make clip START=00:05 END=00:20 [FORMAT=gif] [VIDEO=...]` | Cut a GIF or MP4 from the newest recording | No |
 
 Layout YAMLs are committed to `configs/layouts/`. Regenerate only when you change the
 floor plan geometry in `scripts/layouts/floor_plans/*.py`.
@@ -221,6 +242,8 @@ raw CSVs and write derived ones. None of them needs a GPU or the simulator.
 | `make analyse-calibration [ARM=full_method] [SEED=42]` | Is the EKF covariance honest? | No |
 | `make handover-timing [ARM=full_method]` | Handover latency vs degradation onset | No |
 | `make uncertainty-verdict EVAL_DIR=...` | Epistemic-vs-aleatoric separation | No |
+| `make trace-tier-breakdown TRACE_DIR=...` | Demo-trace outcomes resolved by GNSS tier (collapse vs hard task) | No |
+| `make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf>` | Causal probe: does the policy USE the covariance input? | Yes |
 | `make training-curves` | TensorBoard scalars -> CSV | No |
 | `make figures [FIG=gate_roc]` | Render the figures into `outputs/main_analysis/figures/` | No |
 | `make run-figures [RUN_DIR=...]` | Per-run diagnostic panels | No |
@@ -238,6 +261,11 @@ make analysis-bundle              # summaries + values + MANIFEST
 The single-seed targets (`analyse-ablation`, `analyse-gate`, `analyse-calibration`,
 `handover-timing`) are debugging aids: `analyse-cross-seed` recomputes the same
 statistics over the pooled sample and is what the headline set reads.
+
+`docker-covariance-probe` is the one analysis target that needs the training container,
+since it loads the policy and runs forward passes; everything else is host-side pandas.
+`trace-tier-breakdown` reads a demo-trace dump rather than an evaluation results tree,
+and prints to the console without writing a CSV.
 
 > **Further reading:** [scripts/analysis/README.md](scripts/analysis/README.md) - per-script reference and CSV schema. The `outputs/` tier layout is in [USAGE.md](USAGE.md#results-layout).
 
@@ -299,7 +327,7 @@ for `BASELINE` and `CHECKPOINT` are described at the top of this file.
 |----------|---------|-----------------|---------|
 | `STAGE` | `1` | `1`-`6` | `docker-train`, `docker-train-short`, `docker-tune`, `docker-inspect-dryrun`, `eval-visualise-2d` |
 | `BASELINE` | `full_method` | `vanilla_ppo`, `input_uncertainty`, `output_uncertainty`, `full_method` (bare name) | `docker-train`, `docker-train-short`, `docker-tune`, `docker-eval`, `docker-eval-visualise-3d`, `docker-inspect-dryrun`, `eval-visualise-2d` |
-| `CHECKPOINT` | _(none)_ | run leaf `seed<N>_<DDMMYYYY-HHMM>` (bare name) | `docker-train`, `docker-train-short`, `docker-eval`, `docker-eval-visualise-3d`, `eval-visualise-2d` |
+| `CHECKPOINT` | _(none)_ | run leaf `<stage>_<seed>_<DDMMYYYY-HHMM>` (bare name), or `trial_<N>` for a tuning trial | `docker-train`, `docker-train-short`, `docker-eval`, `docker-eval-visualise-3d`, `docker-covariance-probe`, `eval-visualise-2d` |
 | `LAYOUT` | `rectangle` | `rectangle`, `trapezoid`, `irregular_a` | `docker-train`, `docker-tune`, `docker-eval`, `eval-visualise-2d`, `generate-layouts` |
 | `WORKER` | `0` | integer worker index | `docker-shell-ros2`, `docker-logs-carla`, `docker-logs-ros2`, `visualise` |
 | `STACK` | `all` | `all`, `training`, `inspect` | `docker-clean`, `docker-clean-all` |
@@ -316,3 +344,11 @@ for `BASELINE` and `CHECKPOINT` are described at the top of this file.
 | `SENSORS_VIEW` | `birds_eye` | `birds_eye`, `side`, `front` | `docker-inspect-sensors` |
 | `INSPECT_ZOOM` | `close` | `close`, `wide` | `docker-inspect-sensors` |
 | `INSPECT_SENSOR` | `lidar` | sensor type string | `docker-inspect-live` |
+| `SCENARIO` | `anchor_deployment` | any condition name in `configs/eval_config.yaml`; `docker-eval` also accepts a space-separated subset | `docker-inspect-eval-dryrun`, `docker-eval` |
+| `PER_STEP_CAP` | `0` | leading steps per episode written to `per_step_records.csv`; `0` disables | `docker-eval` |
+| `NO_SAFETY` | _(unset)_ | `1` bypasses the SafetyWrapper; results nest under `without_wrapper/` | `docker-eval` |
+| `DRY_RUN` | `0` | `1` prints the plan without running it | `run-seed-leg` |
+| `TRACE_DIR` | _(required)_ | path to one demo-trace dump | `trace-tier-breakdown` |
+| `REAL_OBS` | _(unset)_ | path to a dumped `.npy` observation set | `docker-covariance-probe` - on-manifold mode |
+| `LOG` | _(required)_ | one or more run log directories | `tb-scalars` |
+| `ARGS` | _(unset)_ | flags forwarded verbatim, e.g. `"--match success --last 10"` | `tb-scalars` |
