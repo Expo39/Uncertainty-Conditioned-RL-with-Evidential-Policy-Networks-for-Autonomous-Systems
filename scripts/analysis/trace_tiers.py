@@ -1,30 +1,16 @@
 """
-@file trace_tier_breakdown.py
+@file trace_tiers.py
 @brief Offline diagnostic: resolve demo-trace outcomes by GNSS localisation tier.
 
-Reads a directory of per-episode demo-trace CSVs (written by CARLAParkingEnv during
-training) and answers one question: does the policy fail BECAUSE localisation is hard
-(failures concentrated in high-EKF-covariance episodes), or does it fail even when
-localisation is clean (a sign of exploration collapse rather than task difficulty)?
+Reads a directory of per-episode demo-trace CSVs and answers one question:
+does the policy fail BECAUSE localisation is hard, or even when it is clean
+(exploration collapse)? Tiers are keyed on the max TRUE error ||ekf_xy -
+gt_xy||, not the reported EKF std, which saturates and understates the tier.
 
-For each episode it reduces the per-step trace to:
- - success: 1 if the per-step success flag is ever set (it flips on the terminal
-   success step and stays 0 otherwise).
- - final pos error (m): the last step's pos_error_m (terminal parking precision).
- - hardest localisation moment: the per-episode max TRUE localisation error
-   ||ekf_xy - gt_xy|| (from the trace's ekf_x/y and gt_x/y), used as the proxy for the
-   worst GNSS tier the episode visited. NOT the reported EKF std: the EKF posterior std
-   is heavily damped by IMU + process-model fusion and saturates around ~1.3 m even when
-   the estimate is 10 m off truth, so it understates the tier by up to ~8x. The reported
-   std is kept only as a secondary view (it is the policy's covariance OBS input).
+Usage:
+    python scripts/analysis/trace_tiers.py --trace-dir <demo-trace dump dir>
 
-It then tabulates success rate and mean final pos error bucketed by that true error into
-GNSS-tier bands (thresholds from gnss_noise_profiles.yaml metric_stddev_m), plus the same
-table keyed on the reported std (to expose the saturation), and the correlation between
-per-step aleatoric uncertainty and per-step EKF std (does the head's predicted uncertainty
-even track localisation uncertainty, or has it gone flat?).
-
-@note Read-only: never mutates traces, configs, or outputs. Pure CPU, no torch/CARLA.
+@note Read-only. Pure CPU, no torch/CARLA.
 """
 
 from __future__ import annotations
@@ -37,14 +23,9 @@ import numpy as np
 import pandas as pd
 
 # Upper edges (inclusive) of the GNSS-tier bands, in metres of TRUE localisation
-# error ||ekf_xy - gt_xy||. Boundaries follow the tiers' metric_stddev_m
-# (rtk_fixed 0.020, rtk_float 0.360, standalone 1.802, degraded 5.0).
-#
-# @warning Band on TRUE error, NOT on the reported EKF std: the EKF posterior std
-# (obs features 2-4) is heavily damped by IMU + process-model fusion and saturates
-# around ~1.3 m even when the estimate is 10 m off truth, so it badly understates the
-# tier and mislabels genuinely-degraded episodes. The true error (from the trace's
-# gt_x/y and ekf_x/y) is the faithful tier proxy.
+# error ||ekf_xy - gt_xy|| (thresholds follow metric_stddev_m: 0.020 / 0.360 /
+# 1.802 / 5.0 for rtk_fixed / rtk_float / standalone / degraded).
+# @warning NOT the reported EKF std, which saturates ~1.3 m and mislabels tiers.
 _BAND_EDGES_M: List[Tuple[str, float]] = [
     ("fixed (<=0.36)", 0.36),
     ("float (<=1.80)", 1.80),

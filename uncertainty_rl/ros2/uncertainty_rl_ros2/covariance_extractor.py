@@ -1,9 +1,6 @@
 """
 @file covariance_extractor.py
 @brief ROS 2 node for extracting covariance from robot_localization.
-
-This module implements a ROS 2 node that subscribes to odometry messages from
-robot_localization and extracts the covariance matrix for use in RL training.
 """
 
 import json
@@ -28,23 +25,18 @@ class CovarianceExtractorNode(Node):
     a CovarianceEstimate message for consumption by the RL agent.
     """
 
-    # Flat indices into the 36-element pose covariance for the 3x3 [x, y, yaw]
-    # submatrix. Full 6x6 order: [x, y, z, roll, pitch, yaw].
-    # Row/col positions of [0,1,5] x [0,1,5] in row-major 6x6:
-    #   (0,0)=0  (0,1)=1  (0,5)=5
-    #   (1,0)=6  (1,1)=7  (1,5)=11
-    #   (5,0)=30 (5,1)=31 (5,5)=35
+    # Flat row-major indices of the [x, y, yaw] submatrix within the 36-element
+    # pose covariance, whose 6x6 axis order is [x, y, z, roll, pitch, yaw].
     _COV_FLAT_IDX: Tuple[int, ...] = (0, 1, 5, 6, 7, 11, 30, 31, 35)
 
-    # Default shared file paths. Overridden at runtime by the EKF_STATE_FILE
-    # environment variable.
+    # Overridden by the EKF_STATE_FILE environment variable.
     _DEFAULT_SHARED_PATH: str = "/workspace/outputs/ekf_state.json"
 
-    # File-based /set_pose signal written by the training container.
-    # The training container writes {seq, x, y, yaw} in CARLA world frame.
+    # File-based /set_pose signal: the training container writes
+    # {seq, x, y, yaw} here in CARLA world frame.
     _DEFAULT_INITIAL_POSE_PATH: str = "/workspace/outputs/initial_pose.json"
 
-    # Log every N odometry callbacks (~100 at 20 Hz = every 5 s).
+    # Every 5 s at the EKF's 20 Hz odometry rate.
     _LOG_EVERY_N: int = 100
 
     def __init__(self, node_name: str = "covariance_extractor") -> None:
@@ -54,70 +46,58 @@ class CovarianceExtractorNode(Node):
         """
         super().__init__(node_name)
 
-        # Declare parameters
         self.declare_parameter("odom_topic", "/odometry/filtered")
         self.declare_parameter("covariance_topic", "/ekf_uncertainty/covariance")
         self.declare_parameter("publish_rate", 10.0)  # Hz
-        # Kept for launch file compatibility; no longer used.
+        # Both launch files still pass this, so it must be declared, but the
+        # node never reads it: the EKF already publishes twist in the body frame.
         self.declare_parameter("twist_in_odom_frame", False)
-        # Per-instance EKF state file path.
         self.declare_parameter(
             "ekf_state_file",
             os.environ.get("EKF_STATE_FILE", self._DEFAULT_SHARED_PATH),
         )
 
-        # Get parameters
         odom_topic: str = str(self.get_parameter("odom_topic").value)
         covariance_topic: str = str(self.get_parameter("covariance_topic").value)
         publish_rate: float = float(self.get_parameter("publish_rate").value)
-        # Instance-specific file paths derived from the ekf_state_file parameter.
         ekf_path: str = str(self.get_parameter("ekf_state_file").value)
         self._SHARED_PATH: str = ekf_path
         self._TMP_PATH: str = ekf_path + ".tmp"
 
-        # Set up QoS profile for reliable communication
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
             depth=10,
         )
 
-        # Create subscriber for odometry
         self.odom_subscriber = self.create_subscription(
             Odometry, odom_topic, self.odom_callback, qos_profile
         )
 
-        # Create publisher for covariance
         self.covariance_publisher = self.create_publisher(
             CovarianceEstimate, covariance_topic, qos_profile
         )
 
-        # Latest extracted state: pose tuple + pre-serialised covariance list.
-        # Both updated atomically at the end of odom_callback so publish_covariance
-        # never sees a partially-updated state.
+        # Both are written together at the end of odom_callback so
+        # publish_covariance never sees a half-updated state.
         self._latest_pose: Optional[Tuple[float, float, float, float, float]] = None
         self._latest_cov_flat: Optional[List[float]] = None
         self._log_counter: int = 0
-        # Monotonically increasing counter written into ekf_state.json so the
-        # training container can detect genuinely new writes without relying on
-        # file mtime (which is unreliable across Docker container clocks).
+        # Lets the training container detect genuinely new writes without file
+        # mtime, which is unreliable across Docker container clocks.
         self._write_seq: int = 0
 
-        # Ensure the outputs directory exists before the first file write.
         os.makedirs(os.path.dirname(os.path.abspath(self._SHARED_PATH)), exist_ok=True)
 
         self.get_logger().info(
             f"CovarianceExtractor: writing EKF state to {self._SHARED_PATH}"
         )
 
-        # Create timer for publishing
         timer_period = 1.0 / publish_rate
         self.timer = self.create_timer(timer_period, self.publish_covariance)
 
-        # /set_pose file watcher
         # The training container (Humble) writes initial_pose.json at episode
-        # reset. This node watches the file and publishes on /set_pose so the
-        # EKF resets its state to the vehicle spawn pose.
+        # reset; watching it here drives the /set_pose EKF reset.
         initial_pose_path: str = os.environ.get(
             "INITIAL_POSE_FILE", self._DEFAULT_INITIAL_POSE_PATH
         )
@@ -138,24 +118,16 @@ class CovarianceExtractorNode(Node):
 
     def odom_callback(self, msg: Odometry) -> None:
         """
-        @brief Callback for odometry messages.
-
-        Extracts pose, velocity, and covariance from the odometry message and
-        stores them. Velocity comes from msg.twist.twist which robot_localization
-        populates with EKF-filtered linear and angular velocity estimates.
+        @brief Extract pose, velocity and covariance from EKF odometry.
         @param msg: Odometry message from robot_localization.
         """
-        # Pose
         x = msg.pose.pose.position.x
-        # Negate y: CARLA uses a left-handed coordinate system (y increases
-        # rightward / southward) while ROS uses right-handed
-        # (y increases leftward / northward). Negating here ensures all
-        # downstream consumers (training container, calibration, _get_state)
-        # work in CARLA world-frame convention consistently.
+        # ROS is right-handed (+y north), CARLA left-handed (+y south).
+        # Negating here keeps every downstream consumer in the CARLA frame.
         y = -msg.pose.pose.position.y
 
-        # Convert quaternion to yaw. Negate because the y-axis flip mirrors
-        # the rotation direction (left-hand vs right-hand convention).
+        # Yaw is negated for the same handedness reason: flipping y mirrors
+        # the direction of rotation.
         qx = msg.pose.pose.orientation.x
         qy = msg.pose.pose.orientation.y
         qz = msg.pose.pose.orientation.z
@@ -164,24 +136,17 @@ class CovarianceExtractorNode(Node):
         cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
         yaw = -math.atan2(siny_cosp, cosy_cosp)
 
-        # Velocity
-        # vyaw stays in REP-103 (left turn positive) to match the rest of the
-        # codebase (LiDAR bearing, target dyaw, reward signs). Position y and
-        # yaw above are negated to recover CARLA's left-handed world frame.
+        # Deliberately NOT negated: vyaw stays REP-103 (left turn positive) to
+        # match LiDAR bearing, target dyaw and the reward signs.
         vyaw = msg.twist.twist.angular.z
-        # Body-frame longitudinal velocity. The EKF publishes twist in
-        # base_link, so no rotation is needed.
+        # Already body-frame: the EKF publishes twist in base_link.
         vx = msg.twist.twist.linear.x
 
-        # Covariance
-        # Extract the 3x3 [x, y, yaw] submatrix directly from the flat 36-element
-        # pose covariance using pre-computed indices.
         raw_cov = msg.pose.covariance
         cov_flat: List[float] = [raw_cov[i] for i in self._COV_FLAT_IDX]
 
-        # Atomic shared-file write
-        # Cross-distro access: training container (Humble) reads this file since
-        # DDS wire protocol is incompatible between Jazzy and Humble containers.
+        # The file, not DDS, is the transport to the training container: the
+        # DDS wire protocol is incompatible between Jazzy and Humble.
         self._write_seq += 1
         data = {
             "seq": self._write_seq,
@@ -192,8 +157,6 @@ class CovarianceExtractorNode(Node):
             "vx": float(vx),
             "covariance": cov_flat,
         }
-        # Log a one-shot warning when the EKF first produces NaN so the
-        # container log shows exactly when and what the EKF published.
         if math.isnan(x) or math.isnan(y) or math.isnan(yaw):
             self.get_logger().warn(
                 f"EKF output contains NaN (seq={self._write_seq}): "
@@ -207,16 +170,13 @@ class CovarianceExtractorNode(Node):
             json.dump(data, f)
         os.replace(self._TMP_PATH, self._SHARED_PATH)
 
-        # Update state atomically
-        # Both attributes are written here; publish_covariance only reads them.
         self._latest_pose = (x, y, yaw, vyaw, vx)
         self._latest_cov_flat = cov_flat
 
-        # Periodic log
         self._log_counter += 1
         if self._log_counter >= self._LOG_EVERY_N:
             self._log_counter = 0
-            # Diagonal elements of the 3x3: indices 0 (xx), 4 (yy), 8 (yaw-yaw).
+            # Diagonal of the 3x3: xx, yy, yaw-yaw.
             std_x = math.sqrt(cov_flat[0])
             std_y = math.sqrt(cov_flat[4])
             std_yaw = math.sqrt(cov_flat[8])
@@ -228,17 +188,11 @@ class CovarianceExtractorNode(Node):
     def publish_covariance(self) -> None:
         """
         @brief Publish the latest covariance as a CovarianceEstimate message.
-
-        Uses semantic fields (x, y, yaw, vyaw, covariance) instead of
-        a flat array. Includes a timestamped header for latency measurement and
-        ordering. The covariance flat list is pre-computed in odom_callback to
-        avoid redundant numpy serialisation on every publish tick.
         """
         if self._latest_pose is None or self._latest_cov_flat is None:
             return
 
-        # vx is written to ekf_state.json only; the DDS message carries
-        # pose + vyaw + covariance.
+        # vx goes to ekf_state.json only; the message carries pose + vyaw + cov.
         x, y, yaw, vyaw, _vx = self._latest_pose
 
         msg = CovarianceEstimate()
@@ -256,11 +210,8 @@ class CovarianceExtractorNode(Node):
         """
         @brief Poll initial_pose.json and publish /set_pose to reset the EKF.
 
-        At each episode reset the training container writes initial_pose.json
-        with the vehicle spawn pose. This method publishes on /set_pose so the
-        robot_localisation EKF resets its state estimate. No datum reset is
-        needed since navsat_transform has been replaced by the flat-earth
-        projection in GnssNoiseRelayNode.
+        @note No datum reset accompanies this: the flat-earth projection in
+              GnssNoiseRelayNode stands in for navsat_transform.
         """
         try:
             mtime_ns = os.stat(self._initial_pose_path).st_mtime_ns
@@ -277,9 +228,9 @@ class CovarianceExtractorNode(Node):
             return
 
         seq = int(data.get("seq", 0))
-        # A regression in seq indicates the training container's subscriber
-        # was reconstructed (e.g. new Optuna trial). Reset the counter so
-        # the first reset of the new session is honoured rather than dropped.
+        # A seq regression means the training container's subscriber has been
+        # reconstructed (e.g. a new Optuna trial), so the counter restarts;
+        # clearing it here keeps the new session's first reset from being dropped.
         if seq < self._initial_pose_last_seq:
             self.get_logger().info(
                 f"initial_pose seq regression ({seq} < "
@@ -318,13 +269,10 @@ class CovarianceExtractorNode(Node):
 class CovarianceMonitorNode(Node):
     """
     @class CovarianceMonitorNode
-    @brief ROS 2 node for monitoring and visualising covariance.
-
-    Subscribes to CovarianceEstimate and logs pose, velocity, and uncertainty
-    statistics. Rate-limited to avoid flooding the terminal at 10 Hz.
+    @brief Debug node logging pose and uncertainty from CovarianceEstimate.
     """
 
-    # Log every N messages (~10 Hz publish rate -> every 2 s at N=20).
+    # Every 2 s at the 10 Hz publish rate; unthrottled would flood the terminal.
     _LOG_EVERY_N: int = 20
 
     def __init__(self, node_name: str = "covariance_monitor") -> None:
@@ -363,7 +311,6 @@ class CovarianceMonitorNode(Node):
             return
         self._log_counter = 0
 
-        # Index directly to avoid a full reshape for just the diagonal.
         std_x = math.sqrt(msg.covariance[0])
         std_y = math.sqrt(msg.covariance[4])
         std_yaw = math.sqrt(msg.covariance[8])

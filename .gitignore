@@ -56,9 +56,10 @@ tmp/
 temp/
 *.tmp
 
-# AI assistant instructions (local only)
+# AI assistant instructions and local session state (local only)
 CLAUDE.md
 **/CLAUDE.md
+.claude/
 
 # Testing & linting artefacts
 htmlcov/
@@ -72,6 +73,9 @@ TODO.md
 
 # Project config archive (local portability)
 project_configs.tar.gz
+
+# Results archives (multi-GB; made by make backup-results)
+project_results*.tar.gz
 
 # Generated layout YAMLs (re-created by make generate-layouts; not version-controlled)
 configs/layouts/*.yaml

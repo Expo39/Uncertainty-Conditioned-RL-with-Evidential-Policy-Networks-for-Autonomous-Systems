@@ -2,9 +2,8 @@
 @file evidential_policy.py
 @brief Evidential policy network for uncertainty quantification.
 
-This module implements an evidential deep learning policy network that quantifies
-both epistemic (model) uncertainty and aleatoric (data) uncertainty using
-evidential distributions.
+Quantifies epistemic (model) and aleatoric (data) uncertainty from a single
+forward pass via a Normal-Inverse-Gamma output distribution.
 """
 
 import logging
@@ -21,30 +20,20 @@ logger = logging.getLogger("uncertainty_rl.networks.evidential_policy")
 class EvidentialLayer(nn.Module):
     """
     @class EvidentialLayer
-    @brief Evidential output layer for uncertainty quantification.
-
-    This layer outputs the parameters of an evidential Normal-Inverse-Gamma (NIG)
-    distribution for epistemic and aleatoric uncertainty quantification.
+    @brief Evidential output layer emitting NIG parameters (gamma, nu, alpha, beta).
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(self, input_dim: int, output_dim: int) -> None:
         """
         @brief Constructor for EvidentialLayer.
         @param input_dim: Dimension of input features.
-        @param output_dim: Action dimension. The parking env uses 3
-                ([steer, throttle, brake]) and gets a per-axis gamma bias;
-                any other size falls back to a symmetric gamma=0 default
-                (smoke tests, e.g. Pendulum).
+        @param output_dim: Action dimension. 3 ([steer, throttle, brake]) gets a
+               per-axis gamma bias; any other size falls back to gamma=0.
         """
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
 
-        # Output 4 parameters per action: gamma, nu, alpha, beta
         self.linear = nn.Linear(input_dim, output_dim * 4)
 
         # Bias layout [gamma | nu | alpha | beta] keeps NIG parameters in a stable
@@ -53,24 +42,18 @@ class EvidentialLayer(nn.Module):
             self.linear.weight.mul_(0.01)
             n = self.output_dim
             if output_dim == 3:
-                # Per-axis gamma bias matches the parking env actuator model.
-                # Steer is bipolar so gamma=0 is symmetric. Throttle and brake
-                # are folded to [0, 1] in the env, so gamma=0 wastes ~50% of
-                # samples on a clipped-to-zero pedal. Bias throttle positive
-                # (default-on during approach) and brake negative (exceptional
-                # action, default-off) to match the task.
+                # Throttle and brake are folded to [0, 1] in the env, so a
+                # symmetric gamma=0 wastes half the samples on a clipped-to-zero
+                # pedal. Steer stays bipolar.
                 self.linear.bias[0] = 0.0  # gamma steer (bipolar)
                 self.linear.bias[1] = 0.5  # gamma throttle (default-on)
                 self.linear.bias[2] = -1.0  # gamma brake (default-off)
             else:
                 # Generic fallback for non-parking action spaces (test harness).
                 self.linear.bias[0 * n : 1 * n].fill_(0.0)
-            # nu prior softplus(-1.0) ~ 0.31 < 1. Since epistemic =
-            # beta/(nu*(alpha-1)) = aleatoric/nu, epistemic > aleatoric iff
-            # nu < 1: a sub-1 prior makes the no-evidence regime (novel/OOD
-            # states) epistemic-dominant, the signal a handoff gate reads. The
-            # advantage-gated evidence term raises nu past 1 for well-predicted
-            # in-distribution actions, where aleatoric should dominate instead.
+            # nu prior softplus(-1.0) ~= 0.31. Epistemic is aleatoric/nu, so a
+            # sub-1 prior makes the no-evidence regime (novel/OOD states)
+            # epistemic-dominant, which is the signal a handoff gate reads.
             self.linear.bias[1 * n : 2 * n].fill_(-1.0)  # nu
             self.linear.bias[2 * n : 3 * n].fill_(0.9)  # alpha
             self.linear.bias[3 * n : 4 * n].fill_(0.0)  # beta
@@ -81,24 +64,19 @@ class EvidentialLayer(nn.Module):
         """
         @brief Forward pass to compute evidential parameters.
         @param x: Input features of shape (batch_size, input_dim).
-        @return Tuple of (gamma, nu, alpha, beta) evidential parameters.
-                - gamma: Mean of the Gaussian (batch_size, output_dim)
-                - nu: Precision parameter (batch_size, output_dim)
-                - alpha: Shape parameter (batch_size, output_dim)
-                - beta: Rate parameter (batch_size, output_dim)
+        @return Tuple of (gamma, nu, alpha, beta), each (batch_size, output_dim).
         """
         out = self.linear(x)
         n = self.output_dim
 
-        # Split along the flat output dimension to match bias layout [gamma | nu | alpha | beta].
+        # Split matches the bias layout [gamma | nu | alpha | beta].
         gamma = out[:, :n]
         pos = F.softplus(out[:, n:]).clamp_(max=100.0)  # one kernel for nu/alpha/beta
         nu = pos[:, :n] + 1e-6
-        # Alpha is offset by 1.5 (not the usual 1.0): aleatoric =
-        # beta / (alpha - 1) diverges as alpha -> 1 (the High Uncertainty
-        # Area), which for an evidential actor is a
-        # policy collapse. The 1.5 offset keeps alpha - 1 >= 0.5 by
-        # construction, making the HUA structurally unreachable.
+        # Offset 1.5, not the usual 1.0: aleatoric = beta/(alpha - 1) diverges as
+        # alpha -> 1, and here that variance IS the action sampling std, so the
+        # divergence is policy collapse. The offset keeps alpha - 1 >= 0.5 by
+        # construction, making that regime structurally unreachable.
         alpha = pos[:, n : 2 * n] + 1.5
         beta = pos[:, 2 * n :] + 1e-6
 
@@ -112,10 +90,6 @@ class EvidentialPolicyNetwork(nn.Module):
 
     @see EvidentialActorCriticPolicy in sb3_integration.py for the RL path.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -149,7 +123,6 @@ class EvidentialPolicyNetwork(nn.Module):
         }
         act_cls = activation_map.get(activation.lower(), nn.ReLU)
 
-        # Build feature extraction layers
         layers: List[nn.Module] = []
         prev_dim = state_dim
         for hidden_dim in hidden_dims:
@@ -164,7 +137,6 @@ class EvidentialPolicyNetwork(nn.Module):
 
         self.feature_extractor = nn.Sequential(*layers)
 
-        # Evidential output layer
         self.evidential_layer = EvidentialLayer(prev_dim, action_dim)
 
         logger.debug(
@@ -193,8 +165,7 @@ class EvidentialPolicyNetwork(nn.Module):
         @brief Get action from the policy with uncertainty estimates.
         @param state: State tensor of shape (batch_size, state_dim).
         @param deterministic: If True, return mean action. Otherwise, sample.
-        @return Tuple of (action, uncertainty_dict) where uncertainty_dict contains
-                epistemic and aleatoric uncertainty estimates.
+        @return Tuple of (action, uncertainty_dict).
         """
         gamma, nu, alpha, beta = self.forward(state)
 
@@ -203,12 +174,11 @@ class EvidentialPolicyNetwork(nn.Module):
         epistemic_uncertainty = beta / (nu * alpha_m1)
         total_uncertainty = epistemic_uncertainty + aleatoric_uncertainty
 
-        # For deterministic action, use mean
         if deterministic:
             action = gamma
         else:
-            # Epistemic uncertainty (Var[mu]) is not added to action noise -
-            # it quantifies model uncertainty over gamma, not per-sample noise.
+            # Epistemic is deliberately not added to the action noise: it is
+            # model uncertainty over gamma, not per-sample noise.
             std = torch.sqrt(torch.clamp(aleatoric_uncertainty, min=1e-6))
             dist = Normal(gamma, std)
             action = dist.sample()
@@ -243,9 +213,7 @@ class EvidentialPolicyNetwork(nn.Module):
         @param target: Target values.
         @param lambda_reg: Regularisation coefficient.
         @return Dictionary containing loss components.
-
-        @note This is a standalone supervised regression loss used in unit tests
-              and standalone experiments.
+        @note Standalone supervised loss for unit tests, not the RL path.
         """
         diff = target - gamma
         omega = 2 * beta * (1 + nu)
@@ -273,15 +241,17 @@ class EvidentialPolicyNetwork(nn.Module):
 class UncertaintyConditionedActor(nn.Module):
     """
     @class UncertaintyConditionedActor
-    @brief Actor network that conditions on state uncertainty.
+    @brief Actor with separate state and uncertainty pathways, then fusion.
 
-    This network explicitly uses uncertainty information in the state to make
-    more cautious decisions under high uncertainty.
+    The EKF covariance gets its own encoder so the actor can learn a caution
+    response to localisation uncertainty rather than treating it as one more
+    undistinguished input feature.
+
+    @note Unused. `use_uncertainty_conditioning` is false, because the 2x2
+          ablation needs the covariance to enter identically for the standard
+          and evidential heads; a dedicated pathway on one side would confound
+          the head as the only difference between arms.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,
@@ -302,7 +272,6 @@ class UncertaintyConditionedActor(nn.Module):
         if hidden_dims is None:
             hidden_dims = [256, 256]
 
-        # Separate processing for state and uncertainty
         self.state_encoder = nn.Sequential(
             nn.Linear(state_dim, hidden_dims[0] // 2),
             nn.ReLU(),
@@ -315,7 +284,9 @@ class UncertaintyConditionedActor(nn.Module):
             nn.LayerNorm(hidden_dims[0] // 2),
         )
 
-        # Combined processing
+        # Each encoder is half-width so the concatenation is exactly
+        # hidden_dims[0] and the trunk continues at the configured net_arch
+        # widths.
         combined_layers = []
         prev_dim = hidden_dims[0]
         for hidden_dim in hidden_dims[1:]:
@@ -330,7 +301,6 @@ class UncertaintyConditionedActor(nn.Module):
 
         self.combined_layers = nn.Sequential(*combined_layers)
 
-        # Evidential output
         self.evidential_layer = EvidentialLayer(prev_dim, action_dim)
 
         logger.debug(
@@ -354,7 +324,6 @@ class UncertaintyConditionedActor(nn.Module):
         state_features = self.state_encoder(state)
         uncertainty_features = self.uncertainty_encoder(uncertainty)
 
-        # Concatenate and process
         combined = torch.cat([state_features, uncertainty_features], dim=-1)
         features = self.combined_layers(combined)
 

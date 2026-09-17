@@ -4,18 +4,17 @@ Main Python package. Trains, evaluates, and deploys an uncertainty-conditioned R
 
 ## At a glance
 
-- Continuous observation comprising EKF speed and yaw rate, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance features. Observation flags toggle the covariance and obstacle blocks; the active dimension is computed by `compute_obs_dim()` from the structural constants in [`utils/constants.py`](utils/constants.py).
-- Continuous action space `[steering, throttle, brake]`. Steering is bipolar, throttle and brake are independent non-negative axes. No reverse gear; the agent performs forward perpendicular bay parking only.
-- PPO with a Normal-Inverse-Gamma evidential actor head; standard MLP critic.
-- Optional dual-encoder path that processes state and covariance features separately before fusion.
-- Evaluation sweep across GNSS degradation conditions (RTK fixed through to RTK loss); conditions are listed in [`configs/eval_config.yaml`](../configs/eval_config.yaml).
-- Sim-to-real capable: all observations come from the EKF and LiDAR, not CARLA ground truth.
+- Continuous observation comprising EKF speed and yaw rate, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance features. Observation flags toggle the covariance and obstacle blocks, and the active dimension is computed at runtime by `compute_obs_dim()` in [`envs/_parking_core.py`](envs/_parking_core.py) from the structural constants in [`utils/constants.py`](utils/constants.py).
+- Continuous action space `[steering, throttle, brake]` with no reverse gear, covering forward perpendicular bay parking only. See [envs/README.md](envs/README.md#action-space).
+- PPO with a Normal-Inverse-Gamma evidential actor head and a standard MLP critic.
+- A seven-condition evaluation sweep, varying the GNSS fix state, LiDAR noise, bay occupancy and floor plan one factor at a time. The conditions are listed in [`configs/eval_config.yaml`](../configs/eval_config.yaml).
+- Sim-to-real capable, since all observations come from the EKF and LiDAR rather than CARLA ground truth.
 
 ## Package layout
 
 | Subpackage | Responsibility |
 |-----------|---------------|
-| `networks/` | Evidential deep learning policy: NIG distributions, EvidentialPPO, dual-encoder actor |
+| `networks/` | Evidential deep learning policy: NIG distributions, EvidentialPPO, NIG actor head |
 | `envs/` | CARLA Gymnasium parking environment with real EKF covariance in observations |
 | `training/` | PPO training loop and Optuna hyperparameter tuning |
 | `evaluation/` | Condition sweep across GNSS degradation scenarios |
@@ -56,7 +55,9 @@ from uncertainty_rl.networks import (
 from uncertainty_rl.envs import CARLAParkingEnv, make_env, SafetyWrapper
 
 # Training
-from uncertainty_rl.training import train, load_config, TrainResult
+from uncertainty_rl.training import (
+    train, load_config, load_env_config, merge_configs, TrainResult,
+)
 
 # Evaluation
 from uncertainty_rl.evaluation import evaluate_across_conditions
@@ -72,7 +73,7 @@ from uncertainty_rl.utils import (
 ```
 
 Concrete values for the dimension constants live in
-[`utils/constants.py`](utils/constants.py); they are the single source of
+[`utils/constants.py`](utils/constants.py), the single source of
 truth for the system's structural shape.
 
 ## Configuration keys consumed
@@ -90,10 +91,11 @@ values rather than relying on this list.
 
 ## See also
 
-- [networks/README.md](networks/README.md) - NIG actor, dual-encoder, EvidentialPPO
+- [networks/README.md](networks/README.md) - NIG actor, EvidentialPPO
 - [envs/README.md](envs/README.md) - Gymnasium env, observation space, reward function
 - [training/README.md](training/README.md) - training loop, Optuna tuning
 - [evaluation/README.md](evaluation/README.md) - condition degradation sweep
 - [ros2/README.md](ros2/README.md) - EKF covariance extraction, GNSS noise relay
 - [utils/README.md](utils/README.md) - constants, covariance tools, geometry helpers
+- [envs/real/README.md](envs/real/README.md) - real-vehicle deployment and inference loop
 - [Root README](../README.md) - system overview, Docker quick start

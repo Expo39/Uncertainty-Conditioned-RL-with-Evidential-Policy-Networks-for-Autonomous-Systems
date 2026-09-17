@@ -35,20 +35,18 @@ def generate() -> Dict[str, Any]:
     )
     # Bays
     centre_perp = _centre_perp_row(lot)
-    # Runs from the right end of the original centred cluster leftward to the
-    # corner clearance, covering the full left portion of the top wall.
-    # start_along is measured from corners[WALL_TOP] (the right corner, x=DEPTH);
-    # 19.55 keeps the rightmost bay near the centred row's right edge while the
-    # leftmost bay clears the corner by the full wall_gap.
+    # Covers the left portion of the top wall, measured from corners[WALL_TOP]
+    # (the right corner, x=DEPTH).
     top_perp = lot.row_along_perimeter(
         "perpendicular",
         n=13,
         wall=WALL_TOP,
+        # Keeps the rightmost bay near the centred row's right edge while the
+        # leftmost bay clears the corner by the full wall_gap.
         start_along=19.55,
     )
-    # Start 2 bay-widths from the left corner so the gap near spawn 1 is empty.
-    # Spawn 1 is hardcoded below to its original position (midpoint of
-    # left_perp.bays[-1] and the now-absent first bay) so it does not shift.
+    # Spawn 1 (hardcoded below) sits at this row's original left edge, so the
+    # start offset must not shift it.
     bottom_perp = lot.row_along_perimeter(
         "perpendicular",
         n=8,
@@ -60,37 +58,31 @@ def generate() -> Dict[str, Any]:
         n=5,
         wall=WALL_BOTTOM,
         pack_from="end",
-        # Default end clearance (bay_w/2 + wall_gap = 2.05) plus a 7 m inset, so
-        # the cluster sits 7 m left of the bottom-right corner.
+        # 7 m inset beyond the default end clearance, so the cluster sits
+        # 7 m left of the bottom-right corner.
         start_along=10.05,
     )
     right_perp = lot.row_along_perimeter(
         "perpendicular",
         n=9,
         wall=WALL_RIGHT,
-        # Clear the bottom-wall row's footprint at the corner; runs up to the
-        # top-right corner (now free of the relocated motorcycle bays).
+        # Clears the bottom-wall row's footprint at the corner.
         start_along=14.0,
     )
     _motorcycle_corner_bays(lot)
 
-    # Spawns
-    # Spawn 2: midpoint of the last bottom-left bay and the last bottom-right bay.
-    # Spawn 3: midpoint of the top-wall row's right end and the right-wall row's
-    # top end, i.e. the open top-right corner (now free of the motorcycle bays).
     # Spawn 1: fixed point in the open left aisle, facing into the lot.
     s1_x, s1_y = -2.3, 12.625
+    # Spawn 2: midpoint of the last bottom-left bay and the last bottom-right bay.
     s2_x, s2_y = _midpoint(bottom_perp.bays[-1], bottom_right_perp.bays[-1])
+    # Spawn 3: the open top-right corner (top-wall row's right end to the
+    # right-wall row's top end), now free of the motorcycle bays.
     s3_x, s3_y = _midpoint(top_perp.bays[0], right_perp.bays[-1])
     lot.spawn(x=s1_x, y=s1_y, yaw_deg=0.0, primary=True)
     lot.spawn(x=s2_x, y=s2_y, yaw_deg=90.0)
     lot.spawn(x=s3_x, y=s3_y, yaw_deg=270.0)
 
-    # Patrol path (4-waypoint CCW loop)
-    # Loop the open aisles: lower aisle (between bottom rows and the perp
-    # centre row) -> right aisle (in front of the right-wall row) -> upper
-    # aisle (between the perp centre row and the top-wall row) -> left aisle
-    # (in front of the left-wall row).
+    # Patrol path loops the open aisles: lower -> right -> upper -> left.
     patrol = PatrolPath()
     y_lower = patrol.aisle_y(below=[bottom_perp, bottom_right_perp], above=centre_perp)
     y_upper = patrol.aisle_y(below=centre_perp, above=top_perp)

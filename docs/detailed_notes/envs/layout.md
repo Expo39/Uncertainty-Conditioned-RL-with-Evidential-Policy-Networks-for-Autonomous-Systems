@@ -1,91 +1,67 @@
 # Layout
 
-Geometry derivations and design rationale for the three parking-lot layouts used in simulation:
-`rectangle`, `trapezoid`, and `irregular_a`.
+Extracted from `scripts/layouts/` and `uncertainty_rl/envs/sim/helpers/`.
+
+Section 3.2 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
+the three lots (`rectangle`, `trapezoid`, `irregular_a`), the target-bay selection and
+the per-episode occupancy draw. `scripts/layouts/README.md` describes each floor plan and
+`BUILDER.md` is the full `LotBuilder` DSL reference.
+
+This note records how the patrol corridors and cone rings are derived from the bay
+geometry, which neither covers.
 
 ## Source files
 
 - `scripts/layouts/floor_plans/rectangle.py`, `trapezoid.py`, `irregular_a.py`;
   `scripts/layouts/common.py`, `scripts/layouts/builder.py`
-- `uncertainty_rl/envs/sim/helpers/_npc_controller.py` (patrol path geometry)
+- `uncertainty_rl/envs/sim/helpers/_npc_controller.py` (patrol lifecycle)
 - `uncertainty_rl/envs/sim/helpers/_lot_spawner.py` (bay sampling, cone placement)
-
-## See also
-
-- `docs/detailed_notes/envs/observation_space.md` - LiDAR sector derivation that depends
-  on lot geometry.
+- `uncertainty_rl/utils/geometry.py` (`_interpolate_cone_positions`)
 
 ---
 
-## Patrol path derivation
+## Patrol path construction
 
-Each layout computes patrol waypoint positions as midpoints between facing bay surfaces,
-ensuring the NPC patrol vehicle always drives along navigable corridors.
+Patrol corridors are not hand-computed. Each floor plan builds them through `PatrolPath`,
+whose `aisle_y(below, above)` and `aisle_x(left, right)` helpers take the midpoint between
+two facing bay-group edges, so a waypoint sits in the navigable gap by construction
+rather than by a coordinate maintained alongside the bays. `BUILDER.md` documents both
+helpers and the `Edge` type they accept, which may be a `BayGroup`, a list of groups
+whose bounding boxes are unioned, or a raw float standing for a notional boundary.
 
-### Rectangle
+All three layouts use the same four-waypoint loop over two aisle rows, differing only in
+which groups bound each aisle and in the small manual offsets applied to a waypoint:
 
-Corridor positions are derived from the centre and wall bay cluster geometry:
+| Layout | Aisle bounds | Offsets |
+|--------|--------------|---------|
+| `rectangle` | Lower and upper aisles bounded by the bottom, centre and top perpendicular rows; the left aisle anchors to a float just inside the wall, as that wall carries no bay row | None |
+| `trapezoid` | Aisles bounded by the bottom, centre-low and top perpendicular rows; x from the left boundary and the two centre clusters | Waypoints pushed out by 1-5 m so the loop clears the tapering walls |
+| `irregular_a` | Aisles bounded by the bottom and diagonal perpendicular rows against the central obstacle at 0.0; x from the obstacle and the right row | Lower waypoints raised 4 m |
 
-- `patrol_x_left`: midpoint between the left lot wall (x=-5) and the left edge of the centre cluster (min of perp and angled cluster x extents).
-- `patrol_y_lower`: midpoint between the bottom-wall bay nose faces (perp and angled groups, whichever projects furthest) and the centre row A (perp) front face.
-- `patrol_x_par_aisle`: midpoint between the inner faces of the right parallel column (Group B) and the inner parallel column (Group C).
-- `patrol_y_upper`: midpoint between the top parallel bay nose faces and the top face of the centre angled row B.
-- `patrol_y_top_aisle`: midpoint between the top parallel bay front faces and the top of the right parallel columns.
-- `patrol_diag_start_x`: midpoint between the right end of the top parallel group and the outer face of the inner parallel column (Group C).
-- `patrol_diag_end_x`: after a 45-degree diagonal from `patrol_diag_start_x`, dropping from `patrol_y_top_aisle` to `patrol_y_upper` (equal delta x and y).
-
-### Trapezoid
-
-Corridor y values:
-
-- `_patrol_lower_cy`: midpoint between row A nose face and the maximum-y corner of the angled bay footprints (computed by rotating the angled bay half-extents through `ang_yaw`).
-- `_patrol_upper_cy`: midpoint between row B nose face and the minimum-y corner of the top-wall parallel bay footprints (computed by rotating the parallel bay half-extents through `top_par_yaw`).
-
-x extents use `x_enter` (midpoint between left boundary and left perp cluster edge) and `x_exit` (midpoint between right perp cluster edge and right-wall parallel inner face).
-
-### Irregular-a
-
-Five-waypoint CCW orbit around the central obstacle:
-
-- `_lower_y`: midpoint between obstacle row C nose faces (bottom side, y=11.5) and the top faces of the bottom parallel bays.
-- `_upper_y`: midpoint between obstacle row D nose faces (top side, y=26.5) and the approximate lowest y of the diagonal top-wall bay footprints (approximated as 37 - ang_offset - depth/2).
-- `_left_x`: midpoint between the right edges of the left-wall angled bays and the left nose faces of obstacle row E.
-- `_right_x`: midpoint between the right nose faces of obstacle row F and the left edge of the notch perpendicular bays.
-- WP3 (26, 34): manual chamfer point to route the patrol around the top-left perpendicular cluster without clipping it.
+The offsets are the only hand-set numbers in the paths. Everything else follows from the
+bay groups, so moving a row moves its aisle with it.
 
 ---
 
 ## Bay sampling
 
-Source: `_LotSpawner._spawn_static_vehicles()` in `envs/sim/helpers/_lot_spawner.py`.
+Source: `LotSpawner._spawn_static_vehicles()` in `envs/sim/helpers/_lot_spawner.py`.
 
-Each episode a fresh occupancy rate is drawn:
+Section 3.2 of the dissertation covers the per-episode occupancy rate, the per-bay
+draw and the 180 deg flip. Two exclusions it does not mention are applied first, in
+order:
 
-    bay_occupancy_rate ~ Uniform(bay_occupancy_min, bay_occupancy_max)
+1. `bay_id` matches the target bay - always excluded, so the agent can enter it.
+2. `always_empty: true` in the layout YAML - a layout-level reservation, never occupied
+   regardless of the occupancy rate.
 
-For every bay in the layout YAML the spawner applies three exclusion checks in order:
-
-1. `bay_id` matches the target bay - always excluded (agent must be able to enter it).
-2. `always_empty: true` flag in the YAML - layout-level reservation. Never occupied
-   regardless of occupancy rate.
-3. `random.random() > bay_occupancy_rate` - probabilistic occupancy. At the minimum
-   rate the lot is mostly empty; at the maximum it is nearly full.
-
-Bays that pass all three checks receive a randomly selected CARLA car blueprint with a
-randomly chosen colour. A 50 % coin flip then rotates the parked car 180 deg, simulating
-both nose-in and nose-out orientations for the same bay.
-
-`motorcycle` bay type bypasses all three checks: its occupant blueprint is fixed by the
-`occupant` key in the YAML and is always spawned.
-
-The per-episode `bay_occupancy_rate` is the primary source of difficulty variation for the
-LiDAR obstacle clearance features. High occupancy forces the ego to navigate narrow gaps;
-low occupancy produces wide clearances with little obstacle signal.
+A `motorcycle` bay bypasses both checks and the occupancy draw: its occupant blueprint
+is fixed by the `occupant` key in the YAML and is always spawned.
 
 ## Cone interpolation
 
 Source: `_interpolate_cone_positions()` in `uncertainty_rl/utils/geometry.py`,
-called by `_LotSpawner._spawn_perimeter_cones()` and `_spawn_obstacle_cones()`.
+called by `LotSpawner._spawn_perimeter_cones()` and `_spawn_obstacle_cones()`.
 
 ### Perimeter cones
 

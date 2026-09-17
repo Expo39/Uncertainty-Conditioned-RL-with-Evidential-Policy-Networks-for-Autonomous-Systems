@@ -32,16 +32,8 @@ from scripts.colours import (
 from uncertainty_rl.envs.sim.carla_parking import CARLAParkingEnv
 from uncertainty_rl.utils.geometry import inflate_polygon, zone_bbox
 
-# ---------------------------------------------------------------------------
-# Dot-drawing constants
-# ---------------------------------------------------------------------------
-
 _DOT_SPACING: float = 0.4  # metres between adjacent dot centres (layout lines)
 _ARC_SPACING: float = 0.3  # metres between dot centres on FOV arcs
-
-# ---------------------------------------------------------------------------
-# Derived colour constants
-# ---------------------------------------------------------------------------
 
 _COL_IMU = hex_to_carla_color(HEX_SENSOR_IMU)
 _COL_GNSS = hex_to_carla_color(HEX_SENSOR_GNSS)
@@ -69,11 +61,6 @@ _BAY_TYPE_COLOURS: Dict[str, Any] = {
 _GNSS_LABELS: Dict[str, str] = {
     "gnss": "GNSS",
 }
-
-
-# ---------------------------------------------------------------------------
-# Layout overlay drawing functions
-# ---------------------------------------------------------------------------
 
 
 def _draw_dotted_segment(
@@ -123,6 +110,7 @@ def _draw_layout_overlays(
     life_time: float,
     show_patrol: bool = True,
     show_pedestrians: bool = True,
+    show_spawns: bool = False,
     oob_inflation_margin: Optional[float] = None,
 ) -> None:
     """
@@ -138,6 +126,9 @@ def _draw_layout_overlays(
     @param life_time: Primitive lifetime in seconds.
     @param show_patrol: Draw the patrol waypoints and path.
     @param show_pedestrians: Draw the pedestrian zones.
+    @param show_spawns: Draw the spawn point and any extra spawn points. Off by
+           default: only one spawn is in use (use_extra_spawns is false in every
+           stage), so the markers label start positions that are never taken.
     @param oob_inflation_margin: When not None, draw the lot polygon inflated by
            this many metres as the soft out-of-bounds boundary.
     """
@@ -216,39 +207,41 @@ def _draw_layout_overlays(
                     debug, ax, ay, bxc, byc, z + 0.1, _COL_OOB, 0.06, life_time
                 )
 
-    # Spawn point
-    spawn = layout.get("spawn_transform", {})
-    sx = float(spawn.get("x", 0.0))
-    sy = float(spawn.get("y", 0.0))
-    draw_point(
-        Location(x=sx, y=sy, z=z + 0.3),
-        size=0.2,
-        color=_COL_SPAWN,
-        life_time=life_time,
-    )
-    draw_string(
-        Location(x=sx, y=sy, z=z + 1.0),
-        "SPAWN",
-        color=_COL_SPAWN,
-        life_time=life_time,
-    )
-
-    # Extra spawn points
-    for i, extra in enumerate(layout.get("extra_spawn_transforms", [])):
-        ex = float(extra.get("x", 0.0))
-        ey = float(extra.get("y", 0.0))
+    # Spawn points. The extra spawns exist in the layout YAML but are only used
+    # when use_extra_spawns is on (it is off in every stage), so drawing them
+    # advertises start positions the episode will never use.
+    if show_spawns:
+        spawn = layout.get("spawn_transform", {})
+        sx = float(spawn.get("x", 0.0))
+        sy = float(spawn.get("y", 0.0))
         draw_point(
-            Location(x=ex, y=ey, z=z + 0.3),
-            size=0.15,
-            color=_COL_EXTRA_SPAWN,
+            Location(x=sx, y=sy, z=z + 0.3),
+            size=0.2,
+            color=_COL_SPAWN,
             life_time=life_time,
         )
         draw_string(
-            Location(x=ex, y=ey, z=z + 1.0),
-            f"SPAWN{i + 2}",
-            color=_COL_EXTRA_SPAWN,
+            Location(x=sx, y=sy, z=z + 1.0),
+            "SPAWN",
+            color=_COL_SPAWN,
             life_time=life_time,
         )
+
+        for i, extra in enumerate(layout.get("extra_spawn_transforms", [])):
+            ex = float(extra.get("x", 0.0))
+            ey = float(extra.get("y", 0.0))
+            draw_point(
+                Location(x=ex, y=ey, z=z + 0.3),
+                size=0.15,
+                color=_COL_EXTRA_SPAWN,
+                life_time=life_time,
+            )
+            draw_string(
+                Location(x=ex, y=ey, z=z + 1.0),
+                f"SPAWN{i + 2}",
+                color=_COL_EXTRA_SPAWN,
+                life_time=life_time,
+            )
 
     # Pedestrian zones
     if show_pedestrians:
@@ -294,11 +287,6 @@ def _draw_layout_overlays(
                 _draw_dotted_segment(
                     debug, wx, wy, nx, ny, z + 0.2, _COL_PATROL, 0.04, life_time
                 )
-
-
-# ---------------------------------------------------------------------------
-# Sensor overlay drawing functions
-# ---------------------------------------------------------------------------
 
 
 def _draw_sensor_dot(

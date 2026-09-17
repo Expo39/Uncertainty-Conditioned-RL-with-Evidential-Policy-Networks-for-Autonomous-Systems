@@ -13,7 +13,9 @@ DEMO_BASELINE_YAML="${DEMO_BASELINE_YAML:-}"  # empty -> demo_drive.py default
 DEMO_STAGE="${DEMO_STAGE:-}"                  # empty -> demo_drive.py default
 DEMO_GNSS_TIER="${DEMO_GNSS_TIER:-}"         # empty -> normal noise process
 DEMO_REALTIME="${DEMO_REALTIME:-true}"        # false -> step flat out
+DEMO_TRACE="${DEMO_TRACE:-true}"              # false -> no per-step CSV traces
 DEMO_VIS_FILE="${DEMO_VIS_FILE:-outputs/vis_history.jsonl}"
+DEMO_VIS_FLAGS="${DEMO_VIS_FLAGS:-}"          # viewer flags (scale, recording)
 DISPLAY="${DISPLAY:?no display attached}"
 
 # UID/GID keep the demo container from falling back to root and leaving
@@ -39,6 +41,12 @@ if [ -n "${DEMO_GNSS_TIER}" ]; then
 fi
 if [ "${DEMO_REALTIME}" = "false" ]; then
     demo_args+=(--no-realtime)
+fi
+# Look-but-don't-touch: skip the per-episode trace CSVs. The bay-success dump
+# still runs (it only writes when an episode completes), and every demo run
+# lands in its own timestamped folder either way.
+if [ "${DEMO_TRACE}" = "false" ]; then
+    demo_args+=(--no-trace)
 fi
 
 demo_cid=""
@@ -71,6 +79,9 @@ echo "Demo container: ${demo_cid}"
 docker logs -f "${demo_cid}" 2>&1 | sed 's/^/[demo] /' &
 logs_pid=$!
 
+# DEMO_VIS_FLAGS is a pre-split flag string from the make recipe (UI scale,
+# recording), so it is intentionally word-split here.
+# shellcheck disable=SC2086
 PYTHONPATH="${REPO_ROOT}" DISPLAY="${DISPLAY}" \
     "${REPO_ROOT}/.venv/bin/python3" scripts/visualise/visualiser.py \
-    --history-file "${DEMO_VIS_FILE}"
+    --history-file "${DEMO_VIS_FILE}" ${DEMO_VIS_FLAGS}

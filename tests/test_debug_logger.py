@@ -14,10 +14,6 @@ import pytest
 
 from uncertainty_rl.utils.logging import DebugLogger
 
-# ---------------------------------------------------------------------------
-# TestDebugLoggerDisabled
-# ---------------------------------------------------------------------------
-
 
 class TestDebugLoggerDisabled:
     """
@@ -80,11 +76,6 @@ class TestDebugLoggerDisabled:
         """
         logger = DebugLogger(debug=False)
         logger.log_actors(n_static=2, n_patrol=1, n_peds=3, n_cones=12)
-
-
-# ---------------------------------------------------------------------------
-# TestDebugLoggerEnabled
-# ---------------------------------------------------------------------------
 
 
 class TestDebugLoggerEnabled:

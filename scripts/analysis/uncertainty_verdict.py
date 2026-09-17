@@ -2,15 +2,9 @@
 @file uncertainty_verdict.py
 @brief One-shot verdict on whether the epistemic/aleatoric ratio varies with state.
 
-Reads an eval run's per-step uncertainty trace (per_step_records.csv, written when
-EVAL_PER_STEP_CAP > 0 for an evidential head) and reports, per condition, the epi/ale
-ratio and implied nu. A FLAT ratio across clean vs novel/degraded conditions confirms the
-single-head NIG conflation (epistemic = aleatoric/nu with nu state-independent) - the two
-channels are one signal, as expected for this architecture. See the detailed note below.
-For the safety controller, threshold the TOTAL uncertainty, not the (non-separating) split.
-
-Read-only diagnostic. Run via `make uncertainty-verdict EVAL_DIR=<run output dir>`.
-@see uncertainty_rl/evaluation/evaluate.py (per_step_records.csv), scripts/evaluation/CLAUDE.md.
+A FLAT epi/ale ratio across clean vs degraded conditions confirms the
+single-head NIG conflation (epistemic = aleatoric/nu), so the safety
+controller should threshold TOTAL uncertainty, not this split.
 """
 
 import argparse
@@ -23,7 +17,7 @@ from typing import Dict, List, Tuple
 # Conditions grouped by whether they leave the training data manifold. CLEAN are
 # in-distribution (clean GNSS / deployment anchor); HARD are the novelty / degradation
 # conditions where epistemic SHOULD be relatively higher if the signal is state-dependent.
-# Names match configs/eval_config.yaml; unlisted conditions are reported but not grouped.
+# Names match configs/eval_config.yaml; unlisted conditions are kept but not grouped.
 _CLEAN = {"gnss_fixed", "anchor_empty", "anchor_deployment"}
 _HARD = {
     "gnss_degraded",
@@ -95,7 +89,7 @@ def main() -> int:
         "eval_dir",
         type=str,
         help="Eval run output dir containing per_step_records.csv "
-        "(e.g. outputs/evaluation_results/<baseline>/<leaf>/without_wrapper).",
+        "(e.g. outputs/raw/evaluation_results/<baseline>/<leaf>/without_wrapper).",
     )
     args = parser.parse_args()
 
@@ -154,12 +148,7 @@ def main() -> int:
     else:
         print("  -> FLAT: epistemic does NOT separate (one signal). Expected on the")
         print("     single-head NIG actor: epistemic = aleatoric/nu and RL leaves nu")
-        print(
-            "     unsupervised, so the two channels stay a fixed ratio. Not tunable -"
-        )
-        print(
-            "     see documentation/detailed_notes/epistemic_aleatoric_disentanglement.md."
-        )
+        print("     unsupervised, so the two channels stay a fixed ratio. Not tunable.")
     return 0
 
 

@@ -1,76 +1,49 @@
 # Sim-to-Real Transfer - Known Gaps and Mitigations
 
-Extracted from the real-world deployment pipeline (`envs/real/inference_loop.py`). This note records the deliberate sim-to-real gaps and why each is acceptable. The pre-deployment checklist and calibration procedure live in [`real_world_deployment.md`](real_world_deployment.md).
+Extracted from the real-world deployment pipeline (`envs/real/inference_loop.py`).
 
----
+The deployment path, code-path parity, frame and actuation calibration and the
+pre-deployment sequence are given in Appendix B of the dissertation
+(`docs/AntonioGaldes_Dissertation.pdf`); the scope limitation that no result was
+obtained on hardware is Section 4.8.3; the five secondary sensor effects that ARE
+modelled, including the per-episode east/north anisotropy and why it must reach the
+covariance features rather than the position alone, are Section 3.4.
 
-## Known Limitations
+This note records only what those do not: two modelling gaps left in the sensor model,
+and why each is tolerable at this task's geometry.
 
-These are acknowledged gaps that do not invalidate the thesis contribution
-but should be discussed in the limitations section.
+## No within-episode IMU gyro bias drift
 
-### Isotropic GNSS noise model
+Appendix A models in-run bias as a fixed per-episode offset, redrawn at each boundary.
+What is not modelled is drift *within* an episode: a real bias walks over time, whereas
+the simulated one is constant once drawn.
 
-**What the sim does:** Stamps a scalar diagonal covariance on NavSatFix.
-All three axes (lat, lon, alt) have equal uncertainty, equal to the tier
-metric stddev.
+A real MEMS gyroscope has a bias instability of roughly 3-10 deg/hr for consumer-grade
+parts. Over a 45 s parking manoeuvre that accumulates
 
-**Real behaviour:** RTK accuracy is anisotropic. It depends on satellite
-geometry (DOP), baseline length to the reference station, and multipath from
-nearby structures. The error ellipse is spatially correlated and changes as
-the vehicle moves.
+    3-10 deg/hr * (45/3600) hr = 0.04-0.12 deg
 
-**Why it does not invalidate the thesis:** The policy observes EKF covariance
-(not raw GNSS accuracy). The EKF covariance magnitude is driven by the
-NavSatFix covariance, so as long as the magnitude varies correctly across
-tiers, the policy receives the right signal. The observation carries only the
-diagonal standard deviations (std_x, std_y, std_yaw); off-diagonal correlation
-is not in the observation, so the anisotropy of the real error ellipse does
-not change the policy's input, which is near-isotropic for open-sky RTK.
+of heading error. At 1.5 m from the vehicle centre to a bay edge, 0.1 deg of heading
+error displaces the corner by roughly 2.6 mm, against a 2.5 m bay.
 
-**Where it might matter:** In heavily obstructed environments with strong
-multipath, the real error ellipse can be significantly elongated. This is
-unlikely in an open parking lot but should be mentioned as a limitation.
+Success is decided geometrically, by the ego bounding box fitting inside the bay
+polygon (`car_fully_inside_bay()`), so a millimetre-scale displacement cannot change
+the outcome. Modelling the walk would add state to the relay for an effect three orders
+of magnitude below the acceptance tolerance, so it is deliberately omitted. The
+argument holds only for short manoeuvres: over a multi-minute run the same drift would
+need modelling.
 
-### No IMU gyro bias drift
+## No surface variation
 
-**What the sim does:** CARLA IMU has no bias walk. The process noise fix
-(ros2_config.yaml) adds realistic per-step noise, but the noise is zero-mean
-with no cumulative drift.
+The world is a flat OpenDRIVE surface (Section 3.2), so the ground contributes no LiDAR
+returns and no attitude disturbance. Real lots have road markings, drain covers, speed
+bumps and a drainage gradient of roughly 1-2 %.
 
-**Real behaviour:** MEMS gyroscopes have a bias instability (typically
-3-10 deg/hr for consumer-grade IMUs). Over a 45 s parking manoeuvre this is
-3-10 deg/hr * (45/3600) hr = 0.04-0.12 deg of accumulated heading error.
-At 1.5 m from the vehicle centre to a bay edge, 0.1 deg heading error
-introduces ~2.6 mm lateral position error - negligible for a 2.5 m bay.
+Two consequences, both bounded by existing design choices. Surface features are
+typically under 0.05 m in height, below the bumper-height scan plane, so they fall
+outside the LiDAR's field of view rather than being filtered out of it. Gradient-induced
+pitch and roll are suppressed by `two_d_mode` in the EKF, which does not estimate those
+states at all.
 
-**Conclusion:** For short-duration parking manoeuvres, IMU bias drift is far
-below the geometric acceptance tolerance (the ego bounding box must fit inside
-the bay polygon, `car_fully_inside_bay()`) and can be safely ignored.
-
-### No surface variation (FlatPlane world)
-
-**What the sim does:** FlatPlane is a perfectly flat ground plane with no
-surface features. LiDAR returns are from static props (cones, parked cars)
-and moving NPCs only.
-
-**Real behaviour:** Real parking lots have road markings, drain covers, speed
-bumps, and slight inclines (drainage gradient ~1-2%). These affect:
-- LiDAR: minor spurious returns from drain covers and surface markings
-  (typically <0.05 m height, below bumper-height scan plane)
-- EKF: slight pitch/roll from surface gradient (suppressed by two_d_mode=true)
-
-**Conclusion:** The bumper-height LiDAR mount (z=0.5 m) is above typical
-surface features. two_d_mode=true in the EKF suppresses pitch/roll. Surface
-variation is not expected to materially affect policy behaviour. Mention as a
-limitation but do not spend time fixing it.
-
----
-
-## Deployment Sequence
-
-1. Verify EKF pipeline in isolation (manual drive, check covariance)
-2. Verify target bay pose pipeline (manual drive, check dx/dy/dyaw)
-3. Verify actuation calibration (manual drive with known inputs)
-4. First closed-loop test in a single bay, RTK fixed, low NPC count
-5. Progressive testing across tiers and conditions
+Neither is expected to affect policy behaviour materially, and both would be
+re-examined on a site with a pronounced gradient.

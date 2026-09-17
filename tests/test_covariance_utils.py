@@ -16,10 +16,6 @@ from uncertainty_rl.utils import (
 )
 from uncertainty_rl.utils.covariance_utils import make_diagonal_covariance
 
-# ---------------------------------------------------------------------------
-# extract_2d_covariance_features
-# ---------------------------------------------------------------------------
-
 
 class TestExtract2DCovarianceFeatures:
     """
@@ -113,11 +109,6 @@ class TestExtract2DCovarianceFeatures:
         assert np.issubdtype(features.dtype, np.floating)
 
 
-# ---------------------------------------------------------------------------
-# validate_covariance_matrix
-# ---------------------------------------------------------------------------
-
-
 class TestValidateCovarianceMatrix:
     """
     @class TestValidateCovarianceMatrix
@@ -186,11 +177,6 @@ class TestValidateCovarianceMatrix:
         assert validate_covariance_matrix(np.eye(6)) is True
 
 
-# ---------------------------------------------------------------------------
-# get_covariance_dimension
-# ---------------------------------------------------------------------------
-
-
 class TestGetCovarianceDimension:
     """
     @class TestGetCovarianceDimension
@@ -209,11 +195,6 @@ class TestGetCovarianceDimension:
         """
         features = extract_2d_covariance_features(np.eye(3))
         assert len(features) == get_covariance_dimension()
-
-
-# ---------------------------------------------------------------------------
-# make_diagonal_covariance
-# ---------------------------------------------------------------------------
 
 
 class TestMakeDiagonalCovariance:

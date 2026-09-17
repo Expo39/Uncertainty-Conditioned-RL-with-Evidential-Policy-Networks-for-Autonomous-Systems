@@ -11,7 +11,6 @@ __all__ = [
     "EvaluationMetrics",
     "evaluate_agent",
     "evaluate_across_conditions",
-    "plot_evaluation_results",
 ]
 
 
@@ -21,19 +20,15 @@ def __getattr__(name):
     @param name: Name of the attribute being accessed.
     @return The requested attribute from its defining module.
 
-    EvaluationMetrics and plot_evaluation_results have no torch /
-    stable-baselines3 dependency, so they load from their dedicated modules; the
-    two evaluation-loop entry points pull in those optional deps via evaluate.
-    Everything stays lazy so importing the package never forces them in CI.
+    EvaluationMetrics has no torch / stable-baselines3 dependency, so it loads
+    from its dedicated module; the two evaluation-loop entry points pull in
+    those optional deps via evaluate. Everything stays lazy so importing the
+    package never forces them in CI.
     """
     if name == "EvaluationMetrics":
         from uncertainty_rl.evaluation.metrics import EvaluationMetrics
 
         return EvaluationMetrics
-    if name == "plot_evaluation_results":
-        from uncertainty_rl.evaluation.plots import plot_evaluation_results
-
-        return plot_evaluation_results
     if name in ("evaluate_agent", "evaluate_across_conditions"):
         from uncertainty_rl.evaluation.evaluate import (  # noqa: E402
             evaluate_across_conditions,

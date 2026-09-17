@@ -1,18 +1,10 @@
 """
 @file gnss_noise_relay.py
 @brief ROS 2 node that injects per-episode GNSS noise, projects to local XY,
-       and publishes Odometry with Doppler-style velocity + COG heading for
-       the robot_localisation EKF.
+       and publishes Odometry with Doppler-style velocity + COG heading.
 
-Subscribes to CARLA NavSatFix, adds tier-appropriate Gaussian noise to
-position, converts to metric Odometry via flat-earth projection
-(/odometry/gps). Velocity is Doppler-style: clean-source differencing at
-20 Hz equals GT velocity; per-tier Gaussian noise (doppler_stddev_ms,
-0.05-12.5 m/s) scales by the same factor as the position tier ladder
-(0.02-5.0 m), so velocity degrades with the fix state. COG is derived from
-the same clean displacement vector with noise proportional to
-doppler_std/speed (so it degrades with the same factor) and published on
-/gnss/heading.
+Velocity/heading come from the CLEAN fix, then noised per tier, so the
+tiers cannot leave a clean dead-reckoning channel to exploit.
 """
 
 import json
@@ -29,59 +21,47 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Imu, NavSatFix, NavSatStatus
 
-# Ordered tier names - index position defines row/column in transition matrix.
+# Index position defines the row/column order in the transition matrix.
 _TIER_ORDER: List[str] = ["rtk_fixed", "rtk_float", "standalone", "degraded"]
-# reverse lookup: tier name -> index in _TIER_ORDER / transition matrix.
 _TIER_INDEX: Dict[str, int] = {name: i for i, name in enumerate(_TIER_ORDER)}
 
-# Noise parameters for each tier (fallback if config file is absent).
-# doppler_stddev_ms is the 1-sigma velocity noise (m/s); it also sets the COG
-# heading noise (course_std = doppler_stddev_ms / speed). It scales by the same
-# per-tier factor as position (1 / 18 / 90 / 250x of the rtk_fixed base), so
-# velocity and heading degrade with the fix state instead of leaving a clean
-# dead-reckoning channel. Mirror these values in gnss_noise_profiles.yaml.
+# Fallback if gnss_noise_profiles.yaml is absent; mirror any edit there.
+# doppler_stddev_ms is 1-sigma velocity noise (m/s) and also sets the COG
+# heading noise (course_std = doppler_stddev_ms / speed).
 _TIER_DEFAULTS: Dict[str, Dict[str, float]] = {
-    # RTK fixed:
-    # Conservative 0.020 m used to cover antenna phase-centre offset
-    # 0.020 / 111320 = 1.797e-7 deg.
     "rtk_fixed": {
         "lat_stddev_deg": 0.0000002,
         "lon_stddev_deg": 0.0000002,
         "alt_stddev_m": 0.05,
+        # Conservative relative to the cm-level RTK solution, to cover the
+        # antenna phase-centre offset.
         "metric_stddev_m": 0.020,
-        "doppler_stddev_ms": 0.05,  # m/s - 1x base (ZED-F9P data-sheet accuracy)
+        "doppler_stddev_ms": 0.05,  # m/s - ZED-F9P data-sheet accuracy
     },
-    # RTK float:
-    # 0.360 / 111320 = 3.233e-6 deg.
     "rtk_float": {
         "lat_stddev_deg": 0.0000032,
         "lon_stddev_deg": 0.0000032,
         "alt_stddev_m": 0.5,
         "metric_stddev_m": 0.360,
-        "doppler_stddev_ms": 0.90,  # m/s - 18x base (matches position factor)
+        "doppler_stddev_ms": 0.90,  # m/s - 18x base, as position is
     },
-    # Standalone PVT:
-    # 1.802 / 111320 = 1.619e-5 deg.
     "standalone": {
         "lat_stddev_deg": 0.0000162,
         "lon_stddev_deg": 0.0000162,
         "alt_stddev_m": 5.0,
         "metric_stddev_m": 1.802,
-        "doppler_stddev_ms": 4.5,  # m/s - 90x base (matches position factor)
+        "doppler_stddev_ms": 4.5,  # m/s - 90x base, as position is
     },
-    # Degraded:
-    # 5.0 / 111320 = 4.492e-5 deg.
     "degraded": {
         "lat_stddev_deg": 0.0000449,
         "lon_stddev_deg": 0.0000449,
         "alt_stddev_m": 10.0,
         "metric_stddev_m": 5.0,
-        "doppler_stddev_ms": 12.5,  # m/s - 250x base (matches position factor)
+        "doppler_stddev_ms": 12.5,  # m/s - 250x base, as position is
     },
 }
 
-# Fallback used only if configs cannot be loaded at startup. Mirror of the
-# transition_matrix in gnss_noise_profiles.yaml (standalone ~4 s, degraded ~7 s dwell).
+# Used only when the profiles YAML cannot be loaded at startup.
 _DEFAULT_TRANSITION_MATRIX: List[List[float]] = [
     # to:  fixed   float   standalone  degraded
     [0.9920, 0.0080, 0.0000, 0.0000],  # from: rtk_fixed
@@ -90,10 +70,9 @@ _DEFAULT_TRANSITION_MATRIX: List[List[float]] = [
     [0.0000, 0.0000, 0.0071, 0.9929],  # from: degraded
 ]
 
-# Map tier name to the corresponding NavSatStatus value that a real receiver
-# would publish in this fix state. RTK FIX/FLOAT solutions use ground-based
-# augmentation (RTCM corrections), so both report STATUS_GBAS_FIX. SPP and
-# degraded SPP report STATUS_FIX. This is real-API parity, not data realism.
+# The NavSatStatus a real receiver would report in each fix state: RTK
+# fix/float use RTCM ground augmentation, hence GBAS; SPP does not. This is
+# real-API parity for consumers that branch on fix quality, not data realism.
 _TIER_STATUS: Dict[str, int] = {
     "rtk_fixed": NavSatStatus.STATUS_GBAS_FIX,
     "rtk_float": NavSatStatus.STATUS_GBAS_FIX,
@@ -111,24 +90,17 @@ def mask_recovery_transitions(
     @brief Mask out recovery (upward) transitions for the monotone-degradation mode.
     @param row: The active tier's row of the per-step transition matrix.
     @param active_idx: Index of the current tier in _TIER_ORDER (0 = best fix).
-    @param degrade_rate_scale: Multiplier on the downward (worse-tier) transition
-            mass before renormalisation. 1.0 leaves the datasheet-anchored chain
-            of gnss_noise_profiles.yaml untouched and is the default everywhere.
-            Values above 1.0 shorten the expected walk to the worst tier, which
-            the handover-latency measurement needs: at the native rate the chain
-            takes ~27 s in expectation to reach 'degraded' while an episode runs
-            ~17 s, so most episodes end before the crossing and the latency
-            sample is small. Scaling only compresses the schedule; the ladder,
-            its ordering and the one-way ratchet are unchanged.
-    @return A renormalised copy of the row with all transitions to a BETTER tier
-            (lower index) zeroed, so the chain can only stay put or degrade. The
-            mass on the forbidden upward rungs folds onto the remaining same-or-
-            worse entries, lengthening the dwell before the next drop. Returns
-            None when no mass remains (the worst tier with no self-loop), signalling
-            the caller to hold the current tier.
+    @param degrade_rate_scale: Multiplier on the downward transition mass before
+            renormalisation. Above 1.0 it compresses the schedule so the walk to
+            the worst tier completes inside the episode horizon, which the
+            handover-latency measurement needs; the ladder, its ordering and the
+            ratchet are unchanged.
+    @return Renormalised copy of the row with transitions to a better tier zeroed,
+            their mass folded onto the same-or-worse entries. None when no mass
+            remains, signalling the caller to hold the current tier.
 
-    Pure function (no node state) so the one-way ratchet can be unit-tested without
-    a running ROS 2 node. @see GnssNoiseRelayNode._step_markov.
+    Kept free of node state so the one-way ratchet is unit-testable without a
+    running ROS 2 node. @see GnssNoiseRelayNode._step_markov.
     """
     masked = np.asarray(row, dtype=np.float64).copy()
     masked[:active_idx] = 0.0
@@ -161,9 +133,8 @@ class GnssNoiseRelayNode(Node):
         "/workspace/configs/deployment/sim/gnss_noise_profiles.yaml"
     )
 
-    # Variance ceiling for publishing COG: pi^2/3 is the variance of a uniform
-    # distribution on [-pi, pi]. A heading observation with variance >= this is
-    # no more informative than "any angle"; do not publish it.
+    # The variance of a uniform angle on [-pi, pi]: a COG observation at or
+    # above this says no more than "any angle", so it is not worth publishing.
     _MAX_PUBLISH_VARIANCE: float = (math.pi**2) / 3.0
 
     def __init__(self, node_name: str = "gnss_noise_relay") -> None:
@@ -188,17 +159,15 @@ class GnssNoiseRelayNode(Node):
         self.declare_parameter("heading_output_topic", "/gnss/heading")
         # Minimum per-step displacement (metres) to accept a COG update.
         self.declare_parameter("cog_min_displacement_m", 0.05)
-        # IMU topic used to detect ZUPT (standstill) and gate COG accordingly.
+        # Source of the ZUPT (standstill) signal that gates COG.
         self.declare_parameter("imu_topic", "/carla/ego_vehicle/imu/stamped")
         # Master switch: false suppresses all COG heading publication.
         self.declare_parameter("enable_cog_heading", True)
-        # Per-episode axis-aligned anisotropy on GNSS position noise. Models
-        # geometric dilution of precision: real receivers have unequal east/north
-        # variances depending on satellite geometry.
+        # Models geometric dilution of precision: real receivers have unequal
+        # east/north variances depending on satellite geometry.
         self.declare_parameter("enable_gnss_anisotropy", True)
         self.declare_parameter("aniso_ratio_max", 1.5)
-        # Per-callback probability of skipping a GNSS fix entirely. Models
-        # cycle slips and brief satellite occlusions.
+        # Models cycle slips and brief satellite occlusions.
         self.declare_parameter("gnss_dropout_probability", 0.02)
         self.declare_parameter(
             "noise_profiles_path",
@@ -206,10 +175,9 @@ class GnssNoiseRelayNode(Node):
                 "GNSS_NOISE_PROFILES_PATH", self._DEFAULT_NOISE_PROFILES_PATH
             ),
         )
-        # Seed for the noise RNG. This node runs in the ros2-bridge container,
-        # a separate process from training, so it cannot inherit the training
-        # seed; it must be seeded independently. Matches the training seed (42)
-        # by default so a fixed-seed training run sees reproducible GNSS noise.
+        # This node runs in the ros2-bridge container, a separate process from
+        # training, so the noise RNG cannot inherit the training seed and must
+        # be seeded independently to keep a fixed-seed run reproducible.
         self.declare_parameter("seed", 42)
 
         input_topic = str(
@@ -272,12 +240,11 @@ class GnssNoiseRelayNode(Node):
             .get_parameter_value()
             .double_value
         )
-        # Per-episode anisotropy factors. 1.0 == isotropic. Geometric mean is
-        # always 1.0 so the tier's nominal sigma still describes the average.
+        # 1.0 == isotropic. Their geometric mean is held at 1.0 so the tier's
+        # nominal sigma still describes the average.
         self._sigma_x_factor: float = 1.0
         self._sigma_y_factor: float = 1.0
 
-        # Precompute flat-earth scale factors for the datum latitude.
         self._metres_per_deg_lat: float = 111320.0
         self._metres_per_deg_lon: float = 111320.0 * math.cos(
             math.radians(self._datum_lat)
@@ -287,32 +254,23 @@ class GnssNoiseRelayNode(Node):
         noise_profiles_path = str(
             self.get_parameter("noise_profiles_path").get_parameter_value().string_value
         )
-        # Transition matrix stepped by the Markov chain. The matrix is the GNSS
-        # degradation process and is stage-invariant - loaded once from the noise
-        # profiles, never rescaled per episode.
+        # Stage-invariant: the degradation process is loaded once here and
+        # never rescaled per episode.
         self._transition_matrix: np.ndarray = self._load_transition_matrix(
             noise_profiles_path
         )
         self._active_tier_idx: int = 0
-        # Per-episode override: when episode_config.json sets hold_tier, the
-        # Markov chain is suppressed for that episode so the level stays fixed
-        # (controlled evaluation conditions). Training leaves it False.
+        # Per-episode override for controlled evaluation conditions: suppresses
+        # the Markov chain so the tier stays fixed. Training leaves it False.
         self._hold_tier: bool = False
-        # Per-episode override: when set, the chain may only walk DOWN the tier
-        # ladder (toward degraded) and never recovers - the monotone-degradation
-        # eval condition (starts at a clean fix, drifts to degraded, stays there).
-        # Implemented by zeroing the upward transitions in _step_markov. Training
-        # leaves it False so the chain recovers normally.
+        # Per-episode override: the chain may only walk down the ladder and
+        # never recovers - the monotone-degradation eval condition.
         self._degrade_one_way: bool = False
-        # Compression factor on the one-way chain's downward transition mass.
-        # 1.0 is the datasheet-anchored schedule; the evaluation condition that
-        # measures handover latency raises it so the drift completes inside the
-        # episode horizon. Only read when _degrade_one_way is set.
+        # Only read when _degrade_one_way is set. @see mask_recovery_transitions.
         self._degrade_rate_scale: float = 1.0
 
         self._extra_alt_stddev_m: float = 0.0
-        # Current tier's NavSatStatus code, updated by _apply_tier and stamped
-        # on each outgoing NavSatFix when sim noise is enabled.
+        # Stamped on each outgoing NavSatFix when sim noise is enabled.
         self._tier_status: int = NavSatStatus.STATUS_FIX
         self._metric_stddev_m: float = self._base_metric_stddev
 
@@ -326,31 +284,28 @@ class GnssNoiseRelayNode(Node):
         seed = int(self.get_parameter("seed").get_parameter_value().integer_value)
         self._rng = np.random.default_rng(seed)
 
-        # Pre-allocated 36-element zeroed lists reused at each callback.
+        # Pre-allocated 36-element lists copied at each callback.
         self._odom_cov_template: List[float] = [0.0] * 36
         self._heading_cov_template: List[float] = [0.0] * 36
-        # Fixed non-zero slots for heading covariance (all position/vel dims
-        # have infinite variance; only yaw slot carries signal).
+        # Everything but yaw gets infinite variance so the EKF takes only the
+        # heading signal from this message; slot 35 is filled per callback.
         self._heading_cov_template[0] = 1.0e6
         self._heading_cov_template[7] = 1.0e6
         self._heading_cov_template[14] = 1.0e6
         self._heading_cov_template[21] = 1.0e6
         self._heading_cov_template[28] = 1.0e6
-        # yaw slot (35) is updated per-callback from self._last_heading_var.
-        # odom cov slot 35 (yaw) always 1e6.
+        # Conversely, GNSS odometry never measures yaw.
         self._odom_cov_template[35] = 1.0e6
 
-        # Twist covariance template for the Odometry message. Inert states
-        # (vz, vroll, vpitch, vyaw) get infinite variance so the EKF ignores
-        # them; vx (slot 0) and vy (slot 7) are overwritten per callback.
+        # Inert states get infinite variance so the EKF ignores them; vx
+        # (slot 0) and vy (slot 7) are overwritten per callback.
         self._twist_cov_template: List[float] = [0.0] * 36
         self._twist_cov_template[14] = 1.0e6  # vz
         self._twist_cov_template[21] = 1.0e6  # vroll
         self._twist_cov_template[28] = 1.0e6  # vpitch
         self._twist_cov_template[35] = 1.0e6  # vyaw
 
-        # Doppler-style velocity noise: set by _apply_tier from doppler_stddev_ms.
-        # Initialised to rtk_fixed default; overwritten on first _apply_tier call.
+        # Overwritten on the first _apply_tier call.
         self._doppler_stddev_ms: float = _TIER_DEFAULTS["rtk_fixed"][
             "doppler_stddev_ms"
         ]
@@ -360,23 +315,20 @@ class GnssNoiseRelayNode(Node):
         self._prev_y: Optional[float] = None
         self._prev_stamp_sec: Optional[float] = None
 
-        # Previous CLEAN (pre-noise) fix in local XY used as the Doppler
-        # velocity source. Clean differencing at 20 Hz = GT velocity;
-        # position-noise amplification by 1/dt is avoided entirely.
+        # Doppler source: differencing CLEAN fixes avoids amplifying position
+        # noise by 1/dt, which at 20 Hz would be a factor of 20.
         self._prev_clean_x: Optional[float] = None
         self._prev_clean_y: Optional[float] = None
 
-        # COG heading state.
         self._cog_initialised: bool = False
         self._last_heading_rad: float = 0.0
         self._last_heading_var: float = (math.pi**2) / 3.0
         self._last_speed_ms: float = 0.0
-        # True only when the last callback met both COG gates (speed + displacement).
-        # Used to suppress tight-variance publish when gates reject a callback.
+        # True only when the last callback met both COG gates, so a rejected
+        # callback cannot publish the previous tight variance.
         self._cog_active: bool = False
 
-        # True when the stamped IMU shows ZUPT-clamped zeros on all channels.
-        # Default True so COG is gated off until the first IMU sample arrives.
+        # Default True so COG stays gated off until the first IMU sample.
         self._imu_stationary: bool = True
 
         qos = QoSProfile(
@@ -413,14 +365,9 @@ class GnssNoiseRelayNode(Node):
             f"markov_transitions={self._markov_enabled})"
         )
 
-    # -----------------------------------------------------------------------
-    # Config and tier helpers
-    # -----------------------------------------------------------------------
-
     def _load_transition_matrix(self, profiles_path: str) -> np.ndarray:
         """
         @brief Load the per-step transition matrix from gnss_noise_profiles.yaml.
-
         @param profiles_path: Absolute path to gnss_noise_profiles.yaml.
         @return 4x4 ndarray indexed in _TIER_ORDER (rows = from, cols = to).
         """
@@ -470,10 +417,8 @@ class GnssNoiseRelayNode(Node):
         """
         @brief Sample per-episode axis-aligned GNSS noise anisotropy.
 
-        Sets sigma_x_factor and sigma_y_factor such that the geometric mean is
-        unity (so the tier's nominal sigma is preserved on average), with a
-        ratio drawn uniformly from [1.0, aniso_ratio_max]. The major-sigma axis
-        is randomly x or y per episode.
+        The two factors are reciprocal, so their geometric mean stays unity and
+        the tier's nominal sigma is preserved on average.
         """
         if not self._enable_anisotropy:
             self._sigma_x_factor = 1.0
@@ -516,10 +461,10 @@ class GnssNoiseRelayNode(Node):
 
     def _check_config_file(self) -> None:
         """
-        @brief Read GNSS noise config from shared JSON file if updated.
+        @brief Read GNSS noise config from the shared JSON file if updated.
 
-        The training container writes this file at each episode reset with
-        the initial tier for the episode.
+        The training container writes it at each episode reset with that
+        episode's start tier.
         """
         try:
             mtime_ns = os.stat(self._config_path).st_mtime_ns
@@ -539,9 +484,6 @@ class GnssNoiseRelayNode(Node):
 
             self._config_seq = seq
 
-            # Per-episode hold: when set, the Markov chain is suppressed for the
-            # whole episode so the level stays fixed (controlled evaluation
-            # conditions). Absent/false in training, where the chain wanders.
             self._hold_tier = bool(data.get("hold_tier", False))
             self._degrade_one_way = bool(data.get("degrade_one_way", False))
             self._degrade_rate_scale = max(
@@ -567,8 +509,8 @@ class GnssNoiseRelayNode(Node):
                     math.radians(self._datum_lat)
                 )
                 self._datum_latched = True
-                # Invalidate previous fixes so stale positions from the old
-                # datum are not used for COG or Doppler velocity after reset.
+                # Invalidate the previous fixes: differencing across a datum
+                # change would give a spurious velocity and heading.
                 self._prev_x = None
                 self._prev_y = None
                 self._prev_clean_x = None
@@ -576,8 +518,8 @@ class GnssNoiseRelayNode(Node):
                 self._prev_stamp_sec = None
                 self._cog_initialised = False
                 self._cog_active = False
-                # Resample anisotropy at the episode boundary so each episode
-                # sees a different satellite-geometry pattern.
+                # At the episode boundary, so each episode sees a different
+                # satellite-geometry pattern.
                 self._resample_anisotropy()
                 self.get_logger().info(
                     f"GNSS datum re-latched: lat={self._datum_lat:.7f} "
@@ -598,8 +540,8 @@ class GnssNoiseRelayNode(Node):
         """
         @brief Write the current active tier back to episode_config.json.
 
-        Read-modify-write so that datum_lat and datum_lon written by the
-        training container at episode reset are preserved.
+        Read-modify-write, so the datum the training container wrote at episode
+        reset survives.
 
         @param tier_name: Active RTK fix-state tier name.
         """
@@ -638,10 +580,6 @@ class GnssNoiseRelayNode(Node):
                 f"(metric_stddev={self._metric_stddev_m:.3f}m)"
             )
 
-    # -----------------------------------------------------------------------
-    # IMU callback (ZUPT detection)
-    # -----------------------------------------------------------------------
-
     def _imu_callback(self, msg: Imu) -> None:
         """
         @brief Set _imu_stationary when ZUPT-clamped zeros are seen on all axes.
@@ -653,14 +591,9 @@ class GnssNoiseRelayNode(Node):
             and msg.linear_acceleration.y == 0.0
         )
 
-    # -----------------------------------------------------------------------
-    # Main callback
-    # -----------------------------------------------------------------------
-
     def _gnss_callback(self, msg: NavSatFix) -> None:
         """
         @brief Process a single GNSS fix: inject noise, project to XY, publish odom + COG.
-
         @param msg: Raw NavSatFix from the CARLA GNSS sensor.
         """
         self._callback_count += 1
@@ -669,9 +602,8 @@ class GnssNoiseRelayNode(Node):
         if self._markov_enabled and not self._hold_tier:
             self._step_markov()
 
-        # Simulated GNSS dropout: occasionally skip a fix entirely so the EKF
-        # goes open-loop on position for one tick. Models cycle slips and brief
-        # satellite occlusions seen in real RTK operation.
+        # Skipping the fix entirely leaves the EKF open-loop on position for a
+        # tick, as a cycle slip or brief satellite occlusion would.
         if (
             self._gnss_noise_enabled
             and self._dropout_probability > 0.0
@@ -681,12 +613,10 @@ class GnssNoiseRelayNode(Node):
 
         stamp_sec = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
 
-        # Datum latch
-        # Preferred path: the training container writes datum_lat/datum_lon to
-        # episode_config.json before any GNSS callback fires for the new
-        # episode, and _apply_episode_config() latches that value. Falling
-        # through to auto-latch only happens when the config has not yet
-        # arrived (process startup race, or env-side publish failure).
+        # Fallback path only. Normally the training container writes the datum
+        # to episode_config.json before the episode's first GNSS callback and
+        # _check_config_file() latches it; reaching here means the config has
+        # not arrived (startup race, or an env-side publish failure).
         if not self._datum_latched:
             self._datum_lat = msg.latitude
             self._datum_lon = msg.longitude
@@ -706,20 +636,17 @@ class GnssNoiseRelayNode(Node):
                 f"lat={self._datum_lat:.6f} lon={self._datum_lon:.6f}"
             )
 
-        # Inject noise to lat/lon
         out = NavSatFix()
         out.header = msg.header
         if self._gnss_noise_enabled:
-            # Sim: override the bridge's pass-through status with one that
-            # reflects the active tier (real-API parity for downstream
-            # consumers that branch on fix quality).
+            # The bridge passes through a fixed status; override it so the
+            # reported fix quality tracks the active tier.
             out.status.status = self._tier_status
             out.status.service = msg.status.service
         else:
             out.status = msg.status
 
         if self._gnss_noise_enabled:
-            # Per-axis sigmas: tier sigma scaled by per-episode anisotropy.
             sigma_x = self._metric_stddev_m * self._sigma_x_factor
             sigma_y = self._metric_stddev_m * self._sigma_y_factor
             n_xy, n_xy2, n_alt = self._rng.standard_normal(3)
@@ -740,8 +667,8 @@ class GnssNoiseRelayNode(Node):
             out.altitude = msg.altitude
 
         if self._gnss_noise_enabled:
-            # Sim path: stamp anisotropic covariance derived from the active
-            # tier and the per-episode anisotropy factors.
+            # Stamp the covariance the injected noise actually has, so the EKF
+            # weights the measurement correctly.
             var_x = (self._metric_stddev_m * self._sigma_x_factor) ** 2
             var_y = (self._metric_stddev_m * self._sigma_y_factor) ** 2
             alt_var = (self._extra_alt_stddev_m + 0.05) ** 2
@@ -763,22 +690,18 @@ class GnssNoiseRelayNode(Node):
             out.position_covariance_type = msg.position_covariance_type
         self._pub.publish(out)
 
-        # Flat-earth projection: noisy lat/lon -> local XY
-        # CARLA latitude increases southward, so the raw delta gives a
-        # south-positive y. Negate to put +y north (REP-103) for the EKF.
+        # CARLA latitude increases southward, so the raw delta is south-positive.
+        # Negate to put +y north (REP-103) for the EKF.
         local_x = (out.longitude - self._datum_lon) * self._metres_per_deg_lon
         local_y = -(out.latitude - self._datum_lat) * self._metres_per_deg_lat
 
-        # Clean projection: project the ORIGINAL (pre-noise) lat/lon.
-        # Differencing consecutive clean positions at 20 Hz equals GT velocity
-        # without amplifying position noise by 1/dt (at 20 Hz that factor is
-        # x20 for position jitter). This is the Doppler source: carrier
-        # frequency-shift velocity is physically derived from the clean signal;
-        # the tier noise models tracking-loop sensitivity, not positional error.
+        # The same projection of the ORIGINAL pre-noise fix, as the Doppler
+        # source: real carrier frequency-shift velocity derives from the clean
+        # signal, and the tier noise added later models tracking-loop
+        # sensitivity rather than positional error.
         clean_x = (msg.longitude - self._datum_lon) * self._metres_per_deg_lon
         clean_y = -(msg.latitude - self._datum_lat) * self._metres_per_deg_lat
 
-        # Doppler-style velocity and COG from clean-source differencing.
         dt: float = 0.0
         clean_dx: float = 0.0
         clean_dy: float = 0.0
@@ -794,35 +717,31 @@ class GnssNoiseRelayNode(Node):
                 clean_speed = clean_disp_m / dt
                 self._last_speed_ms = clean_speed
 
-        # Publish GNSS odometry (EKF odom0: x, y position + vx speed)
         odom_msg = Odometry()
         odom_msg.header = out.header
         odom_msg.header.frame_id = "odom"
-        # child_frame_id = ego_vehicle so robot_localization interprets the
-        # twist in body frame (twist.linear.x = longitudinal speed).
+        # Naming a child frame is what makes robot_localization read the twist
+        # as body-frame, so twist.linear.x is longitudinal speed.
         odom_msg.child_frame_id = "ego_vehicle"
         odom_msg.pose.pose.position.x = local_x
         odom_msg.pose.pose.position.y = local_y
 
-        # Per-axis position variance from the NavSatFix
         pose_cov = list(self._odom_cov_template)
         pose_cov[0] = float(out.position_covariance[0])
         pose_cov[7] = float(out.position_covariance[4])
         odom_msg.pose.covariance = pose_cov
 
-        # Twist: Doppler-style speed on vx. vy always infinite variance.
-        # odom0_config fuses index 6 (vx). Doppler is valid at rest
-        # (~0 +/- sigma), so no moving/stopped gate is needed.
-        # First fix after a latch: no clean pair -> publish with 1e6 variance
-        # so the EKF ignores this measurement and uses its prediction.
+        # Doppler speed goes on vx, the only velocity odom0_config fuses. It is
+        # valid at rest (~0 +/- sigma), so no moving/stopped gate is needed.
         twist_cov = list(self._twist_cov_template)
         twist_cov[7] = 1.0e6  # vy: never measured
         if self._prev_clean_x is None or dt <= 0.0:
-            # No differencing pair yet (first fix or datum re-latch).
+            # No differencing pair yet (first fix or datum re-latch), so the
+            # 1e6 variance makes the EKF fall back on its prediction.
             odom_msg.twist.twist.linear.x = 0.0
             twist_cov[0] = 1.0e6
         elif not self._gnss_noise_enabled:
-            # Noise-disabled path: publish clean speed, rtk_fixed variance.
+            # Real path: unnoised speed, with the best tier's variance.
             doppler_sigma = _TIER_DEFAULTS["rtk_fixed"]["doppler_stddev_ms"]
             odom_msg.twist.twist.linear.x = clean_speed
             twist_cov[0] = doppler_sigma * doppler_sigma
@@ -837,25 +756,23 @@ class GnssNoiseRelayNode(Node):
         odom_msg.twist.covariance = twist_cov
         self._odom_pub.publish(odom_msg)
 
-        # COG heading (EKF pose0: yaw correction).
-        # Derived from the clean displacement direction + Doppler-proportional
-        # heading noise: course_std = doppler_stddev_ms / max(speed, 0.1).
-        # Gates: (a) minimum clean displacement, (b) IMU not in ZUPT, (c)
-        # heading variance below uniform-distribution ceiling. Same gates as
-        # before; the variance model is now analytically derived rather than
-        # positional.
+        # COG heading, the EKF's only yaw correction (pose0).
         if clean_disp_m > 0.0 and dt > 0.0:
+            # Heading noise grows as speed falls: the same lateral velocity
+            # error subtends a larger angle the slower the vehicle moves. The
+            # floor keeps the near-standstill variance finite.
             course_std = self._doppler_stddev_ms / max(clean_speed, 0.1)
             candidate_var = course_std * course_std
+            # Three gates: enough travel to define a direction, the IMU not
+            # reporting standstill, and a heading worth more than a guess.
             if (
                 clean_disp_m >= self._cog_min_displacement_m
                 and not self._imu_stationary
                 and candidate_var <= self._MAX_PUBLISH_VARIANCE
             ):
                 self._cog_active = True
-                # clean_dy is north-positive (negated from CARLA's southward
-                # latitude), so atan2(clean_dy, clean_dx) gives heading in
-                # REP-103 directly.
+                # clean_dy was already made north-positive, so this atan2 is
+                # REP-103 heading with no further correction.
                 raw_heading = math.atan2(clean_dy, clean_dx)
                 if self._gnss_noise_enabled:
                     raw_heading += float(self._rng.standard_normal() * course_std)

@@ -2,22 +2,9 @@
 @file safety_wrapper.py
 @brief Gymnasium wrapper that hands off control when policy uncertainty is high.
 
-Sits around CARLAParkingEnv at evaluation/deployment time and stops the vehicle
-(full brake, hand off to a human) when the evidential head's TOTAL predictive
-uncertainty crosses a threshold. Training runs WITHOUT the wrapper (the policy
-learns freely); only evaluation and deployment install it.
-
-One signal, one threshold:
-- total = epistemic + aleatoric; total >= handoff_threshold -> full stop and hand off.
-
-The total predictive uncertainty is the single defensible quantity on a single-head
-NIG actor: epistemic = aleatoric / nu, so the two are one signal under two names and
-gating on either alone double-counts. @see
-documentation/detailed_notes/epistemic_aleatoric_disentanglement.md for the
-disentanglement argument and the handoff's status as a negative gate result.
-
-Actions are [steering, throttle, brake]: steering in [-1, 1], throttle and brake
-non-negative in [0, 1].
+Wraps CARLAParkingEnv at evaluation and deployment only. Full-stops and
+hands off when epistemic + aleatoric reaches the threshold: gating on the
+TOTAL is the only defensible choice, since epistemic = aleatoric / nu.
 """
 
 import logging
@@ -40,10 +27,6 @@ class SafetyWrapper(gym.Wrapper):
 
     @note Only evaluation/deployment uses this wrapper; training runs without it.
     """
-
-    # -----------------------------------------------------------------------
-    # Construction
-    # -----------------------------------------------------------------------
 
     def __init__(
         self,

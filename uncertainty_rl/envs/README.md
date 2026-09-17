@@ -1,12 +1,12 @@
 # envs/
 
-Gymnasium-compatible CARLA parking environment with real EKF covariance from `robot_localisation` embedded in the observation space.
+Gymnasium-compatible CARLA parking environment with real EKF covariance from `robot_localization` embedded in the observation space.
 
 ## At a glance
 
-- Observation comprises EKF kinematics, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance. The active dimension is derived from the structural constants in [`uncertainty_rl/utils/constants.py`](../utils/constants.py) and the `include_covariance` / `include_obstacle_obs` ablation flags; use `compute_obs_dim()` rather than hardcoding.
-- Continuous action space `[steering, throttle, brake]`. Steering is bipolar; throttle and brake are independent non-negative axes. No reverse gear: forward perpendicular bay parking only.
-- Reward is outcome-only (success +50, collision -25/-10, graded timeout penalty, soft out-of-bounds accumulation); no shaping term couples to EKF uncertainty. Uncertainty enters the system as observation features and through the policy's evidential head only.
+- Observation comprises EKF kinematics, EKF covariance features, the relative target-bay pose in the ego body frame, and hemispheric LiDAR clearance. The active dimension is derived from the structural constants in [`uncertainty_rl/utils/constants.py`](../utils/constants.py) and the `include_covariance` / `include_obstacle_obs` ablation flags. Use `compute_obs_dim()` rather than hardcoding.
+- Continuous action space `[steering, throttle, brake]` with no reverse gear, covering forward perpendicular bay parking only. See [Action space](#action-space) below.
+- Reward is outcome-only in the sense that no contribution reads the localisation covariance or the policy's uncertainty estimates. The signal is dense, combining corridor-potential progress with terminal payments. Uncertainty enters as observation features and through the evidential head alone.
 - Three pre-computed floor plans: `rectangle` (training), and `trapezoid` + `irregular_a` (OOD evaluation only).
 - Sim-to-real capable: all observation features come from EKF and LiDAR, never CARLA ground truth.
 - Requires the full Docker stack for training (carla-server + ros2-bridge + training).
@@ -16,6 +16,7 @@ Gymnasium-compatible CARLA parking environment with real EKF covariance from `ro
 | Module | Class / purpose |
 |--------|----------------|
 | `sim/carla_parking.py` | `CARLAParkingEnv` - main Gymnasium env |
+| `factory.py` | `make_env` - constructs the env with the bay margin appropriate to the caller |
 | `covariance_subscriber.py` | `_CovarianceSubscriber` - file-based EKF state reader (no DDS) |
 | `safety_wrapper.py` | `SafetyWrapper` - action modulation at eval time based on evidential uncertainty |
 | `_parking_core.py` | Pure helper functions shared by sim and real-world deployment |
@@ -30,7 +31,7 @@ Gymnasium-compatible CARLA parking environment with real EKF covariance from `ro
 ```mermaid
 flowchart TB
     subgraph ros2["ros2-bridge"]
-        EKF["robot_localisation EKF\n/odometry/filtered"]
+        EKF["robot_localization EKF\n/odometry/filtered"]
         EXT["CovarianceExtractorNode"]
         EKF --> EXT
     end
@@ -97,46 +98,68 @@ expression and the CARLA-vs-REP-103 chirality handling.
 
 ## Reward function
 
-Outcome-only: terminal events (success +50, collision -25/-10, graded timeout penalty) and a soft out-of-bounds accumulation. Per-step shaping is corridor potential (bay-frame); no uncertainty coupling. See `CARLAParkingEnv._compute_reward()` in [`sim/carla_parking.py`](sim/carla_parking.py) for the exact implementation and the source of truth for all coefficients.
+Five contributions, three of them dense:
+
+- **Corridor progress**, a telescoping bay-frame potential difference weighting
+  cross-track and heading above along-track, so the vehicle is drawn onto the centreline
+  and squared up before advancing. The dominant term.
+- **Endgame finisher**, gated on the conjunction of the corridor factors, so stopping
+  short and crooked pays close to nothing.
+- **Obstacle clearance**, a smooth penalty for drifting toward an occupied neighbour.
+- **Out-of-bounds**, charged per decision outside the inflated lot polygon and
+  terminating once the accumulated cost reaches its limit.
+- **Terminal payments**: success +50, collision -25 at ego fault and -10 otherwise, and
+  a graded timeout penalty on final position and orientation error.
+
+**"Outcome-only" refers to what the reward is blind to, not to sparsity.** No
+contribution reads the localisation covariance or either uncertainty estimate, so
+uncertainty is input-only and any uncertainty-dependent behaviour is emergent rather
+than incentivised.
+
+`_compute_reward()` in [`sim/carla_parking.py`](sim/carla_parking.py) is the source of
+truth for every coefficient. The timeout penalty and stall truncation are applied in
+`step()`.
 
 ## Success criterion
 
-Success is geometric, not a scalar position/orientation tolerance: every corner of
-the ego bounding box must lie inside the target bay polygon (`car_fully_inside_bay()`
-in [`utils/geometry.py`](../utils/geometry.py)) and the speed must be below
-`SUCCESS_THRESHOLD_VELOCITY`, held for `SUCCESS_DWELL_STEPS` consecutive steps. The
-inward bay margin is supplied at env construction: training / tuning callers pass the
-`bay_margin` from the active curriculum stage (looser, to densify terminal +50 events)
-while evaluation, demo, and inspector callers pass `STRICT_BAY_MARGIN` (the strict
-published criterion). The env itself has no training-vs-eval mode; it uses whatever
-margin it was constructed with. The env factory that supplies the right margin per
-caller lives in [`factory.py`](factory.py).
+Success is geometric rather than a scalar pose tolerance, and the inward bay margin is
+supplied at construction time, so the env has no training-versus-evaluation mode. The
+criterion, its constants and the margin split are defined in
+[utils/README.md](../utils/README.md#constantspy). The factory that selects the right
+margin per caller is [`factory.py`](factory.py).
 
 ## Floor plans
 
-| Floor plan | Shape | Role |
-|-----------|-------|------|
-| `rectangle` | Standard rectangular perimeter | Training |
-| `trapezoid` | Widened at one end | OOD only (never seen during training) |
-| `irregular_a` | Five-sided irregular polygon | OOD only (never seen during training) |
+| Floor plan | Shape | Bays | Role |
+|-----------|-------|------|------|
+| `rectangle` | Four-sided rectangular perimeter | 47 perpendicular, 2 motorcycle | Training, and the in-distribution evaluation anchor |
+| `trapezoid` | Four-sided, widened at one end | 39 perpendicular | OOD only, never seen during training |
+| `irregular_a` | Five-sided irregular polygon | 30 perpendicular | OOD only, never seen during training |
 
 Geometry (corners, bay positions, spawn transform, patrol waypoints, pedestrian zones) is
-pre-computed offline. Regenerate with `make generate-layouts`. Bay counts and exact bay
-identifiers live in the layout YAMLs in [`configs/layouts/`](../../configs/layouts/).
+pre-computed offline. Regenerate with `make generate-layouts`. The counts above are read
+from the generated YAMLs, which remain authoritative along with the exact bay identifiers.
+See [`configs/layouts/`](../../configs/layouts/). None of the three defines any obstacle,
+so `obstacles` is empty in every layout.
 
 ## Episode randomisation
 
 | Condition | Range | Effect |
 |-----------|-------|--------|
-| RTK fix-state tier | Per-episode sample from `gnss_noise_profiles.yaml` | Primary EKF uncertainty source |
+| RTK fix-state tier | Start tier sampled per episode from the weights in `gnss_noise_profiles.yaml`, then wandering mid-episode along the Markov chain | Primary EKF uncertainty source |
 | NPC patrol vehicles | Configurable in `parking_scenarios` | Dynamic LiDAR obstacles |
 | Pedestrians | Configurable in `parking_scenarios` | Moving LiDAR obstacles |
 | Bay occupancy rate | Configurable | Static parked vehicle density |
-| No weather | N/A | FlatPlane does not render weather |
+| No weather | N/A | Rendering is disabled (`no_rendering_mode`), and the generated FlatPlane world carries no weather model |
 
-When the `fixed_*` keys in `parking_scenarios` are set, the random sampler is bypassed
-and the named floor plan / bay / tier is used every episode. This is how curriculum
-overrides are expressed.
+The tier is not held fixed for the episode. A start tier is drawn from the per-tier
+weights and the fix state then walks the neighbour-only chain, so degradation and
+recovery both occur mid-manoeuvre. The chain is stage-invariant.
+
+Setting the `fixed_*` keys in `parking_scenarios` bypasses the sampler, which is how
+curriculum overrides are expressed. `fixed_gnss_tier` is omitted from every stage, so the
+start tier is always sampled. See
+[configs/deployment/sim/curriculum/README.md](../../configs/deployment/sim/curriculum/README.md).
 
 ## Key interfaces
 
@@ -176,11 +199,10 @@ obs, reward, terminated, truncated, info = env.step(action)
 | [`configs/layouts/*.yaml`](../../configs/layouts/) | Floor plan geometry (corners, bays, spawn, patrol, zones) |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | Structural dimensions and success thresholds |
 
-<!-- gif:placeholder name="parking_episode" caption="Bird's-eye view of a parking episode under RTK float conditions" -->
-![Parking episode placeholder](../../docs/media/parking_episode.gif)
-
 ## See also
 
+- [scripts/visualise/README.md](../../scripts/visualise/README.md) - the 2D viewer, with a
+  clip of an episode driven under the GNSS tier drift this env applies
 - [uncertainty_rl/README.md](../README.md) - package overview
 - [networks/README.md](../networks/README.md) - evidential actor that consumes this observation
 - [ros2/README.md](../ros2/README.md) - EKF covariance extraction pipeline

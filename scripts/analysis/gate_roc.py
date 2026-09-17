@@ -2,23 +2,9 @@
 @file gate_roc.py
 @brief Compare an EKF-std safety gate against an evidential-epistemic gate.
 
-Host-side, read-only diagnostic that asks the safety question behind the
-ablation: if the vehicle aborts (hands off) when a scalar uncertainty signal
-exceeds a threshold, which signal separates the failures from the successes
-better? Two candidate signals, both already logged per episode in
-episode_records.csv:
-
-  - EKF position std (ekf_std_pos_max_m): available to EVERY arm, since the EKF
-    always runs. This is the gate a covariance-blind system could still build.
-  - Evidential epistemic (max_epistemic): available only to evidential arms
-    (output_uncertainty, full_method). This is the policy's own confidence.
-
-For each signal we sweep the abort threshold and trace the trade-off between
-correctly aborting before a failure (collision / out_of_bounds / near_miss /
-stuck) and needlessly aborting an episode that would have succeeded. The area
-under that curve (AUC) is the single comparison number: a higher-AUC signal is
-the better safety gate. Pure pandas / numpy / matplotlib on the host .venv.
-Run via `make analyse-gate` (never python directly).
+Which separates failures from successes better as a handoff threshold: EKF
+position std (every arm) or evidential epistemic (evidential arms only)?
+Sweeps the threshold, reports failure-catch vs false-abort AUC.
 """
 
 from __future__ import annotations
@@ -29,18 +15,15 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 # Make the repo root importable so the shared discovery helper resolves when this
-# file is run directly (python scripts/evaluation/gate_roc.py).
+# file is run directly (python scripts/analysis/gate_roc.py).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import matplotlib  # noqa: E402
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from scripts.evaluation._discovery import discover_arm_csvs  # noqa: E402
-from scripts.evaluation.ablation_analyser import drop_held_tiers  # noqa: E402
+from scripts.analysis._discovery import discover_arm_csvs  # noqa: E402
+from scripts.analysis.ablation import drop_held_tiers  # noqa: E402
 
 # Outcomes the gate SHOULD pre-empt (a handoff before these is the desired
 # behaviour). success is the only non-failure; "handoff" episodes already
@@ -60,7 +43,7 @@ def _discover_arm_csvs(
 ) -> Dict[str, Path]:
     """
     @brief Find each arm's episode_records.csv (without_wrapper preferred).
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param stage: Optional curriculum stage (e.g. "1") so the gate comparison uses
            arms at the SAME stage rather than each arm's newest leaf (which may sit
            at different stages); None = any stage.
@@ -166,38 +149,6 @@ def _evaluate_signals(records: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _plot_roc(records: pd.DataFrame, out_dir: Path) -> None:
-    """
-    @brief Overlay the gate ROC curves for each (arm, signal) on one axis.
-    @param records: Tidy per-episode frame.
-    @param out_dir: Directory for the saved figure.
-    """
-    fig, ax = plt.subplots(figsize=(7, 6))
-    for arm in sorted(records["arm"].unique()):
-        arm_df = records[records["arm"] == arm]
-        labels = arm_df["is_failure"].to_numpy()
-        for signal, allowed in _SIGNALS.items():
-            if allowed is not None and arm not in allowed:
-                continue
-            if signal not in arm_df.columns:
-                continue
-            scores = arm_df[signal].to_numpy(dtype=float)
-            if np.isnan(scores).all():
-                continue
-            fpr, tpr, auc = _roc_curve(scores, labels)
-            if np.isnan(auc):
-                continue
-            ax.plot(fpr, tpr, label=f"{arm} / {signal} (AUC {auc:.2f})")
-    ax.plot([0, 1], [0, 1], "k--", alpha=0.4, label="chance")
-    ax.set_xlabel("False abort rate (successes needlessly aborted)")
-    ax.set_ylabel("Failure catch rate (failures pre-empted)")
-    ax.set_title("Safety-gate ROC: EKF std vs evidential epistemic")
-    ax.legend(fontsize=8, loc="lower right")
-    fig.tight_layout()
-    fig.savefig(out_dir / "gate_roc.png", dpi=150)
-    plt.close(fig)
-
-
 def analyse(
     results_root: Path,
     out_dir: Path,
@@ -206,12 +157,12 @@ def analyse(
 ) -> None:
     """
     @brief Run the gate comparison and write the AUC table + ROC figure.
-    @param results_root: outputs/evaluation_results (nested <baseline>/<leaf>).
+    @param results_root: outputs/raw/evaluation_results (nested <baseline>/<leaf>).
     @param out_dir: Directory for the CSV table and PNG figure.
     @param stage: Optional curriculum stage (e.g. "1") to compare all arms at the
            same stage; None uses each arm's newest leaf (may mix stages).
     @param keep_held_tiers: Retain the held-tier conditions. Default False drops
-           them so the ROC is scored over the five conditions the write-up reports.
+           them so the ROC is scored over the five reported conditions.
     """
     # Nest by stage so STAGE=1 and STAGE=2 runs never overwrite; unpinned in "latest".
     out_dir = out_dir / (f"stage{stage}" if stage is not None else "latest")
@@ -222,7 +173,6 @@ def analyse(
         records = drop_held_tiers(records)
     auc_table = _evaluate_signals(records)
     auc_table.to_csv(out_dir / "gate_auc.csv", index=False)
-    _plot_roc(records, out_dir)
 
     print("=== Safety-gate AUC (higher = better failure/success separation) ===")
     if auc_table.empty:
@@ -240,7 +190,7 @@ def analyse(
             "better\n  abort signal than the EKF covariance gate a blind system could "
             "build."
         )
-    print(f"\nTable and figure written to {out_dir}")
+    print(f"\nTable written to {out_dir}")
 
 
 def main() -> None:
@@ -253,13 +203,13 @@ def main() -> None:
     parser.add_argument(
         "--results-root",
         type=str,
-        default="outputs/evaluation_results",
+        default="outputs/raw/evaluation_results",
         help="Root holding <baseline>/<leaf>/episode_records.csv for each arm.",
     )
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/gate_analysis",
+        default="outputs/raw_derived/gate_analysis",
         help="Directory for the AUC table and ROC figure.",
     )
     parser.add_argument(
@@ -273,7 +223,7 @@ def main() -> None:
         "--keep-held-tiers",
         action="store_true",
         help="Keep the held-tier conditions (gnss_fixed, gnss_degraded). Default "
-        "drops them, matching the five conditions the write-up reports.",
+        "drops them, matching the five reported conditions.",
     )
     args = parser.parse_args()
     analyse(

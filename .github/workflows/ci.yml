@@ -13,16 +13,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# CI Strategy: Run the same checks as `make verify` locally
-# - Lint: autoflake + isort + black (auto-commits fixes)
-# - TypeCheck: mypy
-# No unit tests (torch/gymnasium/sb3 too expensive for CI). Unit tests run in Docker.
-#
-# To match this locally before pushing:
-#   make verify    # Lint + typecheck + sanity (no torch needed, same as CI)
-#
-# For full testing with torch:
-#   make docker-verify   # Full suite in Docker (tests + checks + training deps)
+# Mirrors `make verify`, except that autoflake/isort/black run in FIX mode here
+# and auto-commit, whereas the local target only checks. No unit tests: torch and
+# sb3 are too heavy for CI, so those run via `make docker-test-unit`.
 
 jobs:
   lint:

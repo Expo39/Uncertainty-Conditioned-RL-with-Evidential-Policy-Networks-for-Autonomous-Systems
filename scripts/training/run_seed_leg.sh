@@ -4,32 +4,18 @@
 #        through the full curriculum (resume-chained), then evaluate the FINAL
 #        stage and generate the evaluation-suite tables.
 #
-# IDEMPOTENT: every step checks for its own completion marker on disk and skips
-# work already done, so a crashed run is resumed simply by re-running this script
-# - it picks up at the first unfinished stage/eval. A training stage is "done"
-# only if its checkpoint leaf has a final_model.zip; a partial leaf (e.g. from a
-# CARLA timeout) lacks one and is retrained. An eval is "done" if its
-# evaluation_results.csv exists.
+# IDEMPOTENT: re-running resumes at the first unfinished step. A stage counts as
+# done only if its leaf holds final_model.zip, so a partial leaf is retrained.
 #
-# The seed is the single source of truth in agent_config.yaml. This script
-# OVERWRITES that one line per seed (and leaves it on the last seed of the list),
-# so the in-container training/noise processes pick up the active seed. Run leaves
-# are <stage>_<seed>_<timestamp>, routing the per-seed output trees (seed_<N>/)
-# automatically.
-#
-# Does NOT build images - run `make docker-build-no-cache` first.
-#
-# DRY_RUN=1 prints every command (and skip decisions) without executing.
-#
-# @warning Long-running (days). Run in a detachable session (tmux/screen).
+# @warning OVERWRITES the seed line in agent_config.yaml per seed, leaving it on
+#          the last of the list, so in-container processes pick up the active
+#          seed. Long-running (days) - use tmux. Build images first. DRY_RUN=1
+#          prints commands and skip decisions without executing.
 
 set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 # Seeds to run, in order. Done work is skipped, so listing an already-finished
 # seed is a cheap no-op. The file is left on the LAST seed when the leg ends.
 SEEDS=(42 123 7)
@@ -48,11 +34,7 @@ PER_STEP_CAP=440
 
 LAYOUT=rectangle
 AGENT_CONFIG=configs/deployment/agent_config.yaml
-EVAL_ROOT=outputs/evaluation_results
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+EVAL_ROOT=outputs/raw/evaluation_results
 
 # @brief Run a command, or just print it when DRY_RUN=1.
 run() {
@@ -89,12 +71,9 @@ complete_leaf() {
     return 0  # nothing complete -> empty stdout
 }
 
-# @brief The leaf the chain should use after a stage: the real complete leaf if
-#        one exists on disk, else a placeholder (only meaningful under DRY_RUN,
-#        where a stage that "would run" has not actually written a leaf). Using
-#        the real leaf when present keeps DRY_RUN skip decisions identical to a
-#        real run - the placeholder appears only for stages a real run would
-#        genuinely train next.
+# @brief The leaf the chain uses after a stage: the real complete leaf if one is
+#        on disk, else a placeholder. Preferring the real leaf keeps DRY_RUN skip
+#        decisions identical to a real run.
 # @param $1 arm, $2 stage, $3 seed.
 resume_leaf() {
     local arm="$1" stage="$2" seed="$3" real
@@ -120,9 +99,7 @@ is_edl() {
     return 1
 }
 
-# ---------------------------------------------------------------------------
 # Main: per seed -> train all arms/stages -> eval final stage -> suite tables.
-# ---------------------------------------------------------------------------
 echo "=================================================================="
 echo " Multi-seed leg: SEEDS=${SEEDS[*]}  arms=${ARMS[*]}  stages=${STAGES[*]}"
 echo " Eval: stage ${EVAL_STAGE} only, PER_STEP_CAP=${PER_STEP_CAP}"
@@ -213,15 +190,10 @@ for SEED in "${SEEDS[@]}"; do
     echo "################## SEED ${SEED} COMPLETE ##################"
 done
 
-# ---------------------------------------------------------------------------
 # Cross-seed suite: pool EVERY seed's stage-EVAL_STAGE eval into the seed-robust
-# headline tables (pooled bootstrap contrast + per-seed mean/range). Gated on the
-# full SEEDS x ARMS matrix being evaluated so a partial leg never aggregates half
-# the data. Host-side and cheap, so it always re-runs and overwrites in place once
-# complete (like the per-seed suite tables). FINAL_LEAF holds only the LAST seed's
-# leaves (it is declared inside the per-seed loop), so completeness is recomputed
-# here in a fresh double loop.
-# ---------------------------------------------------------------------------
+# headline tables. Gated on the full SEEDS x ARMS matrix being evaluated so a
+# partial leg never aggregates half the data; FINAL_LEAF only holds the last
+# seed's leaves, so completeness is recomputed here in a fresh double loop.
 missing=()
 for SEED in "${SEEDS[@]}"; do
     for arm in "${ARMS[@]}"; do

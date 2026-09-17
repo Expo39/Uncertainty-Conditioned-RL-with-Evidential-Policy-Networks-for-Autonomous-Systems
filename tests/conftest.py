@@ -13,23 +13,16 @@ import pytest
 try:
     import torch
 except ImportError:
-    # torch not installed (CI or no training deps). Network fixtures will not
-    # be available; tests that need them should be skipped via pytest.importorskip.
+    # Network fixtures are unavailable without torch; such tests should use
+    # pytest.importorskip.
     torch = None  # type: ignore[assignment]
 
-# ---------------------------------------------------------------------------
-# Constants for network tests. Network tests use a small arbitrary state dim
-# (not the full 13-dim env obs) for fast unit test execution. Env obs space
-# tests in test_carla_parking.py use _compute_obs_dim() directly.
-# ---------------------------------------------------------------------------
+# Network tests use a small arbitrary state dim (not the full 13-dim env obs)
+# for fast unit test execution. Env obs space tests in test_carla_parking.py
+# use _compute_obs_dim() directly.
 STATE_DIM = 15
 BATCH_SIZE = 8
 HIDDEN_DIMS = [64, 64]  # Smaller than production for fast tests
-
-
-# ---------------------------------------------------------------------------
-# Tensor fixtures (skipped if torch not available)
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -48,11 +41,6 @@ def single_state():
     """
     pytest.importorskip("torch")
     return torch.randn(1, STATE_DIM)
-
-
-# ---------------------------------------------------------------------------
-# Config fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture

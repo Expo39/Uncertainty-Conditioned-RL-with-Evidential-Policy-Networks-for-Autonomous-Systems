@@ -2,15 +2,9 @@
 @file test_curriculum_invariants.py
 @brief Structural invariants for the single-phase ADR curriculum stage files.
 
-CPU-only, no CARLA / ROS 2 / GPU - parses YAML only. Encodes the non-negotiable
-"all observation channels live in every stage" rule so a future edit that
-re-degenerates a channel (the original Stage 1 -> 2 failure mode) fails CI:
-  - covariance channel: the GNSS Markov chain is enabled and non-degenerate, so
-    mid-episode drift is always on (the process is stage-invariant - not a stage key);
-  - LiDAR channel: bay_occupancy_max > 0 and LiDAR noise enabled;
-  - target-pose channel: the bay set spans >= 2 approach orientations.
-Also checks the per-policy override blocks are allowlisted and agree on every
-schedule except the entropy coefficient (the documented evidential ent_coef split).
+CPU-only, parses YAML only. Encodes the "all observation channels live in
+every stage" rule so a future edit cannot silently re-degenerate a channel,
+and checks per-policy override blocks agree except the entropy coefficient.
 """
 
 from pathlib import Path
@@ -110,7 +104,7 @@ def test_start_tier_sampled_and_spawns_fixed(n: int) -> None:
     weights, not pinned. The Markov redesign removed fixed_gnss_tier from every stage
     so episodes can begin in any fix state (the realistic arrival case) and the chain
     wanders from there; a stage that re-pins it would make eval easier than training
-    and re-introduce the stale-anchor bug. @see configs/CLAUDE.md, MEMORY.md."""
+    and re-introduce the stale-anchor bug."""
     cfg = _stage(n)
     assert "fixed_gnss_tier" not in cfg.get(
         "parking_scenarios", {}
@@ -127,11 +121,10 @@ def test_override_blocks_allowlisted_and_aligned(n: int) -> None:
     for name, blk in (("standard", std), ("evidential", evi)):
         bad = set(blk) - _ALLOWLIST
         assert not bad, f"stage{n}: {name}_overrides has non-allowlisted keys {bad}"
-    # The two blocks must agree on every schedule EXCEPT the entropy coefficient: the
-    # evidential head's action std IS sqrt(aleatoric), so a collapsing head needs a
-    # higher ent_coef floor than the standard log_std (a documented, deliberate split,
-    # not a confound). Everything else - budget, LR schedule, structural PPO keys -
-    # stays identical so the ablation is fair.
+    # The blocks must agree on every schedule except entropy coefficient: the
+    # evidential head's action std IS sqrt(aleatoric), so a collapsing head
+    # needs a higher ent_coef floor than the standard log_std - a deliberate
+    # split, not a confound.
     _ENTROPY_KEYS = {"ent_coef", "ent_coef_final"}
     std_shared = {k: v for k, v in std.items() if k not in _ENTROPY_KEYS}
     evi_shared = {k: v for k, v in evi.items() if k not in _ENTROPY_KEYS}

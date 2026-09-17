@@ -1,41 +1,54 @@
 # detailed_notes
 
-Technical notes on system design, derivations, and rationale. Organised by subsystem: networks, envs, localisation, training, deployment.
+Implementation notes extracted from the code: index layouts, parameter provenance,
+runtime configuration and design rationale that would otherwise bloat inline comments.
 
-## Cross-reference index
+## Scope
+
+The dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for the design and
+its justification. These notes do not restate it; each one names the section that covers
+its topic and records only what that section leaves out. Where the two ever disagree,
+the dissertation is correct and the note is stale.
+
+## Index
 
 ### networks/
 
-| File | Extracted from | Topic |
-|------|---------------|-------|
-| `evidential_nig_initialisation.md` | `networks/evidential_policy.py` `EvidentialLayer.__init__` | NIG hyperprior bias derivation and ortho_init interaction |
+| File | Extracted from | Records | Canonical |
+|------|---------------|---------|-----------|
+| `evidential_nig_initialisation.md` | `networks/evidential_policy.py` | NIG bias-block layout and the prior values `EvidentialPPO.train` must track | Section 3.5.1 |
 
 ### envs/
 
-| File | Extracted from | Topic |
-|------|---------------|-------|
-| `observation_space.md` | `envs/_parking_core.py` | Observation layout (13-dim default), LiDAR sector boundaries, covariance features |
-| `layout.md` | `scripts/layouts/floor_plans/`, `envs/sim/_npc_controller.py`, `envs/sim/_lot_spawner.py` | Lot geometry derivations, patrol path controller, bay sampling, cone placement |
-| `actuator_model.md` | `envs/sim/carla_parking.py` `step()`, `configs/deployment/agent_config.yaml` | Per-axis rate limits, brake-overrides-throttle constraint, derivation from production DBW/EPS/hydraulic literature |
+| File | Extracted from | Records | Canonical |
+|------|---------------|---------|-----------|
+| `observation_space.md` | `envs/_parking_core.py` | Observation index layout and the constants it maps to | Section 3.3 |
+| `layout.md` | `scripts/layouts/`, `envs/sim/helpers/` | Patrol-path and cone-interpolation geometry per layout; bay exclusions | Section 3.2 (occupancy) |
+| `actuator_model.md` | `envs/sim/carla_parking.py`, `configs/deployment/agent_config.yaml` | Why the limit is in the env not the reward; the wider rate-reference set | Section 3.3 |
 
 ### localisation/
 
-| File | Extracted from | Topic |
-|------|---------------|-------|
-| `ros2_architecture.md` | `envs/covariance_subscriber.py`, `ros2/` | DDS-bypass via shared JSON, atomicity, sequence-number guard |
-| `sensor_noise_models.md` | `envs/sim/helpers/_sensor_manager.py`, `ros2/uncertainty_rl_ros2/sensor_relay/imu_noise_relay.py` | SICK TiM571 LiDAR and VN-100 IMU noise derivations with datasheet sources |
-| `gnss_markov_transitions.md` | `ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py` | RTK fix-state Markov chain design and sim-to-real rationale |
+| File | Extracted from | Records | Canonical |
+|------|---------------|---------|-----------|
+| `ros2_architecture.md` | `envs/covariance_subscriber.py`, `ros2/` | Shared-file paths and per-worker overrides for parallel training | Section 3.1 |
+| `sensor_noise_models.md` | `envs/sim/helpers/_sensor_manager.py`, `ros2/.../sensor_relay/` | Datasheet figures and the code map for each mechanism | Appendix A |
+| `gnss_markov_transitions.md` | `ros2/.../sensor_relay/gnss_noise_relay.py` | Chain runtime behaviour, EKF process noise, the disable flag | Section 3.4.1 |
 
 ### training/
 
-| File | Extracted from | Topic |
-|------|---------------|-------|
-| `hyperparameter_search.md` | `training/tune_hyperparams.py` | Optuna search space design, sampler/pruner rationale, literature references |
-| `ablation_hpo_methodology.md` | `training/train_ppo.py`, `training/tune_hyperparams.py` | Ablation study methodology and hyperparameter optimisation rationale |
+| File | Extracted from | Records | Canonical |
+|------|---------------|---------|-----------|
+| `hyperparameter_search.md` | `training/tune_hyperparams.py` | The unused search space, sampler and pruner choices | Section 3.8.1 |
+| `ablation_hpo_methodology.md` | `training/train_ppo.py`, `training/tune_hyperparams.py` | The code-level constraints behind the untuned configuration | Section 3.8.1 |
 
 ### deployment/
 
-| File | Extracted from | Topic |
-|------|---------------|-------|
-| `real_world_deployment.md` | `envs/real/deployment_utils.py`, `envs/real/inference_loop.py` | Sensor data flow, EKF frame calibration, surveyed datum, actuation calibration |
-| `sim_to_real_transfer.md` | `envs/real/inference_loop.py` | Known sim-to-real gaps and mitigations |
+| File | Extracted from | Records | Canonical |
+|------|---------------|---------|-----------|
+| `real_world_deployment.md` | `envs/real/` | Map from each Appendix B step to the code implementing it | Appendix B |
+| `sim_to_real_transfer.md` | `envs/real/inference_loop.py` | The two modelling gaps the appendices do not cover | Appendix B, Section 4.8.3 |
+
+## Note on hyperparameter tuning
+
+No hyperparameter optimisation was run for any reported result. The tuning pipeline is
+retained as future work, and the two training notes describe it in those terms only.

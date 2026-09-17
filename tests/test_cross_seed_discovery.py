@@ -10,7 +10,7 @@ sorted order, and that a root with no seed nesting degrades to the singleton
 from pathlib import Path
 from typing import List
 
-from scripts.evaluation._discovery import seed_roots
+from scripts.analysis._discovery import seed_roots
 
 
 def _touch(path: Path) -> None:

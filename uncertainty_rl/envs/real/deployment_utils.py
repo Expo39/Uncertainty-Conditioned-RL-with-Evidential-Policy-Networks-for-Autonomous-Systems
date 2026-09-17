@@ -5,6 +5,11 @@
 Owns the static mission configuration for a real-world deployment: the surveyed
 lot datum (EKF frame reference), the target bay resolved from the layout YAML,
 and the per-actuator calibration map. No ROS 2 or runtime sensor state.
+
+@warning Never run on hardware. The datum and calibration values ship as
+         unmeasured placeholders, so both the frame transform and the actuator
+         map reduce to identities until a site survey and a calibration run
+         supply real figures.
 """
 
 import logging
@@ -45,10 +50,6 @@ class RealWorldDeployment:
         self._lot_x: float = float(datum.get("lot_x", 0.0))
         self._lot_y: float = float(datum.get("lot_y", 0.0))
         self._lot_yaw_rad: float = math.radians(float(datum.get("heading_deg", 0.0)))
-
-    # -----------------------------------------------------------------------
-    # Construction helpers
-    # -----------------------------------------------------------------------
 
     @classmethod
     def from_config(
@@ -163,10 +164,6 @@ class RealWorldDeployment:
         target_bay = deployment.set_target_bay(bay_id, layout)
         return deployment, target_bay
 
-    # -----------------------------------------------------------------------
-    # EKF frame calibration
-    # -----------------------------------------------------------------------
-
     def reference_pose(self) -> Tuple[float, float, float]:
         """
         @brief Return the surveyed datum pose in the lot layout frame.
@@ -181,10 +178,6 @@ class RealWorldDeployment:
         @return True if datum dict is populated.
         """
         return bool(self._datum)
-
-    # -----------------------------------------------------------------------
-    # Target bay assignment (replaces random sampling used in sim)
-    # -----------------------------------------------------------------------
 
     def set_target_bay(
         self,
@@ -225,10 +218,6 @@ class RealWorldDeployment:
             f"Bay ID '{bay_id}' not found in layout. "
             f"Available IDs: {[b.get('id', b.get('bay_id', '')) for b in bays]}"
         )
-
-    # -----------------------------------------------------------------------
-    # Actuation calibration
-    # -----------------------------------------------------------------------
 
     def calibrate_action(
         self, steering: float, throttle: float, brake: float

@@ -5,10 +5,10 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 ## At a glance
 
 - `train_ppo.py` is config-driven: all hyperparameters come from [`configs/train_config.yaml`](../../configs/train_config.yaml).
-- `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`; `"standard"` selects `ScheduledEntCoefPPO` + `LayerNormActorCriticPolicy` (the baseline must match the evidential backbone for fair ablation).
-- `VecNormalize` does REWARD normalisation only (`norm_obs=False`, `norm_reward=True`); reward normalisation keeps the near-bimodal return (large terminals over dense shaping) in a range the critic can track. Observations are normalised by FIXED physical ranges in `build_observation` (`constants.py` `OBS_*_SCALE`), not running statistics - stage- and layout-invariant so weights transfer on resume and OOD eval is not confounded.
+- `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`, while `"standard"` selects `ScheduledEntCoefPPO` + `LayerNormActorCriticPolicy` (the baseline must match the evidential backbone for fair ablation).
+- `VecNormalize` does REWARD normalisation only (`norm_obs=False`, `norm_reward=True`), which keeps the near-bimodal return, with its large terminals over dense shaping, in a range the critic can track. Observations are instead normalised by fixed physical ranges inside `build_observation`, as described in [envs/README.md](../envs/README.md#_parking_corepy-helpers).
 - $\lambda_{\text{reg}}$ is linearly annealed from $0$ over the warmup window. The learning rate and entropy coefficient are linear decay schedules wired in `train_ppo.py`, restarted per curriculum stage from each stage's per-policy `standard_overrides` / `evidential_overrides` block (selected by `policy_type`, identical at init).
-- Training follows the single-phase ADR curriculum (6 stages): each stage is selected with `make docker-train STAGE=N` and resumes from the previous stage's checkpoint via `CHECKPOINT=` (or `--resume-from`), carrying over weights and `VecNormalize` reward statistics. The GNSS degradation process is a fixed, stage-invariant Markov chain (not a ramped axis); the curriculum ramps bays + margin then obstacle occupancy.
+- Training follows the single-phase ADR curriculum (6 stages): each stage is selected with `make docker-train STAGE=N` and resumes from the previous stage's checkpoint via `CHECKPOINT=` (or `--resume-from`), carrying over weights and `VecNormalize` reward statistics. The GNSS degradation process is a fixed, stage-invariant Markov chain rather than a ramped axis, and the curriculum ramps bays + margin then obstacle occupancy.
 - Runs are seeded from `seed` in `train_config.yaml` (the ablation sweeps seeds via `--seed`), and the training entry point restarts the run if the CARLA stack crashes mid-episode.
 - Optuna TPE + MedianPruner study with the search space defined in [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml).
 - No evaluation environment during training - two CARLA clients on a synchronous server deadlock.
@@ -18,7 +18,7 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 | Module | Class / purpose |
 |--------|----------------|
 | `train_ppo.py` | `train()` - main training loop, config loading, VecNormalize, checkpointing, TensorBoard, resume |
-| `tune_hyperparams.py` | `run_study()` - Optuna study; `sample_hyperparams()`, `TrialEvalCallback`, `apply_best_params()` |
+| `tune_hyperparams.py` | `run_study()` - Optuna study, plus `sample_hyperparams()`, `objective()`, `TrialEvalCallback`, `apply_best_params()` and `main()` |
 | `__init__.py` | Re-exports `train`, `load_config`, `load_env_config`, `merge_configs`, `TrainResult` |
 
 ## Internal data flow
@@ -51,10 +51,14 @@ flowchart TB
 
 ## Configuration
 
-All training hyperparameters are tuneable and live in
+All training hyperparameters live in
 [`configs/train_config.yaml`](../../configs/train_config.yaml). Read that
-file directly for the live values - it changes as the project iterates,
-and the Optuna tuner writes back into it.
+file directly for the live values.
+
+The committed values were fixed before the ablation began and applied identically to
+every arm and seed; no hyperparameter search was run for any reported result. Tuning per
+arm would have made the configuration a fifth experimental variable and confounded the
+2x2 comparison.
 
 The structural choices that must stay stable across resumes
 (`net_arch`, `activation`, `policy_type`, `include_covariance`,
@@ -88,24 +92,22 @@ warmup window to avoid destabilising early training:
 \lambda_{\text{reg}}(t) = \lambda_{\text{reg}} \cdot \min\!\left(1,\; \frac{t}{t_{\text{warmup}}}\right)
 ```
 
-Total loss at each update:
+The target is 0.02 over the first 50,000 decisions of each stage, so the batch averages
+stabilise under PPO before the anchor takes effect.
 
-```math
-\mathcal{L}_{\text{total}} = \mathcal{L}_{\text{PPO}} + \lambda_{\text{reg}}(t) \cdot \mathcal{L}_{\text{reg}}
-```
-
-See [`networks/README.md`](../networks/README.md) for $\mathcal{L}_{\text{reg}}$.
+The loss this coefficient weights is given in
+[networks/README.md](../networks/README.md#evidential-regularisation).
 
 ## Policy type switching
 
 | `policy_type` | Agent | Policy | Observation routed to actor |
 |---------------|-------|--------|------------------------------|
-| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full obs in flat mode; full obs split into a navigation block (everything bar the covariance) and the covariance block in dual-encoder mode |
+| `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full observation, with the covariance entering as ordinary observation dimensions |
 | `"standard"` | `ScheduledEntCoefPPO` | `LayerNormActorCriticPolicy` | Full obs |
 
 `include_covariance` and `include_obstacle_obs` flags (set per baseline) control
 observation dimensionality. The active dimension is derived from the structural
-constants in [`uncertainty_rl/utils/constants.py`](../utils/constants.py); use
+constants in [`uncertainty_rl/utils/constants.py`](../utils/constants.py). Use
 `compute_obs_dim()` rather than hardcoding.
 
 ## Key interfaces
@@ -127,20 +129,23 @@ Training via Make:
 
 ```bash
 make docker-train STAGE=1 BASELINE=full_method                       # curriculum head (random init)
-make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=seed42_11062026-0628  # resume next stage (bare leaf name)
+make docker-train STAGE=2 BASELINE=full_method CHECKPOINT=6_42_11062026-0628  # resume next stage (bare leaf name)
 make docker-train-short                                              # short smoke-test
 make docker-tune                                                    # Optuna hyperparameter search
 ```
 
 ## Hyperparameter tuning (Optuna)
 
+> **Never run.** No reported result used this pipeline; every arm and seed trained on the
+> committed defaults. It is retained for future work.
+
 TPE sampler + MedianPruner study. The full study configuration and search-space
 bounds live in [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml).
 
-The primary objective is `env/success_rate` from `EnvDiagnosticsCallback`.
-Until any episode succeeds, trials are ranked by a scaled
-`env/mean_progress_reward` tiebreaker so early non-successful trials remain
-comparable. After the study completes, `apply_best_params()` writes the
+Trials are scored by `_composite_objective()`, which returns `env/success_rate` when it
+is non-zero and otherwise falls back to a scaled `env/mean_progress_reward` tiebreaker,
+so trials that never park remain comparable. The scale is small enough that any non-zero
+success rate dominates the fallback. Both metrics come from `EnvDiagnosticsCallback`. After the study completes, `apply_best_params()` writes the
 winning values back to `configs/train_config.yaml` and creates a timestamped
 backup in `logs/tuning/backups/`. To resume a paused study, just re-run
 `make docker-tune` - SQLite persists the trial history.
@@ -170,8 +175,29 @@ Active observation dimensions are derived at runtime.
 | [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml) | `study_name`, `n_trials`, `timesteps_per_trial`, `seed`, search-space bounds |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `TOTAL_OBS_DIM`, `ACTION_DIM`, `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM` |
 
-<!-- img:placeholder name="training_curves" caption="PPO training convergence - episode reward, success rate, and evidential uncertainty metrics" -->
-![Training curves placeholder](../../docs/media/training_curves.png)
+## Training curves
+
+Success and collision rate for all four arms across the six curriculum stages, with the
+stage boundaries marked. `full_method` holds a clear success margin from stage 1 onward,
+and the step changes at each boundary are the difficulty ramping, not instability.
+
+<p align="center">
+  <img src="../../docs/media/training_curves.png" alt="Success and collision rate per arm across the six curriculum stages" width="620">
+</p>
+
+The two panels are the only tags exported by `METRIC_TAGS` in
+`scripts/analysis/tb_curves.py`. Episode reward and the evidential uncertainty scalars are
+logged to TensorBoard during training (see the metrics table above) but are not part of this
+figure. Add them to `METRIC_TAGS` and `_PANELS` if they are wanted.
+
+To regenerate - the first command exports the scalars from the TensorBoard event files to
+CSV, the second draws them:
+
+```bash
+make training-curves
+make figures FIG=training_curves
+cp outputs/main_analysis/figures/training_curves.png docs/media/training_curves.png
+```
 
 ## See also
 

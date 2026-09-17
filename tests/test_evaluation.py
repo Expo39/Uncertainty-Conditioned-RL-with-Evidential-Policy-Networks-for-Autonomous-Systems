@@ -130,11 +130,6 @@ class TestEvaluationMetrics:
         assert d["mean_aleatoric_uncertainty"] == 0.0
 
 
-# ===========================================================================
-# TestClassifyOutcome
-# ===========================================================================
-
-
 class TestClassifyOutcome:
     """
     @class TestClassifyOutcome
@@ -192,11 +187,6 @@ class TestClassifyOutcome:
         assert _classify_outcome(info, 1.5) == "stuck"
 
 
-# ===========================================================================
-# TestMakeEvalEnvPatrolVehiclesKey
-# ===========================================================================
-
-
 class TestMakeEvalEnvPatrolVehiclesKey:
     """
     @class TestMakeEvalEnvPatrolVehiclesKey
@@ -211,7 +201,6 @@ class TestMakeEvalEnvPatrolVehiclesKey:
         without spawning a real environment.
         """
         condition = {"num_patrol_vehicles": 2, "num_pedestrians": 3}
-        # The corrected make_eval_env reads condition.get("num_patrol_vehicles", 0)
         assert condition.get("num_patrol_vehicles", 0) == 2
 
     def test_fallback_to_zero_when_key_absent(self) -> None:
@@ -220,11 +209,6 @@ class TestMakeEvalEnvPatrolVehiclesKey:
         """
         condition: dict = {}
         assert condition.get("num_patrol_vehicles", 0) == 0
-
-
-# ===========================================================================
-# TestScaleSensorNoise
-# ===========================================================================
 
 
 class TestScaleSensorNoise:

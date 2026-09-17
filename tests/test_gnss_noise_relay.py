@@ -3,10 +3,8 @@
 @brief Unit tests for GnssNoiseRelayNode's Doppler-style velocity and COG model.
 
 Tests the tier defaults, course-noise helper, and YAML mirror invariant.
-All tests are CPU-only and require no CARLA or ROS 2. The relay module imports
-sensor_msgs at the top level (ROS 2 only), so _TIER_DEFAULTS and _TIER_ORDER
-are inlined here. The YAML mirror test enforces that gnss_noise_profiles.yaml
-matches these values, which transitively pins the relay's _TIER_DEFAULTS too.
+CPU-only, no CARLA or ROS 2: the relay module imports sensor_msgs at the top
+level, so _TIER_DEFAULTS and _TIER_ORDER are inlined here instead.
 """
 
 import math
@@ -69,11 +67,6 @@ def _mask_recovery_transitions(
     return masked / total
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _course_noise_std(doppler_std: float, speed: float) -> float:
     """
     @brief Compute course-over-ground noise std from Doppler velocity noise.
@@ -83,11 +76,6 @@ def _course_noise_std(doppler_std: float, speed: float) -> float:
     @return Course noise 1-sigma (rad).
     """
     return doppler_std / max(speed, 0.1)
-
-
-# ---------------------------------------------------------------------------
-# Tier defaults
-# ---------------------------------------------------------------------------
 
 
 class TestTierDefaults:
@@ -145,11 +133,6 @@ class TestTierDefaults:
         ), f"Doppler ratio {doppler_ratio:.1f}x must match position ratio {pos_ratio:.1f}x"
 
 
-# ---------------------------------------------------------------------------
-# Course noise helper
-# ---------------------------------------------------------------------------
-
-
 class TestCourseNoiseStd:
     """
     @class TestCourseNoiseStd
@@ -196,11 +179,6 @@ class TestCourseNoiseStd:
         assert math.degrees(course_std_rad) < 5.0
 
 
-# ---------------------------------------------------------------------------
-# YAML mirror consistency
-# ---------------------------------------------------------------------------
-
-
 class TestYamlMirror:
     """
     @class TestYamlMirror
@@ -232,11 +210,6 @@ class TestYamlMirror:
                 f"Tier '{tier}' doppler_stddev_ms mismatch: "
                 f"YAML={actual} vs _TIER_DEFAULTS={expected}"
             )
-
-
-# ---------------------------------------------------------------------------
-# One-way (monotone) degradation masking
-# ---------------------------------------------------------------------------
 
 
 class TestRecoveryMasking:
