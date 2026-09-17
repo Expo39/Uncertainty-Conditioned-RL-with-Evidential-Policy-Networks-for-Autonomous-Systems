@@ -16,37 +16,40 @@ MSc Artificial Intelligence dissertation by Antonio Galdes, September 2026.
 
 ## Overview
 
-RL parking policies are usually developed on the assumption that localisation is
-reliable. In operational parking areas, however, RTK-GNSS accuracy can fall silently
-from centimetres to metres during a manoeuvre. The pose estimate remains available and
-plausible throughout, so a vehicle with no channel to carry that change commits to the
-manoeuvre regardless.
+Reinforcement learning policies for parking are commonly developed on the assumption
+that localisation is reliable. That assumption does not hold in an operational parking
+area, where RTK-GNSS accuracy can fall from centimetres to metres in the course of a
+single manoeuvre. The pose estimate remains available and plausible throughout the
+decline, so a vehicle given no channel to carry that change commits to the manoeuvre
+regardless.
 
-Two mechanisms are examined on a PPO [1] parking agent, one supplying uncertainty and
-the other allowing the actor to use it. On the input side, an EKF [2] fusing RTK-GNSS
-with an IMU passes its posterior covariance into the observation. On the output side,
-that signal is consumed by an evidential Normal-Inverse-Gamma actor head [3], which
-produces per-action epistemic and aleatoric estimates in a single forward pass. Training
-runs in CARLA [4] under an always-on GNSS fix-state Markov chain, and the reward pays
-for the outcome alone. Uncertainty is thus observed but never rewarded, so any
-uncertainty-dependent behaviour must emerge on its own.
+Two mechanisms are examined on a PPO [1] parking agent, the first supplying uncertainty
+and the second allowing the actor to act upon it. At the input, an EKF [2] fusing
+RTK-GNSS with an IMU passes its posterior covariance into the observation. At the
+output, that signal is consumed by an evidential Normal-Inverse-Gamma actor head [3],
+from which per-action epistemic and aleatoric estimates are obtained in a single forward
+pass. Training is conducted in CARLA [4] under an always-on GNSS fix-state Markov chain,
+and the reward is paid for the outcome alone. Uncertainty is therefore observed but never
+rewarded, so any uncertainty-dependent behaviour must emerge unprompted.
 
 ---
 
 ## Demonstrations
 
-The evidential policy parking in CARLA, followed by a chase camera. The clip spans an
-episode boundary, so the car sits parked, the episode resets, and a different target
-bay is approached. Blue outlines mark the bays and green the episode's target.
+The evidential policy is shown parking in CARLA, followed by a chase camera. An episode
+boundary is spanned by the clip, so the vehicle is seen at rest, the episode is reset,
+and a different target bay is then approached. Bays are outlined in blue and the
+episode's target in green.
 
 <p align="center">
   <img src="docs/media/carla_3d.gif" alt="CARLA chase view of the evidential policy parking across two consecutive episodes, each with a different highlighted target bay" width="820">
 </p>
 
-The 2D bird's-eye viewer. The GNSS fix state climbs back up the ladder as the car
-closes on the bay, moving from degraded in red through standalone in orange and RTK
-float in amber to RTK fixed in green. The chain is neighbour-only, so a recovery never
-skips a rung.
+The 2D bird's-eye viewer is shown below. The GNSS fix state is seen climbing back up the
+ladder as the vehicle closes on the bay, passing from degraded in red through standalone
+in orange and RTK float in amber to RTK fixed in green. Transitions are permitted only
+between neighbouring tiers, so a recovery never skips a rung. The viewer itself is
+documented in [scripts/visualise/README.md](scripts/visualise/README.md).
 
 <p align="center">
   <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
@@ -61,9 +64,11 @@ skips a rung.
 
 ## Results
 
-A 2x2 factorial ablation switches each mechanism on and off independently. All four
-arms share one architecture, one hyperparameter configuration and one curriculum. Each
-was trained on three seeds and evaluated over 600 pooled episodes per condition.
+Each mechanism is switched on and off independently in a 2x2 factorial ablation. One
+architecture, one hyperparameter configuration and one curriculum are shared by all four
+arms, every one of them trained on three seeds and evaluated over 600 pooled episodes per
+condition. The conditions themselves are set out in
+[uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md).
 
 <p align="center">
   <img src="docs/media/eval_degradation.png" alt="Success rate and mean final position error per arm across the four reported evaluation conditions" width="820">
@@ -77,20 +82,20 @@ was trained on three seeds and evaluated over 600 pooled episodes per condition.
 | **`full_method`** | **Yes** | **Evidential NIG** | **45.8%** | **52.5%** |
 
 Supplying the covariance to the evidential actor raised parking success by **26.8 to
-36.2 pp** across the three trainable conditions, more than doubling the rate of the
-identical actor denied that input. Every bootstrap interval excludes zero. The same
-input on a standard Gaussian head shifted success by between -2.7 and +1.3 pp, a range
-including zero throughout. The effect is therefore a synergy rather than an additive
-benefit of either part.
+36.2 pp** across the three trainable conditions, more than doubling the rate achieved by
+an identical actor denied that input. Zero is excluded by every bootstrap interval. The
+same input on a standard Gaussian head shifted success by between -2.7 and +1.3 pp, a
+range including zero throughout. The effect is therefore a synergy between the two
+mechanisms rather than an additive benefit of either part taken alone.
 
 Median final position error is lowest under the full method in all three trainable
 conditions, at 0.76 m, 0.41 m and 0.64 m.
 
 **The behaviour was not rewarded.** No uncertainty term appears in the reward and no
-slow-down is scripted, yet braking intensifies as the filter reports greater positional
-uncertainty, at a Spearman correlation of +0.41 against +0.22 for the covariance-blind
-arm. The covariance supplies the timing of the response and the evidential head
-supplies its effort. Only the combination pays.
+slow-down is scripted, yet braking is observed to intensify as the filter reports greater
+positional uncertainty, at a Spearman correlation of +0.41 against +0.22 for the
+covariance-blind arm. The timing of the response is supplied by the covariance and its
+effort by the evidential head, neither part paying in isolation.
 
 The contrast is positive in all nine matched-seed comparisons, at margins of +16.0 to
 +59.0 pp, whereas the standard-head contrast varies in sign across seeds.
@@ -103,10 +108,12 @@ breakdown and the bounds placed on these claims, is set out in
   <img src="docs/media/training_curves.png" alt="Success and collision rate per arm across the six curriculum stages" width="820">
 </p>
 
-Training follows a six-stage single-phase curriculum that widens one difficulty axis at
-a time, progressing on budget rather than on performance. Twelve chains were run, being
-four arms across three seeds, at ten million policy decisions each and roughly two
-weeks of continuous GPU time.
+Training follows a six-stage single-phase curriculum in which one difficulty axis is
+widened at a time, progression being scheduled on budget rather than gated on measured
+performance. Twelve chains were run, being four arms across three seeds, at ten million
+policy decisions each and roughly two weeks of continuous GPU time. The per-stage
+settings are given in
+[configs/deployment/sim/curriculum/README.md](configs/deployment/sim/curriculum/README.md).
 
 ---
 
@@ -120,14 +127,15 @@ weeks of continuous GPU time.
    mitigated.
 3. Evidence that uncertainty-conditioned behaviour can be emergent, arising with no
    uncertainty term in the reward.
-4. A characterisation of the conditions under which a single-head NIG actor separates
-   its epistemic and aleatoric channels, and of why model-free RL does not supply them.
+4. A characterisation of the conditions required for a single-head NIG actor to separate
+   its epistemic and aleatoric channels, together with an account of the reason
+   model-free RL does not supply them.
 5. A reproducible evaluation asset, being a de-confounded four-condition sweep under
    controlled GNSS degradation with a fixed three-seed protocol.
 
 ---
 
-## How it works
+## System Architecture
 
 ```mermaid
 flowchart TB
@@ -164,16 +172,20 @@ flowchart TB
 ```
 
 The observation is 13-dimensional at its maximum, comprising EKF speed and yaw rate,
-three covariance features from the diagonal, the relative target bay pose in the ego
-body frame, and five hemispheric LiDAR clearance features. The action is
-`[steer, throttle, brake]` with no reverse gear, and the task is forward perpendicular
-bay parking. CARLA ground truth is used for reward computation alone and is never
-observable to the agent, which keeps the observation path identical between simulation
-and a real vehicle. The evidential head is applied to the actor alone, not the critic.
+three covariance features taken from the diagonal, the relative target bay pose in the
+ego body frame, and five hemispheric LiDAR clearance features. The action is
+`[steer, throttle, brake]` with no reverse gear, the task being forward perpendicular
+bay parking. CARLA ground truth is reserved for reward computation and is never made
+observable to the agent, so the observation path is identical in simulation and on a
+real vehicle. The evidential head is applied to the actor alone and not to the critic.
+Both spaces are specified in full in
+[uncertainty_rl/envs/README.md](uncertainty_rl/envs/README.md).
 
 PPO is trained through Stable-Baselines3 [5], and the filter is the `robot_localization`
 implementation [2]. The ablation and seed protocol follow the reporting practice
-recommended for RL comparisons [6].
+recommended for RL comparisons [6]. EKF state is passed from the bridge to the training
+container through a shared JSON file rather than over DDS, a decision explained in
+[uncertainty_rl/ros2/README.md](uncertainty_rl/ros2/README.md).
 
 ---
 
@@ -194,17 +206,17 @@ docs/                 Dissertation PDF, detailed notes, media
   detailed_notes/       Implementation notes keyed to dissertation sections
 ```
 
-### What `docs/detailed_notes/` is
+### The role of `docs/detailed_notes/`
 
-The dissertation is the canonical account of the design and its justification. The
-detailed notes are the implementation layer beneath it: the index layouts, parameter
-provenance, runtime configuration and code maps that a reader needs in order to work on
-the source, but which would bloat the dissertation or an inline comment.
+The canonical account of the design and its justification is the dissertation. Beneath it
+sit the detailed notes, forming the implementation layer: index layouts, parameter
+provenance, runtime configuration and code maps, all of them needed to work on the source
+yet too granular for the dissertation or for an inline comment.
 
-Each note names the dissertation section that owns its topic and records only what that
-section leaves out, so the two are complements rather than copies. Where a note and the
+Each note names the dissertation section that owns its topic and records only the
+remainder, so the two are complements rather than copies. Should a note and the
 dissertation ever disagree, the dissertation is correct and the note is stale. A per-file
-index, with the canonical section for each, is in
+index, giving the canonical section for each, is in
 [docs/detailed_notes/README.md](docs/detailed_notes/README.md).
 
 ---
@@ -212,15 +224,19 @@ index, with the canonical section for each, is in
 ## Getting started
 
 ```bash
-make docker-build && make docker-up      # build and start the three-container stack
+make docker-build && make docker-up      # build the images and start the stack
 make docker-train STAGE=1 BASELINE=full_method
 ```
 
-- **[SETUP.md](SETUP.md)** covers installation, the container architecture and the
-  first run.
-- **[USAGE.md](USAGE.md)** covers layout generation, the visualisers, configuration,
-  the ablation study and the results layout.
-- **[COMMANDS.md](COMMANDS.md)** is the complete Make target reference.
+Every workflow is driven through a Make target, the recipes setting the paths,
+environment and container context each command depends upon. Three documents cover the
+remainder:
+
+- **[SETUP.md](SETUP.md)** for installation, the container architecture and the first
+  run.
+- **[USAGE.md](USAGE.md)** for layout generation, the visualisers, configuration, the
+  ablation study and the results layout.
+- **[COMMANDS.md](COMMANDS.md)** for the complete Make target reference.
 
 ---
 
