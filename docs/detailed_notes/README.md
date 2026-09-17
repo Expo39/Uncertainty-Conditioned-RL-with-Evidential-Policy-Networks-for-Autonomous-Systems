@@ -39,7 +39,7 @@ the dissertation is correct and the note is stale.
 | File | Extracted from | Records | Canonical |
 |------|---------------|---------|-----------|
 | `hyperparameter_search.md` | `training/tune_hyperparams.py` | The unused search space, sampler and pruner choices | Section 3.8.1 |
-| `ablation_hpo_methodology.md` | `training/train_ppo.py`, `training/tune_hyperparams.py` | The protocol that would apply if tuning were run | Section 3.8.1 |
+| `ablation_hpo_methodology.md` | `training/train_ppo.py`, `training/tune_hyperparams.py` | The code-level constraints behind the untuned configuration | Section 3.8.1 |
 
 ### deployment/
 
