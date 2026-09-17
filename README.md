@@ -182,11 +182,16 @@ real vehicle. The evidential head is applied to the actor alone and not to the c
 Both spaces are specified in full in
 [uncertainty_rl/envs/README.md](uncertainty_rl/envs/README.md).
 
-PPO is trained through Stable-Baselines3 [5], and the filter is the `robot_localization`
-implementation [2]. The ablation and seed protocol follow the reporting practice
-recommended for RL comparisons [6]. EKF state is passed from the bridge to the training
-container through a shared JSON file rather than over DDS, a decision explained in
-[uncertainty_rl/ros2/README.md](uncertainty_rl/ros2/README.md).
+The three containers above are bridged by a file rather than by DDS. The two ROS 2
+distributions differ, Jazzy on the bridge against Humble in the training image, so EKF
+state is written to a shared JSON file and read from it, sidestepping cross-distro
+serialisation entirely. The rationale is set out in
+[uncertainty_rl/ros2/README.md](uncertainty_rl/ros2/README.md), and the stack itself in
+[SETUP.md](SETUP.md).
+
+PPO is trained through Stable-Baselines3 [5], the filter is the `robot_localization`
+implementation [2], and the ablation reporting follows the practice recommended for RL
+comparisons [6].
 
 ---
 
@@ -215,8 +220,7 @@ provenance, runtime configuration and code maps, all of them needed to work on t
 yet too granular for the dissertation or for an inline comment.
 
 Each note names the dissertation section that owns its topic and records only the
-remainder, so the two are complements rather than copies. Should a note and the
-dissertation ever disagree, the dissertation is correct and the note is stale. A per-file
+remainder, so the two are complements rather than copies. A per-file
 index, giving the canonical section for each, is in
 [docs/detailed_notes/README.md](docs/detailed_notes/README.md).
 
