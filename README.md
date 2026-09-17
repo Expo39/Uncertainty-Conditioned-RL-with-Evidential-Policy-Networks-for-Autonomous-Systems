@@ -48,10 +48,12 @@ green.
 </p>
 
 The second recording comes from a 2D bird's-eye viewer, documented in
-[scripts/visualise/README.md](scripts/visualise/README.md). The GNSS fix state climbs
-back up the hierarchy as the vehicle closes on the bay, passing from degraded in red
-through standalone in orange and RTK float in amber to RTK fixed in green. Transitions
-are permitted only between neighbouring tiers, so a recovery never skips a rung.
+[scripts/visualise/README.md](scripts/visualise/README.md). The ring around the vehicle
+represents the standard deviation of the positional accuracy it is given at the active
+tier, and the fix state climbs back up the hierarchy as the bay is approached, passing
+from degraded in red through standalone in orange and RTK float in amber to RTK fixed in
+green. Transitions are permitted only between neighbouring tiers, so a recovery never
+skips a rung.
 
 The conditioned behaviour is legible in the telemetry beneath the lot. Under the degraded
 tier the vehicle brakes and holds station rather than commit to a bay it cannot locate,
@@ -61,9 +63,6 @@ withholding is scripted anywhere in the reward, as noted under [Results](#result
 <p align="center">
   <img src="docs/media/visualiser_2d.gif" alt="2D bird's-eye visualiser parking as the GNSS fix state recovers from degraded up to RTK fixed" width="820">
 </p>
-
-> The ring represents the standard deviation of the positional accuracy the vehicle is
-> given at the active tier.
 
 ---
 
