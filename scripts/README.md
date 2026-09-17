@@ -154,6 +154,9 @@ Nothing here reads a results tree - that is `analysis/`.
 - `markov_analyser.py` - offline diagnostic for the GNSS tier Markov chain (stationary distribution, mean dwell per tier, time to first contiguous good window).
 - `tb_read.py` - TensorBoard scalar trajectories (tag selection, smoothing, tails, CSV export, multi-run comparison).
 
+Both carry more flags than the Make targets forward; the full surface is in
+[diagnostics/README.md](diagnostics/README.md).
+
 ```bash
 make analyse-markov                              # Defaults from gnss_noise_profiles.yaml
 make analyse-markov N_EPISODES=10000 N_STEPS=1750

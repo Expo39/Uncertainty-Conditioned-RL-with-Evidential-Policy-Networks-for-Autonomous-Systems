@@ -243,6 +243,7 @@ make docker-train STAGE=1 BASELINE=full_method
 | Floor plan modules, LotBuilder DSL, coordinate frame | [scripts/layouts/README.md](scripts/layouts/README.md) |
 | CARLA inspector modes, CLI flags | [scripts/inspect/README.md](scripts/inspect/README.md) |
 | 2D visualiser, JSONL schema, Pygame controls | [scripts/visualise/README.md](scripts/visualise/README.md) |
+| GNSS chain and TensorBoard diagnostics, CLI flags | [scripts/diagnostics/README.md](scripts/diagnostics/README.md) |
 | Sim deployment config files and their consumers | [configs/deployment/sim/README.md](configs/deployment/sim/README.md) |
 | Detailed notes index, with the canonical dissertation section for each | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/BUILDER.md](scripts/layouts/BUILDER.md) |
