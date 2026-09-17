@@ -16,21 +16,23 @@ MSc Artificial Intelligence dissertation by Antonio Galdes, September 2026.
 
 ## Overview
 
-Reinforcement learning policies for parking are commonly developed on the assumption
-that localisation is reliable. That assumption does not hold in an operational parking
-area, where RTK-GNSS accuracy can fall from centimetres to metres in the course of a
-single manoeuvre. The pose estimate remains available and plausible throughout the
-decline, so a vehicle given no channel to carry that change commits to the manoeuvre
-regardless.
+A parking policy depends on its position estimate, generated here by RTK-corrected GNSS
+fused with an IMU through an EKF [2]. That accuracy is not constant. The position is
+accurate to within 1 cm while the satellite solution holds, then only to within a
+decimetre and afterwards a metre as that solution is lost. A policy trained on the
+estimate alone receives no evidence of a decline along that hierarchy of fix states, so
+the bay entry relies on a position that may be several metres inaccurate.
 
-Two mechanisms are examined on a PPO [1] parking agent, the first supplying uncertainty
-and the second allowing the actor to act upon it. At the input, an EKF [2] fusing
-RTK-GNSS with an IMU passes its posterior covariance into the observation. At the
-output, that signal is consumed by an evidential Normal-Inverse-Gamma actor head [3],
-from which per-action epistemic and aleatoric estimates are obtained in a single forward
-pass. Training is conducted in CARLA [4] under an always-on GNSS fix-state Markov chain,
-and the reward is paid for the outcome alone. Uncertainty is therefore observed but never
-rewarded, so any uncertainty-dependent behaviour must emerge unprompted.
+The remedy examined on a PPO [1] agent is a dual-layer uncertainty architecture. The
+input layer incorporates localisation uncertainty into the observation as three pose
+standard deviations taken from the EKF covariance diagonal. The output layer represents
+uncertainty over the selected action through an evidential Normal-Inverse-Gamma head [3],
+one forward pass producing a state-conditioned aleatoric variance together with an
+epistemic estimate.
+
+Both layers are trained together in CARLA [4] and are observed rather than rewarded, the
+reward being based solely on outcomes, so any uncertainty-dependent behaviour must emerge
+unprompted.
 
 ---
 
@@ -81,24 +83,21 @@ condition. The conditions themselves are set out in
 | `output_uncertainty` | No | Evidential NIG | 19.0% | 20.0% |
 | **`full_method`** | **Yes** | **Evidential NIG** | **45.8%** | **52.5%** |
 
-Supplying the covariance to the evidential actor raised parking success by **26.8 to
-36.2 pp** across the three trainable conditions, more than doubling the rate achieved by
-an identical actor denied that input. Zero is excluded by every bootstrap interval. The
-same input on a standard Gaussian head shifted success by between -2.7 and +1.3 pp, a
-range including zero throughout. The effect is therefore a synergy between the two
-mechanisms rather than an additive benefit of either part taken alone.
-
-Median final position error is lowest under the full method in all three trainable
-conditions, at 0.76 m, 0.41 m and 0.64 m.
+Incorporating the EKF covariance into the evidential actor enhanced parking success by
+**26.8 to 36.2 pp** on the trained lot, and every seed favoured the covariance, with a
+margin of +16.0 pp in the closest pairing. The same input, meanwhile, yielded no
+measurable benefit on a standard Gaussian actor. The effect is therefore an interaction
+between the two mechanisms rather than an additive benefit of either part taken alone.
 
 **The behaviour was not rewarded.** No uncertainty term appears in the reward and no
 slow-down is scripted, yet braking is observed to intensify as the filter reports greater
-positional uncertainty, at a Spearman correlation of +0.41 against +0.22 for the
-covariance-blind arm. The timing of the response is supplied by the covariance and its
+positional uncertainty. The timing of the response is supplied by the covariance and its
 effort by the evidential head, neither part paying in isolation.
 
-The contrast is positive in all nine matched-seed comparisons, at margins of +16.0 to
-+59.0 pp, whereas the standard-head contrast varies in sign across seeds.
+The uncertainty the same head reports over its own actions proves less tractable than the
+uncertainty supplied to it, the epistemic and aleatoric estimates remaining inseparable in
+practice under model-free reinforcement learning. The cause is attributed to the
+construction of the head rather than to the conditions of evaluation.
 
 The full analysis, including the calibration of the filter covariance, the behavioural
 breakdown and the bounds placed on these claims, is set out in
