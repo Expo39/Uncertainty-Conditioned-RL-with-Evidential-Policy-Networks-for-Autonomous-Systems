@@ -25,7 +25,7 @@ static_tf = _common_mod.static_tf
 def generate_launch_description() -> LaunchDescription:
     """
     @brief Generate the real-vehicle sensor pipeline launch description.
-    @return LaunchDescription with navsat_transform, static TFs, EKF, and
+    @return LaunchDescription with the sensor relay, static TFs, EKF, and
             CovarianceExtractorNode.
     """
     ros2_cfg = load_yaml("/workspace/configs/ros2_config.yaml", "ROS2_CONFIG_PATH")

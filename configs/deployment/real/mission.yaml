@@ -3,8 +3,9 @@
 # Bay IDs are printed on each bay in the layout PNG under
 # outputs/raw_derived/layouts/; changes take effect on deployment restart.
 
-# Must match a bay 'id' in the layout file below, e.g. "perpendicular_12".
-target_bay_id: "B01"
+# Must match a bay 'id' in the layout file below. Placeholder until a site is
+# surveyed; the generated layouts use perpendicular_<N> and motorcycle_<N>.
+target_bay_id: "perpendicular_12"
 
 # Layout YAML that defines the lot geometry and bay positions.
 # Must match the physical lot at the deployment site.
