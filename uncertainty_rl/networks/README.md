@@ -124,34 +124,24 @@ for the derivation.
 
 The penalty is zero at the prior, with a restoring gradient growing linearly with
 distance. The priors match the bias initialisation in `EvidentialLayer.__init__` plus
-the offsets, giving $\alpha_0 = 2.741$ and $\beta_0 = 0.693$. $\nu$ is excluded here and
-left to the evidence term below.
+the offsets, giving $\alpha_0 = 2.741$ and $\beta_0 = 0.693$.
 
-The full training loss carries five terms beyond the PPO surrogate:
+$\nu$ is deliberately excluded. Anchoring it would bind the epistemic evidence to its
+initial value, defeating the purpose of the head, whose epistemic estimate should rise
+in unfamiliar states and fall as familiarity grows.
+
+This is the only evidential term added to the PPO surrogate:
 
 ```math
 \mathcal{L} = \mathcal{L}_{\text{policy}}
   + c_2 \mathcal{L}_{\text{entropy}}
   + c_1 \mathcal{L}_{\text{value}}
   + \lambda_{\text{reg}}(t) \mathcal{L}_{\text{reg}}
-  + \lambda_{\text{evidence}}(t) \mathcal{L}_{\text{evidence}}
-  + \lambda_{\nu} \mathcal{L}_{\nu\text{-anchor}}
 ```
 
-$\lambda_{\text{reg}}$ and $\lambda_{\text{evidence}}$ are annealed linearly from $0$
-over their own warmup step counts, all configured in `configs/train_config.yaml` under
-`evidential`.
-
-The last two act on $\nu$ in opposition: an advantage-gated accrual term that raises
-$\nu$ for well-predicted actions, against a log-space anchor pulling it back toward its
-sub-unit prior. $\gamma$ is detached in the accrual term, so PPO retains sole ownership
-of the action mean.
-
-> **Both $\lambda_{\text{evidence}}$ and $\lambda_{\nu}$ are `0.0` in the shipped
-> configuration and were inactive in the reported experiments**, which therefore ran
-> three active terms. RL supplies no ground-truth action target, so neither term can
-> make $\nu$ state-dependent, and neither can disentangle epistemic from aleatoric.
-> They are retained for that experiment alone.
+$\lambda_{\text{reg}}$ anneals linearly from $0$ to 0.02 over the first 50,000 decisions
+of each stage, so the batch averages stabilise under PPO before the anchor takes effect.
+It is configured in `configs/train_config.yaml` under `evidential`.
 
 **Why not the supervised term?**
 
@@ -168,20 +158,16 @@ bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiri
 | Tag | Expression logged |
 |-----|------------------|
 | `train/evidential_reg_loss` | Mean prior-anchoring penalty |
-| `train/evidence_loss` | Mean advantage-gated evidence-accrual term |
-| `train/nu_anchor_loss` | Mean log-space $\nu$ anchor |
 | `train/epistemic_uncertainty` | $\langle \beta / (\nu(\alpha - 1)) \rangle$ |
 | `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$ |
 | `train/lambda_reg` | Current annealed $\lambda_{\text{reg}}$ |
-| `train/lambda_evidence` | Current annealed $\lambda_{\text{evidence}}$ |
-| `train/lambda_nu_anchor` | Configured $\lambda_{\nu}$ |
 | `train/ent_coef` | Current value of the linear ent_coef decay schedule |
 
 ## Configuration keys consumed
 
 | Config file | Keys |
 |-------------|------|
-| [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, and under `evidential`: `lambda_reg`, `lambda_reg_warmup_steps`, `lambda_evidence`, `lambda_evidence_warmup_steps`, `lambda_nu_anchor`, `aleatoric_floor`, `use_uncertainty_conditioning` |
+| [`configs/train_config.yaml`](../../configs/train_config.yaml) | `net_arch`, `activation`, and under `evidential`: `lambda_reg`, `lambda_reg_warmup_steps`, `aleatoric_floor` |
 | [`uncertainty_rl/utils/constants.py`](../utils/constants.py) | `VEHICLE_STATE_DIM`, `COVARIANCE_FEATURES_DIM`, `ACTION_DIM` |
 
 ### On plotting epistemic against aleatoric
