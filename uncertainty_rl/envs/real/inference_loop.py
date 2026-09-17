@@ -5,6 +5,13 @@
 Runs the trained evidential policy on a physical vehicle. SafetyWrapper is
 always active: aleatoric uncertainty caps longitudinal speed; epistemic
 uncertainty above the handoff threshold commands a full stop.
+
+@warning Never run on hardware. This pipeline is implemented and unit-tested
+         but has never driven a physical vehicle, so no behaviour here is
+         empirically validated. The LiDAR callback and the vehicle command
+         interface are unimplemented, and the site-specific measurements in
+         configs/deployment/real/ are placeholders; all must be supplied before
+         any closed-loop trial.
 """
 
 import logging
@@ -32,9 +39,9 @@ from uncertainty_rl.utils.constants import (
     SUCCESS_THRESHOLD_VELOCITY,
 )
 
-# Placeholder for the sim's polygon-fit check (car_fully_inside_bay).
-# @todo(AG) replace once deployment vehicle extents are surveyed and
-# added to the deployment config.
+# Scalar stand-in for the sim's polygon-fit check (car_fully_inside_bay), which
+# needs the deployment vehicle's surveyed extents to be available in the
+# deployment config before it can be applied here.
 _REAL_WORLD_POS_THRESHOLD_M = 0.5
 _REAL_WORLD_YAW_THRESHOLD_RAD = math.radians(15.0)
 
@@ -230,10 +237,13 @@ class RealWorldInferenceLoop:
         @brief Return the latest 2D LiDAR point cloud in vehicle body frame.
         @return (N, 2) float32 array of (x_fwd, y_left) returns, or None.
 
-        @todo Implement by reading from the physical LiDAR interface, e.g.:
-            - Subscribe to a ROS 2 sensor_msgs/LaserScan or PointCloud2 topic.
-            - Convert to (N, 2) float32 with x-forward, y-left convention.
-            - The scan may be polled here or cached via a background thread.
+        @note Unimplemented: the binding is specific to the deployed scanner.
+              An implementation subscribes to a ROS 2 sensor_msgs/LaserScan or
+              PointCloud2 topic and converts it to (N, 2) float32 in the
+              x-forward, y-left convention, either polled here or cached by a
+              background thread. Returning None yields zeroed obstacle features,
+              which is the all-clear observation the policy trains against, so
+              obstacle avoidance rests on the safety operator until it is bound.
         """
         return None
 

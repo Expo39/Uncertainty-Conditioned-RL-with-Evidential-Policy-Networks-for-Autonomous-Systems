@@ -5,6 +5,11 @@
 Owns the static mission configuration for a real-world deployment: the surveyed
 lot datum (EKF frame reference), the target bay resolved from the layout YAML,
 and the per-actuator calibration map. No ROS 2 or runtime sensor state.
+
+@warning Never run on hardware. The datum and calibration values ship as
+         unmeasured placeholders, so both the frame transform and the actuator
+         map reduce to identities until a site survey and a calibration run
+         supply real figures.
 """
 
 import logging
