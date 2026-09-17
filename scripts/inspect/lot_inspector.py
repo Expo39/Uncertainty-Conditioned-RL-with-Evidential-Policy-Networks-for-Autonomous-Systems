@@ -214,7 +214,7 @@ def main() -> None:
         default=None,
         help=(
             "Name of an eval_config.yaml condition (e.g. 'anchor_deployment', "
-            "'gnss_standalone', 'heldout_trapezoid_rtk_fixed'). The eval_dryrun "
+            "'ood_irregular_rtk_fixed', 'gnss_degrade_one_way'). The eval_dryrun "
             "env is built for this condition via the same make_eval_env path the "
             "sweep uses (scaled sensor noise, pinned occupancy / floor plan / "
             "GNSS tier). Omit to default to the first condition. "
