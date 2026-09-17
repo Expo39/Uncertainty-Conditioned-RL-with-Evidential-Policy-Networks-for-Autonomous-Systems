@@ -92,7 +92,8 @@ together.
   occupancy, so most episodes begin under uncertainty and the chain still recovers
   mid-episode.
 - `fixed_gnss_tier` is deliberately omitted from every curriculum stage, so no stage
-  pins the start tier. `tests/test_curriculum_invariants.py` enforces that omission in CI.
+  pins the start tier. `tests/test_curriculum_invariants.py` asserts that omission under
+  `make docker-test-unit`.
 - The always-on chain then wanders from the sampled start. It is stage-invariant, so the
   GNSS degradation process is identical in every stage rather than being a ramped
   curriculum axis, and localisation uncertainty is present from stage 1.
