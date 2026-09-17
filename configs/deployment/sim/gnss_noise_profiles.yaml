@@ -54,7 +54,7 @@ tiers:
 
 # Per-step transitions at the 20 Hz callback rate; rows = from-tier, columns =
 # to-tier in key order. Ladder-only, so a walk never skips a rung. Recovery beats
-# degradation everywhere off-fixed, making the chain fixed-dominant (~80%), and
+# degradation everywhere off-fixed, making the chain fixed-dominant (~71%), and
 # every dwell stays under the ~10 s stall margin so a wait is never cut short.
 transition_matrix:
   rtk_fixed:  [0.9920, 0.0080, 0.0000, 0.0000]   # leave fix ~0.8%/step (excursion onset)
