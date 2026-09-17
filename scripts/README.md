@@ -14,16 +14,21 @@ Offline tooling for results analysis, figure rendering, layout generation, CARLA
 | Train (10k step smoke-test) | `make docker-train-short` |
 | Inspect layout in CARLA | `make docker-inspect INSPECT_LAYOUT=rectangle` |
 | Inspect sensor placement | `make docker-inspect-sensors` |
-| Live training overlay (CARLA spectator) | `make docker-inspect-live` |
+| Live sensor overlay in windowed CARLA | `make docker-inspect-live INSPECT_SENSOR=lidar` |
 | Full pipeline dryrun (manual drive) | `make docker-inspect-dryrun` |
+| Manually drive a named eval condition | `make docker-inspect-eval-dryrun SCENARIO=anchor_deployment` |
 | 2D bird's-eye visualiser (live) | `make visualise` |
 | Checkpoint demo + 2D viewer | `make eval-visualise-2d` |
 | Checkpoint demo + 3D CARLA view | `make docker-eval-visualise-3d` |
+| Multi-seed leg (all arms, all stages, then eval) | `make run-seed-leg` |
 | Diagnose GNSS tier Markov chain | `make analyse-markov` |
 | Cross-arm covariance contrast + degradation slope | `make analyse-ablation` |
 | EKF covariance calibration (std vs error) | `make analyse-calibration` |
 | Safety-gate ROC (EKF-std vs epistemic) | `make analyse-gate` |
+| Pool every seed into the headline tables | `make analyse-cross-seed` |
 | Causal covariance-input probe | `make docker-covariance-probe BASELINE=full_method CHECKPOINT=<leaf>` |
+| Every reported figure | `make figures` |
+| Assemble the curated `outputs/main_analysis/` set | `make analysis-bundle` |
 
 ## Directory map
 
@@ -38,8 +43,9 @@ flowchart TB
         MLT["multi_workers/\nWorker stack scripts"]
         CLN["cleanup/\nstack_clean.sh"]
         DIA["diagnostics/\nmarkov_analyser.py\ntb_read.py"]
-        EVL["analysis/\nablation.py\ncalibration.py\ngate_roc.py\ncross_seed.py\ncovariance_probe.py"]
-        FIG["analysis/figures/\nbuild + run_figures\nfigure_style.py"]
+        EVL["analysis/\nablation.py\ncalibration.py\ngate_roc.py\ncross_seed.py\ncovariance_probe.py\nbundle.py + others"]
+        FIG["analysis/figures/\nbuild + run_figures"]
+        STY["figure_style.py\n(house style, scripts/ root)"]
     end
 
     subgraph make["make targets"]
@@ -59,6 +65,7 @@ flowchart TB
     TRN --> DT
     EVL --> AN
     FIG --> FG
+    STY --> FIG
     DIA --> DG
 ```
 
@@ -80,13 +87,14 @@ Writes `configs/layouts/<name>.yaml` and `outputs/raw_derived/layouts/<name>.png
 Unified CARLA debug overlay inspector (`lot_inspector.py`) for visually verifying lot geometry and sensor placement. Entry point for all inspection modes.
 
 ```bash
-make docker-inspect INSPECT_LAYOUT=rectangle   # Layout boundary + bay overlay
-make docker-inspect-sensors                    # Sensor placement on layout
-make docker-inspect-live                       # Live CARLA spectator during training
-make docker-inspect-dryrun                     # Full pipeline dryrun (manual drive)
+make docker-inspect INSPECT_LAYOUT=rectangle              # Layout boundary + bay overlay
+make docker-inspect-sensors INSPECT_LAYOUT=rectangle      # Sensor placement on layout
+make docker-inspect-live INSPECT_SENSOR=lidar             # Live sensor overlay in windowed CARLA
+make docker-inspect-dryrun STAGE=1 MANUAL=true            # Full curriculum-stage pipeline (manual drive)
+make docker-inspect-eval-dryrun SCENARIO=anchor_deployment  # Drive a named eval condition (no checkpoint)
 ```
 
-See [inspect/README.md](inspect/README.md) for the full argument reference.
+`dryrun.sh` streams the inspect container's logs and tears the stack down on exit; it is mode-agnostic, driving both dryrun targets. Inspector classes live in `inspect/inspectors/`. See [inspect/README.md](inspect/README.md) for the full argument reference.
 
 ### `visualise/`
 
@@ -99,11 +107,15 @@ make eval-visualise-2d BASELINE=full_method CHECKPOINT=seed42_11062026-0628  # C
 make docker-eval-visualise-3d                                    # Checkpoint + CARLA 3D spectator view
 ```
 
-The env writes frames only when `outputs/.vis_active` exists (created by the visualiser on start, removed on close). See [visualise/README.md](visualise/README.md) for the signal file protocol and JSONL schema.
+Alongside `visualiser.py` (the viewer) and `demo_drive.py` (loads a checkpoint and drives deterministic CARLA episodes), the directory holds `gnss_tiers.py` (tier sigma, description and severity colour read from `gnss_noise_profiles.yaml`, so no tier is hardcoded in the viewer), `recorder.py` (`FrameRecorder`, raw frames piped to the host ffmpeg for MP4 capture) and `eval_visualise_2d.sh` (the demo container, log stream and viewer orchestration behind `make eval-visualise-2d`).
+
+The env writes frames only when `outputs/.vis_active` exists (created by the visualiser on start, removed on close). Recording and `make clip` need the **host** ffmpeg binary (`make check-host-deps`); it is deliberately absent from every image because the viewer is host-side.
+
+**`make eval-visualise-2d` tears the whole stack down before it starts**, so it will stop a training run in progress. See [visualise/README.md](visualise/README.md) for the signal file protocol and JSONL schema.
 
 ### `colours/`
 
-Single source of truth for all visualisation colours (bay types, pedestrian zones, patrol path, lot boundary, ego vehicle, actor overlays). Import from here, and never hardcode hex values in any script.
+Single source of truth for all visualisation colours (bay types, pedestrian zones, patrol path, lot and out-of-bounds boundary, ego vehicle, actor overlays, sensor mounts and FOV arcs). Import from here, and never hardcode hex values in any script.
 
 ```python
 from scripts.colours import HEX_EGO, HEX_TARGET_BAY, BAY_HEX
@@ -115,9 +127,9 @@ See `scripts/colours/__init__.py` for the full palette reference.
 
 Shell helpers invoked inside the training container.
 
-- `train.sh` - runs `train_ppo.py` with ROS 2 and DDS noise filtered from stderr, forwarding extra arguments to the Python script.
-- `tune.sh` - the same wrapper for `tune_hyperparams.py`, invoked by `make docker-tune`.
-- `run_seed_leg.sh` - the multi-seed orchestrator behind `make run-seed-leg`. Trains every arm through every stage, evaluates the final stage, and writes the suite tables. It is idempotent, skipping completed work so a crashed leg resumes on re-run.
+- `train.sh` - runs `train_ppo.py` with ROS 2 and DDS noise filtered from stderr, forwarding extra arguments to the Python script. Fixes the config, log and checkpoint paths; everything else is passed through from the make recipe.
+- `tune.sh` - the Optuna wrapper, running `uncertainty_rl.training.tune_hyperparams` as a module with ROS 2 logging redirected. Invoked by `make docker-tune`. **No tuning run was ever performed** - every reported result uses the committed defaults.
+- `run_seed_leg.sh` - the multi-seed orchestrator behind `make run-seed-leg`. Trains the four arms (`vanilla_ppo`, `input_uncertainty`, `output_uncertainty`, `full_method`) through stages 1-6 for seeds 42, 123 and 7, resume-chaining each stage, then evaluates the final stage only (both SafetyWrapper variants for the evidential arms) and writes the suite tables. It is idempotent, skipping completed work so a crashed leg resumes on re-run.
 
 ```bash
 make docker-train        # Full training run
@@ -150,10 +162,12 @@ make tb-scalars LOG=logs/<baseline>/<leaf> ARGS="--match success --last 10"
 
 ### `analysis/`
 
-Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the reported input-covariance and uncertainty results. Run only after an eval has written results under `outputs/raw/evaluation_results/<baseline>/<leaf>/`.
+Host-side (and one in-container) analysis tooling that turns an eval run's CSVs into the reported input-covariance and uncertainty results. Run only after an eval has written results under `outputs/raw/evaluation_results/seed_<N>/<baseline>/<leaf>/`.
 
 ```bash
 make analyse-ablation          # Cross-arm covariance contrast + degradation slope
+make analyse-calibration       # Is the EKF covariance honest (std vs actual error)?
+make analyse-gate              # EKF-std vs evidential-epistemic safety-gate ROC
 make analyse-cross-seed        # Pool every seed into the headline + per-seed robustness
 make analysis-bundle           # Assemble the curated outputs/main_analysis/ set
 ```
@@ -166,7 +180,7 @@ Every rendered figure. Presentation only: these modules read CSVs and draw them,
 
 - `build.py` - the pooled figure set, one entry point for all of them. Figures are addressed by name, the nine ids being `ablation_by_condition`, `behaviour_by_std`, `degradation_tiers`, `ekf_calibration`, `ekf_sawtooth`, `gate_roc`, `lot_layouts`, `seed_robustness` and `training_curves`.
 - `run_figures.py` - the per-run panels, rebuilt from a run's `evaluation_results.csv`.
-- [`figure_style.py`](figure_style.py) - the one house style. Every figure imports it, and nothing sets rcParams, picks a colour, or builds a legend by hand.
+- [`scripts/figure_style.py`](figure_style.py) - the one house style, at the `scripts/` root rather than inside `figures/`. Every figure imports it as `from scripts import figure_style as fs`, and nothing sets rcParams, picks a colour, or builds a legend by hand.
 
 ```bash
 make figures                 # Every figure, into outputs/main_analysis/figures
@@ -181,5 +195,8 @@ make run-figures RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<lea
 - [scripts/analysis/README.md](analysis/README.md) - eval analysis tooling and CSV schema
 - [scripts/inspect/README.md](inspect/README.md) - inspector argument reference
 - [scripts/visualise/README.md](visualise/README.md) - visualiser protocol and JSONL schema
+- [scripts/layouts/BUILDER.md](layouts/BUILDER.md) - the `LotBuilder` DSL
 - `scripts/colours/__init__.py` - palette constants
+- `scripts/figure_style.py` - figure house style (rcParams, palette, legends)
 - [uncertainty_rl/README.md](../uncertainty_rl/README.md) - package overview
+- [docs/AntonioGaldes_Dissertation.pdf](../docs/AntonioGaldes_Dissertation.pdf) - the reported method and results
