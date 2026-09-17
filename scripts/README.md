@@ -32,42 +32,20 @@ Offline tooling for results analysis, figure rendering, layout generation, CARLA
 
 ## Directory map
 
+Each directory points down to the `make` targets that invoke it.
+
 ```mermaid
 flowchart TB
-    subgraph scripts["scripts/"]
-        LAY["layouts/\nFloor plan modules +\ngenerate_layouts.py"]
-        INS["inspect/\nlot_inspector.py\ndryrun.sh"]
-        VIS["visualise/\nvisualiser.py\ndemo_drive.py"]
-        COL["colours/\nPalette constants"]
-        TRN["training/\ntrain.sh"]
-        MLT["multi_workers/\nWorker stack scripts"]
-        CLN["cleanup/\nstack_clean.sh"]
-        DIA["diagnostics/\nmarkov_analyser.py\ntb_read.py"]
-        EVL["analysis/\nablation.py\ncalibration.py\ngate_roc.py\ncross_seed.py\ncovariance_probe.py\nbundle.py + others"]
-        FIG["analysis/figures/\nbuild + run_figures"]
-        STY["figure_style.py\n(house style, scripts/ root)"]
-    end
-
-    subgraph make["make targets"]
-        GL["generate-layouts"]
-        DI["docker-inspect*"]
-        EV["visualise\neval-visualise-2d\ndocker-eval-visualise-3d"]
-        DT["docker-train\ndocker-train-short"]
-    end
-
-    AN["analyse-ablation\nanalyse-calibration\nanalyse-gate\nanalyse-cross-seed\ndocker-covariance-probe"]
-    FG["figures\nrun-figures"]
-    DG["analyse-markov\ntb-scalars"]
-
-    LAY --> GL
-    INS --> DI
-    VIS --> EV
-    TRN --> DT
-    EVL --> AN
-    FIG --> FG
-    STY --> FIG
-    DIA --> DG
+    LAY["layouts/"] --> GL["generate-layouts"]
+    INS["inspect/"] --> DI["docker-inspect*"]
+    VIS["visualise/"] --> EV["visualise<br>eval-visualise-2d<br>docker-eval-visualise-3d"]
+    TRN["training/"] --> DT["docker-train<br>docker-train-short"]
+    EVL["analysis/"] --> AN["analyse-ablation<br>analyse-calibration<br>analyse-gate<br>analyse-cross-seed<br>docker-covariance-probe"]
+    STY["figure_style.py"] --> FIG["analysis/figures/"] --> FG["figures<br>run-figures"]
+    DIA["diagnostics/"] --> DG["analyse-markov<br>tb-scalars"]
 ```
+
+`colours/`, `multi_workers/` and `cleanup/` have no direct target of their own.
 
 ## Subdirectories
 
