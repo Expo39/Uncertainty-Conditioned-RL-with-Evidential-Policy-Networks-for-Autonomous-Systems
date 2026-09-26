@@ -247,7 +247,7 @@ raw CSVs and write derived ones. None of them needs a GPU or the simulator.
 | `make training-curves` | TensorBoard scalars -> CSV | No |
 | `make figures [FIG=gate_roc]` | Render the figures into `outputs/main_analysis/figures/` | No |
 | `make run-figures [RUN_DIR=...]` | Per-run diagnostic panels | No |
-| `make analysis-bundle [STAGE=6]` | Assemble summaries, values and MANIFEST | No |
+| `make analysis-bundle [STAGE=6] [BOOTSTRAP_SEED=42]` | Assemble summaries (gate AUCs with 95% bootstrap intervals), values and MANIFEST | No |
 
 Typical order after a completed evaluation:
 
@@ -255,7 +255,7 @@ Typical order after a completed evaluation:
 make analyse-cross-seed STAGE=6   # pooled CSVs -> raw_derived/cross_seed_analysis/
 make training-curves              # TB scalars  -> raw_derived/training/
 make figures                      # figures     -> main_analysis/figures/
-make analysis-bundle              # summaries + values + MANIFEST
+make analysis-bundle STAGE=6 BOOTSTRAP_SEED=42   # summaries + values + MANIFEST
 ```
 
 The single-seed targets (`analyse-ablation`, `analyse-gate`, `analyse-calibration`,

@@ -23,7 +23,11 @@ import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from scripts.analysis._discovery import discover_arm_csvs  # noqa: E402
-from scripts.analysis.ablation import drop_held_tiers  # noqa: E402
+from scripts.analysis.ablation import _N_BOOTSTRAP, drop_held_tiers  # noqa: E402
+
+# Resamples per bootstrap chunk. Bounds the (chunk x n_failures) weight matrix
+# so the interval costs a few tens of MB at the pooled episode counts.
+_BOOTSTRAP_CHUNK = 500
 
 # Outcomes the gate SHOULD pre-empt (a handoff before these is the desired
 # behaviour). success is the only non-failure; "handoff" episodes already
@@ -112,6 +116,78 @@ def _roc_curve(
     # neither np.trapz (removed in NumPy 2.x) nor sklearn.
     auc = float(np.sum(np.diff(fpr) * (tpr[1:] + tpr[:-1]) / 2.0))
     return fpr, tpr, auc
+
+
+def _pair_wins(scores: np.ndarray, labels: np.ndarray) -> np.ndarray:
+    """
+    @brief Failure-vs-success pairwise win matrix of a gate signal.
+    @param scores: Per-episode signal value (higher = more uncertain).
+    @param labels: 1 for a failure episode, 0 for a success.
+    @return Matrix of shape (n_failures, n_successes): 1 where the failure
+            scores higher, 0.5 on a tie, 0 otherwise. Empty when either class
+            is absent. NaN scores are dropped first.
+
+    Its mean is the Mann-Whitney AUC with ties averaged, which a pinned signal
+    (the EKF std sitting at its floor) needs: the trapezoidal sweep in
+    _roc_curve depends on how argsort happens to order tied scores.
+    """
+    mask = ~np.isnan(scores)
+    scores, labels = scores[mask], labels[mask]
+    failures = scores[labels == 1]
+    successes = scores[labels == 0]
+    diff = failures[:, None] - successes[None, :]
+    return (diff > 0).astype(float) + 0.5 * (diff == 0)
+
+
+def _bootstrap_counts(n: int, n_resamples: int, rng: np.random.Generator) -> np.ndarray:
+    """
+    @brief How often each of n items is drawn in each bootstrap resample.
+    @param n: Items in the sample.
+    @param n_resamples: Number of resamples.
+    @param rng: Random generator.
+    @return Integer matrix of shape (n_resamples, n) whose rows each sum to n.
+    """
+    draws = rng.integers(0, n, size=(n_resamples, n))
+    offsets = n * np.arange(n_resamples)[:, None]
+    flat = np.bincount((draws + offsets).ravel(), minlength=n_resamples * n)
+    return flat.reshape(n_resamples, n)
+
+
+def _bootstrap_auc_ci(
+    scores: np.ndarray,
+    labels: np.ndarray,
+    rng: np.random.Generator,
+) -> Tuple[float, float, float]:
+    """
+    @brief Tie-aware rank AUC with a stratified bootstrap interval.
+    @param scores: Per-episode signal value (higher = more uncertain).
+    @param labels: 1 for a failure episode, 0 for a success.
+    @param rng: Random generator; seed it for a reproducible interval.
+    @return Tuple (auc, ci_low, ci_high) at the 95% percentile level; all NaN
+            when either class is absent.
+    @note Failures and successes are resampled separately, so every resample
+          keeps the observed class counts and the AUC stays defined. An
+          unstratified draw could empty the rarer class on a small condition.
+
+    A resampled AUC is the pairwise win matrix weighted by how often each
+    failure and each success was drawn, so the pairs are compared once and each
+    resample reduces to a matrix product rather than a fresh sort.
+    """
+    wins = _pair_wins(scores, labels)
+    n_failures, n_successes = wins.shape
+    if n_failures == 0 or n_successes == 0:
+        return float("nan"), float("nan"), float("nan")
+
+    point = float(wins.mean())
+    aucs = np.empty(_N_BOOTSTRAP)
+    for start in range(0, _N_BOOTSTRAP, _BOOTSTRAP_CHUNK):
+        size = min(_BOOTSTRAP_CHUNK, _N_BOOTSTRAP - start)
+        fail_w = _bootstrap_counts(n_failures, size, rng)
+        succ_w = _bootstrap_counts(n_successes, size, rng)
+        weighted = np.sum((fail_w @ wins) * succ_w, axis=1)
+        aucs[start : start + size] = weighted / (n_failures * n_successes)
+    ci_low, ci_high = np.percentile(aucs, [2.5, 97.5])
+    return point, float(ci_low), float(ci_high)
 
 
 def _evaluate_signals(records: pd.DataFrame) -> pd.DataFrame:

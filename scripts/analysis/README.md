@@ -25,7 +25,7 @@ Output tiers: raw eval CSVs in `outputs/raw/`, everything written here in `outpu
 | Export TensorBoard scalars for the training-curve figure | `make training-curves [LOGS_ROOT=logs]` |
 | Draw the headline figures | `make figures [FIG=gate_roc]` |
 | Draw the per-run diagnostic panels | `make run-figures [RUN_DIR=<dir>]` |
-| Assemble the curated `outputs/main_analysis/` set | `make analysis-bundle [STAGE=6]` |
+| Assemble the curated `outputs/main_analysis/` set | `make analysis-bundle [STAGE=6] [BOOTSTRAP_SEED=42]` |
 
 ## Modules
 
@@ -97,6 +97,12 @@ Run with `make analyse-gate [STAGE=6]`.
 per-episode max of the per-step epistemic + aleatoric **sum**, since the deployed safety
 layer thresholds the total at each step. Summing the two per-episode maxima is a
 different quantity, as the channels need not peak on the same step.
+It also reports each AUC with a 95% stratified bootstrap interval (failures and
+successes resampled separately, so every resample keeps both classes; 10,000 resamples
+on `--bootstrap-seed`, default 42), both pooled over the varying conditions and within
+each condition. That AUC is the tie-aware Mann-Whitney form (`_bootstrap_auc_ci`), since
+the EKF std pins at its floor on many episodes and the trapezoidal sweep would depend on
+how tied scores happen to sort.
 
 ### `covariance_probe.py` (in-container, torch)
 
@@ -204,7 +210,7 @@ Writes `training_curves.csv` and `training_stage_bounds.csv` to
 
 ### `bundle.py` (host-side)
 
-Assembles `outputs/main_analysis/` - the curated set. Recomputes each summary from the per-episode records through the shared scope filters (`drop_unreported`, `keep_varying`) rather than copying, so every cell traces back to raw data. Writes nine tables into `summaries/` (success by condition, position error, covariance contrasts, conditioning analysis, seed unanimity, gate AUC, calibration, behaviour bands, per-seed summary), copies the pooled cross-seed CSVs verbatim into `values/`, and writes a `MANIFEST.md` naming the source of each artefact and stating the reported scope.
+Assembles `outputs/main_analysis/` - the curated set. Recomputes each summary from the per-episode records through the shared scope filters (`drop_unreported`, `keep_varying`) rather than copying, so every cell traces back to raw data. Writes nine tables into `summaries/` (success by condition, position error, covariance contrasts, conditioning analysis, seed unanimity, gate AUC with bootstrap intervals, calibration, behaviour bands, per-seed summary), copies the pooled cross-seed CSVs verbatim into `values/`, and writes a `MANIFEST.md` naming the source of each artefact and stating the reported scope.
 
 Two details matter for reading the numbers. Position error is reported as both a mean
 (from the pooled summary) and a median (recomputed from the per-episode records, the only
@@ -215,7 +221,7 @@ varying ones, so a differing condition mix cannot masquerade as a behavioural re
 
 `summaries/` and `values/` are rebuilt from scratch each run; `figures/` is left alone,
 because `make figures` writes straight into `main_analysis/figures/`. Run
-`make figures` first, then `make analysis-bundle [STAGE=6]`, so the manifest lists the
+`make figures` first, then `make analysis-bundle [STAGE=6] [BOOTSTRAP_SEED=42]`, so the manifest lists the
 figures that are actually present.
 
 ### `figures/` (host-side)
