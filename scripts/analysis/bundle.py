@@ -17,6 +17,7 @@ from typing import Dict, List
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 
 from scripts.analysis._discovery import pooled_frame  # noqa: E402
@@ -33,13 +34,17 @@ from scripts.analysis.figures.build import (  # noqa: E402
     _pooled_max_total,
     _spearman,
 )
-from scripts.analysis.gate_roc import _roc_curve  # noqa: E402
+from scripts.analysis.gate_roc import _bootstrap_auc_ci  # noqa: E402
 
 # Default roots.
 FROZEN = Path("outputs/raw_derived/cross_seed_analysis/all_seeds/stage6")
 RAW = Path("outputs/raw/evaluation_results")
 OUT = Path("outputs/main_analysis")
 SEEDS = ["seed_42", "seed_123", "seed_7"]
+
+# Matches the cross-seed contrast default so every interval in the bundle is
+# reproducible from one seed.
+BOOTSTRAP_SEED = 42
 
 # Pooled CSVs copied verbatim as the values behind the headline metrics.
 REPORTED_VALUES: List[str] = [
@@ -201,12 +206,18 @@ def _seed_unanimity(frozen: Path) -> pd.DataFrame:
     return spread.join(matched)
 
 
-def _gate_auc(raw: Path, seeds: List[str]) -> pd.DataFrame:
+def _gate_auc(raw: Path, seeds: List[str], bootstrap_seed: int) -> pd.DataFrame:
     """
-    @brief Failure-prediction AUC per arm and gate signal.
+    @brief Failure-prediction AUC per arm and gate signal, with 95% intervals.
     @param raw: Per-episode evaluation tree.
     @param seeds: Seed sub-roots to pool.
-    @return One row per arm and signal.
+    @param bootstrap_seed: RNG seed for the stratified bootstrap intervals.
+    @return One row per arm, signal and scope, where scope is "pooled" over the
+            varying conditions or one condition on its own.
+
+    The pooled reading mixes conditions whose failure causes differ, so each
+    condition is also scored within itself; a per-condition interval lying
+    below 0.5 marks an inverted ordering rather than a merely absent one.
     """
     records = keep_varying(
         pooled_frame(raw, seeds, EVIDENTIAL_ARMS, "episode_records.csv")
@@ -228,15 +239,33 @@ def _gate_auc(raw: Path, seeds: List[str]) -> pd.DataFrame:
         )
         records.loc[idx, "max_total"] = merged["max_total"].to_numpy()
 
+    rng = np.random.default_rng(bootstrap_seed)
     rows: List[Dict[str, object]] = []
     for arm in EVIDENTIAL_ARMS:
-        block = records[records["arm"] == arm]
-        labels = block["is_failure"].to_numpy()
+        arm_block = records[records["arm"] == arm]
+        scopes = [("pooled", arm_block)] + [
+            (str(condition), part)
+            for condition, part in arm_block.groupby("condition", sort=True)
+        ]
         for signal in ("ekf_std_pos_max_m", "max_total"):
-            _, _, auc = _roc_curve(block[signal].to_numpy(dtype=float), labels)
-            rows.append(
-                {"arm": arm, "signal": signal, "auc": auc, "n_episodes": len(block)}
-            )
+            for scope, block in scopes:
+                labels = block["is_failure"].to_numpy()
+                auc, ci_low, ci_high = _bootstrap_auc_ci(
+                    block[signal].to_numpy(dtype=float), labels, rng
+                )
+                rows.append(
+                    {
+                        "arm": arm,
+                        "signal": signal,
+                        "scope": scope,
+                        "auc": auc,
+                        "ci_low": ci_low,
+                        "ci_high": ci_high,
+                        "n_failures": int(labels.sum()),
+                        "n_success": int((1 - labels).sum()),
+                        "n_episodes": len(block),
+                    }
+                )
     return pd.DataFrame(rows)
 
 
@@ -317,13 +346,16 @@ def _write_manifest(out: Path, summaries: Dict[str, str], figures: List[str]) ->
     (out / "MANIFEST.md").write_text("\n".join(lines))
 
 
-def build(frozen: Path, raw: Path, out: Path, seeds: List[str]) -> None:
+def build(
+    frozen: Path, raw: Path, out: Path, seeds: List[str], bootstrap_seed: int
+) -> None:
     """
     @brief Assemble the whole bundle.
     @param frozen: Pooled cross-seed directory.
     @param raw: Per-episode evaluation tree.
     @param out: Bundle root; recreated from scratch each run.
     @param seeds: Seed sub-roots to pool.
+    @param bootstrap_seed: RNG seed for the gate AUC intervals.
     """
     # figures/ is written directly by `make figures`; only the derived
     # summaries and copied values are rebuilt here.
@@ -339,7 +371,10 @@ def build(frozen: Path, raw: Path, out: Path, seeds: List[str]) -> None:
         "covariance_contrasts.csv": "contrasts with 95% bootstrap intervals",
         "conditioning_analysis.csv": "rank correlations and operating levels",
         "seed_unanimity.csv": "per-seed spread and matched-seed contrast",
-        "gate_auc.csv": "failure-prediction AUC per arm and signal",
+        "gate_auc.csv": (
+            "failure-prediction AUC per arm and signal, pooled and per "
+            "condition, with 95% stratified bootstrap intervals"
+        ),
         "calibration.csv": "rank correlation and binned mean error",
         "behaviour_bands.csv": "behavioural proxies per arm and band",
         "per_seed_summary.csv": "per-seed success and error, one row per run",
@@ -351,7 +386,7 @@ def build(frozen: Path, raw: Path, out: Path, seeds: List[str]) -> None:
         "covariance_contrasts.csv": _covariance_contrasts(frozen),
         "conditioning_analysis.csv": _conditioning_analysis(raw, seeds),
         "seed_unanimity.csv": _seed_unanimity(frozen),
-        "gate_auc.csv": _gate_auc(raw, seeds),
+        "gate_auc.csv": _gate_auc(raw, seeds, bootstrap_seed),
         "calibration.csv": _calibration(raw, seeds),
         "behaviour_bands.csv": _behaviour_bands(raw, seeds),
         "per_seed_summary.csv": drop_unreported(
@@ -383,8 +418,15 @@ def main() -> None:
     parser.add_argument("--raw", type=Path, default=RAW)
     parser.add_argument("--output-dir", type=Path, default=OUT)
     parser.add_argument("--seeds", nargs="+", default=SEEDS)
+    parser.add_argument(
+        "--bootstrap-seed",
+        type=int,
+        default=BOOTSTRAP_SEED,
+        help="RNG seed for the gate AUC bootstrap intervals (reproducibility "
+        "only - NOT an experiment seed).",
+    )
     args = parser.parse_args()
-    build(args.frozen, args.raw, args.output_dir, args.seeds)
+    build(args.frozen, args.raw, args.output_dir, args.seeds, args.bootstrap_seed)
 
 
 if __name__ == "__main__":
