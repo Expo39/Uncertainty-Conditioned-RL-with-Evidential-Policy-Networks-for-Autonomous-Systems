@@ -451,12 +451,13 @@ training-curves: ## Export seed-averaged training curves from the TensorBoard lo
 		--logs-root $(or $(LOGS_ROOT),logs) \
 		--output-dir $(or $(OUTPUT_DIR),outputs/raw_derived/training)
 
-analysis-bundle: ## Assemble the summaries and values into outputs/main_analysis. Run after `make figures`. Usage: make analysis-bundle [STAGE=6]
+analysis-bundle: ## Assemble the summaries and values into outputs/main_analysis. Run after `make figures`. Usage: make analysis-bundle [STAGE=6] [BOOTSTRAP_SEED=42]
 	$(call ensure-venv)
 	$(PYTHON) $(SCRIPTS_DIR)/analysis/bundle.py \
 		--frozen $(or $(FROZEN),outputs/raw_derived/cross_seed_analysis/all_seeds/stage$(or $(STAGE),6)) \
 		--raw $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
-		--output-dir $(or $(OUTPUT_DIR),outputs/main_analysis)
+		--output-dir $(or $(OUTPUT_DIR),outputs/main_analysis) \
+		--bootstrap-seed $(or $(BOOTSTRAP_SEED),42)
 
 uncertainty-verdict: ## Judge epistemic-vs-aleatoric separation. Usage: make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper
 	$(call ensure-venv)
