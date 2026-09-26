@@ -213,7 +213,7 @@ Rebuilding everything downstream of a completed evaluation:
 make analyse-cross-seed STAGE=6   # pooled CSVs
 make training-curves              # TensorBoard scalars -> CSV
 make figures                      # figures, into main_analysis/figures/
-make analysis-bundle              # summaries + values + MANIFEST
+make analysis-bundle STAGE=6 BOOTSTRAP_SEED=42   # summaries + values + MANIFEST
 ```
 
 Of the seven conditions defined in `configs/eval_config.yaml`, four are reported. The
