@@ -91,6 +91,13 @@ margin of +16.0 pp in the closest pairing. The same input, meanwhile, yielded no
 measurable benefit on a standard Gaussian actor. The effect is therefore an interaction
 between the two mechanisms rather than an additive benefit of either part taken alone.
 
+**Control arms (in progress).** The evidential head differs from the Gaussian one in
+more than its NIG parameterisation: its action variance also depends on the state. Two
+further arms, `heteroscedastic` and `heteroscedastic_input`, extend the design to 3x2
+with a heteroscedastic Gaussian head, which is the evidential head with the NIG removed.
+They test whether state-dependent variance alone lets the policy use the covariance.
+See [configs/baselines/README.md](configs/baselines/README.md) for the full matrix.
+
 **The behaviour was not rewarded.** No uncertainty term appears in the reward and no
 slow-down is scripted, yet braking is observed to intensify as the filter reports greater
 positional uncertainty. The timing of the response is supplied by the covariance and its

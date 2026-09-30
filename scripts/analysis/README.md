@@ -21,6 +21,7 @@ Output tiers: raw eval CSVs in `outputs/raw/`, everything written here in `outpu
 | Epistemic-vs-aleatoric separation verdict | `make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper` |
 | Handover timing vs degradation onset | `make handover-timing [ARM=full_method]` |
 | Pool all seeds into headline + per-seed robustness | `make analyse-cross-seed [STAGE=6]` |
+| Seed-level intervals, permutation tests, brake correlations (3x2) | `make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]` |
 | Per-tier episode breakdown from the demo traces | `make trace-tier-breakdown TRACE_DIR=<dir>` |
 | Export TensorBoard scalars for the training-curve figure | `make training-curves [LOGS_ROOT=logs]` |
 | Draw the headline figures | `make figures [FIG=gate_roc]` |
@@ -31,9 +32,9 @@ Output tiers: raw eval CSVs in `outputs/raw/`, everything written here in `outpu
 
 ### `ablation.py` (host-side)
 
-Cross-arm contrast, and the home of the shared condition-scope filters every other module imports. Globs `outputs/raw/evaluation_results/seed_<N>/<baseline>/<leaf>/episode_records.csv` for the four arms, joins on condition, and computes:
+Cross-arm contrast, and the home of the shared condition-scope filters every other module imports. Globs `outputs/raw/evaluation_results/seed_<N>/<baseline>/<leaf>/episode_records.csv` for the six arms, joins on condition, and computes:
 
-- The covariance contrast deltas with 95% bootstrap CIs - `input_uncertainty - vanilla_ppo` (standard heads) and `full_method - output_uncertainty` (evidential heads), the single-variable covariance on/off tests. 10000 resamples, treatment and control resampled independently (a two-sample difference, not paired - the arms ran on separate episode draws), percentile interval at [2.5, 97.5]. The RNG seed is `--seed` (default 42) and is a reproducibility knob, not an experiment seed.
+- The covariance contrast deltas with 95% bootstrap CIs - `input_uncertainty - vanilla_ppo` (standard heads), `full_method - output_uncertainty` (evidential heads) and `heteroscedastic_input - heteroscedastic` (heteroscedastic heads), the single-variable covariance on/off tests. The heteroscedastic pair is listed last in `_CONTRAST_PAIRS`, so the original pairs keep their bootstrap draws under a fixed seed. An arm with no records is skipped. 10000 resamples, treatment and control resampled independently (a two-sample difference, not paired - the arms ran on separate episode draws), percentile interval at [2.5, 97.5]. The RNG seed is `--seed` (default 42) and is a reproducibility knob, not an experiment seed.
 - The GNSS degradation slope per arm (`gnss_fixed -> gnss_degraded` success drop + position-error growth). **Only computed with `--keep-held-tiers`** (see below).
 - Behaviour-by-std: final pos-error and the caution metrics binned into five quantile bins of EKF position std per arm (the mechanism - precision / caution under uncertainty).
 - Caution slopes, contrast and levels: the per-arm Spearman of each caution metric (`mean_brake_cmd`, `mean_speed_moving_ms`, `mean_abs_vyaw_rads`, `mean_action_jerk`) against EKF position std, the cross-arm difference of those slopes (the causal read: caution attributable to *seeing* the covariance rather than to a harder episode), and the absolute operating level with its success / position-error payoff.
@@ -166,6 +167,32 @@ and `seed_robustness*.csv` under
 `outputs/raw_derived/cross_seed_analysis/all_seeds/stage<S>/`. CSVs only - the figures over
 this pool are drawn separately by `figures/build.py`. Run with
 `make analyse-cross-seed [STAGE=6]`.
+
+### `seed_level.py` (host-side)
+
+Seed-level inference for the 3x2 design. The pooled bootstrap treats seed as a fixed
+nuisance; here every interval is a **two-level bootstrap**: per arm, three seeds are drawn
+with replacement, then the episodes of each drawn seed, and the arms are resampled
+independently (10000 resamples, one random stream seeded by `--bootstrap-seed`). Over the
+varying conditions (`anchor_deployment`, `anchor_empty`, `gnss_degrade_one_way`) it
+writes, under `outputs/raw_derived/seed_level/`:
+
+- `pooled_success.csv`, `per_seed_success.csv` - success per condition and arm.
+- `estimates.csv` - point and 95% interval (pp) of each covariance contrast per head,
+  their interactions (heteroscedastic minus standard, evidential minus heteroscedastic,
+  evidential minus standard), `full_method - heteroscedastic_input` and
+  `heteroscedastic - vanilla_ppo`.
+- `permutation.csv` - the exact one-sided seed-level permutation test of each
+  covariance pair over the C(6, 3) = 20 arrangements (smallest attainable p = 0.05).
+- `brake_spearman.csv` - brake command against EKF position std, averaged over the
+  varying conditions, per seed and pooled.
+- `parking_precision*.csv` - final position error and decisions over successful parks,
+  with two-level intervals of each covariance pair's difference.
+
+Estimates needing an arm with no records are skipped with a warning. Run with
+`make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]`. The pre-registered
+reading is in
+[docs/detailed_notes/training/heteroscedastic_control_preregistration.md](../../docs/detailed_notes/training/heteroscedastic_control_preregistration.md).
 
 ### `trace_tiers.py` (host-side)
 

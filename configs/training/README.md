@@ -4,8 +4,8 @@ Optuna hyperparameter search configuration.
 
 > **This search was never run.** Every reported result uses the committed defaults in
 > [`configs/train_config.yaml`](../train_config.yaml). Tuning per arm would make the
-> configuration a fifth variable and confound the 2x2 ablation, so hyperparameters are
-> fixed across all four arms and all seeds. The pipeline below is retained for future
+> configuration an extra variable and confound the 3x2 ablation, so hyperparameters are
+> fixed across every arm and all seeds. The pipeline below is retained for future
 > work and produced no reported result. Section 3.8.1 of
 > [the dissertation](../../docs/AntonioGaldes_Dissertation.pdf) is canonical.
 
@@ -44,7 +44,7 @@ This depends on whether `--baseline` was given explicitly:
 | No `BASELINE` | `train_config.yaml` via `apply_best_params()`, original backed up to `logs/tuning/backups/` | Overwritten |
 | `BASELINE=<name>` | `logs/tuning/results/best_params_<name>.yaml` only | Left untouched |
 
-The per-baseline case deliberately leaves the shared file alone, since four arms writing
+The per-baseline case deliberately leaves the shared file alone, since several arms writing
 into one file would overwrite each other. Every run also saves a standalone copy of the
 best params under `logs/tuning/results/`.
 
@@ -99,7 +99,7 @@ tables here and the file disagree.
 
 Re-running `make docker-tune` resumes from the last completed trial stored in the SQLite
 database at `logs/tuning/optuna_study.db`, with no configuration change needed. Runs
-that name a baseline suffix the filename, so the four arms keep separate studies.
+that name a baseline suffix the filename, so every arm keeps a separate study.
 
 ## See also
 

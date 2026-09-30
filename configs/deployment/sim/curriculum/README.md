@@ -88,8 +88,10 @@ Every stage spells out the same full difficulty key set:
 ## Override blocks
 
 `standard_overrides` (vanilla_ppo, input_uncertainty) and `evidential_overrides`
-(output_uncertainty, full_method) are selected by `policy_type` in
-`_apply_stage_training_overrides()`. The two blocks began identical and were split only
+(output_uncertainty, full_method, heteroscedastic, heteroscedastic_input) are selected by
+`policy_type` in `_apply_stage_training_overrides()`, through the explicit
+`_STAGE_OVERRIDE_BLOCK` map; an unknown `policy_type` raises. The heteroscedastic head
+reads the evidential block because its action std is also an actor output. The two blocks began identical and were split only
 where evidential instability was observed, so they now differ in `ent_coef_final` in
 every stage, and in the `ent_coef` starting value from stage 4 onward.
 
@@ -129,9 +131,9 @@ Schedule conventions:
 - `ent_coef` decays to a floor of 0.0005 under `standard_overrides` and 0.0015 under
   `evidential_overrides`, in every stage. The standard policy's action std is
   entropy-driven, so its floor bounds exploration noise at convergence. The evidential
-  policy's action std is the NIG aleatoric instead, bounded below by the
-  stage-invariant `evidential.aleatoric_floor` in `train_config.yaml`, which is why the
-  two floors differ.
+  policy's action std is the NIG aleatoric instead (the heteroscedastic policy's is
+  `exp(log_std)`), bounded below by the stage-invariant `evidential.aleatoric_floor` in
+  `train_config.yaml`, which is why the two floors differ.
 
 ## Running a stage
 
