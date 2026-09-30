@@ -119,7 +119,7 @@ file that owns each setting. Live values are read from the YAML directly.
 | [`deployment/sensor_config.yaml`](configs/deployment/sensor_config.yaml) | Physical sensor mounts and specifications, shared between sim and real |
 | [`deployment/sim/gnss_noise_profiles.yaml`](configs/deployment/sim/gnss_noise_profiles.yaml) | RTK fix-state tiers and the Markov transition matrix |
 | [`training/tuning_config.yaml`](configs/training/tuning_config.yaml) | Optuna study and search-space bounds |
-| [`baselines/*.yaml`](configs/baselines/) | Override files for the 2x2 ablation study |
+| [`baselines/*.yaml`](configs/baselines/) | Override files for the 3x2 ablation study |
 
 > **Further reading:** [configs/deployment/sim/README.md](configs/deployment/sim/README.md)
 > gives a full breakdown of the sim config files and the consumer of each key.
@@ -128,12 +128,15 @@ file that owns each setting. Live values are read from the YAML directly.
 
 ## Ablation Study
 
-Four arms are selected through the override files in `configs/baselines/`:
+Six arms (three actor heads, each with and without the covariance input) are selected
+through the override files in `configs/baselines/`:
 
 | Baseline | Covariance in observation | Actor head | Observation dim |
 |----------|---------------------------|------------|-----------------|
 | `vanilla_ppo` | No | Gaussian | 10 |
 | `input_uncertainty` | Yes | Gaussian | 13 |
+| `heteroscedastic` | No | Heteroscedastic Gaussian | 10 |
+| `heteroscedastic_input` | Yes | Heteroscedastic Gaussian | 13 |
 | `output_uncertainty` | No | Evidential NIG | 10 |
 | `full_method` | Yes | Evidential NIG | 13 |
 
@@ -143,6 +146,7 @@ Observation dimensions are derived at runtime from `include_covariance` and
 ```bash
 make run-seed-leg              # trains every arm and stage, then evaluates the final stage
 make run-seed-leg DRY_RUN=1    # print the plan without running it
+ARMS_OVERRIDE="heteroscedastic heteroscedastic_input" make run-seed-leg  # the new arms only
 ```
 
 The seeds are set inside `scripts/training/run_seed_leg.sh`. The target is idempotent, so
@@ -157,7 +161,7 @@ seed, giving 600 pooled episodes per cell.
 ## Hyperparameter Tuning
 
 > **No tuning was performed for the reported results.** A single committed
-> configuration was applied identically to all four arms and all three seeds. Tuning
+> configuration was applied identically to every arm and all three seeds. Tuning
 > per arm would have made the configuration a fifth experimental variable and
 > confounded the ablation, at the acknowledged cost of ranking each arm at one
 > operating point rather than at its best. The tuning pipeline is retained for future

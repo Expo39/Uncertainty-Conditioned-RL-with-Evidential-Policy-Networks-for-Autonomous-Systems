@@ -130,8 +130,9 @@ make docker-train STAGE=1 BASELINE=vanilla_ppo
 make docker-train STAGE=2 BASELINE=vanilla_ppo CHECKPOINT=6_42_11062026-0628
 ```
 
-`run-seed-leg` chains all of that automatically: it trains the four arms through stages
-1-6 for each seed, resume-chaining every stage, then evaluates the final stage only. It is
+`run-seed-leg` chains all of that automatically: it trains the six arms through stages
+1-6 for each seed (`ARMS_OVERRIDE="heteroscedastic heteroscedastic_input"` restricts it
+to the listed arms), resume-chaining every stage, then evaluates the final stage only. It is
 idempotent, skipping work that is already done, so a crashed leg resumes on re-run. Expect
 it to run for days - start it under `tmux`, and use `DRY_RUN=1` first to print the plan
 without executing it.
@@ -144,7 +145,7 @@ without executing it.
 
 > **Never run.** No reported result used this pipeline: every arm and seed trained on the
 > committed defaults in `configs/train_config.yaml`, because a separate search per arm
-> would make the configuration a fifth experimental variable and confound the 2x2
+> would make the configuration an extra experimental variable and confound the 3x2
 > ablation. The target is retained for future work.
 
 Were it run, it would tune structural PPO parameters only, leaving `learning_rate` and
@@ -237,6 +238,7 @@ raw CSVs and write derived ones. None of them needs a GPU or the simulator.
 | Command | Purpose | GPU? |
 |---------|---------|------|
 | `make analyse-cross-seed [STAGE=6]` | Pool every seed into the headline CSVs + per-seed robustness | No |
+| `make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]` | Two-level (seed, episode) bootstrap intervals, seed permutation tests and brake correlations for the 3x2 contrasts | No |
 | `make analyse-ablation [STAGE=6] [SEED=42]` | Single-seed cross-arm contrast | No |
 | `make analyse-gate [STAGE=6] [SEED=42]` | Single-seed safety-gate ROC | No |
 | `make analyse-calibration [ARM=full_method] [SEED=42]` | Is the EKF covariance honest? | No |
@@ -326,7 +328,7 @@ for `BASELINE` and `CHECKPOINT` are described at the top of this file.
 | Variable | Default | Accepted values | Used by |
 |----------|---------|-----------------|---------|
 | `STAGE` | `1` | `1`-`6` | `docker-train`, `docker-train-short`, `docker-tune`, `docker-inspect-dryrun`, `eval-visualise-2d` |
-| `BASELINE` | `full_method` | `vanilla_ppo`, `input_uncertainty`, `output_uncertainty`, `full_method` (bare name) | `docker-train`, `docker-train-short`, `docker-tune`, `docker-eval`, `docker-eval-visualise-3d`, `docker-inspect-dryrun`, `eval-visualise-2d` |
+| `BASELINE` | `full_method` | `vanilla_ppo`, `input_uncertainty`, `heteroscedastic`, `heteroscedastic_input`, `output_uncertainty`, `full_method` (bare name) | `docker-train`, `docker-train-short`, `docker-tune`, `docker-eval`, `docker-eval-visualise-3d`, `docker-inspect-dryrun`, `eval-visualise-2d` |
 | `CHECKPOINT` | _(none)_ | run leaf `<stage>_<seed>_<DDMMYYYY-HHMM>` (bare name), or `trial_<N>` for a tuning trial | `docker-train`, `docker-train-short`, `docker-eval`, `docker-eval-visualise-3d`, `docker-covariance-probe`, `eval-visualise-2d` |
 | `LAYOUT` | `rectangle` | `rectangle`, `trapezoid`, `irregular_a` | `docker-train`, `docker-tune`, `docker-eval`, `eval-visualise-2d`, `generate-layouts` |
 | `WORKER` | `0` | integer worker index | `docker-shell-ros2`, `docker-logs-carla`, `docker-logs-ros2`, `visualise` |

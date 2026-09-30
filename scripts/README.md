@@ -107,7 +107,7 @@ Shell helpers invoked inside the training container.
 
 - `train.sh` - runs `train_ppo.py` with ROS 2 and DDS noise filtered from stderr, forwarding extra arguments to the Python script. Fixes the config, log and checkpoint paths; everything else is passed through from the make recipe.
 - `tune.sh` - the Optuna wrapper, running `uncertainty_rl.training.tune_hyperparams` as a module with ROS 2 logging redirected. Invoked by `make docker-tune`. **No tuning run was ever performed** - every reported result uses the committed defaults.
-- `run_seed_leg.sh` - the multi-seed orchestrator behind `make run-seed-leg`. Trains the four arms (`vanilla_ppo`, `input_uncertainty`, `output_uncertainty`, `full_method`) through stages 1-6 for seeds 42, 123 and 7, resume-chaining each stage, then evaluates the final stage only (both SafetyWrapper variants for the evidential arms) and writes the suite tables. It is idempotent, skipping completed work so a crashed leg resumes on re-run.
+- `run_seed_leg.sh` - the multi-seed orchestrator behind `make run-seed-leg`. Trains the six arms (`vanilla_ppo`, `input_uncertainty`, `heteroscedastic`, `heteroscedastic_input`, `output_uncertainty`, `full_method`) through stages 1-6 for seeds 42, 123 and 7, resume-chaining each stage, then evaluates the final stage only (both SafetyWrapper variants for the evidential arms, free-running only for the rest) and writes the suite tables. `ARMS_OVERRIDE="heteroscedastic heteroscedastic_input"` restricts the leg to the listed arms; the cross-seed step still waits for the full six-arm matrix. It is idempotent, skipping completed work so a crashed leg resumes on re-run.
 
 ```bash
 make docker-train        # Full training run

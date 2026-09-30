@@ -120,8 +120,14 @@ localisation crosses into the degraded regime, rather than from the spawn? See
 | Success rate | `info["success"]` from `CARLAParkingEnv.step()` |
 | Mean episode reward | Accumulated per episode |
 | Mean steps to termination | Episode length |
-| Epistemic uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
-| Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only) |
+| Epistemic uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only; NaN for the heteroscedastic head, which has no epistemic channel) |
+| Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential and heteroscedastic heads; for the latter the raw `exp(2 * log_std)`) |
+| Action std | `sqrt(aleatoric)` per decision for the evidential and heteroscedastic heads; the constant `exp(log_std)` for the standard head |
+
+**Heteroscedastic arms run without the SafetyWrapper only.** With no epistemic channel
+there is nothing for the handoff gate to read, so `evaluate_across_conditions()` raises
+`ValueError` for a heteroscedastic checkpoint unless `EVAL_DISABLE_SAFETY_WRAPPER=1`
+(`make docker-eval NO_SAFETY=1`). The CSV schema is the same for every head.
 
 **Success criteria**: judged geometrically in the env rather than by scalar thresholds,
 and evaluated here at `STRICT_BAY_MARGIN`, the published criterion behind every reported
@@ -169,7 +175,7 @@ make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 
 Success rate (top) and mean final position error (bottom) for each arm, per
 condition. `full_method` leads on success in every condition that any arm solves, and all four
-arms score 0% on `ood_irregular_rtk_fixed`, which is why that group is empty in the top
+original arms score 0% on `ood_irregular_rtk_fixed`, which is why that group is empty in the top
 panel and appears only in the position-error panel below.
 
 <p align="center">

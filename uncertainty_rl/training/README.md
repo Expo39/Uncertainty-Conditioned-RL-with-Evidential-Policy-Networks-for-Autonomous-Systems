@@ -5,9 +5,9 @@ PPO training loop and Optuna hyperparameter tuning for the uncertainty-condition
 ## At a glance
 
 - `train_ppo.py` is config-driven: all hyperparameters come from [`configs/train_config.yaml`](../../configs/train_config.yaml).
-- `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`, while `"standard"` selects `ScheduledEntCoefPPO` + `LayerNormActorCriticPolicy` (the baseline must match the evidential backbone for fair ablation).
+- `policy_type: "evidential"` selects `EvidentialPPO` + `EvidentialActorCriticPolicy`, `"standard"` selects `ScheduledEntCoefPPO` + `LayerNormActorCriticPolicy` (the baseline must match the evidential backbone for fair ablation), and `"heteroscedastic"` selects `HeteroscedasticPPO` + `HeteroscedasticActorCriticPolicy` (the evidential head without the NIG). Any other value raises `ValueError`.
 - `VecNormalize` does REWARD normalisation only (`norm_obs=False`, `norm_reward=True`), which keeps the near-bimodal return, with its large terminals over dense shaping, in a range the critic can track. Observations are instead normalised by fixed physical ranges inside `build_observation`, as described in [envs/README.md](../envs/README.md#_parking_corepy-helpers).
-- $\lambda_{\text{reg}}$ is linearly annealed from $0$ over the warmup window. The learning rate and entropy coefficient are linear decay schedules wired in `train_ppo.py`, restarted per curriculum stage from each stage's per-policy `standard_overrides` / `evidential_overrides` block (selected by `policy_type`, identical at init).
+- $\lambda_{\text{reg}}$ is linearly annealed from $0$ over the warmup window. The learning rate and entropy coefficient are linear decay schedules wired in `train_ppo.py`, restarted per curriculum stage from each stage's per-policy `standard_overrides` / `evidential_overrides` block (selected by `policy_type` through `_STAGE_OVERRIDE_BLOCK`; the heteroscedastic head reads `evidential_overrides`).
 - Training follows the single-phase ADR curriculum (6 stages): each stage is selected with `make docker-train STAGE=N` and resumes from the previous stage's checkpoint via `CHECKPOINT=` (or `--resume-from`), carrying over weights and `VecNormalize` reward statistics. The GNSS degradation process is a fixed, stage-invariant Markov chain rather than a ramped axis, and the curriculum ramps bays + margin then obstacle occupancy.
 - Runs are seeded from `seed` in `train_config.yaml` (the ablation sweeps seeds via `--seed`), and the training entry point restarts the run if the CARLA stack crashes mid-episode.
 - Optuna TPE + MedianPruner study with the search space defined in [`configs/training/tuning_config.yaml`](../../configs/training/tuning_config.yaml).
@@ -57,8 +57,8 @@ file directly for the live values.
 
 The committed values were fixed before the ablation began and applied identically to
 every arm and seed; no hyperparameter search was run for any reported result. Tuning per
-arm would have made the configuration a fifth experimental variable and confounded the
-2x2 comparison.
+arm would have made the configuration an extra experimental variable and confounded the
+3x2 comparison.
 
 The structural choices that must stay stable across resumes
 (`net_arch`, `activation`, `policy_type`, `include_covariance`,
@@ -104,6 +104,12 @@ The loss this coefficient weights is given in
 |---------------|-------|--------|------------------------------|
 | `"evidential"` | `EvidentialPPO` | `EvidentialActorCriticPolicy` | Full observation, with the covariance entering as ordinary observation dimensions |
 | `"standard"` | `ScheduledEntCoefPPO` | `LayerNormActorCriticPolicy` | Full obs |
+| `"heteroscedastic"` | `HeteroscedasticPPO` | `HeteroscedasticActorCriticPolicy` | Full obs |
+
+The heteroscedastic head reads `evidential.aleatoric_floor` into its `policy_kwargs`, so
+it shares the evidential exploration floor, and it trains on the plain PPO loss (no prior
+anchor). On resume the same learning-rate and `ent_coef` schedules are re-bound as for
+the other heads.
 
 `include_covariance` and `include_obstacle_obs` flags (set per baseline) control
 observation dimensionality. The active dimension is derived from the structural
@@ -152,7 +158,7 @@ backup in `logs/tuning/backups/`. To resume a paused study, just re-run
 
 ## Ablation study
 
-The 2 by 2 ablation runs `train_ppo.py` once per baseline config. Each file in
+The 3 by 2 ablation runs `train_ppo.py` once per baseline config. Each file in
 [`configs/baselines/`](../../configs/baselines/) overrides only the keys that
 differ from `train_config.yaml`:
 
@@ -160,10 +166,12 @@ differ from `train_config.yaml`:
 |----------|--------------|----------------------|
 | `vanilla_ppo` | `standard` | `false` |
 | `input_uncertainty` | `standard` | `true` |
+| `heteroscedastic` | `heteroscedastic` | `false` |
+| `heteroscedastic_input` | `heteroscedastic` | `true` |
 | `output_uncertainty` | `evidential` | `false` |
 | `full_method` | `evidential` | `true` |
 
-All four baselines share identical PPO hyperparameters from `train_config.yaml`.
+All six baselines share identical PPO hyperparameters from `train_config.yaml`.
 Active observation dimensions are derived at runtime.
 
 ## Configuration keys consumed
@@ -177,7 +185,7 @@ Active observation dimensions are derived at runtime.
 
 ## Training curves
 
-Success and collision rate for all four arms across the six curriculum stages, with the
+Success and collision rate for every trained arm across the six curriculum stages, with the
 stage boundaries marked. `full_method` holds a clear success margin from stage 1 onward,
 and the step changes at each boundary are the difficulty ramping, not instability.
 
