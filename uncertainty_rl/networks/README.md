@@ -18,6 +18,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 |--------|-------------------|
 | `evidential_policy.py` | `EvidentialLayer`, `EvidentialPolicyNetwork`, `UncertaintyConditionedActor` |
 | `sb3_integration.py` | `EvidentialDistribution`, `EvidentialActorCriticPolicy`, `EvidentialPPO`, `ScheduledEntCoefPPO`, `LayerNormActorCriticPolicy` |
+| `heteroscedastic.py` | `HeteroscedasticLayer`, `HeteroscedasticDistribution`, `HeteroscedasticActorCriticPolicy`, `HeteroscedasticPPO` (control head, not evidential) |
 | `__init__.py` | Re-exports the public names |
 
 ## Internal data flow
@@ -57,6 +58,27 @@ at `[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`. `train_p
 enforces this, logging a warning and forcing the flag back to `False` rather than building
 a mis-indexed actor.
 
+## Heteroscedastic control head
+
+`heteroscedastic.py` is the evidential head with the NIG parameterisation removed. It
+exists to test whether state-dependent action variance alone, rather than the NIG
+mechanism, is what lets the policy use the covariance input (arms `heteroscedastic` and
+`heteroscedastic_input`, `policy_type: heteroscedastic`).
+
+| Aspect | Evidential head | Heteroscedastic head |
+|--------|-----------------|----------------------|
+| Output layer | `Linear(latent, 4n)` -> `(gamma, nu, alpha, beta)` | `Linear(latent, 2n)` -> `(mean, log_std)` |
+| Action variance | `beta / (alpha - 1)` | `exp(2 * log_std)`, state-dependent |
+| Initial variance | 0.398 from the alpha/beta bias priors | Same: log_std bias derived in code from the same priors |
+| Sampling clamp | `[aleatoric_floor, 1.0]` | Same |
+| Backbone, critic, mean bias, gains, squashing, entropy | - | Same (squashing and entropy inherited from `EvidentialDistribution`) |
+| Training | `EvidentialPPO` (PPO + prior anchor) | `HeteroscedasticPPO` (PPO loss only, as `ScheduledEntCoefPPO`) |
+| Reported uncertainty | epistemic, aleatoric, total | aleatoric = raw `exp(2 * log_std)`, epistemic = NaN, total = aleatoric |
+
+`log_std_init` from the shared `policy_kwargs` is accepted and ignored: the initial std
+comes from the matched prior bias. The head reads `evidential.aleatoric_floor`, so both
+heads share one exploration floor.
+
 ## NIG uncertainty decomposition
 
 ```math
@@ -74,6 +96,10 @@ a mis-indexed actor.
 ```python
 action, uncertainty_dict = policy.get_action_with_uncertainty(obs_tensor)
 # uncertainty_dict keys: epistemic, aleatoric, total, gamma, nu, alpha, beta
+
+# Heteroscedastic control head
+action, uncertainty_dict = hetero_policy.get_action_with_uncertainty(obs_tensor)
+# uncertainty_dict keys: aleatoric, epistemic (NaN), total, mean, log_std, action_std
 ```
 
 ### Training (SB3 integration)
@@ -87,6 +113,14 @@ model = EvidentialPPO(
     # All hyperparameters come from configs/train_config.yaml
 )
 model.learn(total_timesteps=total_timesteps)
+
+from uncertainty_rl.networks import HeteroscedasticActorCriticPolicy, HeteroscedasticPPO
+
+model = HeteroscedasticPPO(
+    policy=HeteroscedasticActorCriticPolicy,
+    env=env,
+    policy_kwargs={"aleatoric_floor": aleatoric_floor},
+)
 ```
 
 ### Standalone test harness (unit tests only)
@@ -159,7 +193,7 @@ bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiri
 |-----|------------------|
 | `train/evidential_reg_loss` | Mean prior-anchoring penalty |
 | `train/epistemic_uncertainty` | $\langle \beta / (\nu(\alpha - 1)) \rangle$ |
-| `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$ |
+| `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$; for `HeteroscedasticPPO`, $\langle e^{2 \log\sigma} \rangle$ under the same tag so the curves overlay |
 | `train/lambda_reg` | Current annealed $\lambda_{\text{reg}}$ |
 | `train/ent_coef` | Current value of the linear ent_coef decay schedule |
 
