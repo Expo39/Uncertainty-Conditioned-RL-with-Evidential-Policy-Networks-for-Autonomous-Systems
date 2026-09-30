@@ -23,10 +23,9 @@ carla_sensors:
     noise:
       enabled: true  # Constant realism floor (on in every stage).
 
-# standard_overrides (vanilla, input_uncertainty) / evidential_overrides
-# (output_uncertainty, full_method, heteroscedastic, heteroscedastic_input),
-# selected by policy_type; identical at init. The heteroscedastic head shares the
-# evidential block because its action std is also an actor output.
+# standard_overrides (vanilla, input_uncertainty) / evidential_overrides (output,
+# full_method and both heteroscedastic arms, whose action std is also an actor
+# output), selected by policy_type; identical at init.
 # stage_timesteps counts policy decisions (action_repeat ticks each).
 standard_overrides:
   stage_timesteps: 1500000

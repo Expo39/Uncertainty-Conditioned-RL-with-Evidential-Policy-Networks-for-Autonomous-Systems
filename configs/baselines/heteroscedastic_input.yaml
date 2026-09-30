@@ -1,8 +1,7 @@
-# Baseline: Heteroscedastic Gaussian Control with Input Uncertainty
+# Baseline: Heteroscedastic Control with Input Uncertainty
 # Observation: vehicle state + EKF covariance + relative target pose + obstacle clearance.
-# The agent sees localisation uncertainty; the policy is the evidential head with the
-# NIG parameterisation removed, so its action variance depends on the state
-# (log_std is an actor output) but carries no epistemic channel.
+# The agent sees localisation uncertainty; the policy is the evidential head without
+# the NIG parameterisation, so its action variance is a state-dependent output.
 
 baseline_name: "heteroscedastic_input"
 
