@@ -36,11 +36,13 @@ _ARM_ORDER: List[str] = [
 ]
 
 # The single-variable covariance contrasts the study claims (covariance arm
-# minus its matched no-covariance arm with the same policy head).
+# minus its matched no-covariance arm with the same policy head). The
+# heteroscedastic pair comes last so the bootstrap draws of the original two
+# pairs, and so their intervals under a fixed seed, are unchanged.
 _CONTRAST_PAIRS: List[Tuple[str, str, str]] = [
     ("standard_head", "input_uncertainty", "vanilla_ppo"),
-    ("heteroscedastic_head", "heteroscedastic_input", "heteroscedastic"),
     ("evidential_head", "full_method", "output_uncertainty"),
+    ("heteroscedastic_head", "heteroscedastic_input", "heteroscedastic"),
 ]
 
 # GNSS tier endpoints for the degradation slope (cleanest -> worst held tier).
