@@ -70,7 +70,12 @@ try:
     # (`from uncertainty_rl.training.train_ppo import make_env`) keep
     # working; the canonical owner is uncertainty_rl.envs.factory.
     from uncertainty_rl.envs import CARLAParkingEnv, make_env  # noqa: F401
-    from uncertainty_rl.networks import EvidentialActorCriticPolicy, EvidentialPPO
+    from uncertainty_rl.networks import (
+        EvidentialActorCriticPolicy,
+        EvidentialPPO,
+        HeteroscedasticActorCriticPolicy,
+        HeteroscedasticPPO,
+    )
     from uncertainty_rl.networks.sb3_integration import (
         LayerNormActorCriticPolicy,
         ScheduledEntCoefPPO,
@@ -82,6 +87,8 @@ except ImportError:
     EvidentialPPO = None  # type: ignore[assignment,misc]
     LayerNormActorCriticPolicy = None  # type: ignore[assignment,misc]
     ScheduledEntCoefPPO = None  # type: ignore[assignment,misc]
+    HeteroscedasticActorCriticPolicy = None  # type: ignore[assignment,misc]
+    HeteroscedasticPPO = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger("uncertainty_rl.training.train_ppo")
 
@@ -278,6 +285,27 @@ _STAGE_TRAINING_OVERRIDE_ALLOWLIST = frozenset(
     }
 )
 
+# Stage override block per policy_type. The heteroscedastic head shares the
+# evidential block: its action std is also an actor output, so it needs the same
+# higher entropy floor against a collapsing head.
+_STAGE_OVERRIDE_BLOCK: Dict[str, str] = {
+    "standard": "standard_overrides",
+    "evidential": "evidential_overrides",
+    "heteroscedastic": "evidential_overrides",
+}
+
+
+def _unknown_policy_type(policy_type: str) -> ValueError:
+    """
+    @brief Build the error raised for a policy_type outside the supported heads.
+    @param policy_type: The offending policy_type value.
+    @return ValueError listing the valid policy types.
+    """
+    return ValueError(
+        f"Unknown policy_type '{policy_type}'. "
+        f"Expected one of {sorted(_STAGE_OVERRIDE_BLOCK)}."
+    )
+
 
 def _apply_stage_training_overrides(
     config: Dict[str, Any], env_config_path: str, stage: int
@@ -289,19 +317,18 @@ def _apply_stage_training_overrides(
     @param env_config_path: Path to env_config.yaml (the stage file sits in a
            sibling `curriculum/` directory).
     @param stage: Curriculum stage number.
-    @note Selects `standard_overrides` or `evidential_overrides` by
-          `policy_type` (falls back to a single `training_overrides` block);
-          only allowlisted keys are copied onto config, a non-allowlisted key
-          raises. @see _STAGE_TRAINING_OVERRIDE_ALLOWLIST.
+    @note Selects the block for `policy_type` via _STAGE_OVERRIDE_BLOCK (falls
+          back to a single `training_overrides` block); an unknown policy_type
+          or a non-allowlisted key raises. @see _STAGE_TRAINING_OVERRIDE_ALLOWLIST.
     """
     stage_path = Path(env_config_path).parent / "curriculum" / f"stage{stage}.yaml"
     with open(stage_path) as f:
         stage_cfg: Dict[str, Any] = yaml.load(f, Loader=_YamlLoader) or {}
 
     policy_type = str(config.get("policy_type", "evidential"))
-    block_key = (
-        "standard_overrides" if policy_type == "standard" else "evidential_overrides"
-    )
+    if policy_type not in _STAGE_OVERRIDE_BLOCK:
+        raise _unknown_policy_type(policy_type)
+    block_key = _STAGE_OVERRIDE_BLOCK[policy_type]
     overrides = stage_cfg.get(block_key)
     if overrides is None:
         # Fallback: a single shared block (pre-split schema).
@@ -717,11 +744,10 @@ def train(
             model = EvidentialPPO.load(checkpoint_model_path)
         elif policy_type == "standard":
             model = ScheduledEntCoefPPO.load(checkpoint_model_path)
+        elif policy_type == "heteroscedastic":
+            model = HeteroscedasticPPO.load(checkpoint_model_path)
         else:
-            raise ValueError(
-                f"Unknown policy_type '{policy_type}'. "
-                f"Expected 'evidential' or 'standard'."
-            )
+            raise _unknown_policy_type(policy_type)
 
         # Load environment normalisation statistics if we have a new env to wrap.
         if (
@@ -826,11 +852,18 @@ def train(
                 policy=LayerNormActorCriticPolicy,
                 **ppo_kwargs,
             )
-        else:
-            raise ValueError(
-                f"Unknown policy_type '{policy_type}'. "
-                f"Expected 'evidential' or 'standard'."
+        elif policy_type == "heteroscedastic":
+            # Shares the evidential exploration floor so the two heads differ
+            # only in the variance parameterisation.
+            ppo_kwargs["policy_kwargs"]["aleatoric_floor"] = config.get(
+                "evidential", {}
+            ).get("aleatoric_floor", 1e-6)
+            model = HeteroscedasticPPO(
+                policy=HeteroscedasticActorCriticPolicy,
+                **ppo_kwargs,
             )
+        else:
+            raise _unknown_policy_type(policy_type)
 
     # Set up SB3 logger (TensorBoard + stdout). Named sb3_logger to avoid
     # shadowing the module-level Python logger.
@@ -1023,10 +1056,9 @@ def main() -> None:
         default=None,
         help=(
             "Path to a baseline override config (configs/baselines/*.yaml). Its keys "
-            "(baseline_name, include_covariance, include_obstacle_obs, policy_type, "
-            "log_dir, checkpoint_dir) set the ablation cell. These flags live only in "
-            "the baseline files - omit to default to the full method "
-            "(configs/baselines/full_method.yaml)."
+            "(baseline_name, include_covariance, include_obstacle_obs, policy_type) "
+            "set the ablation cell. These flags live only in the baseline files - "
+            "omit to default to the full method (configs/baselines/full_method.yaml)."
         ),
     )
 
