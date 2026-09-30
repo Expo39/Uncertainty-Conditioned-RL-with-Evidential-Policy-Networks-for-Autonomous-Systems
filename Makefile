@@ -445,6 +445,14 @@ analyse-cross-seed: ## Pool all seeds into headline tables + per-seed robustness
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
 		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
 
+analyse-seed-level: ## Two-level (seed, episode) bootstrap intervals, seed permutation tests and brake correlations for the 3x2 ablation. Usage: make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]
+	$(call ensure-venv)
+	$(PYTHON) scripts/analysis/seed_level.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/raw_derived/seed_level) \
+		--stage $(or $(STAGE),6) \
+		--bootstrap-seed $(or $(BOOTSTRAP_SEED),20260927)
+
 training-curves: ## Export seed-averaged training curves from the TensorBoard logs to CSV. Usage: make training-curves [LOGS_ROOT=logs]
 	$(call ensure-venv)
 	$(PYTHON) $(SCRIPTS_DIR)/analysis/tb_curves.py \
