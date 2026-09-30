@@ -26,6 +26,8 @@ DPI = 400
 ARMS: Tuple[Tuple[str, str, str, str, str], ...] = (
     ("vanilla_ppo", "vanilla", "#4c72b0", "o", "-"),
     ("input_uncertainty", "input", "#dd8452", "s", "--"),
+    ("heteroscedastic", "hetero", "#8172b3", "v", ":"),
+    ("heteroscedastic_input", "hetero input", "#937860", "P", "--"),
     ("output_uncertainty", "output", "#55a868", "^", "-."),
     ("full_method", "full", "#c44e52", "D", "-"),
 )

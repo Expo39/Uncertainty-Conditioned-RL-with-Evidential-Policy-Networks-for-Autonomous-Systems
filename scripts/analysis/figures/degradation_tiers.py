@@ -33,7 +33,14 @@ from scripts import figure_style as fs  # noqa: E402
 # stand in for the fixed-integer tier, which the chain rarely holds all episode.
 _BAND_LABELS = ["low", "medium", "high"]
 
-_ARMS = ["vanilla_ppo", "input_uncertainty", "output_uncertainty", "full_method"]
+_ARMS = [
+    "vanilla_ppo",
+    "input_uncertainty",
+    "heteroscedastic",
+    "heteroscedastic_input",
+    "output_uncertainty",
+    "full_method",
+]
 _SEEDS = ["seed_42", "seed_123", "seed_7"]
 
 # Draw order only: colour, marker and linestyle come from figure_style so this
@@ -42,7 +49,9 @@ _SEEDS = ["seed_42", "seed_123", "seed_7"]
 _ARM_ZORDER: Dict[str, int] = {
     "full_method": 6,
     "output_uncertainty": 4,
+    "heteroscedastic_input": 5,
     "input_uncertainty": 3,
+    "heteroscedastic": 3,
     "vanilla_ppo": 2,
 }
 
@@ -60,6 +69,9 @@ def _collect(base: Path) -> pd.DataFrame:
     rows: List[Dict[str, object]] = []
     for arm in _ARMS:
         for seed in _SEEDS:
+            # An arm not yet evaluated for a seed is left out, not fatal.
+            if not (base / seed / arm).is_dir():
+                continue
             wd = _stage6_dir(base, seed, arm)
             ps = pd.read_csv(wd / "per_step_records.csv")
             ps = ps[ps["condition"] == "anchor_deployment"]

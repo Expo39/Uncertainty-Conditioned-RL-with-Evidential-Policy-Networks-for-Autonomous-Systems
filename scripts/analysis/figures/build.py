@@ -141,6 +141,11 @@ def ablation_by_condition(args) -> None:
     summary = drop_unreported(pd.read_csv(args.frozen / "pooled_condition_summary.csv"))
     conditions = list(pd.unique(summary["condition"]))
 
+    # Bars share 0.8 of each condition slot, so the group stays centred on its
+    # tick whatever the number of arms.
+    n_arms = len(fs.ARM_ORDER)
+    width = 0.8 / n_arms
+
     fs.apply()
     fig, axes = plt.subplots(2, 1, figsize=fs.STACK_2, sharex=True)
     handles, labels = [], []
@@ -152,11 +157,14 @@ def ablation_by_condition(args) -> None:
             a = summary[summary["arm"] == arm]
             if a.empty:
                 continue
-            xs = [conditions.index(c) + (i - 1.5) * 0.2 for c in a["condition"]]
+            xs = [
+                conditions.index(c) + (i - (n_arms - 1) / 2.0) * width
+                for c in a["condition"]
+            ]
             ax.bar(
                 xs,
                 a[metric],
-                width=0.2,
+                width=width,
                 color=fs.ARM_COLOUR[arm],
                 label=fs.arm_label(arm),
             )
@@ -502,7 +510,7 @@ def ekf_sawtooth(args) -> None:
 
 def training_curves(args) -> None:
     """
-    @brief Training curves across the curriculum, four arms, two panels.
+    @brief Training curves across the curriculum, every arm, two panels.
     @param args: Parsed CLI namespace.
     """
     from scripts.analysis.figures.training_curves import render
