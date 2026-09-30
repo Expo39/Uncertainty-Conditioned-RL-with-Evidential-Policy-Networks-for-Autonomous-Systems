@@ -19,10 +19,15 @@ DRY_RUN="${DRY_RUN:-0}"
 # Seeds to run, in order. Done work is skipped, so listing an already-finished
 # seed is a cheap no-op. The file is left on the LAST seed when the leg ends.
 SEEDS=(42 123 7)
-# All four ablation arms, in dependency-free order.
-ARMS=(vanilla_ppo input_uncertainty output_uncertainty full_method)
+# All six ablation arms (3 heads x covariance input), in dependency-free order.
+ALL_ARMS=(vanilla_ppo input_uncertainty heteroscedastic heteroscedastic_input
+          output_uncertainty full_method)
+# Arms this leg trains and evaluates; ARMS_OVERRIDE (space-separated) restricts
+# it, e.g. ARMS_OVERRIDE="heteroscedastic heteroscedastic_input".
+read -r -a ARMS <<< "${ARMS_OVERRIDE:-${ALL_ARMS[*]}}"
 # Evidential arms get BOTH SafetyWrapper variants at eval (the with/without A/B);
-# standard arms have no uncertainty head, so only the free-running variant.
+# standard and heteroscedastic arms have no epistemic channel to gate on, so only
+# the free-running variant.
 EDL_ARMS=(output_uncertainty full_method)
 # The full curriculum. Stage 1 trains from scratch; 2..6 resume the prior stage.
 STAGES=(1 2 3 4 5 6)
@@ -181,6 +186,8 @@ for SEED in "${SEEDS[@]}"; do
     run make analyse-gate STAGE="${EVAL_STAGE}" SEED="${SEED}"
 
     for arm in "${EDL_ARMS[@]}"; do
+        # Skip EDL arms excluded by ARMS_OVERRIDE (no final leaf this leg).
+        [ -n "${FINAL_LEAF[${arm}]+x}" ] || continue
         leaf="${FINAL_LEAF[${arm}]}"
         echo ">>> SUITE EDL: calibration + handover ${arm} ${leaf}"
         run make analyse-calibration ARM="${arm}" CHECKPOINT="${leaf}"
@@ -191,12 +198,12 @@ for SEED in "${SEEDS[@]}"; do
 done
 
 # Cross-seed suite: pool EVERY seed's stage-EVAL_STAGE eval into the seed-robust
-# headline tables. Gated on the full SEEDS x ARMS matrix being evaluated so a
-# partial leg never aggregates half the data; FINAL_LEAF only holds the last
+# headline tables. Gated on the full SEEDS x ALL_ARMS matrix (not ARMS, so an
+# override leg never aggregates half the design); FINAL_LEAF only holds the last
 # seed's leaves, so completeness is recomputed here in a fresh double loop.
 missing=()
 for SEED in "${SEEDS[@]}"; do
-    for arm in "${ARMS[@]}"; do
+    for arm in "${ALL_ARMS[@]}"; do
         leaf="$(complete_leaf "${arm}" "${EVAL_STAGE}" "${SEED}")"
         if [ -z "${leaf}" ]; then
             missing+=("${SEED}/${arm} (no stage-${EVAL_STAGE} checkpoint)")
