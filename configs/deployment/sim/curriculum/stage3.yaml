@@ -29,6 +29,7 @@ evidential_overrides:
   learning_rate: 0.00015
   learning_rate_final: 0.00004
   ent_coef: 0.0015
-  # Higher floor than the standard block: action std = sqrt(aleatoric), so a
+  # Higher floor than the standard block: the action std is an actor output
+  # (sqrt(aleatoric), or exp(log_std) for the heteroscedastic head), so a
   # collapsing head kills exploration (the standard log_std is decoupled).
   ent_coef_final: 0.0015

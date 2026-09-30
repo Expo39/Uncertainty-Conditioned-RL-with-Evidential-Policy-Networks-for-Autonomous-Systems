@@ -28,7 +28,8 @@ evidential_overrides:
   stage_timesteps: 2000000
   learning_rate: 0.00012
   learning_rate_final: 0.00003
-  # Higher start + floor than the standard block: action std = sqrt(aleatoric),
-  # so a collapsing head kills exploration (the standard log_std is decoupled).
+  # Higher start + floor than the standard block: the action std is an actor
+  # output (sqrt(aleatoric), or exp(log_std) for the heteroscedastic head), so a
+  # collapsing head kills exploration (the standard log_std is decoupled).
   ent_coef: 0.002
   ent_coef_final: 0.0015

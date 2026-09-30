@@ -1,0 +1,13 @@
+# Baseline: Heteroscedastic Gaussian Control with Input Uncertainty
+# Observation: vehicle state + EKF covariance + relative target pose + obstacle clearance.
+# The agent sees localisation uncertainty; the policy is the evidential head with the
+# NIG parameterisation removed, so its action variance depends on the state
+# (log_std is an actor output) but carries no epistemic channel.
+
+baseline_name: "heteroscedastic_input"
+
+include_covariance: true
+include_obstacle_obs: true
+policy_type: "heteroscedastic"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.
