@@ -22,6 +22,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from uncertainty_rl.envs import make_env
+from uncertainty_rl.networks.heteroscedastic import HeteroscedasticPPO
 from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 from uncertainty_rl.utils.bay_success import BaySuccessTracker
 from uncertainty_rl.utils.constants import OOB_INFLATION_MARGIN, STRICT_BAY_MARGIN
@@ -366,6 +367,8 @@ def main() -> None:
     policy_type = train_config.get("policy_type", "evidential")
     if policy_type == "evidential":
         model: PPO = EvidentialPPO.load(args.checkpoint)
+    elif policy_type == "heteroscedastic":
+        model = HeteroscedasticPPO.load(args.checkpoint)
     else:
         model = PPO.load(args.checkpoint)
 
@@ -393,7 +396,8 @@ def main() -> None:
         env.norm_reward = False
         print(f"Loaded normalisation stats from {vec_normalize_path!s}")
 
-    is_evidential = isinstance(model, EvidentialPPO) and hasattr(
+    # The heteroscedastic head shares the interface; its epistemic is NaN.
+    is_evidential = isinstance(model, (EvidentialPPO, HeteroscedasticPPO)) and hasattr(
         model.policy, "get_action_with_uncertainty"
     )
 
@@ -494,7 +498,8 @@ def main() -> None:
                 step_start = time.monotonic()
 
                 # Per-decision evidential uncertainty (mean over action axes).
-                # NaN for a non-evidential policy, which exposes no uncertainty.
+                # NaN for a standard policy, which exposes no uncertainty, and
+                # epistemic NaN for the heteroscedastic head.
                 epistemic = float("nan")
                 aleatoric = float("nan")
                 if is_evidential and _get_action is not None:
