@@ -539,6 +539,50 @@ class TestStageTrainingOverrides:
 
         assert config == {"learning_rate": 0.0001}
 
+    def _write_split_stage(self, tmp_path: Path) -> str:
+        """@brief Write a stage file with distinct standard/evidential blocks."""
+        sim_dir = tmp_path / "deployment" / "sim"
+        (sim_dir / "curriculum").mkdir(parents=True)
+        env_path = sim_dir / "env_config.yaml"
+        env_path.write_text(yaml.safe_dump({"use_extra_spawns": True}))
+        (sim_dir / "curriculum" / "stage4.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "standard_overrides": {"ent_coef": 0.001},
+                    "evidential_overrides": {"ent_coef": 0.002},
+                }
+            )
+        )
+        return str(env_path)
+
+    @pytest.mark.parametrize(
+        "policy_type, expected",
+        [("standard", 0.001), ("evidential", 0.002), ("heteroscedastic", 0.002)],
+    )
+    def test_block_selected_by_policy_type(
+        self, tmp_path: Path, policy_type: str, expected: float
+    ) -> None:
+        """
+        @brief standard reads standard_overrides; evidential and heteroscedastic
+               read evidential_overrides (action std is an actor output).
+        """
+        env_path = self._write_split_stage(tmp_path)
+        config = {"policy_type": policy_type}
+
+        _apply_stage_training_overrides(config, env_path, stage=4)
+
+        assert config["ent_coef"] == expected
+
+    def test_unknown_policy_type_raises(self, tmp_path: Path) -> None:
+        """
+        @brief A policy_type with no override mapping is rejected, never silently
+               given the evidential block.
+        """
+        env_path = self._write_split_stage(tmp_path)
+
+        with pytest.raises(ValueError, match="Unknown policy_type"):
+            _apply_stage_training_overrides({"policy_type": "bogus"}, env_path, 4)
+
     def test_training_overrides_stripped_from_env(self, tmp_path: Path) -> None:
         """
         @brief load_env_config() strips training_overrides so it never reaches the
@@ -617,6 +661,27 @@ class TestBaselineOverlay:
         assert cfg["include_covariance"] is False
         assert cfg["include_obstacle_obs"] is True
         assert cfg["baseline_name"] == "vanilla_ppo"
+
+    @pytest.mark.parametrize(
+        "baseline_file, include_covariance",
+        [("heteroscedastic.yaml", False), ("heteroscedastic_input.yaml", True)],
+    )
+    def test_heteroscedastic_overlays(
+        self, baseline_file: str, include_covariance: bool
+    ) -> None:
+        """
+        @brief Both heteroscedastic baselines pass apply_baseline and select the
+               heteroscedastic head with only the covariance flag differing.
+        """
+        from uncertainty_rl.utils.config_merge import apply_baseline
+
+        baseline = yaml.safe_load((self._BASELINES / baseline_file).read_text())
+        config: dict = {}
+        apply_baseline(config, baseline)
+        assert config["policy_type"] == "heteroscedastic"
+        assert config["include_covariance"] is include_covariance
+        assert config["include_obstacle_obs"] is True
+        assert config["baseline_name"] == Path(baseline_file).stem
 
     def test_baseline_inherits_ppo_hyperparams(self) -> None:
         """
