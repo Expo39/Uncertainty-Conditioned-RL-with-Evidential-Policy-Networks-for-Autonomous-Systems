@@ -1,8 +1,7 @@
-# Baseline: Heteroscedastic Gaussian Control
+# Baseline: Heteroscedastic Control
 # Observation: vehicle state + relative target pose + obstacle clearance.
-# The agent does not see EKF covariance; the policy is the evidential head with the
-# NIG parameterisation removed, so its action variance depends on the state
-# (log_std is an actor output) but carries no epistemic channel.
+# The agent does not see EKF covariance; the policy is the evidential head without
+# the NIG parameterisation, so its action variance is a state-dependent output.
 
 baseline_name: "heteroscedastic"
 
