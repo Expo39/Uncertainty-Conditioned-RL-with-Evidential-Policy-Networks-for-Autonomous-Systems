@@ -40,6 +40,7 @@ the dissertation is correct and the note is stale.
 |------|---------------|---------|-----------|
 | `hyperparameter_search.md` | `training/tune_hyperparams.py` | The unused search space, sampler and pruner choices | Section 3.8.1 |
 | `ablation_hpo_methodology.md` | `training/train_ppo.py`, `training/tune_hyperparams.py` | The code-level constraints behind the untuned configuration | Section 3.8.1 |
+| `heteroscedastic_control_preregistration.md` | `networks/heteroscedastic.py`, `scripts/analysis/seed_level.py` | Pre-registered hypothesis, decision rule and analysis for the heteroscedastic control arms | This note |
 
 ### deployment/
 
