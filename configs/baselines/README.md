@@ -32,7 +32,7 @@ The three actor heads differ only in how the action variance is produced:
 
 - **Standard** (`LayerNormActorCriticPolicy`): one state-independent `log_std` parameter.
 - **Heteroscedastic** (`HeteroscedasticActorCriticPolicy`): a state-dependent `log_std`
-  output, with the same backbone, initial variance, clamp and squashing as the
+  output, with the same backbone, initial variance, variance range and squashing as the
   evidential head, trained with the plain PPO loss (no NIG prior anchor).
 - **Evidential** (`EvidentialActorCriticPolicy`): NIG `(gamma, nu, alpha, beta)`, action
   variance `beta / (alpha - 1)`, trained with the PPO loss plus the prior anchor.

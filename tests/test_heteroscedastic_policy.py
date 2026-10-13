@@ -193,12 +193,48 @@ class TestInitialisation:
         torch.testing.assert_close(
             bias[:ACTION_DIM], torch.tensor([0.0, 0.5, -1.0]), atol=1e-7, rtol=0.0
         )
+
+    def test_initial_log_std_output(
+        self, policy: HeteroscedasticActorCriticPolicy
+    ) -> None:
+        """
+        @brief At a zero latent the bounded log_std equals _LOG_STD_BIAS.
+        """
+        _, log_std = policy.action_net(torch.zeros(1, 64))
         torch.testing.assert_close(
-            bias[ACTION_DIM:],
-            torch.full((ACTION_DIM,), _LOG_STD_BIAS),
-            atol=1e-6,
+            log_std,
+            torch.full((1, ACTION_DIM), _LOG_STD_BIAS),
+            atol=1e-5,
             rtol=0.0,
         )
+
+
+class TestLogStdBounds:
+    """
+    @class TestLogStdBounds
+    @brief log_std must stay inside the live range of the variance clamp.
+    """
+
+    def test_layer_log_std_bounded(self) -> None:
+        """
+        @brief For extreme latents the layer's log_std stays within
+               [0.5 * log(floor), 0], so the clamp never zeroes the gradient.
+        """
+        layer = HeteroscedasticLayer(16, ACTION_DIM, aleatoric_floor=FLOOR)
+        _, log_std = layer(torch.randn(BATCH_SIZE, 16) * 1e4)
+        assert torch.all(log_std >= 0.5 * math.log(FLOOR) - 1e-6)
+        assert torch.all(log_std <= 1e-6)
+
+    def test_log_std_gradient_survives_extreme_latent(self) -> None:
+        """
+        @brief A large latent still yields a non-zero gradient into the layer.
+        """
+        layer = HeteroscedasticLayer(16, ACTION_DIM, aleatoric_floor=FLOOR)
+        x = torch.full((4, 16), 3.0)
+        _, log_std = layer(x)
+        log_std.sum().backward()
+        assert layer.linear.weight.grad is not None
+        assert layer.linear.weight.grad[ACTION_DIM:].abs().sum() > 0.0
 
 
 class TestDistribution:

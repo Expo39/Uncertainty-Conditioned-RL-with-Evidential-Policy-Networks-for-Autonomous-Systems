@@ -60,18 +60,31 @@ class HeteroscedasticLayer(nn.Module):
     """
     @class HeteroscedasticLayer
     @brief Output layer emitting a state-dependent Gaussian (mean, log_std).
+
+    log_std is bounded by construction:
+    log_std = lo + (hi - lo) * (tanh(raw) + 1) / 2, with
+    lo = 0.5 * log(aleatoric_floor) and hi = 0.5 * log(_VARIANCE_CAP).
+    A hard clamp, as in the SB3 SAC actor (log_std in [-20, 2]), only suits bounds
+    wide enough to be rarely reached. These bounds are narrow, so a clamp would leave
+    log_std free to drift into the region where it passes no gradient and the
+    reported variance would lose its meaning.
     """
 
-    def __init__(self, input_dim: int, output_dim: int) -> None:
+    def __init__(
+        self, input_dim: int, output_dim: int, aleatoric_floor: float = 1e-6
+    ) -> None:
         """
         @brief Constructor for HeteroscedasticLayer.
         @param input_dim: Dimension of the latent actor features.
         @param output_dim: Action dimension. ACTION_DIM gets the per-axis mean
                bias; any other size falls back to a zero mean.
+        @param aleatoric_floor: Lower bound on the variance exp(2 * log_std).
         """
         super().__init__()
         self.input_dim = input_dim
         self.output_dim = output_dim
+        self.log_std_min = 0.5 * math.log(aleatoric_floor)
+        self.log_std_max = 0.5 * math.log(_VARIANCE_CAP)
         self.linear = nn.Linear(input_dim, output_dim * 2)
         # Weights scaled by 0.01 so the prior biases dominate at step 0.
         with th.no_grad():
@@ -80,26 +93,35 @@ class HeteroscedasticLayer(nn.Module):
 
     def reset_bias(self) -> None:
         """
-        @brief Write the prior bias layout [mean | log_std].
+        @brief Write the prior bias layout [mean | raw log_std].
         @note Called again by the policy after ortho_init, which zeroes biases.
+              The raw bias is chosen so the bounded log_std starts at
+              _LOG_STD_BIAS (clipped into the bounds if the floor exceeds it).
         """
         n = self.output_dim
+        span = self.log_std_max - self.log_std_min
+        unit = 2.0 * (_LOG_STD_BIAS - self.log_std_min) / span - 1.0
+        raw = math.atanh(max(-1.0 + 1e-6, min(1.0 - 1e-6, unit)))
         with th.no_grad():
             bias = self.linear.bias
             if n == ACTION_DIM:
                 bias[:n] = th.tensor(_MEAN_BIAS, dtype=bias.dtype)
             else:
                 bias[:n].fill_(0.0)
-            bias[n:].fill_(_LOG_STD_BIAS)
+            bias[n:].fill_(raw)
 
     def forward(self, x: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
         """
         @brief Forward pass to compute the Gaussian parameters.
         @param x: Input features of shape (batch_size, input_dim).
-        @return Tuple of (mean, log_std), each (batch_size, output_dim).
+        @return Tuple of (mean, log_std), each (batch_size, output_dim), with
+                log_std inside [log_std_min, log_std_max].
         """
         out = self.linear(x)
-        return out[:, : self.output_dim], out[:, self.output_dim :]
+        raw = out[:, self.output_dim :]
+        span = self.log_std_max - self.log_std_min
+        log_std = self.log_std_min + 0.5 * span * (th.tanh(raw) + 1.0)
+        return out[:, : self.output_dim], log_std
 
 
 class HeteroscedasticDistribution(EvidentialDistribution):
@@ -127,7 +149,9 @@ class HeteroscedasticDistribution(EvidentialDistribution):
         @param latent_dim: Dimension of the latent actor features.
         @return HeteroscedasticLayer module.
         """
-        return HeteroscedasticLayer(latent_dim, self.action_dim)
+        return HeteroscedasticLayer(
+            latent_dim, self.action_dim, aleatoric_floor=self.aleatoric_floor
+        )
 
     def proba_distribution(  # type: ignore[override]
         self, mean: th.Tensor, log_std: th.Tensor
@@ -135,13 +159,13 @@ class HeteroscedasticDistribution(EvidentialDistribution):
         """
         @brief Set distribution parameters from the actor output.
         @param mean: Pre-squash mean, shape (batch_size, action_dim).
-        @param log_std: Pre-clamp log standard deviation, same shape.
+        @param log_std: Bounded log standard deviation, same shape.
         @return Self with updated distribution.
         """
         self._log_std = log_std
         self._gaussian_actions = None
-        # Same clamp as the evidential head: floor for exploration, cap at the
-        # action half-range.
+        # Same bounds as the evidential head. The layer already keeps log_std
+        # inside them; the clamp only guards callers that bypass the layer.
         variance = th.clamp(
             th.exp(2.0 * log_std), min=self.aleatoric_floor, max=_VARIANCE_CAP
         )
@@ -176,7 +200,7 @@ class HeteroscedasticDistribution(EvidentialDistribution):
     @property
     def log_std(self) -> th.Tensor:
         """
-        @brief Pre-clamp log standard deviation from the last proba_distribution().
+        @brief Log standard deviation from the last proba_distribution().
         @return Log std of shape (batch_size, action_dim).
         """
         assert self._log_std is not None
@@ -185,7 +209,7 @@ class HeteroscedasticDistribution(EvidentialDistribution):
     @property
     def raw_variance(self) -> th.Tensor:
         """
-        @brief Unclamped predicted variance exp(2 * log_std), the reported signal.
+        @brief Predicted variance exp(2 * log_std), the reported signal.
         @return Variance of shape (batch_size, action_dim).
         """
         return th.exp(2.0 * self.log_std)
@@ -353,8 +377,8 @@ class HeteroscedasticActorCriticPolicy(ActorCriticPolicy):
         @brief Get action with its predicted action variance.
         @param obs: Observation tensor.
         @param deterministic: If True, return tanh(mean); otherwise sample.
-        @return Tuple of (action, uncertainty_dict) holding aleatoric (raw
-                exp(2 * log_std)), epistemic (NaN: no epistemic channel), total
+        @return Tuple of (action, uncertainty_dict) holding aleatoric
+                (exp(2 * log_std)), epistemic (NaN: no epistemic channel), total
                 (= aleatoric), mean, log_std and action_std (sqrt(aleatoric)).
         """
         if self.training:
@@ -363,7 +387,7 @@ class HeteroscedasticActorCriticPolicy(ActorCriticPolicy):
             distribution = self.get_distribution(obs)
             # Sampled through the training distribution so the clamp matches.
             action = distribution.get_actions(deterministic=deterministic)
-            # Reported variance is the raw output; only sampling is clamped.
+            # Reported variance is the layer output, already inside [floor, cap].
             aleatoric = th.clamp(distribution.raw_variance, min=1e-6)
             mean = cast(Normal, distribution.distribution).mean
 

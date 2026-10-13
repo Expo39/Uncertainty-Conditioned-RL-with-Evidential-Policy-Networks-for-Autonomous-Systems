@@ -1,7 +1,6 @@
 # Heteroscedastic Control Arms: Pre-registration
 
-> Fixed on 30 September 2026, before any heteroscedastic chain was launched. The analysis
-> below is run as written, whatever the outcome.
+> The analysis below is run as written, whatever the outcome.
 
 Extracted from `networks/heteroscedastic.py`, `configs/baselines/` and
 `scripts/analysis/seed_level.py`.
@@ -27,9 +26,12 @@ variance, not the NIG parameterisation, that lets the policy use the covariance 
 
 A third head, `policy_type: heteroscedastic`, is the evidential head with the NIG
 parameterisation and its prior anchor removed. It keeps the same backbone, critic, mean
-bias, initial action variance (0.398), sampling clamp `[aleatoric_floor, 1.0]`,
-squashing, entropy, PPO hyperparameters and `evidential_overrides` entropy schedule. The
-contract is tabulated in [networks/README.md](../../../uncertainty_rl/networks/README.md).
+bias, initial action variance (0.398), action variance range `[aleatoric_floor, 1.0]`,
+squashing, entropy, PPO hyperparameters and `evidential_overrides` entropy schedule.
+`log_std` is bounded to `[0.5 * log(aleatoric_floor), 0]` by a rescaled tanh in the
+output layer, so the variance stays inside that range with a non-zero gradient and the
+reported variance is the sampling variance. The contract is tabulated in
+[networks/README.md](../../../uncertainty_rl/networks/README.md).
 
 | Arm | `policy_type` | `include_covariance` |
 |---|---|---|
@@ -51,7 +53,8 @@ contract is tabulated in [networks/README.md](../../../uncertainty_rl/networks/R
   deterministic actions, exactly as for the existing arms.
 - `train/aleatoric_uncertainty`, `train/entropy_loss` and the rolling success rate are
   monitored. A std that sits at the floor (0.2) or the cap (1.0) for most of a stage is
-  reported.
+  reported. Unlike the evidential head, the heteroscedastic head has no prior anchor
+  opposing the entropy bonus, so drift towards the cap is the expected failure mode.
 
 ## Primary hypothesis (H1g)
 

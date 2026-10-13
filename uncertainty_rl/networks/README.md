@@ -68,12 +68,12 @@ mechanism, is what lets the policy use the covariance input (arms `heteroscedast
 | Aspect | Evidential head | Heteroscedastic head |
 |--------|-----------------|----------------------|
 | Output layer | `Linear(latent, 4n)` -> `(gamma, nu, alpha, beta)` | `Linear(latent, 2n)` -> `(mean, log_std)` |
-| Action variance | `beta / (alpha - 1)` | `exp(2 * log_std)`, state-dependent |
-| Initial variance | 0.398 from the alpha/beta bias priors | Same: log_std bias derived in code from the same priors |
+| Action variance | `beta / (alpha - 1)` | `exp(2 * log_std)`, state-dependent, `log_std` tanh-bounded to `[0.5 * log(floor), 0]` |
+| Initial variance | 0.398 from the alpha/beta bias priors | Same: raw log_std bias derived in code so the bounded log_std starts at the same value |
 | Sampling clamp | `[aleatoric_floor, 1.0]` | Same |
 | Backbone, critic, mean bias, gains, squashing, entropy | - | Same (squashing and entropy inherited from `EvidentialDistribution`) |
 | Training | `EvidentialPPO` (PPO + prior anchor) | `HeteroscedasticPPO` (PPO loss only, as `ScheduledEntCoefPPO`) |
-| Reported uncertainty | epistemic, aleatoric, total | aleatoric = raw `exp(2 * log_std)`, epistemic = NaN, total = aleatoric |
+| Reported uncertainty | epistemic, aleatoric, total | aleatoric = `exp(2 * log_std)`, epistemic = NaN, total = aleatoric |
 
 `log_std_init` from the shared `policy_kwargs` is accepted and ignored: the initial std
 comes from the matched prior bias. The head reads `evidential.aleatoric_floor`, so both

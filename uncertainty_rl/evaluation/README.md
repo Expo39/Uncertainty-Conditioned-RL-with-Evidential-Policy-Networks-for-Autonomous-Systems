@@ -121,7 +121,7 @@ localisation crosses into the degraded regime, rather than from the spawn? See
 | Mean episode reward | Accumulated per episode |
 | Mean steps to termination | Episode length |
 | Epistemic uncertainty | `get_action_with_uncertainty()` mean over episode (evidential only; NaN for the heteroscedastic head, which has no epistemic channel) |
-| Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential and heteroscedastic heads; for the latter the raw `exp(2 * log_std)`) |
+| Aleatoric uncertainty | `get_action_with_uncertainty()` mean over episode (evidential and heteroscedastic heads; for the latter `exp(2 * log_std)`) |
 | Action std | `sqrt(aleatoric)` per decision for the evidential and heteroscedastic heads; the constant `exp(log_std)` for the standard head |
 
 **Heteroscedastic arms run without the SafetyWrapper only.** With no epistemic channel
