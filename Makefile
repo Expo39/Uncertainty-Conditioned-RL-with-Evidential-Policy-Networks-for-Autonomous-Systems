@@ -705,12 +705,17 @@ restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-wor
 RESULTS_TREES = checkpoints logs outputs
 RESULTS_ARCHIVE ?= project_results.tar.gz
 
+# ekf_state.json is the live ROS2 -> env hand-off, rewritten many times a second
+# while the stack runs: it is not a result, so it is left out. Its rewrites still
+# touch outputs/ itself, so tar exit 1 ("file changed as we read it") is accepted;
+# exit 2 (a real failure) still stops the target.
 backup-results: ## Archive checkpoints/, logs/ and outputs/ (multi-GB). Usage: make backup-results [RESULTS_ARCHIVE=project_results.tar.gz]
 	@present="$$(for d in $(RESULTS_TREES); do [ -d "$$d" ] && echo $$d; done)"; \
 	if [ -z "$$present" ]; then echo "Nothing to back up - none of $(RESULTS_TREES) exist."; exit 1; fi; \
 	echo "Archiving: $$(echo $$present | tr '\n' ' ')"; \
 	echo "On disk: $$(du -csh $$present | tail -1 | cut -f1) (model .zip files are already compressed, so gzip gains little)"; \
-	tar -czf $(RESULTS_ARCHIVE) $$present
+	tar --exclude=outputs/ekf_state.json --warning=no-file-changed \
+		-czf $(RESULTS_ARCHIVE) $$present || [ $$? -eq 1 ]
 	@echo "Wrote $(RESULTS_ARCHIVE) ($$(du -h $(RESULTS_ARCHIVE) | cut -f1))"
 
 restore-results: ## Restore checkpoints/, logs/ and outputs/ from the archive. Usage: make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]
