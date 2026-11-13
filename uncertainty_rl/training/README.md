@@ -32,7 +32,7 @@ flowchart TB
 
     subgraph train["train_ppo.py"]
         ENV["CARLAParkingEnv\nVecNormalize"]
-        PPO["EvidentialPPO\n(or PPO)"]
+        PPO["EvidentialPPO /\nScheduledEntCoefPPO /\nHeteroscedasticPPO"]
         CB["EnvDiagnosticsCallback\nCheckpointCallback"]
     end
 
@@ -210,7 +210,7 @@ cp outputs/main_analysis/figures/training_curves.png docs/media/training_curves.
 ## See also
 
 - [uncertainty_rl/README.md](../README.md) - package overview
-- [networks/README.md](../networks/README.md) - EvidentialPPO and EvidentialActorCriticPolicy
+- [networks/README.md](../networks/README.md) - EvidentialPPO, EvidentialActorCriticPolicy and the heteroscedastic control head
 - [evaluation/README.md](../evaluation/README.md) - evaluation after training completes
 - [docs/detailed_notes/training/hyperparameter_search.md](../../docs/detailed_notes/training/hyperparameter_search.md) - search space design rationale
 - [docs/detailed_notes/networks/evidential_nig_initialisation.md](../../docs/detailed_notes/networks/evidential_nig_initialisation.md) - NIG init and regularisation derivation
