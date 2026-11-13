@@ -11,6 +11,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 - The actor is a flat MLP over the full observation.
 - Evidential loss applies to the actor only. Critic is a standard Gaussian MLP.
 - Prior-anchoring quadratic-ratio regularisation (RL-stable, replaces the Amini 2020 supervised term).
+- A heteroscedastic Gaussian control head (`heteroscedastic.py`) keeps the state-dependent action variance but drops the NIG, isolating what the evidential parameterisation adds. See [Heteroscedastic control head](#heteroscedastic-control-head).
 
 ## Modules
 
@@ -48,8 +49,8 @@ features. It is implemented and unit-tested but **was never used**:
 `use_uncertainty_conditioning` is `false` in `train_config.yaml` and no reported result
 enables it.
 
-The flag is off because the 2x2 ablation requires the covariance to enter identically for
-the standard and evidential heads, leaving the head as the only difference between arms.
+The flag is off because the 3x2 ablation requires the covariance to enter identically for
+all three heads (standard, heteroscedastic and evidential), leaving the head as the only difference between arms.
 A dedicated pathway on one side would confound that comparison, so it is a separate
 architectural variant rather than part of the method under test.
 
@@ -187,7 +188,7 @@ In RL there are no ground-truth action targets. $|\text{action} - \gamma|$ is po
 noise, not prediction error, so this term grows unboundedly. The prior-anchoring penalty is
 bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiring target labels.
 
-## TensorBoard logs (evidential-specific)
+## TensorBoard logs (evidential and heteroscedastic)
 
 | Tag | Expression logged |
 |-----|------------------|
