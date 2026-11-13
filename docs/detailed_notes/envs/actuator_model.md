@@ -3,13 +3,12 @@
 Extracted from `uncertainty_rl/envs/sim/carla_parking.py` (`step()`) and
 `configs/deployment/agent_config.yaml` (`actuator_model:` block).
 
-Section 3.3 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
-the actuator model: the clipping equation, the adopted rate limits, the brake-priority
-threshold, and the comparison of the steering rate against the EPS capability ceiling
-and the MPC comfort envelope.
+The actuator model comprises the clipping equation, the adopted rate limits, the
+brake-priority threshold, and the comparison of the steering rate against the EPS
+capability ceiling and the MPC comfort envelope.
 
-This note records two things the dissertation does not: why the constraint is enforced
-in the env rather than the reward, and the wider set of measurements the chosen rates
+This note records two things behind it: why the constraint is enforced in the env rather
+than the reward, and the wider set of measurements the chosen rates
 were checked against.
 
 ## Why the env and not the reward

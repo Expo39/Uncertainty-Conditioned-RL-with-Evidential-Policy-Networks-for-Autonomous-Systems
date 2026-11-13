@@ -5,9 +5,8 @@
 
 Extracted from `training/train_ppo.py` and `training/tune_hyperparams.py`.
 
-Section 3.8 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
-the ablation and, in Section 3.8.1, for the decision to fix the hyperparameters rather
-than tune them. The search space and Optuna settings are in `hyperparameter_search.md`.
+The hyperparameters were fixed rather than tuned for every arm of the ablation. The
+search space and Optuna settings are in `hyperparameter_search.md`.
 
 This note records only the code-level constraints behind that decision.
 

@@ -2,14 +2,12 @@
 
 Extracted from `uncertainty_rl/networks/evidential_policy.py` (`EvidentialLayer.__init__`).
 
-Section 3.5.1 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical
-for the NIG head and its initialisation, covering the softplus-with-offsets constraints,
+The NIG head initialisation rests on the softplus-with-offsets constraints,
 why the alpha offset is 1.5 rather than 1.0, the transfer of control from weights to
 biases, the per-axis gamma biases, the sub-1 nu prior, and the re-application of the
-biases after SB3's orthogonal-initialisation pass. Figure 3.9 there illustrates it.
+biases after SB3's orthogonal-initialisation pass.
 
-This note records the bias layout the code depends on, which the dissertation does not
-enumerate index by index.
+This note records the bias layout the code depends on, index by index.
 
 ## Bias layout
 

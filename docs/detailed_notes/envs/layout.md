@@ -2,8 +2,7 @@
 
 Extracted from `scripts/layouts/` and `uncertainty_rl/envs/sim/helpers/`.
 
-Section 3.2 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
-the three lots (`rectangle`, `trapezoid`, `irregular_a`), the target-bay selection and
+This note covers the three lots (`rectangle`, `trapezoid`, `irregular_a`), the target-bay selection and
 the per-episode occupancy draw. `scripts/layouts/README.md` describes each floor plan and
 `BUILDER.md` is the full `LotBuilder` DSL reference.
 
@@ -47,9 +46,8 @@ bay groups, so moving a row moves its aisle with it.
 
 Source: `LotSpawner._spawn_static_vehicles()` in `envs/sim/helpers/_lot_spawner.py`.
 
-Section 3.2 of the dissertation covers the per-episode occupancy rate, the per-bay
-draw and the 180 deg flip. Two exclusions it does not mention are applied first, in
-order:
+Occupancy is drawn per episode at a fixed rate, per bay, with a 180 deg flip. Two
+exclusions are applied first, in order:
 
 1. `bay_id` matches the target bay - always excluded, so the agent can enter it.
 2. `always_empty: true` in the layout YAML - a layout-level reservation, never occupied

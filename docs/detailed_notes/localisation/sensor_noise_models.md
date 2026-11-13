@@ -8,8 +8,8 @@ This note records the datasheet figures behind the simulated sensor noise and ma
 each mechanism to the code that implements it. The derivations that turn these
 figures into the injected parameters - the CEP to sigma conversion, the spectral
 density to per-sample variance conversion, the per-tier GNSS values and the EKF
-process-noise diagonal - are given in the sensor-noise appendix of the dissertation
-(`docs/AntonioGaldes_Dissertation.pdf`), which is canonical for all of them.
+process-noise diagonal - are encoded in `configs/deployment/sim/env_config.yaml` and
+`configs/ros2_config.yaml`.
 
 ## Target hardware
 

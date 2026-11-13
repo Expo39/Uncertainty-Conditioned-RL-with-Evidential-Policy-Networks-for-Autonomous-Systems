@@ -2,12 +2,10 @@
 
 Extracted from `uncertainty_rl/envs/covariance_subscriber.py` and `uncertainty_rl/ros2/`.
 
-Section 3.1 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
-the Jazzy-Humble file bridge: why DDS is bypassed at the training boundary, the three
+The Jazzy-Humble file bridge rests on why DDS is bypassed at the training boundary, the three
 JSON files and their roles, the atomic `tempfile` plus `os.replace` write, and the
 sequence-number guard that keeps a stale record out of the first observation of an
-episode. Section 3.4 covers the COG heading derivation and its publication gates, and
-`uncertainty_rl/ros2/README.md` documents the nodes and topics.
+episode. `uncertainty_rl/ros2/README.md` documents the nodes and topics.
 
 This note records the file-path configuration, which is needed to run parallel workers
 and is documented nowhere else.

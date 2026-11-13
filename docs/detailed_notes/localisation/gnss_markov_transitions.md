@@ -2,13 +2,12 @@
 
 Extracted from `uncertainty_rl/ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`.
 
-Section 3.4.1 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical
-for the chain: why fix quality is modelled as a Markov process rather than a per-episode
+The design of the chain covers why fix quality is modelled as a Markov process rather than a per-episode
 constant, the ladder-only transition structure, the upward recovery bias, the long-run
 occupancy and dwell times, the one-way drift mode used for evaluation, and the local
-datum. Figure 3.8 there draws the chain with its probabilities.
+datum.
 
-This note records only the runtime behaviour around it.
+This note records the runtime behaviour around it.
 
 ## Configuration and rates
 

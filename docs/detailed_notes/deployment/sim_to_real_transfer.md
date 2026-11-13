@@ -3,18 +3,16 @@
 Extracted from the real-world deployment pipeline (`envs/real/inference_loop.py`).
 
 The deployment path, code-path parity, frame and actuation calibration and the
-pre-deployment sequence are given in Appendix B of the dissertation
-(`docs/AntonioGaldes_Dissertation.pdf`); the scope limitation that no result was
-obtained on hardware is Section 4.8.3; the five secondary sensor effects that ARE
-modelled, including the per-episode east/north anisotropy and why it must reach the
-covariance features rather than the position alone, are Section 3.4.
+pre-deployment sequence are mapped to code in `real_world_deployment.md`. No result was
+obtained on hardware. The secondary sensor effects that ARE modelled, including the
+per-episode east/north anisotropy, are listed in `../localisation/sensor_noise_models.md`.
 
-This note records only what those do not: two modelling gaps left in the sensor model,
-and why each is tolerable at this task's geometry.
+This note records two modelling gaps left in the sensor model, and why each is tolerable
+at this task's geometry.
 
 ## No within-episode IMU gyro bias drift
 
-Appendix A models in-run bias as a fixed per-episode offset, redrawn at each boundary.
+The sensor model treats in-run bias as a fixed per-episode offset, redrawn at each boundary.
 What is not modelled is drift *within* an episode: a real bias walks over time, whereas
 the simulated one is constant once drawn.
 
@@ -35,7 +33,7 @@ need modelling.
 
 ## No surface variation
 
-The world is a flat OpenDRIVE surface (Section 3.2), so the ground contributes no LiDAR
+The world is a flat OpenDRIVE surface, so the ground contributes no LiDAR
 returns and no attitude disturbance. Real lots have road markings, drain covers, speed
 bumps and a drainage gradient of roughly 1-2 %.
 

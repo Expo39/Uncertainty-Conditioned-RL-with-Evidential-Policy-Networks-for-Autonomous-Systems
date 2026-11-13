@@ -4,8 +4,7 @@ Search space design rationale and literature references for the Optuna study in
 `uncertainty_rl/training/tune_hyperparams.py`.
 
 > **This search was never run.** Every reported result uses the committed defaults in
-> `configs/train_config.yaml`, for the reason given in Section 3.8.1 of the dissertation.
-> The tooling below is retained for future work. See `ablation_hpo_methodology.md` for
+> `configs/train_config.yaml`. The tooling below is retained for future work. See `ablation_hpo_methodology.md` for
 > the constraints a later run would have to respect.
 
 ---
