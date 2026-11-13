@@ -10,7 +10,6 @@
 ![Dissertation](https://img.shields.io/badge/MSc%20Dissertation-September%202026-purple)
 
 MSc Artificial Intelligence dissertation by Antonio Galdes, September 2026.
-**[Read the full document](docs/AntonioGaldes_Dissertation.pdf)**
 
 ---
 
@@ -68,9 +67,9 @@ withholding is scripted anywhere in the reward, as noted under [Results](#result
 
 ## Results
 
-Each mechanism is switched on and off independently in a 2x2 factorial ablation. One
-architecture, one hyperparameter configuration and one curriculum are shared by all four
-arms, every one of them trained on three seeds and evaluated over 600 pooled episodes per
+The reported results come from a 2x2 factorial ablation in which each mechanism is switched
+on and off independently. One architecture, one hyperparameter configuration and one
+curriculum are shared by all four reported arms, every one of them trained on three seeds and evaluated over 600 pooled episodes per
 condition. The conditions themselves are set out in
 [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md).
 
@@ -108,9 +107,9 @@ uncertainty supplied to it, the epistemic and aleatoric estimates remaining inse
 practice under model-free reinforcement learning. The cause is attributed to the
 construction of the head rather than to the conditions of evaluation.
 
-The full analysis, including the calibration of the filter covariance, the behavioural
-breakdown and the bounds placed on these claims, is set out in
-[the dissertation](docs/AntonioGaldes_Dissertation.pdf).
+The analysis scripts behind these figures, including the calibration of the filter
+covariance and the behavioural breakdown, are documented in
+[scripts/analysis/README.md](scripts/analysis/README.md).
 
 <p align="center">
   <img src="docs/media/training_curves.png" alt="Success and collision rate per arm across the six curriculum stages" width="820">
@@ -118,7 +117,7 @@ breakdown and the bounds placed on these claims, is set out in
 
 Training follows a six-stage single-phase curriculum in which one difficulty axis is
 widened at a time, progression being scheduled on budget rather than gated on measured
-performance. Twelve chains were run, being four arms across three seeds, at ten million
+performance. Twelve chains were run for the reported 2x2, being four arms across three seeds, at ten million
 policy decisions each and roughly two weeks of continuous GPU time. The per-stage
 settings are given in
 [configs/deployment/sim/curriculum/README.md](configs/deployment/sim/curriculum/README.md).
@@ -206,7 +205,7 @@ comparisons [6].
 
 ```
 uncertainty_rl/       Main package
-  networks/             Evidential NIG policy, SB3 integration
+  networks/             Evidential NIG policy, heteroscedastic control head, SB3 integration
   envs/                 CARLA Gymnasium parking environment, safety wrapper
   training/             PPO training loop, Optuna tuning
   evaluation/           Condition sweep, metrics (CSVs only, no figures)
@@ -215,21 +214,16 @@ uncertainty_rl/       Main package
 configs/              YAML only, nothing hardcoded in source
 scripts/              Layout generation, inspectors, visualiser, analysis
 tests/                Unit and integration tiers
-docs/                 Dissertation PDF, detailed notes, media
-  detailed_notes/       Implementation notes keyed to dissertation sections
+docs/                 Detailed notes, media
+  detailed_notes/       Implementation notes: index layouts, provenance, code maps
 ```
 
 ### The role of `docs/detailed_notes/`
 
-The canonical account of the design and its justification is the dissertation. Beneath it
-sit the detailed notes, forming the implementation layer: index layouts, parameter
-provenance, runtime configuration and code maps, all of them needed to work on the source
-yet too granular for the dissertation or for an inline comment.
-
-Each note names the dissertation section that owns its topic and records only the
-remainder, so the two are complements rather than copies. A per-file
-index, giving the canonical section for each, is in
-[docs/detailed_notes/README.md](docs/detailed_notes/README.md).
+The detailed notes form the implementation layer beneath the subpackage READMEs: index
+layouts, parameter provenance, runtime configuration and code maps, all of them needed to
+work on the source yet too granular for a README or for an inline comment. A per-file
+index is in [docs/detailed_notes/README.md](docs/detailed_notes/README.md).
 
 ---
 
@@ -260,7 +254,7 @@ remainder:
 | Day-to-day operation | [USAGE.md](USAGE.md) |
 | All Make targets with variables and GPU requirements | [COMMANDS.md](COMMANDS.md) |
 | Python package overview, subpackage map | [uncertainty_rl/README.md](uncertainty_rl/README.md) |
-| Evidential NIG networks, actor head, loss design | [uncertainty_rl/networks/README.md](uncertainty_rl/networks/README.md) |
+| Evidential NIG networks, heteroscedastic control head, loss design | [uncertainty_rl/networks/README.md](uncertainty_rl/networks/README.md) |
 | Observation space, reward function, action space, env config | [uncertainty_rl/envs/README.md](uncertainty_rl/envs/README.md) |
 | PPO training loop, Optuna tuning, callbacks | [uncertainty_rl/training/README.md](uncertainty_rl/training/README.md) |
 | Evaluation conditions, metrics, result plots | [uncertainty_rl/evaluation/README.md](uncertainty_rl/evaluation/README.md) |
@@ -273,7 +267,7 @@ remainder:
 | 2D visualiser, JSONL schema, Pygame controls | [scripts/visualise/README.md](scripts/visualise/README.md) |
 | GNSS chain and TensorBoard diagnostics, CLI flags | [scripts/diagnostics/README.md](scripts/diagnostics/README.md) |
 | Sim deployment config files and their consumers | [configs/deployment/sim/README.md](configs/deployment/sim/README.md) |
-| Detailed notes index, with the canonical dissertation section for each | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
+| Detailed notes index | [docs/detailed_notes/README.md](docs/detailed_notes/README.md) |
 | LotBuilder DSL full reference | [scripts/layouts/BUILDER.md](scripts/layouts/BUILDER.md) |
 
 ---
@@ -306,9 +300,6 @@ remainder:
     2018, pp. 3207-3214,
     doi: [10.1609/aaai.v32i1.11694](https://doi.org/10.1609/aaai.v32i1.11694).
 
-The full bibliography is in the dissertation,
-[docs/AntonioGaldes_Dissertation.pdf](docs/AntonioGaldes_Dissertation.pdf).
-
 ---
 
 ## Citation
@@ -329,5 +320,5 @@ The full bibliography is in the dissertation,
 
 ## Academic use
 
-The code and the dissertation are provided for academic reference. Citation is
-requested where either is drawn upon.
+The code is provided for academic reference. Citation is requested where it is drawn
+upon.
