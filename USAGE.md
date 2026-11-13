@@ -162,7 +162,7 @@ seed, giving 600 pooled episodes per cell.
 
 > **No tuning was performed for the reported results.** A single committed
 > configuration was applied identically to every arm and all three seeds. Tuning
-> per arm would have made the configuration a fifth experimental variable and
+> per arm would have made the configuration an extra experimental variable and
 > confounded the ablation, at the acknowledged cost of ranking each arm at one
 > operating point rather than at its best. The tuning pipeline is retained for future
 > work. See
@@ -193,6 +193,7 @@ outputs/
 |
 |-- raw_derived/              Intermediate, regenerated from raw/ by scripts/analysis/
 |   |-- cross_seed_analysis/    Pooled + per-seed robustness (make analyse-cross-seed)
+|   |-- seed_level/             Two-level bootstrap, permutation tests (make analyse-seed-level)
 |   |-- ablation_analysis/      Single-seed contrasts (make analyse-ablation)
 |   |-- gate_analysis/          Single-seed gate ROC (make analyse-gate)
 |   |-- training/               Seed-averaged curves (make training-curves)
@@ -215,6 +216,7 @@ Rebuilding everything downstream of a completed evaluation:
 
 ```bash
 make analyse-cross-seed STAGE=6   # pooled CSVs
+make analyse-seed-level STAGE=6   # 3x2 seed-level contrasts
 make training-curves              # TensorBoard scalars -> CSV
 make figures                      # figures, into main_analysis/figures/
 make analysis-bundle STAGE=6 BOOTSTRAP_SEED=42   # summaries + values + MANIFEST
