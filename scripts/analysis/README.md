@@ -190,7 +190,10 @@ writes, under `outputs/raw_derived/seed_level/`:
   with two-level intervals of each covariance pair's difference.
 
 Estimates needing an arm with no records are skipped with a warning. Run with
-`make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]`. The pre-registered
+`make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]`; `RESULTS_ROOT` and
+`OUTPUT_DIR` override the input tree and the output directory. Called directly, the
+script also takes `--seeds` (default `seed_42 seed_123 seed_7`) and `--n-bootstrap`
+(default 10000). The pre-registered
 reading is in
 [docs/detailed_notes/training/heteroscedastic_control_preregistration.md](../../docs/detailed_notes/training/heteroscedastic_control_preregistration.md).
 
@@ -232,7 +235,8 @@ moving average at 0.9 (the TensorBoard UI default) and thinned to an even stride
 points.
 
 Writes `training_curves.csv` and `training_stage_bounds.csv` to
-`outputs/raw_derived/training/`, which the `training_curves` figure reads. Run with
+`outputs/raw_derived/training/`, which the `training_curves` figure reads. `--arms`
+defaults to all six arms of the 3x2 design. Run with
 `make training-curves [LOGS_ROOT=logs]`.
 
 ### `bundle.py` (host-side)
@@ -264,7 +268,8 @@ Every rendered figure, and nothing else: these modules read CSVs and draw them, 
 - `degradation_tiers.py` - per-arm success across TRUE-localisation tiers, pooled over
   seeds. Episodes are banded into equal-population terciles of their MEAN true error
   (mean, not max, so one transient spike cannot make the axis non-monotone), since the
-  live chain rarely holds one integer tier for a whole episode.
+  live chain rarely holds one integer tier for a whole episode. Covers all six arms; an
+  arm not yet evaluated for a seed is skipped rather than failing the figure.
 - `ekf_sawtooth.py` - the reported EKF sigma_x sawtooth over one episode, with the true
   `gnss_tier` Markov state shaded behind it. Reads one demo-trace CSV, no smoothing.
 - `lot_layouts.py` - both lot layouts drawn from the generated layout YAMLs; no geometry
