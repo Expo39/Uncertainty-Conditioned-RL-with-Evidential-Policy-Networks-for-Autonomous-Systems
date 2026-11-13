@@ -1,0 +1,12 @@
+# Baseline: Heteroscedastic Control
+# Observation: vehicle state + relative target pose + obstacle clearance.
+# The agent does not see EKF covariance; the policy is the evidential head without
+# the NIG parameterisation, so its action variance is a state-dependent output.
+
+baseline_name: "heteroscedastic"
+
+include_covariance: false
+include_obstacle_obs: true
+policy_type: "heteroscedastic"
+# Output dirs derive from baseline_name + the base ./logs / ./checkpoints in
+# train_config.yaml, so the base path lives in one place.

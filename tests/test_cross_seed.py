@@ -13,7 +13,7 @@ from typing import List, Tuple
 import pandas as pd
 
 from scripts.analysis import cross_seed
-from scripts.analysis.ablation import _ARM_ORDER
+from scripts.analysis.ablation import _ARM_ORDER, _CONTRAST_PAIRS
 
 # The two GNSS-tier endpoints the degradation slope and many tests key on.
 _CLEAN = "gnss_fixed"
@@ -172,6 +172,59 @@ class TestCrossSeedPooling:
         # full_method (0.8) - output_uncertainty (0.5) is a positive success delta.
         evidential = contrasts[contrasts["pair"] == "evidential_head"]
         assert (evidential["success_delta_pp"] > 0).all()
+
+
+class TestSixArmDesign:
+    """
+    @class TestSixArmDesign
+    @brief The analysis covers the 3x2 design: three heads x covariance input.
+    """
+
+    def test_arm_order(self) -> None:
+        """
+        @brief Heads in standard, heteroscedastic, evidential order, each with its
+               covariance-blind arm first.
+        """
+        assert _ARM_ORDER == [
+            "vanilla_ppo",
+            "input_uncertainty",
+            "heteroscedastic",
+            "heteroscedastic_input",
+            "output_uncertainty",
+            "full_method",
+        ]
+
+    def test_heteroscedastic_contrast_is_last(self) -> None:
+        """
+        @brief The new pair is appended, so the original pairs keep their
+               bootstrap draws under a fixed seed.
+        """
+        assert _CONTRAST_PAIRS[:2] == [
+            ("standard_head", "input_uncertainty", "vanilla_ppo"),
+            ("evidential_head", "full_method", "output_uncertainty"),
+        ]
+        assert _CONTRAST_PAIRS[2] == (
+            "heteroscedastic_head",
+            "heteroscedastic_input",
+            "heteroscedastic",
+        )
+
+    def test_contrast_table_includes_heteroscedastic(self, tmp_path: Path) -> None:
+        """
+        @brief With the heteroscedastic arms present the contrast table carries a
+               heteroscedastic_head row per condition.
+        """
+        from scripts.analysis.ablation import _contrast_table
+
+        root = _build_three_seed_tree(tmp_path)
+        for seed in (42, 123, 7):
+            _write_episode_csv(root, seed, "heteroscedastic", 10, 0.5)
+            _write_episode_csv(root, seed, "heteroscedastic_input", 10, 0.7)
+        pooled = cross_seed._pool_episodes(root, stage="6")
+        contrasts = _contrast_table(pooled, seed=42)
+        het = contrasts[contrasts["pair"] == "heteroscedastic_head"]
+        assert set(het["condition"]) == {_CLEAN, _DEGRADED}
+        assert (het["success_delta_pp"] > 0).all()
 
 
 class TestSeedRobustness:

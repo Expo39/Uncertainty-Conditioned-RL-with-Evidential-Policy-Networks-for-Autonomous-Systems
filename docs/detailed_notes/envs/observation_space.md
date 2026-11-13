@@ -2,13 +2,11 @@
 
 Extracted from `uncertainty_rl/envs/_parking_core.py`.
 
-Section 3.3 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
-the observation design: what each block contributes, why absolute position is excluded,
+The observation design covers what each block contributes, why absolute position is excluded,
 why only the covariance diagonal is observed, the +/-15 deg LiDAR segmentation, the 1 m
 self-return and rear-hemisphere exclusions, and the fixed physical-range normalisation.
 
-This note records the index layout and the constants it maps to, which the code needs
-and the dissertation does not enumerate.
+This note records the index layout and the constants it maps to, which the code needs.
 
 ## Index layout
 

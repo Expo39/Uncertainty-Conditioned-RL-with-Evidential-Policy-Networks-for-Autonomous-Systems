@@ -2,14 +2,12 @@
 
 Extracted from `uncertainty_rl/networks/evidential_policy.py` (`EvidentialLayer.__init__`).
 
-Section 3.5.1 of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical
-for the NIG head and its initialisation, covering the softplus-with-offsets constraints,
+The NIG head initialisation rests on the softplus-with-offsets constraints,
 why the alpha offset is 1.5 rather than 1.0, the transfer of control from weights to
 biases, the per-axis gamma biases, the sub-1 nu prior, and the re-application of the
-biases after SB3's orthogonal-initialisation pass. Figure 3.9 there illustrates it.
+biases after SB3's orthogonal-initialisation pass.
 
-This note records the bias layout the code depends on, which the dissertation does not
-enumerate index by index.
+This note records the bias layout the code depends on, index by index.
 
 ## Bias layout
 
@@ -35,6 +33,12 @@ not random input projections, dominate the output at step 0.
 The log-penalty prior targets in `EvidentialPPO.train` must track this table:
 `nu_prior = 0.313` and `alpha_prior = 2.741`, the latter carrying the layer's 1.5
 offset.
+
+`uncertainty_rl/networks/heteroscedastic.py` duplicates the alpha and beta bias priors
+and the alpha offset (`_ALPHA_BIAS_PRIOR = 0.9`, `_ALPHA_OFFSET = 1.5`,
+`_BETA_BIAS_PRIOR = 0.0`) to derive its `log_std` bias, so the heteroscedastic head starts
+from the same action variance (~0.398). Those constants must track this table too, or
+the initial-variance match between the two heads breaks.
 
 ## See also
 

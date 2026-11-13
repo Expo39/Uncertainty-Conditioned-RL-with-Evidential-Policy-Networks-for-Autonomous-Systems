@@ -52,9 +52,10 @@ make docker-test               # Full suite (unit + integration)
 | `test_carla_parking.py` | `CARLAParkingEnv` obs/action shapes, geometry helpers (`point_in_polygon`, `yaw_from_quaternion`, `wrap_angle_symmetric`), `build_observation`, `extract_obstacle_features`, `load_floor_plan`, `wait_for_ekf`, bay sampling, reward, `VisStateWriter` |
 | `test_covariance_utils.py` | `extract_2d_covariance_features`, `validate_covariance_matrix`, `get_covariance_dimension`, `make_diagonal_covariance` |
 | `test_sb3_integration.py` | SB3 + evidential policy: policy construction, forward pass, action sampling, actor wiring |
+| `test_heteroscedastic_policy.py` | `HeteroscedasticLayer`, `HeteroscedasticDistribution`, `HeteroscedasticActorCriticPolicy`, `HeteroscedasticPPO`: shapes, initial variance matched to the evidential head, `log_std` bounds and gradient, variance clamp, state dependence, save/load, `train_ppo` wiring (fresh, resume, unknown `policy_type`) and the `evaluate_agent` record path |
 | `test_evaluation.py` | `EvaluationMetrics` container and aggregation, the `_classify_outcome` failure taxonomy, and `_scale_sensor_noise` (no CARLA connection) |
 | `test_covariance_subscriber.py` | `_CovarianceSubscriber`: JSON file reading, the seq-based staleness guard (mtime only skips a re-parse), `invalidate()`, `get_latest_uncertainty()`, `get_latest_pose()`, `has_data` |
-| `test_train_ppo.py` | `linear_schedule`, `EnvDiagnosticsCallback`, `make_env` helpers (no CARLA required) |
+| `test_train_ppo.py` | `linear_schedule`, `EnvDiagnosticsCallback`, `make_env` helpers, `_apply_stage_training_overrides` block selection by `policy_type`, the heteroscedastic baseline overlays (no CARLA required) |
 | `test_tune_hyperparams.py` | Optuna sampling, `apply_best_params`, `TrialEvalCallback` (no CARLA or GPU required) |
 | `test_safety_wrapper.py` | `SafetyWrapper.apply()`, `step()`, `reset()`, `get_episode_safety_stats()` |
 | `test_debug_logger.py` | `DebugLogger`: no-op contract when disabled, dict population when enabled |
@@ -64,12 +65,13 @@ make docker-test               # Full suite (unit + integration)
 | `test_curriculum_invariants.py` | Curriculum stage invariants: every obs channel live in every stage, architecture keys constant, one axis ramps per stage |
 | `test_gnss_noise_relay.py` | `GnssNoiseRelayNode`: Doppler-style velocity / COG model, tier defaults, course-noise helper, and the `gnss_noise_profiles.yaml` mirror invariant |
 | `test_observation_norm.py` | `normalise_observation`: fixed physical-range scaling, bounds, channel alignment |
-| `test_cross_seed.py` | `scripts/analysis/cross_seed.py`: the pooled aggregator across seeds |
+| `test_cross_seed.py` | `scripts/analysis/cross_seed.py`: the pooled aggregator across seeds; the six-arm `_ARM_ORDER`, `_CONTRAST_PAIRS` and `_contrast_table` in `ablation.py` |
+| `test_seed_level.py` | `scripts/analysis/seed_level.py`: the two-level (seed, episode) bootstrap, the end-to-end tables, skipping of missing arms |
 | `test_cross_seed_discovery.py` | `seed_roots()` in `_discovery.py`: locating the per-seed sub-roots |
 | `test_gnss_tiers.py` | The visualiser's GNSS tier presentation loader |
 | `test_recorder.py` | The visualiser's MP4 `FrameRecorder` |
 
-The last four cover `scripts/`, not the `uncertainty_rl` package.
+The last five cover `scripts/`, not the `uncertainty_rl` package.
 
 ### Integration tests (Docker + GPU - `@pytest.mark.integration`)
 
@@ -101,6 +103,7 @@ than reading a fixture. The structural constants themselves (`TOTAL_OBS_DIM`,
 |---------------|-----------|
 | `networks/evidential_policy.py` | `test_evidential_policy.py` |
 | `networks/sb3_integration.py` | `test_sb3_integration.py` |
+| `networks/heteroscedastic.py` | `test_heteroscedastic_policy.py` |
 | `envs/sim/carla_parking.py` | `test_carla_parking.py` |
 | `envs/sim/helpers/_sensor_manager.py` | `test_lidar_noise.py` |
 | `envs/covariance_subscriber.py` | `test_covariance_subscriber.py` |
@@ -115,7 +118,8 @@ than reading a fixture. The structural constants themselves (`TOTAL_OBS_DIM`,
 | `envs/_parking_core.py` (`normalise_observation`) | `test_observation_norm.py` |
 | `ros2/.../sensor_relay/gnss_noise_relay.py` | `test_gnss_noise_relay.py` |
 | `configs/deployment/sim/curriculum/*.yaml` | `test_curriculum_invariants.py` |
-| `scripts/analysis/cross_seed.py` | `test_cross_seed.py` |
+| `scripts/analysis/cross_seed.py`, `ablation.py` | `test_cross_seed.py` |
+| `scripts/analysis/seed_level.py` | `test_seed_level.py` |
 | `scripts/analysis/_discovery.py` | `test_cross_seed_discovery.py` |
 | `scripts/visualise/gnss_tiers.py` | `test_gnss_tiers.py` |
 | `scripts/visualise/recorder.py` | `test_recorder.py` |

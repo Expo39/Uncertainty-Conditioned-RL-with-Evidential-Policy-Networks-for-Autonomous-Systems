@@ -1,12 +1,18 @@
 """
 @file __init__.py
-@brief Evidential deep learning policy networks.
+@brief Evidential deep learning and heteroscedastic control policy networks.
 """
 
 from uncertainty_rl.networks.evidential_policy import (
     EvidentialLayer,
     EvidentialPolicyNetwork,
     UncertaintyConditionedActor,
+)
+from uncertainty_rl.networks.heteroscedastic import (
+    HeteroscedasticActorCriticPolicy,
+    HeteroscedasticDistribution,
+    HeteroscedasticLayer,
+    HeteroscedasticPPO,
 )
 from uncertainty_rl.networks.sb3_integration import (
     EvidentialActorCriticPolicy,
@@ -25,4 +31,8 @@ __all__ = [
     "EvidentialPPO",
     "LayerNormActorCriticPolicy",
     "ScheduledEntCoefPPO",
+    "HeteroscedasticLayer",
+    "HeteroscedasticDistribution",
+    "HeteroscedasticActorCriticPolicy",
+    "HeteroscedasticPPO",
 ]

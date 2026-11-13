@@ -57,7 +57,7 @@ mode.
   (`configs/deployment/sim/gnss_noise_profiles.yaml`) varies GNSS noise, which drives
   EKF covariance variation. NPC traffic and bay occupancy are secondary axes. **No
   weather** - FlatPlane does not render it.
-- **Uncertainty formulae**: epistemic = `beta/(alpha-1)`, aleatoric =
+- **Uncertainty formulae**: aleatoric = `beta/(alpha-1)`, epistemic =
   `beta/(nu*(alpha-1))`.
 - **Simulator**: CARLA 0.9.16, custom FlatPlane OpenDRIVE world, ROS 2 bridge.
 
@@ -69,7 +69,11 @@ Core novel component. `EvidentialLayer` outputs NIG params per action dim.
 is a test harness. SB3 integration in `sb3_integration.py`: `EvidentialDistribution`,
 `EvidentialActorCriticPolicy`, `EvidentialPPO`, `LayerNormActorCriticPolicy`. LayerNorm,
 not BatchNorm. `get_action()` must always return `(action, uncertainty_dict)` with keys
-`epistemic`, `aleatoric`, `total`, `gamma`, `nu`, `alpha`, `beta`.
+`epistemic`, `aleatoric`, `total`, `gamma`, `nu`, `alpha`, `beta`. `heteroscedastic.py`
+holds the control head (`HeteroscedasticLayer`, `HeteroscedasticDistribution`,
+`HeteroscedasticActorCriticPolicy`, `HeteroscedasticPPO`): the evidential head without the
+NIG, selected by `policy_type: heteroscedastic`. Its uncertainty dict carries `aleatoric`,
+`epistemic` (NaN), `total`, `mean`, `log_std`, `action_std`.
 
 ### `uncertainty_rl/envs/`
 Gymnasium CARLA parking env (`sim/carla_parking.py`). 13-dim obs (indices above); use

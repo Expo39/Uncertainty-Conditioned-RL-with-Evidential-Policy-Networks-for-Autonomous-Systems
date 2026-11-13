@@ -32,9 +32,11 @@ except ImportError:
     VecNormalize = None  # type: ignore[assignment,misc]
 
 try:
+    from uncertainty_rl.networks.heteroscedastic import HeteroscedasticPPO
     from uncertainty_rl.networks.sb3_integration import EvidentialPPO
 except ImportError:
     EvidentialPPO = None  # type: ignore[assignment,misc]
+    HeteroscedasticPPO = None  # type: ignore[assignment,misc]
 
 # The metric schema and the condition -> env contract live in dedicated
 # modules; re-exported here so existing import paths
@@ -132,6 +134,13 @@ def evaluate_agent(
         and isinstance(model, EvidentialPPO)
         and hasattr(model.policy, "get_action_with_uncertainty")
     )
+    # The heteroscedastic head reports a state-dependent action variance but has
+    # no epistemic channel, so it is recorded like the evidential head's aleatoric
+    # and never feeds the SafetyWrapper.
+    is_heteroscedastic = HeteroscedasticPPO is not None and isinstance(
+        model, HeteroscedasticPPO
+    )
+    has_variance_head = is_evidential or is_heteroscedastic
 
     # Bind a single step function to eliminate the per-step branch.
     _StepReturn = Tuple[np.ndarray, float, np.ndarray, List[Dict[str, Any]]]
@@ -163,6 +172,24 @@ def evaluate_agent(
             if _has_set_uncertainty:
                 _set_uncertainty("set_uncertainty", epistemic, aleatoric)
             next_obs, reward, done, infos = env.step(action)
+            return next_obs, float(reward[0]), done, infos
+
+        const_action_std = float("nan")
+
+    elif is_heteroscedastic:
+        _get_action_with_variance = model.policy.get_action_with_uncertainty
+        _policy_device = model.policy.device
+
+        def step_fn(obs: np.ndarray) -> _StepReturn:  # type: ignore[misc]
+            obs_tensor = th.as_tensor(obs, device=_policy_device)
+            action_tensor, uncertainty_dict = _get_action_with_variance(
+                obs_tensor, deterministic=deterministic
+            )
+            aleatoric = float(uncertainty_dict["aleatoric"].mean().item())
+            metrics.aleatoric_uncertainties.append(aleatoric)
+            ep_aleatoric.append(aleatoric)
+            ep_action_std.append(float(np.sqrt(aleatoric)))
+            next_obs, reward, done, infos = env.step(action_tensor.cpu().numpy())
             return next_obs, float(reward[0]), done, infos
 
         const_action_std = float("nan")
@@ -318,10 +345,10 @@ def evaluate_agent(
                             ep_epistemic[-1] if is_evidential else float("nan")
                         ),
                         "aleatoric": (
-                            ep_aleatoric[-1] if is_evidential else float("nan")
+                            ep_aleatoric[-1] if has_variance_head else float("nan")
                         ),
                         "action_std": (
-                            ep_action_std[-1] if is_evidential else const_action_std
+                            ep_action_std[-1] if has_variance_head else const_action_std
                         ),
                         "ekf_std_pos_m": (_std_x + _std_y) / 2.0,
                         "ekf_std_yaw_rad": _std_yaw,
@@ -371,9 +398,9 @@ def evaluate_agent(
                 std_pos_mean, std_pos_max = _mean_max(ep_std_pos)
                 std_yaw_mean, _ = _mean_max(ep_std_yaw)
                 # Action std: state-conditional sqrt(aleatoric) for the
-                # evidential head; the constant exp(log_std) for the standard
-                # Gaussian policy (its only confidence measure).
-                if is_evidential:
+                # evidential and heteroscedastic heads; the constant exp(log_std)
+                # for the standard Gaussian policy (its only confidence measure).
+                if has_variance_head:
                     act_std_mean, act_std_max = _mean_max(ep_action_std)
                 else:
                     act_std_mean = act_std_max = const_action_std
@@ -501,11 +528,21 @@ def evaluate_across_conditions(
     near_miss_threshold = float(eval_config.get("near_miss_threshold_m", 1.5))
 
     logger.info("Loading model from %s...", "/".join(Path(model_path).parts[-3:]))
-    # EvidentialPPO when the baseline specifies policy_type=evidential, so
-    # isinstance(model, EvidentialPPO) is True and uncertainty is collected.
+    # EvidentialPPO / HeteroscedasticPPO per the baseline's policy_type, so the
+    # isinstance checks in evaluate_agent select the uncertainty-recording path.
     policy_type = baseline_cfg.get("policy_type", "evidential")
     if policy_type == "evidential":
         model: PPO = EvidentialPPO.load(model_path)
+    elif policy_type == "heteroscedastic":
+        # No epistemic channel to gate on, so a with-wrapper run would silently
+        # never hand off and mislabel a free-running result.
+        if not bool(int(os.environ.get("EVAL_DISABLE_SAFETY_WRAPPER", "0") or "0")):
+            raise ValueError(
+                "Heteroscedastic arms have no epistemic channel for the "
+                "SafetyWrapper; evaluate them with EVAL_DISABLE_SAFETY_WRAPPER=1 "
+                "(make docker-eval NO_SAFETY=1)."
+            )
+        model = HeteroscedasticPPO.load(model_path)
     else:
         model = PPO.load(model_path)
 

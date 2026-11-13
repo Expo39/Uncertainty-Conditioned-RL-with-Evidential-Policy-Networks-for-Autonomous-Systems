@@ -21,6 +21,7 @@ Output tiers: raw eval CSVs in `outputs/raw/`, everything written here in `outpu
 | Epistemic-vs-aleatoric separation verdict | `make uncertainty-verdict EVAL_DIR=outputs/raw/evaluation_results/seed_42/<baseline>/<leaf>/without_wrapper` |
 | Handover timing vs degradation onset | `make handover-timing [ARM=full_method]` |
 | Pool all seeds into headline + per-seed robustness | `make analyse-cross-seed [STAGE=6]` |
+| Seed-level intervals, permutation tests, brake correlations (3x2) | `make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]` |
 | Per-tier episode breakdown from the demo traces | `make trace-tier-breakdown TRACE_DIR=<dir>` |
 | Export TensorBoard scalars for the training-curve figure | `make training-curves [LOGS_ROOT=logs]` |
 | Draw the headline figures | `make figures [FIG=gate_roc]` |
@@ -31,9 +32,9 @@ Output tiers: raw eval CSVs in `outputs/raw/`, everything written here in `outpu
 
 ### `ablation.py` (host-side)
 
-Cross-arm contrast, and the home of the shared condition-scope filters every other module imports. Globs `outputs/raw/evaluation_results/seed_<N>/<baseline>/<leaf>/episode_records.csv` for the four arms, joins on condition, and computes:
+Cross-arm contrast, and the home of the shared condition-scope filters every other module imports. Globs `outputs/raw/evaluation_results/seed_<N>/<baseline>/<leaf>/episode_records.csv` for the six arms, joins on condition, and computes:
 
-- The covariance contrast deltas with 95% bootstrap CIs - `input_uncertainty - vanilla_ppo` (standard heads) and `full_method - output_uncertainty` (evidential heads), the single-variable covariance on/off tests. 10000 resamples, treatment and control resampled independently (a two-sample difference, not paired - the arms ran on separate episode draws), percentile interval at [2.5, 97.5]. The RNG seed is `--seed` (default 42) and is a reproducibility knob, not an experiment seed.
+- The covariance contrast deltas with 95% bootstrap CIs - `input_uncertainty - vanilla_ppo` (standard heads), `full_method - output_uncertainty` (evidential heads) and `heteroscedastic_input - heteroscedastic` (heteroscedastic heads), the single-variable covariance on/off tests. The heteroscedastic pair is listed last in `_CONTRAST_PAIRS`, so the original pairs keep their bootstrap draws under a fixed seed. An arm with no records is skipped. 10000 resamples, treatment and control resampled independently (a two-sample difference, not paired - the arms ran on separate episode draws), percentile interval at [2.5, 97.5]. The RNG seed is `--seed` (default 42) and is a reproducibility knob, not an experiment seed.
 - The GNSS degradation slope per arm (`gnss_fixed -> gnss_degraded` success drop + position-error growth). **Only computed with `--keep-held-tiers`** (see below).
 - Behaviour-by-std: final pos-error and the caution metrics binned into five quantile bins of EKF position std per arm (the mechanism - precision / caution under uncertainty).
 - Caution slopes, contrast and levels: the per-arm Spearman of each caution metric (`mean_brake_cmd`, `mean_speed_moving_ms`, `mean_abs_vyaw_rads`, `mean_action_jerk`) against EKF position std, the cross-arm difference of those slopes (the causal read: caution attributable to *seeing* the covariance rather than to a harder episode), and the absolute operating level with its success / position-error payoff.
@@ -167,6 +168,35 @@ and `seed_robustness*.csv` under
 this pool are drawn separately by `figures/build.py`. Run with
 `make analyse-cross-seed [STAGE=6]`.
 
+### `seed_level.py` (host-side)
+
+Seed-level inference for the 3x2 design. The pooled bootstrap treats seed as a fixed
+nuisance; here every interval is a **two-level bootstrap**: per arm, three seeds are drawn
+with replacement, then the episodes of each drawn seed, and the arms are resampled
+independently (10000 resamples, one random stream seeded by `--bootstrap-seed`). Over the
+varying conditions (`anchor_deployment`, `anchor_empty`, `gnss_degrade_one_way`) it
+writes, under `outputs/raw_derived/seed_level/`:
+
+- `pooled_success.csv`, `per_seed_success.csv` - success per condition and arm.
+- `estimates.csv` - point and 95% interval (pp) of each covariance contrast per head,
+  their interactions (heteroscedastic minus standard, evidential minus heteroscedastic,
+  evidential minus standard), `full_method - heteroscedastic_input` and
+  `heteroscedastic - vanilla_ppo`.
+- `permutation.csv` - the exact one-sided seed-level permutation test of each
+  covariance pair over the C(6, 3) = 20 arrangements (smallest attainable p = 0.05).
+- `brake_spearman.csv` - brake command against EKF position std, averaged over the
+  varying conditions, per seed and pooled.
+- `parking_precision*.csv` - final position error and decisions over successful parks,
+  with two-level intervals of each covariance pair's difference.
+
+Estimates needing an arm with no records are skipped with a warning. Run with
+`make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]`; `RESULTS_ROOT` and
+`OUTPUT_DIR` override the input tree and the output directory. Called directly, the
+script also takes `--seeds` (default `seed_42 seed_123 seed_7`) and `--n-bootstrap`
+(default 10000). The pre-registered
+reading is in
+[docs/detailed_notes/training/heteroscedastic_control_preregistration.md](../../docs/detailed_notes/training/heteroscedastic_control_preregistration.md).
+
 ### `trace_tiers.py` (host-side)
 
 Resolves demo-trace outcomes by localisation tier, separating failure because the task
@@ -205,7 +235,8 @@ moving average at 0.9 (the TensorBoard UI default) and thinned to an even stride
 points.
 
 Writes `training_curves.csv` and `training_stage_bounds.csv` to
-`outputs/raw_derived/training/`, which the `training_curves` figure reads. Run with
+`outputs/raw_derived/training/`, which the `training_curves` figure reads. `--arms`
+defaults to all six arms of the 3x2 design. Run with
 `make training-curves [LOGS_ROOT=logs]`.
 
 ### `bundle.py` (host-side)
@@ -237,7 +268,8 @@ Every rendered figure, and nothing else: these modules read CSVs and draw them, 
 - `degradation_tiers.py` - per-arm success across TRUE-localisation tiers, pooled over
   seeds. Episodes are banded into equal-population terciles of their MEAN true error
   (mean, not max, so one transient spike cannot make the axis non-monotone), since the
-  live chain rarely holds one integer tier for a whole episode.
+  live chain rarely holds one integer tier for a whole episode. Covers all six arms; an
+  arm not yet evaluated for a seed is skipped rather than failing the figure.
 - `ekf_sawtooth.py` - the reported EKF sigma_x sawtooth over one episode, with the true
   `gnss_tier` Markov state shaded behind it. Reads one demo-trace CSV, no smoothing.
 - `lot_layouts.py` - both lot layouts drawn from the generated layout YAMLs; no geometry
@@ -287,4 +319,3 @@ which run it describes.
 - [scripts/analysis/CLAUDE.md](CLAUDE.md) - the working contract for this directory
 - [uncertainty_rl/evaluation/](../../uncertainty_rl/evaluation/) - `evaluate.py`, the condition sweep that writes the CSVs these scripts consume
 - [configs/eval_config.yaml](../../configs/eval_config.yaml) - the seven eval conditions, of which four carry reported results
-- [docs/AntonioGaldes_Dissertation.pdf](../../docs/AntonioGaldes_Dissertation.pdf) - canonical for the methodology; this README covers the implementation

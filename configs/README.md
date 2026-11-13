@@ -28,9 +28,11 @@ configs/
 |   |- trapezoid.yaml
 |   |- irregular_a.yaml
 |   `- flat_plane.xodr
-|- baselines/               Ablation override configs (2x2 study)
+|- baselines/               Ablation override configs (3x2 study)
 |   |- vanilla_ppo.yaml
 |   |- input_uncertainty.yaml
+|   |- heteroscedastic.yaml
+|   |- heteroscedastic_input.yaml
 |   |- output_uncertainty.yaml
 |   `- full_method.yaml
 `- training/
@@ -38,8 +40,8 @@ configs/
 ```
 
 **No hyperparameter search was run.** Every reported result uses the committed defaults
-in `train_config.yaml`; tuning per arm would make the configuration a fifth variable and
-confound the 2x2 ablation. See [configs/training/README.md](training/README.md).
+in `train_config.yaml`; tuning per arm would make the configuration an extra variable and
+confound the 3x2 ablation. See [configs/training/README.md](training/README.md).
 
 ## How configs are loaded
 
@@ -136,7 +138,7 @@ Fixed structural values (observation dim, action dim, success thresholds) live i
 
 ## See also
 
-- [configs/baselines/README.md](baselines/README.md) - ablation 2x2 matrix and reproduction
+- [configs/baselines/README.md](baselines/README.md) - ablation 3x2 matrix and reproduction
 - [configs/layouts/README.md](layouts/README.md) - layout YAML schema and regeneration
 - [configs/deployment/README.md](deployment/README.md) - shared sensor and agent configs
 - [configs/deployment/sim/README.md](deployment/sim/README.md) - CARLA simulation settings

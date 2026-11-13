@@ -11,6 +11,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 - The actor is a flat MLP over the full observation.
 - Evidential loss applies to the actor only. Critic is a standard Gaussian MLP.
 - Prior-anchoring quadratic-ratio regularisation (RL-stable, replaces the Amini 2020 supervised term).
+- A heteroscedastic Gaussian control head (`heteroscedastic.py`) keeps the state-dependent action variance but drops the NIG, isolating what the evidential parameterisation adds. See [Heteroscedastic control head](#heteroscedastic-control-head).
 
 ## Modules
 
@@ -18,6 +19,7 @@ Core novel component. Evidential deep learning policy networks for uncertainty-a
 |--------|-------------------|
 | `evidential_policy.py` | `EvidentialLayer`, `EvidentialPolicyNetwork`, `UncertaintyConditionedActor` |
 | `sb3_integration.py` | `EvidentialDistribution`, `EvidentialActorCriticPolicy`, `EvidentialPPO`, `ScheduledEntCoefPPO`, `LayerNormActorCriticPolicy` |
+| `heteroscedastic.py` | `HeteroscedasticLayer`, `HeteroscedasticDistribution`, `HeteroscedasticActorCriticPolicy`, `HeteroscedasticPPO` (control head, not evidential) |
 | `__init__.py` | Re-exports the public names |
 
 ## Internal data flow
@@ -47,8 +49,8 @@ features. It is implemented and unit-tested but **was never used**:
 `use_uncertainty_conditioning` is `false` in `train_config.yaml` and no reported result
 enables it.
 
-The flag is off because the 2x2 ablation requires the covariance to enter identically for
-the standard and evidential heads, leaving the head as the only difference between arms.
+The flag is off because the 3x2 ablation requires the covariance to enter identically for
+all three heads (standard, heteroscedastic and evidential), leaving the head as the only difference between arms.
 A dedicated pathway on one side would confound that comparison, so it is a separate
 architectural variant rather than part of the method under test.
 
@@ -56,6 +58,27 @@ It also requires `include_covariance = True`, since the split assumes the covari
 at `[VEHICLE_STATE_DIM : VEHICLE_STATE_DIM + COVARIANCE_FEATURES_DIM]`. `train_ppo.py`
 enforces this, logging a warning and forcing the flag back to `False` rather than building
 a mis-indexed actor.
+
+## Heteroscedastic control head
+
+`heteroscedastic.py` is the evidential head with the NIG parameterisation removed. It
+exists to test whether state-dependent action variance alone, rather than the NIG
+mechanism, is what lets the policy use the covariance input (arms `heteroscedastic` and
+`heteroscedastic_input`, `policy_type: heteroscedastic`).
+
+| Aspect | Evidential head | Heteroscedastic head |
+|--------|-----------------|----------------------|
+| Output layer | `Linear(latent, 4n)` -> `(gamma, nu, alpha, beta)` | `Linear(latent, 2n)` -> `(mean, log_std)` |
+| Action variance | `beta / (alpha - 1)` | `exp(2 * log_std)`, state-dependent, `log_std` tanh-bounded to `[0.5 * log(floor), 0]` |
+| Initial variance | 0.398 from the alpha/beta bias priors | Same: raw log_std bias derived in code so the bounded log_std starts at the same value |
+| Sampling clamp | `[aleatoric_floor, 1.0]` | Same |
+| Backbone, critic, mean bias, gains, squashing, entropy | - | Same (squashing and entropy inherited from `EvidentialDistribution`) |
+| Training | `EvidentialPPO` (PPO + prior anchor) | `HeteroscedasticPPO` (PPO loss only, as `ScheduledEntCoefPPO`) |
+| Reported uncertainty | epistemic, aleatoric, total | aleatoric = `exp(2 * log_std)`, epistemic = NaN, total = aleatoric |
+
+`log_std_init` from the shared `policy_kwargs` is accepted and ignored: the initial std
+comes from the matched prior bias. The head reads `evidential.aleatoric_floor`, so both
+heads share one exploration floor.
 
 ## NIG uncertainty decomposition
 
@@ -74,6 +97,10 @@ a mis-indexed actor.
 ```python
 action, uncertainty_dict = policy.get_action_with_uncertainty(obs_tensor)
 # uncertainty_dict keys: epistemic, aleatoric, total, gamma, nu, alpha, beta
+
+# Heteroscedastic control head
+action, uncertainty_dict = hetero_policy.get_action_with_uncertainty(obs_tensor)
+# uncertainty_dict keys: aleatoric, epistemic (NaN), total, mean, log_std, action_std
 ```
 
 ### Training (SB3 integration)
@@ -87,6 +114,14 @@ model = EvidentialPPO(
     # All hyperparameters come from configs/train_config.yaml
 )
 model.learn(total_timesteps=total_timesteps)
+
+from uncertainty_rl.networks import HeteroscedasticActorCriticPolicy, HeteroscedasticPPO
+
+model = HeteroscedasticPPO(
+    policy=HeteroscedasticActorCriticPolicy,
+    env=env,
+    policy_kwargs={"aleatoric_floor": aleatoric_floor},
+)
 ```
 
 ### Standalone test harness (unit tests only)
@@ -153,13 +188,13 @@ In RL there are no ground-truth action targets. $|\text{action} - \gamma|$ is po
 noise, not prediction error, so this term grows unboundedly. The prior-anchoring penalty is
 bounded and keeps $\nu, \alpha, \beta$ near their initialisation without requiring target labels.
 
-## TensorBoard logs (evidential-specific)
+## TensorBoard logs (evidential and heteroscedastic)
 
 | Tag | Expression logged |
 |-----|------------------|
 | `train/evidential_reg_loss` | Mean prior-anchoring penalty |
 | `train/epistemic_uncertainty` | $\langle \beta / (\nu(\alpha - 1)) \rangle$ |
-| `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$ |
+| `train/aleatoric_uncertainty` | $\langle \beta / (\alpha - 1) \rangle$; for `HeteroscedasticPPO`, $\langle e^{2 \log\sigma} \rangle$ under the same tag so the curves overlay |
 | `train/lambda_reg` | Current annealed $\lambda_{\text{reg}}$ |
 | `train/ent_coef` | Current value of the linear ent_coef decay schedule |
 
@@ -185,8 +220,6 @@ signal and collapses to a state-independent constant, leaving
 `corr(epistemic, aleatoric)` around 0.9 in every run. Plotting the two channels side by
 side would imply a separation documented as absent. This is a finished negative result
 rather than a missing figure.
-@see the uncertainty-channels section of the dissertation
-(`docs/AntonioGaldes_Dissertation.pdf`).
 
 The defensible alternative is `gate_roc`, which scores the evidential uncertainty as a
 safety gate against the EKF position std. Its AUC figures and regeneration recipe are in

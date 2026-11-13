@@ -24,20 +24,25 @@ import pandas as pd  # noqa: E402
 
 from scripts.analysis._discovery import discover_arm_csvs  # noqa: E402
 
-# The four ablation arms in plot order: covariance-off then covariance-on,
-# standard heads then evidential heads. The contrast pairs are adjacent.
+# The six ablation arms in plot order: standard, heteroscedastic then evidential
+# heads, covariance-off before covariance-on. The contrast pairs are adjacent.
 _ARM_ORDER: List[str] = [
     "vanilla_ppo",
     "input_uncertainty",
+    "heteroscedastic",
+    "heteroscedastic_input",
     "output_uncertainty",
     "full_method",
 ]
 
 # The single-variable covariance contrasts the study claims (covariance arm
-# minus its matched no-covariance arm with the same policy head).
+# minus its matched no-covariance arm with the same policy head). The
+# heteroscedastic pair comes last so the bootstrap draws of the original two
+# pairs, and so their intervals under a fixed seed, are unchanged.
 _CONTRAST_PAIRS: List[Tuple[str, str, str]] = [
     ("standard_head", "input_uncertainty", "vanilla_ppo"),
     ("evidential_head", "full_method", "output_uncertainty"),
+    ("heteroscedastic_head", "heteroscedastic_input", "heteroscedastic"),
 ]
 
 # GNSS tier endpoints for the degradation slope (cleanest -> worst held tier).
@@ -623,10 +628,11 @@ def _print_caution(slopes: pd.DataFrame, contrast: pd.DataFrame) -> None:
 
     print("\n=== Caution CROSS-arm (covariance - blind): the causal claim ===")
     if contrast.empty:
+        pairs = ", ".join(f"{cov} vs {blind}" for _, cov, blind in _CONTRAST_PAIRS)
         print(
-            "  (need BOTH arms of a contrast pair: input_uncertainty vs vanilla_ppo,\n"
-            "   full_method vs output_uncertainty - only then is caution attributable\n"
-            "   to SEEING the covariance, not to the episode merely being harder)"
+            f"  (need BOTH arms of a contrast pair: {pairs} - only then is caution\n"
+            "   attributable to SEEING the covariance, not to the episode merely\n"
+            "   being harder)"
         )
     else:
         for pair in contrast["pair"].unique():

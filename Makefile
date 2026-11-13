@@ -162,7 +162,7 @@ docker-top: ## Show running processes in containers
 	$(DOCKER_COMPOSE) top
 
 
-run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
+run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1] [ARMS_OVERRIDE="heteroscedastic heteroscedastic_input"]
 	bash scripts/training/run_seed_leg.sh
 
 docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628]
@@ -189,7 +189,7 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1] (NO_SAFETY=1 is required for the heteroscedastic baselines)
 	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(EVAL_SEED) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -445,6 +445,14 @@ analyse-cross-seed: ## Pool all seeds into headline tables + per-seed robustness
 		--slope-clean $(or $(SLOPE_CLEAN),gnss_fixed) \
 		--slope-degraded $(or $(SLOPE_DEGRADED),gnss_degraded)
 
+analyse-seed-level: ## Two-level (seed, episode) bootstrap intervals, seed permutation tests and brake correlations for the 3x2 ablation. Usage: make analyse-seed-level [STAGE=6] [BOOTSTRAP_SEED=20260927]
+	$(call ensure-venv)
+	$(PYTHON) scripts/analysis/seed_level.py \
+		--results-root $(or $(RESULTS_ROOT),outputs/raw/evaluation_results) \
+		--output-dir $(or $(OUTPUT_DIR),outputs/raw_derived/seed_level) \
+		--stage $(or $(STAGE),6) \
+		--bootstrap-seed $(or $(BOOTSTRAP_SEED),20260927)
+
 training-curves: ## Export seed-averaged training curves from the TensorBoard logs to CSV. Usage: make training-curves [LOGS_ROOT=logs]
 	$(call ensure-venv)
 	$(PYTHON) $(SCRIPTS_DIR)/analysis/tb_curves.py \
@@ -697,12 +705,17 @@ restore-configs: ## Restore CLAUDE.md, TODO.md, documentation/, and the real-wor
 RESULTS_TREES = checkpoints logs outputs
 RESULTS_ARCHIVE ?= project_results.tar.gz
 
-backup-results: ## Archive checkpoints/, logs/ and outputs/ (multi-GB). Usage: make backup-results [RESULTS_ARCHIVE=project_results.tar.gz]
+# ekf_state.json is the live ROS2 -> env hand-off, rewritten many times a second
+# while the stack runs: it is not a result, so it is left out. Its rewrites still
+# touch outputs/ itself, so tar exit 1 ("file changed as we read it") is accepted;
+# exit 2 (a real failure) still stops the target.
+backup-results: ## Archive checkpoints/, logs/ and outputs/ (multi-GB), excluding outputs/ekf_state.json. Usage: make backup-results [RESULTS_ARCHIVE=project_results.tar.gz]
 	@present="$$(for d in $(RESULTS_TREES); do [ -d "$$d" ] && echo $$d; done)"; \
 	if [ -z "$$present" ]; then echo "Nothing to back up - none of $(RESULTS_TREES) exist."; exit 1; fi; \
 	echo "Archiving: $$(echo $$present | tr '\n' ' ')"; \
 	echo "On disk: $$(du -csh $$present | tail -1 | cut -f1) (model .zip files are already compressed, so gzip gains little)"; \
-	tar -czf $(RESULTS_ARCHIVE) $$present
+	tar --exclude=outputs/ekf_state.json --warning=no-file-changed \
+		-czf $(RESULTS_ARCHIVE) $$present || [ $$? -eq 1 ]
 	@echo "Wrote $(RESULTS_ARCHIVE) ($$(du -h $(RESULTS_ARCHIVE) | cut -f1))"
 
 restore-results: ## Restore checkpoints/, logs/ and outputs/ from the archive. Usage: make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]

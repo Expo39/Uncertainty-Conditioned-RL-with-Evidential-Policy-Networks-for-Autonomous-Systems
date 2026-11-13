@@ -10,7 +10,7 @@ Three things are outstanding before a first closed-loop trial: the LiDAR hardwar
 (`_get_lidar_scan`) and the vehicle command interface, both hardware-specific; the surveyed
 lot datum; and the actuator calibration. The last two ship as placeholders that reduce to
 identity transforms. See `docs/detailed_notes/deployment/real_world_deployment.md` for the
-code map and Appendix B of the dissertation for the pre-deployment sequence.
+code map and the pre-deployment sequence.
 
 ---
 

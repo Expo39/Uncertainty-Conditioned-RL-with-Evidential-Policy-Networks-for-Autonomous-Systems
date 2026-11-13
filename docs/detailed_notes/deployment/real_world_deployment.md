@@ -5,17 +5,15 @@ Extracted from `uncertainty_rl/envs/real/`.
 **Never run on hardware.** The pipeline is implemented and unit-tested but has never
 driven a physical vehicle, so nothing below is empirically validated.
 
-Appendix B of the dissertation (`docs/AntonioGaldes_Dissertation.pdf`) is canonical for
-the deployment path: code-path parity, the ROS interface and master-switch values, the
-frame-calibration transform, the actuation model and the pre-deployment sequence. The
+The deployment path covers code-path parity, the ROS interface and master-switch values,
+the frame-calibration transform, the actuation model and the pre-deployment sequence. The
 sim-to-real modelling gaps are in `sim_to_real_transfer.md`.
 
-This note maps that material onto the code, so a reader can go from a step in
-Appendix B to the function implementing it.
+This note maps each deployment step onto the function implementing it.
 
 ## Where each step lives
 
-| Appendix B step | Code |
+| Deployment step | Code |
 |-----------------|------|
 | Sensor data flow, unchanged downstream of the two topics | `CovarianceExtractorNode` (ros2), `_CovarianceSubscriber` (`envs/covariance_subscriber.py`) - identical in sim and real |
 | Sim-side GNSS driver, replaced on the vehicle | `GnssNoiseRelayNode` (`ros2/uncertainty_rl_ros2/sensor_relay/gnss_noise_relay.py`) |
@@ -25,7 +23,7 @@ Appendix B to the function implementing it.
 | Actuation calibration | `RealWorldDeployment.calibrate_action()`, reading `configs/deployment/real/actuation_calibration.yaml` |
 | Mission definition | `configs/deployment/real/mission.yaml`, read only on the vehicle |
 
-## Implementation notes not in Appendix B
+## Implementation notes
 
 `ekf_state.json` stores `y` in ROS REP-103 convention (y-left). Both the inference loop
 and the simulation environment negate it before applying the frame transform, so the

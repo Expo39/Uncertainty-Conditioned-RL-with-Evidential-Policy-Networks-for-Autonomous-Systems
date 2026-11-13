@@ -93,3 +93,6 @@ outputs/
 
 # Documentation 
 documentation/
+
+# Rendered documents
+docs/*.pdf

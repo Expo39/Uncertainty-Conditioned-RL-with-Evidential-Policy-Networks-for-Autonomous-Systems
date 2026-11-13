@@ -196,6 +196,8 @@ def main() -> None:
         default=[
             "vanilla_ppo",
             "input_uncertainty",
+            "heteroscedastic",
+            "heteroscedastic_input",
             "output_uncertainty",
             "full_method",
         ],
