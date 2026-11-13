@@ -314,4 +314,3 @@ which run it describes.
 - [scripts/analysis/CLAUDE.md](CLAUDE.md) - the working contract for this directory
 - [uncertainty_rl/evaluation/](../../uncertainty_rl/evaluation/) - `evaluate.py`, the condition sweep that writes the CSVs these scripts consume
 - [configs/eval_config.yaml](../../configs/eval_config.yaml) - the seven eval conditions, of which four carry reported results
-- [docs/AntonioGaldes_Dissertation.pdf](../../docs/AntonioGaldes_Dissertation.pdf) - canonical for the methodology; this README covers the implementation

@@ -180,4 +180,3 @@ make run-figures RUN_DIR=outputs/raw/evaluation_results/seed_42/full_method/<lea
 - `scripts/colours/__init__.py` - palette constants
 - `scripts/figure_style.py` - figure house style (rcParams, palette, legends)
 - [uncertainty_rl/README.md](../uncertainty_rl/README.md) - package overview
-- [docs/AntonioGaldes_Dissertation.pdf](../docs/AntonioGaldes_Dissertation.pdf) - the reported method and results
