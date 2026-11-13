@@ -34,6 +34,12 @@ The log-penalty prior targets in `EvidentialPPO.train` must track this table:
 `nu_prior = 0.313` and `alpha_prior = 2.741`, the latter carrying the layer's 1.5
 offset.
 
+`uncertainty_rl/networks/heteroscedastic.py` duplicates the alpha and beta bias priors
+and the alpha offset (`_ALPHA_BIAS_PRIOR = 0.9`, `_ALPHA_OFFSET = 1.5`,
+`_BETA_BIAS_PRIOR = 0.0`) to derive its `log_std` bias, so the heteroscedastic head starts
+from the same action variance (~0.398). Those constants must track this table too, or
+the initial-variance match between the two heads breaks.
+
 ## See also
 
 - `uncertainty_rl/networks/evidential_policy.py` - `EvidentialLayer.__init__`, `forward`
