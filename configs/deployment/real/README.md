@@ -42,8 +42,8 @@ Before any real-vehicle deployment run:
 transform. The actuation calibration has no such guard: an unfilled
 `actuation_calibration.yaml` is a valid identity mapping and passes silently.
 
-Appendix B of `docs/AntonioGaldes_Dissertation.pdf` is the canonical pre-deployment
-sequence; this checklist is the config-side subset of it.
+This checklist is the config-side subset of the pre-deployment sequence mapped to code in
+`docs/detailed_notes/deployment/real_world_deployment.md`.
 
 ## `real_world_datum.yaml`
 
@@ -140,4 +140,4 @@ a missing `mission.yaml` raises `FileNotFoundError`.
 - [docs/detailed_notes/deployment/real_world_deployment.md](../../../docs/detailed_notes/deployment/real_world_deployment.md) - deployment architecture and code map
 - [docs/detailed_notes/deployment/sim_to_real_transfer.md](../../../docs/detailed_notes/deployment/sim_to_real_transfer.md) - sim-to-real gap analysis
 - [configs/layouts/README.md](../../layouts/README.md) - layout files and bay identifiers
-- `docs/AntonioGaldes_Dissertation.pdf`, Appendix B - canonical account of the deployment path (frame calibration, actuation model, pre-deployment sequence)
+- [docs/detailed_notes/deployment/real_world_deployment.md](../../../docs/detailed_notes/deployment/real_world_deployment.md) - deployment path: frame calibration, actuation model, pre-deployment sequence

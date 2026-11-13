@@ -6,8 +6,8 @@ Optuna hyperparameter search configuration.
 > [`configs/train_config.yaml`](../train_config.yaml). Tuning per arm would make the
 > configuration an extra variable and confound the 3x2 ablation, so hyperparameters are
 > fixed across every arm and all seeds. The pipeline below is retained for future
-> work and produced no reported result. Section 3.8.1 of
-> [the dissertation](../../docs/AntonioGaldes_Dissertation.pdf) is canonical.
+> work and produced no reported result. See
+> [ablation_hpo_methodology.md](../../docs/detailed_notes/training/ablation_hpo_methodology.md).
 
 ## Files
 

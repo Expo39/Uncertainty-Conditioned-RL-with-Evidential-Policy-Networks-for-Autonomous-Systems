@@ -35,9 +35,7 @@ the stage schedule layered last - see
 
 Stage transitions are scheduled on budget, not gated on a measured success rate: each
 stage runs its `stage_timesteps` and the next stage resumes from the checkpoint that
-leaves. Section 3.7 of
-[`docs/AntonioGaldes_Dissertation.pdf`](../../../../docs/AntonioGaldes_Dissertation.pdf)
-is the canonical account.
+leaves.
 
 Design rules behind the table:
 

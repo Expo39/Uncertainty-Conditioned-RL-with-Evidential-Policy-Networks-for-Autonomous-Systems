@@ -125,4 +125,4 @@ deployment path via the two paths named in `agent_config.yaml`.
 - [configs/README.md](../README.md) - full configs directory map
 - [uncertainty_rl/envs/real/README.md](../../uncertainty_rl/envs/real/README.md) - the deployment path that consumes these files
 - [docs/detailed_notes/envs/actuator_model.md](../../docs/detailed_notes/envs/actuator_model.md) - actuator model derivation
-- `docs/AntonioGaldes_Dissertation.pdf`, Appendix B - canonical account of the deployment path
+- [docs/detailed_notes/deployment/real_world_deployment.md](../../docs/detailed_notes/deployment/real_world_deployment.md) - map from each deployment step to its code

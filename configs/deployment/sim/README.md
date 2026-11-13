@@ -64,8 +64,9 @@ in [`docs/detailed_notes/localisation/sensor_noise_models.md`](../../../docs/det
 
 Defines the RTK fix-state tiers sampled per episode to vary GNSS noise and
 drive EKF covariance variation - the primary uncertainty source in training.
-Section 3.4.1 of [`docs/AntonioGaldes_Dissertation.pdf`](../../../docs/AntonioGaldes_Dissertation.pdf)
-is the canonical write-up. The YAML is the single source of truth for the numbers; the
+The chain runtime behaviour is described in
+[`docs/detailed_notes/localisation/gnss_markov_transitions.md`](../../../docs/detailed_notes/localisation/gnss_markov_transitions.md).
+The YAML is the single source of truth for the numbers; the
 figures below are orientation, not a substitute for reading it.
 
 ### Tiers
