@@ -162,7 +162,7 @@ docker-top: ## Show running processes in containers
 	$(DOCKER_COMPOSE) top
 
 
-run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1]
+run-seed-leg: ensure-dirs ## Multi-seed leg (seeds in the script): train all arms/stages + eval final stage (cap 440, EDL with+without) + suite tables. Idempotent (skips done work); resumes a crash by re-running. Long-running; use tmux. Usage: make run-seed-leg [DRY_RUN=1] [ARMS_OVERRIDE="heteroscedastic heteroscedastic_input"]
 	bash scripts/training/run_seed_leg.sh
 
 docker-train: ensure-dirs ## Run training. Usage: make docker-train [LAYOUT=rectangle] [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628]
@@ -189,7 +189,7 @@ docker-tune: ensure-dirs ## Run Optuna hyperparameter tuning. Usage: make docker
 	$(WORKERS_UP)
 	$(DOCKER_COMPOSE) exec training bash scripts/training/tune.sh $(if $(STAGE),--stage $(STAGE),) $(if $(BASELINE),--baseline $(BASELINE_YAML),)
 
-docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1]
+docker-eval: ensure-dirs ## Run evaluation inside container. Usage: make docker-eval [LAYOUT=rectangle] [BASELINE=vanilla_ppo] [CHECKPOINT=6_42_11062026-0628] [SCENARIO="gnss_degraded"|"gnss_fixed gnss_degraded"] [PER_STEP_CAP=20] [NO_SAFETY=1] (NO_SAFETY=1 is required for the heteroscedastic baselines)
 	@echo "Evaluation: layout=$(LAYOUT) checkpoint=$(CHECKPOINT_NAME) baseline=$(BASELINE_NAME) seed=$(EVAL_SEED) scenario=$(if $(filter command line,$(origin SCENARIO)),$(SCENARIO),<all>) per_step_cap=$(PER_STEP_CAP) safety_wrapper=$(if $(NO_SAFETY),OFF,ON)"
 	$(DOCKER_COMPOSE) down
 	$(WORKERS_DOWN)
@@ -709,7 +709,7 @@ RESULTS_ARCHIVE ?= project_results.tar.gz
 # while the stack runs: it is not a result, so it is left out. Its rewrites still
 # touch outputs/ itself, so tar exit 1 ("file changed as we read it") is accepted;
 # exit 2 (a real failure) still stops the target.
-backup-results: ## Archive checkpoints/, logs/ and outputs/ (multi-GB). Usage: make backup-results [RESULTS_ARCHIVE=project_results.tar.gz]
+backup-results: ## Archive checkpoints/, logs/ and outputs/ (multi-GB), excluding outputs/ekf_state.json. Usage: make backup-results [RESULTS_ARCHIVE=project_results.tar.gz]
 	@present="$$(for d in $(RESULTS_TREES); do [ -d "$$d" ] && echo $$d; done)"; \
 	if [ -z "$$present" ]; then echo "Nothing to back up - none of $(RESULTS_TREES) exist."; exit 1; fi; \
 	echo "Archiving: $$(echo $$present | tr '\n' ' ')"; \
