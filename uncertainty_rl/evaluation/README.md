@@ -4,7 +4,7 @@ Performance evaluation across varying physical conditions. Tests whether the unc
 
 ## At a glance
 
-- 4 conditions, each varying exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors): a reference pair, a generalisation probe and a within-episode drift condition
+- 4 reported conditions (of the 7 the sweep runs from `eval_config.yaml`), each varying exactly ONE factor against the in-distribution anchor (rectangle lot, occupancy 0.5, no dynamic actors): a reference pair, a generalisation probe and a within-episode drift condition
 - Base noise from `env_config.yaml`, with per-condition multipliers applied by `_scale_sensor_noise()`. LiDAR noise is always enabled at eval, matching the training realism floor
 - Success is the geometric criterion evaluated at `STRICT_BAY_MARGIN`, defined in [utils/README.md](../utils/README.md#the-success-criterion)
 - `n_episodes = 200` per condition in `eval_config.yaml`, falling back to 100 when the key is unset, with deterministic (mean) actions. Pooling three seeds gives the 600 episodes per condition behind the reported results
@@ -157,7 +157,7 @@ df, run_output_dir = evaluate_across_conditions(
 Run via Make:
 
 ```bash
-make docker-eval          # Full 7-condition sweep (n_episodes per condition; 200+ for headlines)
+make docker-eval          # Full 7-condition sweep, 4 reported (n_episodes per condition; 200+ for headlines)
 make run-figures          # Redraw the per-run panels from the CSVs (no sweep needed)
 make eval-visualise-2d    # Detachable 2D bird's-eye replay after evaluation
 ```
