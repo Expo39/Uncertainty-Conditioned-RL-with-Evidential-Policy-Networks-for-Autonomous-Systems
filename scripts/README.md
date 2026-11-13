@@ -20,12 +20,13 @@ Offline tooling for results analysis, figure rendering, layout generation, CARLA
 | 2D bird's-eye visualiser (live) | `make visualise` |
 | Checkpoint demo + 2D viewer | `make eval-visualise-2d` |
 | Checkpoint demo + 3D CARLA view | `make docker-eval-visualise-3d` |
-| Multi-seed leg (all arms, all stages, then eval) | `make run-seed-leg` |
+| Multi-seed leg (all six arms, all stages, then eval) | `make run-seed-leg [ARMS_OVERRIDE="..."]` |
 | Diagnose GNSS tier Markov chain | `make analyse-markov` |
 | Cross-arm covariance contrast + degradation slope | `make analyse-ablation` |
 | EKF covariance calibration (std vs error) | `make analyse-calibration` |
 | Safety-gate ROC (EKF-std vs epistemic) | `make analyse-gate` |
 | Pool every seed into the headline tables | `make analyse-cross-seed` |
+| Seed-level bootstrap + permutation tests for the 3x2 | `make analyse-seed-level` |
 | Causal covariance-input probe | `make docker-covariance-probe BASELINE=full_method CHECKPOINT=<leaf>` |
 | Every reported figure | `make figures` |
 | Assemble the curated `outputs/main_analysis/` set | `make analysis-bundle` |
@@ -40,7 +41,7 @@ flowchart TB
     INS["inspect/"] --> DI["docker-inspect*"]
     VIS["visualise/"] --> EV["visualise<br>eval-visualise-2d<br>docker-eval-visualise-3d"]
     TRN["training/"] --> DT["docker-train<br>docker-train-short"]
-    EVL["analysis/"] --> AN["analyse-ablation<br>analyse-calibration<br>analyse-gate<br>analyse-cross-seed<br>docker-covariance-probe"]
+    EVL["analysis/"] --> AN["analyse-ablation<br>analyse-calibration<br>analyse-gate<br>analyse-cross-seed<br>analyse-seed-level<br>docker-covariance-probe"]
     STY["figure_style.py"] --> FIG["analysis/figures/"] --> FG["figures<br>run-figures"]
     DIA["diagnostics/"] --> DG["analyse-markov<br>tb-scalars"]
 ```
@@ -150,6 +151,7 @@ make analyse-ablation          # Cross-arm covariance contrast + degradation slo
 make analyse-calibration       # Is the EKF covariance honest (std vs actual error)?
 make analyse-gate              # EKF-std vs evidential-epistemic safety-gate ROC
 make analyse-cross-seed        # Pool every seed into the headline + per-seed robustness
+make analyse-seed-level        # Two-level bootstrap + seed permutation tests (3x2 contrasts)
 make analysis-bundle           # Assemble the curated outputs/main_analysis/ set
 ```
 
