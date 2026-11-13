@@ -59,7 +59,7 @@ Behaviour settings that must match the trained policy. Check these before every 
 | Key | Default | Notes |
 |-----|---------|-------|
 | `seed` | `7` | The master RNG seed, and the single source of truth for the whole experiment. It seeds training and the separate-process GNSS and IMU noise relays alike, and nothing else in the tree carries a seed. Change this one line to run a new seed. |
-| `baseline` | `configs/baselines/full_method.yaml` | Names the baseline the deployed checkpoint was trained as. Its `include_covariance`, `include_obstacle_obs` and `policy_type`, being the obs shape and policy class, are read from there and must match the checkpoint. |
+| `baseline` | `configs/baselines/full_method.yaml` | Names the baseline the deployed checkpoint was trained as. Its `include_covariance`, `include_obstacle_obs` and `policy_type`, being the obs shape and policy class, are read from there and must match the checkpoint. The inference loop loads `EvidentialPPO`, so only an evidential baseline (`output_uncertainty`, `full_method`) can be deployed as it stands. |
 | `max_ego_speed_ms` | `6.0` | Hard speed cap in m/s. Throttle is cut at or above it, brake is unaffected. |
 | `actuator_model.*` | see below | Per-axis slew limits and the brake-overrides-throttle threshold. Applied before the action reaches CARLA or the vehicle. |
 | `safety_handoff_threshold` | `1.2` | Total uncertainty, being epistemic plus aleatoric, at or above which the vehicle full-stops and hands off. Calibrate per checkpoint against the calm-condition upper tail. |
