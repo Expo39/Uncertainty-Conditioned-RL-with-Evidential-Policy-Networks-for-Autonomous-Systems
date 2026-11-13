@@ -120,7 +120,7 @@ a random init (no `CHECKPOINT`). See
 |---------|---------|------|
 | `make docker-train [STAGE=1] [BASELINE=vanilla_ppo] [CHECKPOINT=<leaf>] [LAYOUT=rectangle]` | Run a training stage | Yes |
 | `make docker-train-short [STAGE=1] [BASELINE=...] [CHECKPOINT=<leaf>]` | 10 000-step smoke test before a full run | Yes |
-| `make run-seed-leg [DRY_RUN=1]` | The whole experiment: every arm through every stage, then evaluate the final stage | Yes |
+| `make run-seed-leg [DRY_RUN=1] [ARMS_OVERRIDE="..."]` | The whole experiment: every arm through every stage, then evaluate the final stage | Yes |
 
 ```bash
 # Stage 1 from scratch, vanilla baseline
@@ -245,7 +245,7 @@ raw CSVs and write derived ones. None of them needs a GPU or the simulator.
 | `make handover-timing [ARM=full_method]` | Handover latency vs degradation onset | No |
 | `make uncertainty-verdict EVAL_DIR=...` | Epistemic-vs-aleatoric separation | No |
 | `make trace-tier-breakdown TRACE_DIR=...` | Demo-trace outcomes resolved by GNSS tier (collapse vs hard task) | No |
-| `make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf>` | Causal probe: does the policy USE the covariance input? | Yes |
+| `make docker-covariance-probe BASELINE=<name> CHECKPOINT=<leaf>` | Causal probe: does the policy USE the covariance input? Loads `EvidentialPPO`, so only `output_uncertainty` and `full_method` checkpoints | Yes |
 | `make training-curves` | TensorBoard scalars -> CSV | No |
 | `make figures [FIG=gate_roc]` | Render the figures into `outputs/main_analysis/figures/` | No |
 | `make run-figures [RUN_DIR=...]` | Per-run diagnostic panels | No |
@@ -255,6 +255,7 @@ Typical order after a completed evaluation:
 
 ```bash
 make analyse-cross-seed STAGE=6   # pooled CSVs -> raw_derived/cross_seed_analysis/
+make analyse-seed-level STAGE=6   # 3x2 contrasts -> raw_derived/seed_level/
 make training-curves              # TB scalars  -> raw_derived/training/
 make figures                      # figures     -> main_analysis/figures/
 make analysis-bundle STAGE=6 BOOTSTRAP_SEED=42   # summaries + values + MANIFEST
@@ -285,7 +286,7 @@ and prints to the console without writing a CSV.
 | `make docker-clean-all [STACK=all]` | Remove containers, images, and volumes |
 | `make backup-configs` | Pack all `CLAUDE.md`, `TODO.md`, and `documentation/` into `project_configs.tar.gz` |
 | `make restore-configs` | Restore those files from `project_configs.tar.gz` |
-| `make backup-results [RESULTS_ARCHIVE=...]` | Archive `checkpoints/`, `logs/` and `outputs/` into `project_results.tar.gz` (multi-GB) |
+| `make backup-results [RESULTS_ARCHIVE=...]` | Archive `checkpoints/`, `logs/` and `outputs/` (except `outputs/ekf_state.json`) into `project_results.tar.gz` (multi-GB) |
 | `make restore-results [RESULTS_ARCHIVE=...] [FORCE=1]` | Restore those trees, refusing to overwrite unless `FORCE=1` |
 | `make list-results-archive [RESULTS_ARCHIVE=...]` | List the archive contents without extracting |
 | `make help` | Print a one-line summary of every target |
@@ -294,6 +295,10 @@ and prints to the console without writing a CSV.
 
 `checkpoints/`, `logs/` and `outputs/` are gitignored: a fresh clone has none of them,
 and they represent GPU time that cannot be regenerated. `backup-results` packs all three.
+`outputs/ekf_state.json` is left out: it is the live ROS 2 -> env hand-off, rewritten
+many times a second while the stack runs, and not a result. Because those rewrites still
+touch `outputs/`, tar exit status 1 ("file changed as we read it") is accepted, so the
+backup can be taken with the stack up; exit status 2 (a real failure) still stops it.
 
 ```bash
 make backup-results                              # -> project_results.tar.gz (~5 GB here)
@@ -348,8 +353,11 @@ for `BASELINE` and `CHECKPOINT` are described at the top of this file.
 | `INSPECT_SENSOR` | `lidar` | sensor type string | `docker-inspect-live` |
 | `SCENARIO` | `anchor_deployment` | any condition name in `configs/eval_config.yaml`; `docker-eval` also accepts a space-separated subset | `docker-inspect-eval-dryrun`, `docker-eval` |
 | `PER_STEP_CAP` | `0` | leading steps per episode written to `per_step_records.csv`; `0` disables | `docker-eval` |
-| `NO_SAFETY` | _(unset)_ | `1` bypasses the SafetyWrapper; results nest under `without_wrapper/` | `docker-eval` |
+| `NO_SAFETY` | _(unset)_ | `1` bypasses the SafetyWrapper; results nest under `without_wrapper/`. Required for `heteroscedastic` and `heteroscedastic_input`, which have no epistemic channel to gate on | `docker-eval` |
 | `DRY_RUN` | `0` | `1` prints the plan without running it | `run-seed-leg` |
+| `ARMS_OVERRIDE` | all six arms | space-separated arm names, e.g. `"heteroscedastic heteroscedastic_input"` | `run-seed-leg` |
+| `BOOTSTRAP_SEED` | `20260927` (`analyse-seed-level`), `42` (`analysis-bundle`) | integer | `analyse-seed-level`, `analysis-bundle` |
+| `RESULTS_ROOT` / `OUTPUT_DIR` | `outputs/raw/evaluation_results` / `outputs/raw_derived/seed_level` | paths | `analyse-seed-level` |
 | `TRACE_DIR` | _(required)_ | path to one demo-trace dump | `trace-tier-breakdown` |
 | `REAL_OBS` | _(unset)_ | path to a dumped `.npy` observation set | `docker-covariance-probe` - on-manifold mode |
 | `LOG` | _(required)_ | one or more run log directories | `tb-scalars` |
